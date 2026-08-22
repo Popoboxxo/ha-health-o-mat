@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up HA Health-O-Mat",
+        "description": "Create one person. Add the integration again for each additional person.",
+        "data": {
+          "person": "Person name",
+          "lifetime_start_ml": "Lifetime counter start value in ml"
+        }
+      }
+    },
+    "error": {
+      "invalid_person": "Please enter a name."
+    },
+    "abort": {
+      "already_configured": "This person already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "daily_goal_ml": "Daily goal in ml"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "today": "Drunk today",
+      "goal_percent": "Daily goal percent",
+      "history_drinks": "Drinks history",
+      "lifetime": "Lifetime total",
+      "history_bp": "Blood pressure history",
+      "bp_sys": "Blood pressure systolic",
+      "bp_dia": "Blood pressure diastolic",
+      "bp_pulse": "Pulse"
+    },
+    "binary_sensor": {
+      "goal_reached": "Daily goal reached",
+      "bp_warning": "Blood pressure warning"
+    },
+    "button": {
+      "book_custom": "Book custom amount",
+      "undo_drink": "Undo last drink",
+      "save_reading": "Save measurement"
+    },
+    "text": {
+      "freetext": "Free-text drink"
+    },
+    "number": {
+      "daily_goal": "Daily goal ml",
+      "custom_amount": "Custom amount ml",
+      "threshold_sys": "Warning threshold systolic",
+      "threshold_dia": "Warning threshold diastolic",
+      "input_systolic": "Input systolic",
+      "input_diastolic": "Input diastolic",
+      "input_pulse": "Input pulse"
+    }
+  }
+}

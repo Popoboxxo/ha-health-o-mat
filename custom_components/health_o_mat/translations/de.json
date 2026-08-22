@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA Health-O-Mat einrichten",
+        "description": "Lege eine Person an. Für jede Person einfach erneut hinzufügen.",
+        "data": {
+          "person": "Name der Person",
+          "lifetime_start_ml": "Startwert Lebenszähler in ml (z. B. aus dem alten Wasser-Zähler)"
+        }
+      }
+    },
+    "error": {
+      "invalid_person": "Bitte einen Namen eingeben."
+    },
+    "abort": {
+      "already_configured": "Diese Person existiert bereits."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen",
+        "data": {
+          "daily_goal_ml": "Tagesziel in ml"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "today": "Heute getrunken",
+      "goal_percent": "Tagesziel Prozent",
+      "history_drinks": "Getränke Historie",
+      "lifetime": "Gesamt (Lebenszähler)",
+      "history_bp": "Blutdruck Verlauf",
+      "bp_sys": "Blutdruck Systolisch",
+      "bp_dia": "Blutdruck Diastolisch",
+      "bp_pulse": "Puls"
+    },
+    "binary_sensor": {
+      "goal_reached": "Tagesziel erreicht",
+      "bp_warning": "Blutdruck Warnung"
+    },
+    "button": {
+      "book_custom": "Eigenen Betrag buchen",
+      "undo_drink": "Letzte Buchung löschen",
+      "save_reading": "Messung speichern"
+    },
+    "text": {
+      "freetext": "Freitext Getränk"
+    },
+    "number": {
+      "daily_goal": "Tagesziel ml",
+      "custom_amount": "Eigenmenge ml",
+      "threshold_sys": "Warnschwelle Systolisch",
+      "threshold_dia": "Warnschwelle Diastolisch",
+      "input_systolic": "Eingabe Systolisch",
+      "input_diastolic": "Eingabe Diastolisch",
+      "input_pulse": "Eingabe Puls"
+    }
+  }
+}

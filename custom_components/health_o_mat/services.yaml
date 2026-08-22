@@ -1,0 +1,73 @@
+add_drink:
+  name: Getränk buchen
+  description: Bucht eine Getränkemenge für eine Person.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    amount_ml:
+      name: Menge (ml)
+      description: Getränkemenge in Millilitern.
+      example: 250
+    drink_type:
+      name: Getränk
+      description: Bezeichnung des Getränks (optional, Default „Eigen").
+      example: "Kaffee"
+    source:
+      name: Quelle
+      description: Freier Herkunfts-Tag (optional).
+      example: "automation"
+
+add_blood_pressure:
+  name: Blutdruckmessung speichern
+  description: Speichert systolischen/diastolischen Wert und optional Puls.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    systolic:
+      name: Systolisch
+      description: Oberwert in mmHg.
+      example: 124
+    diastolic:
+      name: Diastolisch
+      description: Unterwert in mmHg.
+      example: 82
+    pulse:
+      name: Puls
+      description: Herzfrequenz in BPM (optional).
+      example: 64
+    note:
+      name: Notiz
+      description: Freitext-Notiz zur Messung (optional).
+      example: "morgens"
+
+remove_last_entry:
+  name: Letzte Buchung löschen
+  description: Entfernt die letzte Getränkebuchung (Undo).
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+
+export_csv:
+  name: CSV-Export
+  description: Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = alle Personen).
+    dataset:
+      name: Datensatz
+      description: Welche Daten exportiert werden.
+      example: "all"
+      select:
+        options:
+          - label: Alles
+            value: "all"
+          - label: Getränke
+            value: "drinks"
+          - label: Blutdruck
+            value: "blood_pressure"

@@ -1,0 +1,174 @@
+"""Sensor-Plattform: Aggregate + Verlauf + BP-Werte je Person."""
+from __future__ import annotations
+
+from datetime import datetime
+import json
+
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
+
+from .const import DOMAIN
+from .entity import HealthOMatEntity
+from . import logic
+
+
+async def async_setup_entry(hass, entry, async_add_entities) -> None:
+    store = hass.data[DOMAIN]["store"]
+    coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+
+    entities: list = [
+        TodaySensor(coord, entry, store),
+        PercentSensor(coord, entry, store),
+        HistoryDrinksSensor(coord, entry, store),
+        LifetimeSensor(coord, entry, store),
+        BloodPressureHistorySensor(coord, entry, store),
+    ]
+    for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
+        entities.append(LastReadingSensor(coord, entry, store, key, unit))
+
+    async_add_entities(entities)
+
+
+class HealthOMatSensor(HealthOMatEntity, SensorEntity):
+    """Basis-Sensor."""
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry)
+        self._store = store
+        self._attr_has_entity_name = True
+
+    @property
+    def _data(self) -> dict:
+        return self._store.all_entries().get(self._entry.entry_id, {})
+
+    def _today_sums(self) -> dict:
+        now = datetime.now()
+        rt = self._entry.runtime_data
+        return logic.window_sums(
+            self._data.get("drinks", []),
+            logic.day_start(now, rt.boundary_hour, rt.boundary_minute),
+            now,
+        )
+
+
+class TodaySensor(HealthOMatSensor):
+    """Sauberer Mengen-Sensor in ml für „Heute"."""
+
+    _attr_translation_key = "today"
+    _attr_native_unit_of_measurement = "ml"
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_icon = "mdi:cup-water"
+
+    @property
+    def native_value(self) -> int:
+        return self._today_sums()["total_ml"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        sums = self._today_sums()
+        rt = self._entry.runtime_data
+        now = datetime.now()
+        y_start, y_end = logic.yesterday_window(now, rt.boundary_hour, rt.boundary_minute)
+        yesterday = logic.window_sums(self._data.get("drinks", []), y_start, y_end)
+        return {
+            "drinks_count": sums["count"],
+            "percent_of_goal": round(sums["total_ml"] / max(1, rt.daily_goal_ml) * 100, 1),
+            "breakdown_by_type": json.dumps(sums["breakdown"], ensure_ascii=False),
+            "last_drink_at": sums["last_ts"],
+            "yesterday_ml": yesterday["total_ml"],
+        }
+
+
+class PercentSensor(HealthOMatSensor):
+    """Tagesziel in Prozent (Gauge-fähig)."""
+
+    _attr_translation_key = "goal_percent"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:gauge"
+
+    @property
+    def native_value(self) -> float:
+        return round(
+            self._today_sums()["total_ml"] / max(1, self._entry.runtime_data.daily_goal_ml) * 100,
+            1,
+        )
+
+
+class HistoryDrinksSensor(HealthOMatSensor):
+    """Rohhistorie der Getränke als JSON-Attribut."""
+
+    _attr_translation_key = "history_drinks"
+    _attr_icon = "mdi:format-list-bulleted"
+
+    @property
+    def native_value(self) -> int:
+        return self._today_sums()["count"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"entries_json": json.dumps(self._data.get("drinks", []), ensure_ascii=False)}
+
+
+class LifetimeSensor(HealthOMatSensor):
+    """Kumulierter Lebenszähler (Startwert aus Alt-System übernehmbar)."""
+
+    _attr_translation_key = "lifetime"
+    _attr_native_unit_of_measurement = "ml"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:water-well"
+
+    @property
+    def native_value(self) -> int:
+        return int(self._data.get("total_ml_lifetime", 0))
+
+
+class LastReadingSensor(HealthOMatSensor):
+    """Letzter gemessener Blutdruck-/Pulswert (measurement → Verlaufsgraph)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:heart-pulse"
+
+    def __init__(self, coordinator, entry, store, key: str, unit: str) -> None:
+        super().__init__(coordinator, entry, store)
+        self._key = key
+        self._attr_translation_key = f"bp_{key}"
+        self._attr_native_unit_of_measurement = unit
+
+    def _sorted_readings(self) -> list[dict]:
+        return sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))
+
+    @property
+    def native_value(self) -> int | None:
+        readings = self._sorted_readings()
+        if not readings:
+            return None
+        return readings[-1].get(self._key)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        readings = self._sorted_readings()
+        if not readings:
+            return {}
+        vals = [r[self._key] for r in readings if r.get(self._key) is not None]
+        window = vals[-20:] if vals else []
+        return {
+            "measured_at": readings[-1].get("ts"),
+            "avg_7d": round(sum(window) / len(window), 1) if window else None,
+            "readings_total": len(readings),
+        }
+
+
+class BloodPressureHistorySensor(HealthOMatSensor):
+    """BP-Verlauf (letzte 30 Messungen) als JSON-Attribut."""
+
+    _attr_translation_key = "history_bp"
+    _attr_icon = "mdi:heart-box-outline"
+
+    @property
+    def native_value(self) -> int:
+        return len(self._data.get("readings", []))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        readings = sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))[-30:]
+        return {"history_json": json.dumps(readings, ensure_ascii=False)}

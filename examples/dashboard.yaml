@@ -1,0 +1,36 @@
+type: vertical-stack
+cards:
+  - type: gauge
+    entity: sensor.health_o_mat_caro_tagesziel_prozent
+    name: Caro Tagesziel
+    severity:
+      green: 100
+      yellow: 60
+      red: 0
+
+  - type: tiles
+    entities:
+      - entity: sensor.health_o_mat_caro_heute_getrunken
+        name: Getrunken
+      - entity: binary_sensor.health_o_mat_caro_tagesziel_erreicht
+        name: Ziel erreicht
+      - entity: sensor.health_o_mat_caro_blutdruck_systolisch
+        name: Systolisch
+      - entity: sensor.health_o_mat_caro_blutdruck_diastolisch
+        name: Diastolisch
+
+  - type: buttons
+    entities:
+      - button.health_o_mat_caro_glas_wasser
+      - button.health_o_mat_caro_flasche_wasser
+      - button.health_o_mat_caro_kaffee
+      - button.health_o_mat_caro_saft
+      - button.health_o_mat_caro_letzten_eintrag_loeschen
+      - button.health_o_mat_caro_messung_speichern
+
+  - type: history-graph
+    entities:
+      - entity: sensor.health_o_mat_caro_blutdruck_systolisch
+      - entity: sensor.health_o_mat_caro_blutdruck_diastolisch
+      - entity: sensor.health_o_mat_caro_puls
+    hours_to_show: 168
