@@ -1,12 +1,14 @@
 {
   "domain": "health_o_mat",
   "name": "HA Health-O-Mat",
-  "codeowners": ["@Popoboxxo"],
+  "codeowners": [
+    "@Popoboxxo"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/Popoboxxo/ha-health-o-mat",
   "integration_type": "device",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Popoboxxo/ha-health-o-mat/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

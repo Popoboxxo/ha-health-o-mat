@@ -59,5 +59,17 @@ class HealthOMatStore:
         self.entry(entry_id)["total_ml_lifetime"] = int(ml)
         await self._async_save()
 
+    async def set_wellbeing(self, entry_id: str, status: str, ts_iso: str) -> None:
+        """Wohlbefinden-Meldung setzen + Historie führen."""
+        e = self.entry(entry_id)
+        wb = e.setdefault("wellbeing", {})
+        history = e.setdefault("wellbeing_history", [])
+        if wb.get("status"):
+            history.append({"ts": ts_iso, "status": wb["status"]})
+            del history[:-100]
+        wb["status"] = status
+        wb["ts"] = ts_iso
+        await self._async_save()
+
     async def _async_save(self) -> None:
         await self._store.async_save(self._data)

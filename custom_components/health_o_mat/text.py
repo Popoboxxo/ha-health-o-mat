@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 
 from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
-from .entity import HealthOMatEntity
+from .entity import HealthOMatEntity, signal_refresh
 from . import parser
 
 
@@ -26,10 +27,10 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
     _attr_mode = "text"
 
     def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry)
+        super().__init__(coordinator, entry, "text_freetext")
         self._store = store
-        self._attr_has_entity_name = True
         self._native_value: str = ""
+        self._last_parsed: dict = {}
 
     async def async_set_value(self, value: str) -> None:
         result = parser.parse(value)
@@ -51,8 +52,7 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
             "input": value,
         }
         self._native_value = ""
-        coordinator = self.hass.data[DOMAIN][self._entry.entry_id]["coordinator"]
-        coordinator.async_set_updated_data(datetime.now().isoformat())
+        signal_refresh(self.hass, self._entry.entry_id)
 
     @property
     def native_value(self) -> str:
@@ -60,4 +60,9 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return getattr(self, "_last_parsed", {})
+        return {
+            "amount_ml": self._last_parsed.get("amount_ml"),
+            "drink_type": self._last_parsed.get("drink_type"),
+            "last_input": self._last_parsed.get("input"),
+            "_json": json.dumps(self._last_parsed, ensure_ascii=False),
+        }

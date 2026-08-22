@@ -1,4 +1,4 @@
-"""Buttons: Quick-Drinks, Custom-Buchung, Undo, BP-Speichern."""
+"""Buttons: Quick-Drinks, Custom-Buchung, Undo, BP-Speichern, Wohlbefinden."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -7,7 +7,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
-from .entity import HealthOMatEntity
+from .entity import HealthOMatEntity, signal_refresh
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -18,21 +18,18 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         UndoDrinkButton(coord, entry, store),
         SaveReadingButton(coord, entry, store),
     ]
-    for i, qd in enumerate(entry.data.get("quick_drinks", []) or []):
+    for i in range(len(entry.data.get("quick_drinks", []) or [])):
         entities.append(QuickDrinkButton(coord, entry, store, i))
+    from .const import WELLBEING_STATES
+    for status in WELLBEING_STATES:
+        entities.append(WellbeingButton(coord, entry, store, status))
     async_add_entities(entities)
 
 
-def _signal(hass, entry_id: str) -> None:
-    coordinator = hass.data[DOMAIN][entry_id]["coordinator"]
-    coordinator.async_set_updated_data(datetime.now().isoformat())
-
-
 class HealthOMatButton(HealthOMatEntity, ButtonEntity):
-    def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry)
+    def __init__(self, coordinator, entry, store, key: str) -> None:
+        super().__init__(coordinator, entry, key)
         self._store = store
-        self._attr_has_entity_name = True
 
     @property
     def _data(self) -> dict:
@@ -42,7 +39,7 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
         await self._store.add_drink(
             self._entry.entry_id, datetime.now().isoformat(), ml, drink_type, src
         )
-        _signal(self.hass, self._entry.entry_id)
+        signal_refresh(self.hass, self._entry.entry_id)
 
 
 class QuickDrinkButton(HealthOMatButton):
@@ -51,14 +48,13 @@ class QuickDrinkButton(HealthOMatButton):
     _attr_icon = "mdi:cup-water"
 
     def __init__(self, coordinator, entry, store, index: int) -> None:
-        super().__init__(coordinator, entry, store)
-        self._index = index
+        super().__init__(coordinator, entry, store, f"button_quick_{index}")
         qd = entry.data.get("quick_drinks", [])[index]
         self._ml = int(qd.get("ml", 200))
-        self._label = qd.get("label") or f"Quick {index + 1}"
-        self._attr_translation_key = None
-        self._attr_translation_placeholders = {}
+        self._label = str(qd.get("label") or f"Quick {index + 1}")
+        self._icon = str(qd.get("icon") or "mdi:cup-water")
         self._attr_name = self._label
+        self._attr_icon = self._icon
 
     async def async_press(self) -> None:
         await self._book(self._ml, self._label, "quick_button")
@@ -69,6 +65,9 @@ class CustomDrinkButton(HealthOMatButton):
 
     _attr_translation_key = "book_custom"
     _attr_icon = "mdi:plus-circle-outline"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "button_book_custom")
 
     async def async_press(self) -> None:
         ml = int(self._entry.runtime_data.custom_amount_ml or 0)
@@ -83,18 +82,24 @@ class UndoDrinkButton(HealthOMatButton):
     _attr_translation_key = "undo_drink"
     _attr_icon = "mdi:undo-variant"
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "button_undo_drink")
+
     async def async_press(self) -> None:
         removed = await self._store.remove_last_drink(self._entry.entry_id)
         if not removed:
             raise HomeAssistantError("Keine Getränke zum Entfernen")
-        _signal(self.hass, self._entry.entry_id)
+        signal_refresh(self.hass, self._entry.entry_id)
 
 
 class SaveReadingButton(HealthOMatButton):
-    """Übernimmt die BP-Eingabefelder als neue Messung."""
+    """Übernimmt die BP-Eingabefelder als neue Messung (Blutdruck-Manager)."""
 
     _attr_translation_key = "save_reading"
     _attr_icon = "mdi:content-save-check"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "button_save_reading")
 
     async def async_press(self) -> None:
         rt = self._entry.runtime_data
@@ -112,4 +117,33 @@ class SaveReadingButton(HealthOMatButton):
             "", "button",
         )
         rt._inputs = {}
-        _signal(self.hass, self._entry.entry_id)
+        signal_refresh(self.hass, self._entry.entry_id)
+
+
+class WellbeingButton(HealthOMatButton):
+    """Meldet „Wie geht es dir?" und setzt den Select-Status."""
+
+    def __init__(self, coordinator, entry, store, status: dict) -> None:
+        super().__init__(coordinator, entry, store, f"button_report_{status['key']}")
+        self._status = status
+        self._attr_name = f"Melden: {status['label']}"
+        self._attr_icon = str(status["icon"])
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"status": self._status["key"], "emoji": self._status["emoji"]}
+
+    async def async_press(self) -> None:
+        await self._store.set_wellbeing(
+            self._entry.entry_id,
+            self._status["key"],
+            datetime.now().isoformat(),
+        )
+        signal_refresh(self.hass, self._entry.entry_id)
+
+
+def build_wellbeing_buttons(hass, entry, store):
+    """5 Melden-Buttons (einer pro Status) für Wohlbefinden."""
+    from .const import WELLBEING_STATES
+    coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    return [WellbeingButton(coord, entry, store, status) for status in WELLBEING_STATES]

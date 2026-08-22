@@ -12,19 +12,19 @@ from . import logic
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
-    store = hass.data[DOMAIN]["store"]
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    store = hass.data[DOMAIN]["store"]
 
-    entities: list = [
+    entities = [
         TodaySensor(coord, entry, store),
         PercentSensor(coord, entry, store),
         HistoryDrinksSensor(coord, entry, store),
         LifetimeSensor(coord, entry, store),
         BloodPressureHistorySensor(coord, entry, store),
+        WellbeingSinceSensor(coord, entry, store),
     ]
     for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
         entities.append(LastReadingSensor(coord, entry, store, key, unit))
-
     async_add_entities(entities)
 
 
@@ -32,9 +32,9 @@ class HealthOMatSensor(HealthOMatEntity, SensorEntity):
     """Basis-Sensor."""
 
     def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry)
+        super().__init__(coordinator, entry, "sensor")
         self._store = store
-        self._attr_has_entity_name = True
+        self._attr_unique_id = f"{entry.entry_id}_sensor_{type(self).__name__}"
 
     @property
     def _data(self) -> dict:
@@ -110,7 +110,7 @@ class HistoryDrinksSensor(HealthOMatSensor):
 
 
 class LifetimeSensor(HealthOMatSensor):
-    """Kumulierter Lebenszähler (Startwert aus Alt-System übernehmbar)."""
+    """Kumulierter Lebenszähler."""
 
     _attr_translation_key = "lifetime"
     _attr_native_unit_of_measurement = "ml"
@@ -131,6 +131,7 @@ class LastReadingSensor(HealthOMatSensor):
     def __init__(self, coordinator, entry, store, key: str, unit: str) -> None:
         super().__init__(coordinator, entry, store)
         self._key = key
+        self._attr_unique_id = f"{entry.entry_id}_sensor_bp_{key}"
         self._attr_translation_key = f"bp_{key}"
         self._attr_native_unit_of_measurement = unit
 
@@ -172,3 +173,20 @@ class BloodPressureHistorySensor(HealthOMatSensor):
     def extra_state_attributes(self) -> dict:
         readings = sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))[-30:]
         return {"history_json": json.dumps(readings, ensure_ascii=False)}
+
+
+class WellbeingSinceSensor(HealthOMatSensor):
+    """Zeitpunkt der letzten Wohlbefinden-Meldung."""
+
+    _attr_translation_key = "wellbeing_since"
+    _attr_device_class = "timestamp"
+    _attr_icon = "mdi:emoticon-outline"
+
+    @property
+    def native_value(self):
+        wb = self._data.get("wellbeing") or {}
+        ts = wb.get("ts")
+        if not ts:
+            return None
+        from homeassistant.util import dt as dt_util
+        return dt_util.as_local(datetime.fromisoformat(ts))

@@ -36,7 +36,8 @@
       "history_bp": "Blutdruck Verlauf",
       "bp_sys": "Blutdruck Systolisch",
       "bp_dia": "Blutdruck Diastolisch",
-      "bp_pulse": "Puls"
+      "bp_pulse": "Puls",
+      "wellbeing_since": "Wohlbefinden gemeldet am"
     },
     "binary_sensor": {
       "goal_reached": "Tagesziel erreicht",

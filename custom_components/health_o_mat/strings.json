@@ -36,7 +36,8 @@
       "history_bp": "Blood pressure history",
       "bp_sys": "Blood pressure systolic",
       "bp_dia": "Blood pressure diastolic",
-      "bp_pulse": "Pulse"
+      "bp_pulse": "Pulse",
+      "wellbeing_since": "Wellbeing reported at"
     },
     "binary_sensor": {
       "goal_reached": "Daily goal reached",

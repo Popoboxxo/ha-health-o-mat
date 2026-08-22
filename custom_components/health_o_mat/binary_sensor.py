@@ -7,6 +7,7 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity
+from . import logic
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -19,17 +20,15 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
 
 class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
-    def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry)
+    def __init__(self, coordinator, entry, store, key: str) -> None:
+        super().__init__(coordinator, entry, key)
         self._store = store
-        self._attr_has_entity_name = True
 
     @property
     def _data(self) -> dict:
         return self._store.all_entries().get(self._entry.entry_id, {})
 
     def _today_ml(self) -> int:
-        from . import logic
         now = datetime.now()
         rt = self._entry.runtime_data
         sums = logic.window_sums(
@@ -43,6 +42,9 @@ class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
 class GoalReachedEntity(HealthOMatBinary):
     _attr_translation_key = "goal_reached"
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "binary_goal_reached")
+
     @property
     def is_on(self) -> bool:
         goal = max(1, self._entry.runtime_data.daily_goal_ml)
@@ -52,6 +54,9 @@ class GoalReachedEntity(HealthOMatBinary):
 class BloodPressureWarningEntity(HealthOMatBinary):
     _attr_translation_key = "bp_warning"
     _attr_icon = "mdi:alert-octagon"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "binary_bp_warning")
 
     @property
     def is_on(self) -> bool:

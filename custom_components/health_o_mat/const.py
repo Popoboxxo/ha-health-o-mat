@@ -57,6 +57,15 @@ DAY_BOUNDARY_OPTIONS = [
     DAY_BOUNDARY_04,
     DAY_BOUNDARY_CUSTOM,
 ]
+# Wohlbefinden „Wie geht es dir?": key, Anzeigename, Emoji, MDI-Icon
+WELLBEING_STATES: list[dict] = [
+    {"key": "very_bad", "label": "Sehr schlecht", "emoji": "😵", "icon": "mdi:emoticon-dead-outline"},
+    {"key": "bad", "label": "Schlecht", "emoji": "🙁", "icon": "mdi:emoticon-sad-outline"},
+    {"key": "okay", "label": "Okay", "emoji": "😐", "icon": "mdi:emoticon-neutral-outline"},
+    {"key": "good", "label": "Gut", "emoji": "🙂", "icon": "mdi:emoticon-happy-outline"},
+    {"key": "great", "label": "Super", "emoji": "😄", "icon": "mdi:emoticon-excited-outline"},
+]
+
 BOUNDARY_HOUR_MINUTE: dict[str, tuple[int, int]] = {
     DAY_BOUNDARY_MIDNIGHT: (0, 0),
     DAY_BOUNDARY_22: (22, 0),
