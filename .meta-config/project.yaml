@@ -23,10 +23,12 @@ roles:
 variables:
   PROJECT_NAME: ha-health-o-mat
   PROJECT_DESCRIPTION: Home Assistant HACS Custom Integration für Getränke-Tracking,
-    Blutdruck- Messwerte und Wohlbefinden-Erfassung pro Person.
+    Blutdruck-Messwerte und Wohlbefinden-Erfassung pro Person — ein Config-Entry pro
+    Person, dynamisch beliebig oft anlegbar.
   PROJECT_GOAL: Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat)
-    bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst und als native HA-Entities
-    zur Verfügung stellt.
+    bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst, als native HA-Entities
+    zur Verfügung stellt — unter konsequenter Beachtung der aus vorherigen HACS-Integrationen
+    gelernten Lektionen (Releases, unique_id-Stabilität, Setup-Architektur, Config/Options-Flow).
   PLATFORM: Home Assistant (HACS Custom Integration)
   RUNTIME: Home Assistant Core
   PROJECT_LANGUAGES: Python
@@ -49,31 +51,50 @@ variables:
 
     '
   BUILD_COMMANDS: ''
-  PROJECT_CONTEXT: HACS-Integration im Standard-Layout custom_components/health_o_mat/.
-    Persistenz über homeassistant.helpers.storage.Store, ein Coordinator pro Config-Entry,
-    mehrere Plattformen (sensor, binary_sensor, button, number, select, text) und
-    ein Options-/Config-Flow (eine Person pro Entry).
-  ARCHITECTURE: "custom_components/health_o_mat/\n  __init__.py        # Setup/Unload,\
-    \ Services, Options-Handling\n  store.py           # HealthOMatStore (Storage-Persistenz\
-    \ je Person)\n  logic.py           # reine Logik (Tagesfenster, Summen), HA-frei\n\
-    \  parser.py          # Freitext-Parser für Getränke-Eingaben\n  entity.py   \
-    \        # gemeinsame HealthOMatEntity-Basis\n  sensor.py, binary_sensor.py, button.py,\
-    \ number.py, select.py, text.py\n  exporter.py         # CSV-Export-Service\n\
-    \  config_flow.py      # Config-/Options-Flow\ntests/                # isolierte\
-    \ Tests für logic.py/parser.py (importlib, ohne HA)\n"
-  CODE_CONVENTIONS: '- `from __future__ import annotations` + vollständige Type-Hints
-
-    - unique_id + device_info ab Entity #1
-
-    - Store liegt unter hass.data[DOMAIN]["shared"]["store"]
-
+  PROJECT_CONTEXT: |-
+    HACS-Integration im Standard-Layout custom_components/health_o_mat/. Ein Config-Entry = eine Person (dynamisch beliebig oft anlegbar, kein Hardcoding). Persistenz über ein gemeinsames homeassistant.helpers.storage.Store-Objekt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry getrennt unter hass.data[DOMAIN][entry_id] (Entry-Registry, damit Services ihre Person wiederfinden). Ein DataUpdateCoordinator pro Config-Entry (update_interval=None, Refresh via async_set_updated_data() bei Event statt Polling). Plattformen: sensor, binary_sensor, button, number, select, text. Options-/Config-Flow: eine Person pro Entry, Duplikat-Schutz via async_set_unique_id + _abort_if_unique_id_configured, Update-Listener via entry.add_update_listener.
+  ARCHITECTURE: |-
+    custom_components/health_o_mat/
+      __init__.py         # Setup/Unload, Services, Options-Handling, Entry-Registry
+      store.py            # HealthOMatStore (Storage-Persistenz je Person)
+      logic.py            # reine Logik (Tagesfenster on-read, Summen), HA-frei
+      parser.py           # Freitext-Parser für Getränke-Eingaben
+      entity.py           # gemeinsame HealthOMatEntity-Basis (unique_id, device_info)
+      sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py
+      exporter.py         # CSV-Export-Service (privater Ordner, nie /config/www)
+      config_flow.py      # Config-/Options-Flow
+    tests/                 # isolierte Tests für logic.py/parser.py (importlib, ohne HA-Paket)
+  CODE_CONVENTIONS: |-
+    - `from __future__ import annotations` + vollständige Type-Hints
+    - unique_id + device_info ab Entity #1; unique_id stabil & entry-spezifisch ({entry_id}_{key}), NIE nachträglich ändern
+    - Store liegt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-Daten pro Entry unter hass.data[DOMAIN][entry_id]
     - Domain snake_case ohne Bindestriche (health_o_mat)
-
     - iot_class nur in manifest.json, nie in hacs.json
-
-    '
-  EXTRA_DONTS: ''
-  CODE_QUALITY_RULES: ''
+    - Plattform-Name == Dateiname (z.B. "select" in PLATFORMS braucht select.py) — sonst ModuleNotFoundError beim Setup
+    - has_entity_name = True + translation_key statt hartkodierter Entity-Namen
+    - state_class setzen (measurement/total) wo sinnvoll, für Langzeitstatistik
+    - Zeitstempel-Entities mit device_class: timestamp
+    - Nachträglich Korrigierbares gehört in Options, nicht ins initiale Setup
+    - Config-Flow muss strukturelle Daten explizit in entry.data schreiben, nicht nur als Default annehmen
+    - Services mit voluptuous-Schema + ServiceValidationError, danach Refresh via async_set_updated_data()
+    - Zeitfenster ("heute") on-read berechnen statt Reset-Job — neustart- und DST-fest
+  EXTRA_DONTS: |-
+    - Git-Tag ohne echtes GitHub-Release reicht NICHT für HACS-Updates — immer `gh release create vX.Y.Z`
+    - VERSION im ConfigFlow NIE ohne async_migrate_entry() erhöhen (sonst "Migration handler not found", Entry lädt nicht mehr)
+    - unique_id NIE nachträglich ändern (verwaiste Entities, User muss manuell am Gerät aufräumen)
+    - iot_class NIE in hacs.json — ausschließlich ins manifest.json
+    - Keine Versions-Downgrades ohne Schutz zulassen (if version > CURRENT: abort)
+    - Kein Fachjargon ("Store", "Entry", "Coordinator") im User-facing Config-/Options-Flow-Text
+    - Sensible Exporte NIE nach /config/www (öffentliches Media-Panel) — nur in private Ordner wie /config/health_o_mat_export/
+    - Config-/Options-Flow-Validierung NIE blockierend bei Netzfehlern abbrechen lassen — nur eindeutige Fehler (z.B. 401) brechen ab, sonst "Prüfung überspringen"-Option anbieten
+    - Keine Telemetrie und keine undokumentierten Cloud-Calls
+    - Keine Geheimnisse/Gesundheitsdaten in Diagnostics — nur Counts, Versionen, maskierte Werte
+  CODE_QUALITY_RULES: |-
+    - CI ab Tag 1: hacs/action + home-assistant/actions/hassfest in .github/workflows/validate.yml
+    - Release-Dreiklang: Commit + Tag (vX.Y.Z) + echtes GitHub Release, Tag exakt synchron zu manifest.version
+    - Erst Unit-Tests der HA-freien Logik (Fake-Package/importlib wie in tests/), dann E2E auf Dev-Instanz, erst danach Release
+    - translations/strings.json als Master, de/en synchron halten
+    - Debugging-Reihenfolge bei "geht nicht": 1) Entity-Generation prüfen (Device-Seite, nicht nur Entitätsliste) 2) HA-Log auf ModuleNotFoundError (Plattform-Datei fehlt) oder "Migration handler not found" (VERSION ohne Migrator) 3) HACS zeigt kein Update? Release vs. Tag + Tag↔manifest-Sync prüfen 4) Setup bricht sofort komplett ab? Syntax/Import-Fehler in EINER Plattform-Datei killt alle 5) Services finden nichts? hass.data-Registry-Befüllung prüfen
   REQ_CATEGORIES: ''
   TESTER_SNIPPETS_PATH: ''
   DEVELOPER_SNIPPETS_PATH: ''

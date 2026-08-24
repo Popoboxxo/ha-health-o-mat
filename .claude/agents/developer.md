@@ -69,18 +69,25 @@ A2A envelope present → parse `payload.{t,ctx,con,refs,pri,dep}`. Otherwise: pl
 
 <context>
 **Project context:**
-HACS-Integration im Standard-Layout custom_components/health_o_mat/. Persistenz über homeassistant.helpers.storage.Store, ein Coordinator pro Config-Entry, mehrere Plattformen (sensor, binary_sensor, button, number, select, text) und ein Options-/Config-Flow (eine Person pro Entry).
+HACS-Integration im Standard-Layout custom_components/health_o_mat/. Ein Config-Entry = eine Person (dynamisch beliebig oft anlegbar, kein Hardcoding). Persistenz über ein gemeinsames homeassistant.helpers.storage.Store-Objekt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry getrennt unter hass.data[DOMAIN][entry_id] (Entry-Registry, damit Services ihre Person wiederfinden). Ein DataUpdateCoordinator pro Config-Entry (update_interval=None, Refresh via async_set_updated_data() bei Event statt Polling). Plattformen: sensor, binary_sensor, button, number, select, text. Options-/Config-Flow: eine Person pro Entry, Duplikat-Schutz via async_set_unique_id + _abort_if_unique_id_configured, Update-Listener via entry.add_update_listener.
 
-**Goal:** Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat) bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst und als native HA-Entities zur Verfügung stellt.
+**Goal:** Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat) bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst, als native HA-Entities zur Verfügung stellt — unter konsequenter Beachtung der aus vorherigen HACS-Integrationen gelernten Lektionen (Releases, unique_id-Stabilität, Setup-Architektur, Config/Options-Flow).
 **Languages:** Python
 
 **Code conventions:**
 - `from __future__ import annotations` + vollständige Type-Hints
-- unique_id + device_info ab Entity #1
-- Store liegt unter hass.data[DOMAIN]["shared"]["store"]
+- unique_id + device_info ab Entity #1; unique_id stabil & entry-spezifisch ({entry_id}_{key}), NIE nachträglich ändern
+- Store liegt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-Daten pro Entry unter hass.data[DOMAIN][entry_id]
 - Domain snake_case ohne Bindestriche (health_o_mat)
 - iot_class nur in manifest.json, nie in hacs.json
-
+- Plattform-Name == Dateiname (z.B. "select" in PLATFORMS braucht select.py) — sonst ModuleNotFoundError beim Setup
+- has_entity_name = True + translation_key statt hartkodierter Entity-Namen
+- state_class setzen (measurement/total) wo sinnvoll, für Langzeitstatistik
+- Zeitstempel-Entities mit device_class: timestamp
+- Nachträglich Korrigierbares gehört in Options, nicht ins initiale Setup
+- Config-Flow muss strukturelle Daten explizit in entry.data schreiben, nicht nur als Default annehmen
+- Services mit voluptuous-Schema + ServiceValidationError, danach Refresh via async_set_updated_data()
+- Zeitfenster ("heute") on-read berechnen statt Reset-Job — neustart- und DST-fest
 
 - **Named exports only** — NO default exports
 - **kebab-case** file names
@@ -89,16 +96,15 @@ HACS-Integration im Standard-Layout custom_components/health_o_mat/. Persistenz 
 
 **Architecture:**
 custom_components/health_o_mat/
-  __init__.py        # Setup/Unload, Services, Options-Handling
-  store.py           # HealthOMatStore (Storage-Persistenz je Person)
-  logic.py           # reine Logik (Tagesfenster, Summen), HA-frei
-  parser.py          # Freitext-Parser für Getränke-Eingaben
-  entity.py           # gemeinsame HealthOMatEntity-Basis
+  __init__.py         # Setup/Unload, Services, Options-Handling, Entry-Registry
+  store.py            # HealthOMatStore (Storage-Persistenz je Person)
+  logic.py            # reine Logik (Tagesfenster on-read, Summen), HA-frei
+  parser.py           # Freitext-Parser für Getränke-Eingaben
+  entity.py           # gemeinsame HealthOMatEntity-Basis (unique_id, device_info)
   sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py
-  exporter.py         # CSV-Export-Service
+  exporter.py         # CSV-Export-Service (privater Ordner, nie /config/www)
   config_flow.py      # Config-/Options-Flow
-tests/                # isolierte Tests für logic.py/parser.py (importlib, ohne HA)
-
+tests/                 # isolierte Tests für logic.py/parser.py (importlib, ohne HA-Paket)
 
 **Dev environment:**
 # HA-Konfiguration prüfen (via CLI im HA-Container):
