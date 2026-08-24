@@ -1,3 +1,17 @@
 __pycache__/
 *.pyc
 .venv/
+
+# --- agent-meta managed (do not edit) ---
+.claude/agent-memory-local/
+.claude/pending-tasks.md
+.claude/settings.local.json
+.mcp.json
+.meta-config/env.ps1
+.meta-config/env.sh
+.meta-config/env.unset.ps1
+.meta-config/env.unset.sh
+.meta-config/secrets.local.yaml
+CLAUDE.personal.md
+sync.log
+# --- end agent-meta managed ---

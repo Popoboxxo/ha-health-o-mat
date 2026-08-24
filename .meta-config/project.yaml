@@ -1,0 +1,96 @@
+project:
+  name: ha-health-o-mat
+  prefix: hom
+  short: health-o-mat
+agent-meta-version: 0.100.0
+ai-providers:
+- Claude
+dod-preset: rapid-prototyping
+platforms:
+- hacs
+roles:
+- orchestrator
+- developer
+- code-reviewer
+- tester
+- devops-engineer
+- release
+- documenter
+- git
+- meta-feedback
+- ideation
+- agent-meta-manager
+variables:
+  PROJECT_NAME: ha-health-o-mat
+  PROJECT_DESCRIPTION: Home Assistant HACS Custom Integration für Getränke-Tracking,
+    Blutdruck- Messwerte und Wohlbefinden-Erfassung pro Person.
+  PROJECT_GOAL: Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat)
+    bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst und als native HA-Entities
+    zur Verfügung stellt.
+  PLATFORM: Home Assistant (HACS Custom Integration)
+  RUNTIME: Home Assistant Core
+  PROJECT_LANGUAGES: Python
+  COMMUNICATION_LANGUAGE: Deutsch
+  USER_INPUT_LANGUAGE: Deutsch
+  DOCS_LANGUAGE: Englisch
+  INTERNAL_DOCS_LANGUAGE: Deutsch
+  CODE_LANGUAGE: Englisch
+  GIT_PLATFORM: GitHub
+  GIT_REMOTE_URL: https://github.com/Popoboxxo/ha-health-o-mat
+  GIT_MAIN_BRANCH: main
+  BUILD_COMMAND: ''
+  TEST_COMMAND: pytest
+  DEV_COMMANDS: '# HA-Konfiguration prüfen (via CLI im HA-Container):
+
+    # ha core check
+
+    '
+  TEST_COMMANDS: 'pytest tests/
+
+    '
+  BUILD_COMMANDS: ''
+  PROJECT_CONTEXT: HACS-Integration im Standard-Layout custom_components/health_o_mat/.
+    Persistenz über homeassistant.helpers.storage.Store, ein Coordinator pro Config-Entry,
+    mehrere Plattformen (sensor, binary_sensor, button, number, select, text) und
+    ein Options-/Config-Flow (eine Person pro Entry).
+  ARCHITECTURE: "custom_components/health_o_mat/\n  __init__.py        # Setup/Unload,\
+    \ Services, Options-Handling\n  store.py           # HealthOMatStore (Storage-Persistenz\
+    \ je Person)\n  logic.py           # reine Logik (Tagesfenster, Summen), HA-frei\n\
+    \  parser.py          # Freitext-Parser für Getränke-Eingaben\n  entity.py   \
+    \        # gemeinsame HealthOMatEntity-Basis\n  sensor.py, binary_sensor.py, button.py,\
+    \ number.py, select.py, text.py\n  exporter.py         # CSV-Export-Service\n\
+    \  config_flow.py      # Config-/Options-Flow\ntests/                # isolierte\
+    \ Tests für logic.py/parser.py (importlib, ohne HA)\n"
+  CODE_CONVENTIONS: '- `from __future__ import annotations` + vollständige Type-Hints
+
+    - unique_id + device_info ab Entity #1
+
+    - Store liegt unter hass.data[DOMAIN]["shared"]["store"]
+
+    - Domain snake_case ohne Bindestriche (health_o_mat)
+
+    - iot_class nur in manifest.json, nie in hacs.json
+
+    '
+  EXTRA_DONTS: ''
+  CODE_QUALITY_RULES: ''
+  REQ_CATEGORIES: ''
+  TESTER_SNIPPETS_PATH: ''
+  DEVELOPER_SNIPPETS_PATH: ''
+  AGENT_META_REPO: Popoboxxo/agent-meta
+# Which rules are active: default (all), minimal (situational off), silent (only essentials)
+rules-preset: default
+# Communication style for all agents. Copied as .claude/rules/speech-mode.md — loaded automatically by Claude Code into every agent context. 'full' = default behavior, no rule generated. 'short' = facts only, no filler. 'childish' = playful, simple language with animal/toy analogies. 'caveman' = brutally short, caveman speech. 'asozial' = technically correct but dripping with contempt — New Kids style, insults the user's intelligence. 'submissive' = completely devoted and submissive, no contradiction, no own opinion, addresses user as master/mistress. 'business' = formal corporate tone. 'bullshit-bingo' = management speak, buzzwords. 'linkedin' = LinkedIn influencer style, inspirational.
+speech-mode: full
+# The active tier preset mapped against config/tier-presets.yaml. Adjusts model selection globally. Use se-focus: true instead of the deprecated '(SE)' suffix variants.
+tier-preset: Normal
+# When true, SE roles (se-architect, se-critic, se-developer, etc.) are upgraded one tier before preset mapping is applied. Replaces the deprecated '(SE)' suffix in tier-preset names.
+se-focus: false
+# Maximum number of agents that a coordinator (orchestrator, feature) may run in parallel via run_in_background. Default: 2. Set to 1 to disable parallelism.
+max-parallel-agents: 2
+# The active naming/versioning conventions preset, matched against config/conventions-presets.yaml. Individual overrides via 'conventions' block. Precedence: conventions > conventions-preset > 'default'.
+conventions-preset: default
+# When true, sync.py injects a debug block into every generated agent. Active agents announce themselves ([Agent: <name>]), log every delegation (→ Delegiere an: ...), and confirm completion (✓ [Agent: <name>] fertig). Default: false — no change to any agent file.
+debug-mode: false
+# Allow sync.py to write files containing detected secrets to committed (non-gitignored) paths. Default: false — sync aborts with an error when a secret is detected in a committed file. Set to true only when you deliberately commit secret-looking values (e.g. static demo tokens). NOT recommended for production projects.
+allow-committed-secrets: false
