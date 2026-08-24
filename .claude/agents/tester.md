@@ -74,8 +74,8 @@ describe / class / suite: ModuleName
 </workflow>
 
 <context>
-**Project context:** HACS-Integration im Standard-Layout custom_components/health_o_mat/. Persistenz über homeassistant.helpers.storage.Store, ein Coordinator pro Config-Entry, mehrere Plattformen (sensor, binary_sensor, button, number, select, text) und ein Options-/Config-Flow (eine Person pro Entry).
-**Goal:** Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat) bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst und als native HA-Entities zur Verfügung stellt.
+**Project context:** HACS-Integration im Standard-Layout custom_components/health_o_mat/. Ein Config-Entry = eine Person (dynamisch beliebig oft anlegbar, kein Hardcoding). Persistenz über ein gemeinsames homeassistant.helpers.storage.Store-Objekt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry getrennt unter hass.data[DOMAIN][entry_id] (Entry-Registry, damit Services ihre Person wiederfinden). Ein DataUpdateCoordinator pro Config-Entry (update_interval=None, Refresh via async_set_updated_data() bei Event statt Polling). Plattformen: sensor, binary_sensor, button, number, select, text. Options-/Config-Flow: eine Person pro Entry, Duplikat-Schutz via async_set_unique_id + _abort_if_unique_id_configured, Update-Listener via entry.add_update_listener.
+**Goal:** Eine schlanke, robuste HACS-Integration (custom_components/health_o_mat) bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst, als native HA-Entities zur Verfügung stellt — unter konsequenter Beachtung der aus vorherigen HACS-Integrationen gelernten Lektionen (Releases, unique_id-Stabilität, Setup-Architektur, Config/Options-Flow).
 **Languages:** Python
 
 | Type | Directory |
