@@ -12,7 +12,7 @@ from .entity import HealthOMatEntity, signal_refresh
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    store = hass.data[DOMAIN]["store"]
+    store = hass.data[DOMAIN]["shared"]["store"]
     entities: list = [
         CustomDrinkButton(coord, entry, store),
         UndoDrinkButton(coord, entry, store),
