@@ -8,6 +8,8 @@ __pycache__/
 .claude/settings.local.json
 .gemini/
 .opencode/
+.claude/
+CLAUDE.md
 .mcp.json
 .meta-config/env.ps1
 .meta-config/env.sh

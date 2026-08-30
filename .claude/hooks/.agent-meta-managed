@@ -1,7 +1,0 @@
-dod-push-check.sh
-graphify-read-guard.sh
-graphify-search-guard.sh
-lifecycle-check.sh
-orchestrator-guard.sh
-sync-on-config-change.sh
-viz-log.sh

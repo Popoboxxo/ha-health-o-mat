@@ -1,8 +1,0 @@
-{
-  "isolation-deny": [
-    ".gemini/**",
-    ".opencode/**",
-    "**/opencode.json",
-    "**/AGENTS.md"
-  ]
-}
