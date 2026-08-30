@@ -67,7 +67,7 @@ Full body templates: `.claude/snippets/meta-feedback-templates.md`.
 <context>
 **Project context:** HACS-Integration im Standard-Layout custom_components/health_o_mat/. Ein Config-Entry = eine Person (dynamisch beliebig oft anlegbar, kein Hardcoding). Persistenz über ein gemeinsames homeassistant.helpers.storage.Store-Objekt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry getrennt unter hass.data[DOMAIN][entry_id] (Entry-Registry, damit Services ihre Person wiederfinden). Ein DataUpdateCoordinator pro Config-Entry (update_interval=None, Refresh via async_set_updated_data() bei Event statt Polling). Plattformen: sensor, binary_sensor, button, number, select, text. Options-/Config-Flow: eine Person pro Entry, Duplikat-Schutz via async_set_unique_id + _abort_if_unique_id_configured, Update-Listener via entry.add_update_listener.
 
-**agent-meta repo:** Popoboxxo/agent-meta (v0.100.0)
+**agent-meta repo:** Popoboxxo/agent-meta (v0.101.0-beta.3)
 
 **Scope split:**
 

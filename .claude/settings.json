@@ -5,7 +5,11 @@
       "Bash(rm -rf:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
-      "Bash(git reset --hard:*)"
+      "Bash(git reset --hard:*)",
+      ".gemini/**",
+      ".opencode/**",
+      "**/opencode.json",
+      "**/AGENTS.md"
     ]
   },
   "hooks": {

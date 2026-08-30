@@ -2,9 +2,11 @@ project:
   name: ha-health-o-mat
   prefix: hom
   short: health-o-mat
-agent-meta-version: 0.100.0
+agent-meta-version: 0.101.0-beta.4
 ai-providers:
 - Claude
+- Gemini
+- Opencode
 dod-preset: rapid-prototyping
 platforms:
 - hacs

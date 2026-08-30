@@ -6,12 +6,17 @@ __pycache__/
 .claude/agent-memory-local/
 .claude/pending-tasks.md
 .claude/settings.local.json
+.gemini/
+.opencode/
 .mcp.json
 .meta-config/env.ps1
 .meta-config/env.sh
 .meta-config/env.unset.ps1
 .meta-config/env.unset.sh
 .meta-config/secrets.local.yaml
+AGENTS.personal.md
+AGENTS.md
 CLAUDE.personal.md
+opencode.json
 sync.log
 # --- end agent-meta managed ---
