@@ -2,24 +2,31 @@ project:
   name: ha-health-o-mat
   prefix: hom
   short: health-o-mat
-agent-meta-version: 0.100.0
+agent-meta-version: 0.101.0-beta.4
 ai-providers:
 - Claude
+- Gemini
+- Opencode
 dod-preset: rapid-prototyping
 platforms:
 - hacs
 roles:
-- orchestrator
-- developer
+- agent-meta-manager
+- bug-feature-analyzer
 - code-reviewer
-- tester
+- concept-reviewer
+- developer
 - devops-engineer
-- release
 - documenter
 - git
-- meta-feedback
 - ideation
-- agent-meta-manager
+- meta-feedback
+- orchestrator
+- release
+- requirements
+- senior-developer
+- tester
+- validator
 variables:
   PROJECT_NAME: ha-health-o-mat
   PROJECT_DESCRIPTION: Home Assistant HACS Custom Integration für Getränke-Tracking,
@@ -115,3 +122,14 @@ conventions-preset: default
 debug-mode: false
 # Allow sync.py to write files containing detected secrets to committed (non-gitignored) paths. Default: false — sync aborts with an error when a secret is detected in a committed file. Set to true only when you deliberately commit secret-looking values (e.g. static demo tokens). NOT recommended for production projects.
 allow-committed-secrets: false
+# Generated files and provider-specific directories should not be committed
+gitignore:
+  generated: true
+  settings: true
+  custom_entries:
+    - .claude/
+    - .gemini/
+    - .opencode/
+    - AGENTS.md
+    - opencode.json
+    - CLAUDE.md
