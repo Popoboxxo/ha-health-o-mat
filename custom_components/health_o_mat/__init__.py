@@ -36,8 +36,6 @@ class HealthOMatData:
         self.custom_amount_ml: int = 250
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
-        self.boundary_hour: int = 0
-        self.boundary_minute: int = 0
         self._inputs: dict = {}
 
 

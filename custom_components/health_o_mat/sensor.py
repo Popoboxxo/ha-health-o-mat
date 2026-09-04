@@ -42,10 +42,9 @@ class HealthOMatSensor(HealthOMatEntity, SensorEntity):
 
     def _today_sums(self) -> dict:
         now = datetime.now()
-        rt = self._entry.runtime_data
         return logic.window_sums(
             self._data.get("drinks", []),
-            logic.day_start(now, rt.boundary_hour, rt.boundary_minute),
+            logic.day_start(now),
             now,
         )
 
@@ -67,7 +66,7 @@ class TodaySensor(HealthOMatSensor):
         sums = self._today_sums()
         rt = self._entry.runtime_data
         now = datetime.now()
-        y_start, y_end = logic.yesterday_window(now, rt.boundary_hour, rt.boundary_minute)
+        y_start, y_end = logic.yesterday_window(now)
         yesterday = logic.window_sums(self._data.get("drinks", []), y_start, y_end)
         return {
             "drinks_count": sums["count"],

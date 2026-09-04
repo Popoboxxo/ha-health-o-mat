@@ -30,10 +30,9 @@ class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
 
     def _today_ml(self) -> int:
         now = datetime.now()
-        rt = self._entry.runtime_data
         sums = logic.window_sums(
             self._data.get("drinks", []),
-            logic.day_start(now, rt.boundary_hour, rt.boundary_minute),
+            logic.day_start(now),
             now,
         )
         return sums["total_ml"]

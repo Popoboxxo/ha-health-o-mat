@@ -46,17 +46,6 @@ DRINK_LEXICON: dict[str, tuple[str, int]] = {
     "milch": ("Milch", 200), "milk": ("Milch", 200),
 }
 
-# Tagesgrenzen-Auswahl (Select)
-DAY_BOUNDARY_MIDNIGHT = "midnight"   # 0 Uhr (Default, per Definition)
-DAY_BOUNDARY_22 = "2200"             # Alt-Verhalten der Reset-Automation
-DAY_BOUNDARY_04 = "0400"             # „Nacht gehört zum Vortag"
-DAY_BOUNDARY_CUSTOM = "custom"
-DAY_BOUNDARY_OPTIONS = [
-    DAY_BOUNDARY_MIDNIGHT,
-    DAY_BOUNDARY_22,
-    DAY_BOUNDARY_04,
-    DAY_BOUNDARY_CUSTOM,
-]
 # Wohlbefinden „Wie geht es dir?": key, Anzeigename, Emoji, MDI-Icon
 WELLBEING_STATES: list[dict] = [
     {"key": "very_bad", "label": "Sehr schlecht", "emoji": "😵", "icon": "mdi:emoticon-dead-outline"},
@@ -65,9 +54,3 @@ WELLBEING_STATES: list[dict] = [
     {"key": "good", "label": "Gut", "emoji": "🙂", "icon": "mdi:emoticon-happy-outline"},
     {"key": "great", "label": "Super", "emoji": "😄", "icon": "mdi:emoticon-excited-outline"},
 ]
-
-BOUNDARY_HOUR_MINUTE: dict[str, tuple[int, int]] = {
-    DAY_BOUNDARY_MIDNIGHT: (0, 0),
-    DAY_BOUNDARY_22: (22, 0),
-    DAY_BOUNDARY_04: (4, 0),
-}
