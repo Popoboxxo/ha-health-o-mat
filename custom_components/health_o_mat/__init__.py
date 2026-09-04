@@ -17,6 +17,7 @@ from .const import (
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
 )
+from .entity import signal_refresh
 from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -93,13 +94,7 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
         wanted = int(opts["set_lifetime_ml"])
         if wanted != int(current):
             hass.async_create_task(store.set_lifetime_start(entry.entry_id, wanted))
-            hass.async_create_task(_refresh_entry(hass, entry.entry_id))
-
-
-async def _refresh_entry(hass, entry_id: str) -> None:
-    info = hass.data.get(DOMAIN, {}).get(entry_id)
-    if info:
-        info["coordinator"].async_set_updated_data(datetime.now().isoformat())
+            signal_refresh(hass, entry.entry_id)
 
 
 async def _options_updated(hass, entry) -> None:
@@ -114,9 +109,7 @@ async def _options_updated(hass, entry) -> None:
     current = int(store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0))
     if wanted and wanted != current:
         await store.set_lifetime_start(entry.entry_id, wanted)
-    info = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if info:
-        info["coordinator"].async_set_updated_data(datetime.now().isoformat())
+    signal_refresh(hass, entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -163,11 +156,6 @@ def _register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, "add_drink"):
         return
 
-    def _refresh(entry_id: str) -> None:
-        info = hass.data[DOMAIN].get(entry_id)
-        if info:
-            info["coordinator"].async_set_updated_data(datetime.now().isoformat())
-
     async def add_drink(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
         ml = int(call.data["amount_ml"])
@@ -179,7 +167,7 @@ def _register_services(hass: HomeAssistant) -> None:
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
         )
-        _refresh(entry_id)
+        signal_refresh(hass, entry_id)
 
     async def add_blood_pressure(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
@@ -191,7 +179,7 @@ def _register_services(hass: HomeAssistant) -> None:
             int(pulse) if pulse else None,
             call.data.get("note") or "", "service",
         )
-        _refresh(entry_id)
+        signal_refresh(hass, entry_id)
 
     async def remove_last_entry(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
@@ -199,7 +187,7 @@ def _register_services(hass: HomeAssistant) -> None:
         removed = await store.remove_last_drink(entry_id)
         if not removed:
             raise ServiceValidationError("Keine Getränke zum Entfernen")
-        _refresh(entry_id)
+        signal_refresh(hass, entry_id)
 
     async def export_csv(call: ServiceCall) -> None:
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
@@ -243,10 +231,3 @@ def _register_services(hass: HomeAssistant) -> None:
         }),
         service_func=export_csv,
     )
-
-
-def signal_update(hass: HomeAssistant, entry_id: str) -> None:
-    """Entities auffrischen (Kompatibilitäts-Alias)."""
-    info = hass.data.get(DOMAIN, {}).get(entry_id)
-    if info and "coordinator" in info:
-        info["coordinator"].async_set_updated_data(datetime.now().isoformat())
