@@ -1,10 +1,9 @@
 """Buttons: Quick-Drinks, Custom-Buchung, Undo, BP-Speichern, Wohlbefinden."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
@@ -37,7 +36,7 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
     async def _book(self, ml: int, drink_type: str, src: str) -> None:
         await self._store.add_drink(
-            self._entry.entry_id, datetime.now().isoformat(), ml, drink_type, src
+            self._entry.entry_id, dt_util.now().isoformat(), ml, drink_type, src
         )
         signal_refresh(self.hass, self._entry.entry_id)
 
@@ -111,7 +110,7 @@ class SaveReadingButton(HealthOMatButton):
             raise HomeAssistantError("Erst Systolisch und Diastolisch eintragen")
         await self._store.add_reading(
             self._entry.entry_id,
-            datetime.now().isoformat(),
+            dt_util.now().isoformat(),
             int(sys_v), int(dia_v),
             int(pulse_v) if pulse_v else None,
             "", "button",
@@ -137,7 +136,7 @@ class WellbeingButton(HealthOMatButton):
         await self._store.set_wellbeing(
             self._entry.entry_id,
             self._status["key"],
-            datetime.now().isoformat(),
+            dt_util.now().isoformat(),
         )
         signal_refresh(self.hass, self._entry.entry_id)
 

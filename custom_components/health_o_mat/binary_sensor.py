@@ -1,9 +1,8 @@
 """Binary-Sensoren: Tagesziel erreicht + Blutdruck-Warnung."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity
@@ -29,7 +28,7 @@ class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
         return self._store.all_entries().get(self._entry.entry_id, {})
 
     def _today_ml(self) -> int:
-        now = datetime.now()
+        now = dt_util.now()
         sums = logic.window_sums(
             self._data.get("drinks", []),
             logic.day_start(now),

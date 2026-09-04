@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity
@@ -41,7 +42,7 @@ class HealthOMatSensor(HealthOMatEntity, SensorEntity):
         return self._store.all_entries().get(self._entry.entry_id, {})
 
     def _today_sums(self) -> dict:
-        now = datetime.now()
+        now = dt_util.now()
         return logic.window_sums(
             self._data.get("drinks", []),
             logic.day_start(now),
@@ -65,7 +66,7 @@ class TodaySensor(HealthOMatSensor):
     def extra_state_attributes(self) -> dict:
         sums = self._today_sums()
         rt = self._entry.runtime_data
-        now = datetime.now()
+        now = dt_util.now()
         y_start, y_end = logic.yesterday_window(now)
         yesterday = logic.window_sums(self._data.get("drinks", []), y_start, y_end)
         return {
@@ -187,5 +188,7 @@ class WellbeingSinceSensor(HealthOMatSensor):
         ts = wb.get("ts")
         if not ts:
             return None
-        from homeassistant.util import dt as dt_util
+        # ts wird seit M-3 tz-aware geschrieben (dt_util.now().isoformat());
+        # ältere naive Bestandsdaten fängt as_local() ab (nimmt lokale
+        # HA-Zeitzone an statt sie undefiniert zu belassen).
         return dt_util.as_local(datetime.fromisoformat(ts))

@@ -1,11 +1,10 @@
 """Gemeinsame Basis: unique_id + Device-Kopplung für alle Entities."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 
@@ -44,4 +43,4 @@ def signal_refresh(hass: HomeAssistant, entry_id: str) -> None:
     """
     info = hass.data.get(DOMAIN, {}).get(entry_id)
     if info and "coordinator" in info:
-        info["coordinator"].async_set_updated_data(datetime.now().isoformat())
+        info["coordinator"].async_set_updated_data(dt_util.now().isoformat())

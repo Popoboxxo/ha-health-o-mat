@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 import voluptuous as vol
 
 from .const import (
@@ -59,7 +59,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     coordinator = DataUpdateCoordinator(
         hass, _LOGGER,
         name=f"health_o_mat_{entry.entry_id}",
-        update_method=lambda: datetime.now().isoformat(),
+        update_method=lambda: dt_util.now().isoformat(),
         update_interval=None,
     )
 
@@ -171,7 +171,7 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("amount_ml muss zwischen 1 und 10000 liegen")
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         await store.add_drink(
-            entry_id, datetime.now().isoformat(), ml,
+            entry_id, dt_util.now().isoformat(), ml,
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
         )
@@ -182,7 +182,7 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         pulse = call.data.get("pulse")
         await store.add_reading(
-            entry_id, datetime.now().isoformat(),
+            entry_id, dt_util.now().isoformat(),
             int(call.data["systolic"]), int(call.data["diastolic"]),
             int(pulse) if pulse else None,
             call.data.get("note") or "", "service",

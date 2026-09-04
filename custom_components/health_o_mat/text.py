@@ -1,11 +1,11 @@
 """Text-Entity: Freitext-Eingabe „Kaffee 300ml" mit Parser."""
 from __future__ import annotations
 
-from datetime import datetime
 import json
 
 from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
@@ -41,7 +41,7 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
             )
         await self._store.add_drink(
             self._entry.entry_id,
-            datetime.now().isoformat(),
+            dt_util.now().isoformat(),
             result.amount_ml,
             result.drink_type,
             "freetext",

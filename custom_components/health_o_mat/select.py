@@ -1,9 +1,8 @@
 """Select: „Wie geht es dir?" mit 5 Smileys (manuell setzbar)."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.components.select import SelectEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, WELLBEING_STATES
 from .entity import HealthOMatEntity, signal_refresh
@@ -43,7 +42,7 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
         if not status:
             return
         await self._store.set_wellbeing(
-            self._entry.entry_id, status["key"], datetime.now().isoformat()
+            self._entry.entry_id, status["key"], dt_util.now().isoformat()
         )
         signal_refresh(self.hass, self._entry.entry_id)
 
