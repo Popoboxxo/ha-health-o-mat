@@ -83,7 +83,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
 
 
 def _apply_options(hass: HomeAssistant, entry) -> None:
-    """Options-Werte zur Laufzeit übernehmen."""
+    """Options-Werte zur Laufzeit übernehmen.
+
+    entry.options ist die einzige Quelle der Wahrheit für daily_goal_ml (Audit C-2).
+    rt.daily_goal_ml ist nur ein Lese-Spiegel für schnellen Zugriff in Sensoren/
+    Binary-Sensoren — er wird ausschließlich hier und in _options_updated() aus
+    entry.options nachgezogen, nie eigenständig geschrieben (auch nicht von der
+    DailyGoalNumber-Entity, siehe number.py).
+    """
     rt = entry.runtime_data
     opts = entry.options or {}
     if opts.get("daily_goal_ml"):
@@ -98,8 +105,11 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
 
 
 async def _options_updated(hass, entry) -> None:
-    """Wird nach dem Speichern des Options-Dialogs aufgerufen (Entry wird neu geladen)."""
-    # Nach Reload ist runtime_data frisch; Options hier direkt anwenden:
+    """Wird bei jeder entry.options-Änderung aufgerufen (Options-Dialog UND
+    DailyGoalNumber.async_set_native_value, siehe number.py — beide schreiben nur
+    noch in entry.options, dieser Listener ist der einzige Sync-Punkt zurück in
+    den Runtime-Spiegel rt.daily_goal_ml).
+    """
     rt = entry.runtime_data
     opts = entry.options or {}
     if opts.get("daily_goal_ml"):

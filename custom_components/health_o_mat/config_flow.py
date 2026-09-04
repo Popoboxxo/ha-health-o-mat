@@ -8,7 +8,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 import voluptuous as vol
 
-from .const import DEFAULT_QUICK_DRINKS, DOMAIN
+from .const import DEFAULT_DAILY_GOAL_ML, DEFAULT_QUICK_DRINKS, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,8 +55,12 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-        current = getattr(self.config_entry.runtime_data, "daily_goal_ml", 2000) \
-            if self.config_entry.runtime_data else 2000
+        # entry.options ist die einzige Quelle der Wahrheit für daily_goal_ml (Audit C-2):
+        # zuerst dort lesen, runtime_data/Default nur als Fallback vor dem ersten Sync.
+        current = self.config_entry.options.get("daily_goal_ml")
+        if current is None:
+            current = getattr(self.config_entry.runtime_data, "daily_goal_ml", DEFAULT_DAILY_GOAL_ML) \
+                if self.config_entry.runtime_data else DEFAULT_DAILY_GOAL_ML
         lifetime = 0
         store = self.hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
         if store:
