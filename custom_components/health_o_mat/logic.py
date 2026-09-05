@@ -72,6 +72,36 @@ def today_sums(
     return window_sums(drinks, day_start(now, hour, minute), now)
 
 
+def avg_over_window(
+    readings: Iterable[dict[str, Any]],
+    key: str,
+    now: datetime,
+    days: int = 7,
+) -> float | None:
+    """Durchschnitt von `key` über Messungen im Zeitfenster [now - days, now].
+
+    Bewusst on-read berechnet (kein Reset-Job): neustart- und DST-fest, analog
+    zu `today_sums`/`window_sums`. Werte mit fehlendem/None `key` und Einträge
+    mit ungültigem/fehlendem `ts` werden übersprungen.
+    Rückgabe: None, falls kein gültiger Wert im Fenster liegt (statt 0, um
+    "keine Daten" von "Durchschnitt 0" zu unterscheiden).
+    """
+    start = now - timedelta(days=days)
+    values: list[float] = []
+    for r in readings:
+        try:
+            ts = datetime.fromisoformat(r["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start <= ts <= now:
+            val = r.get(key)
+            if val is not None:
+                values.append(val)
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def yesterday_window(now: datetime, hour: int = 0, minute: int = 0) -> tuple[datetime, datetime]:
     """Fenster des Vortags [Start(Vortag), Start(heute))."""
     this_start = day_start(now, hour, minute)

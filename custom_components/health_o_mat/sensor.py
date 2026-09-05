@@ -145,11 +145,10 @@ class LastReadingSensor(HealthOMatSensor):
         readings = self._sorted_readings()
         if not readings:
             return {}
-        vals = [r[self._key] for r in readings if r.get(self._key) is not None]
-        window = vals[-20:] if vals else []
+        avg = logic.avg_over_window(readings, self._key, dt_util.now())
         return {
             "measured_at": readings[-1].get("ts"),
-            "avg_7d": round(sum(window) / len(window), 1) if window else None,
+            "avg_7d": round(avg, 1) if avg is not None else None,
             "readings_total": len(readings),
         }
 

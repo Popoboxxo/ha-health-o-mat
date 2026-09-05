@@ -91,3 +91,48 @@ def test_yesterday_window():
     now = datetime(2026, 8, 22, 23, 0)
     s, e = logic.yesterday_window(now)
     assert s == datetime(2026, 8, 21, 0, 0) and e == datetime(2026, 8, 22, 0, 0)
+
+
+READINGS = [
+    {"ts": "2026-08-22T08:00:00", "sys": 120, "dia": 80, "pulse": 70},
+    {"ts": "2026-08-16T08:00:00", "sys": 130, "dia": 85, "pulse": 72},  # exactly 7 days before "today"
+    {"ts": "2026-08-10T08:00:00", "sys": 999, "dia": 999, "pulse": 999},  # outside window, must be excluded
+    {"ts": "2026-08-20T08:00:00", "sys": 110, "dia": None, "pulse": None},  # None value for dia/pulse
+    {"ts": "kaputt", "sys": 500, "dia": 500, "pulse": 500},  # invalid ts, must be excluded
+]
+
+
+def test_avg_over_window_basic():
+    now = datetime(2026, 8, 23, 8, 0)
+    avg = logic.avg_over_window(READINGS, "sys", now)
+    # within [now-7d, now]: 120 (22.), 130 (16., exactly at boundary), 110 (20.)
+    assert avg == (120 + 130 + 110) / 3
+
+
+def test_avg_over_window_excludes_outside_range():
+    now = datetime(2026, 8, 23, 8, 0)
+    avg = logic.avg_over_window(READINGS, "sys", now)
+    assert avg != 999
+    # sanity: the outlier reading from 08-10 is more than 7 days before "now"
+    assert (now - datetime(2026, 8, 10, 8, 0)).days > 7
+
+
+def test_avg_over_window_skips_none_values():
+    now = datetime(2026, 8, 23, 8, 0)
+    avg = logic.avg_over_window(READINGS, "dia", now)
+    # only 2026-08-22 (80) and 2026-08-16 (85) have a non-None dia in window
+    assert avg == (80 + 85) / 2
+
+
+def test_avg_over_window_empty_when_no_readings_in_range():
+    now = datetime(2026, 8, 23, 8, 0)
+    assert logic.avg_over_window([], "sys", now) is None
+    only_old = [{"ts": "2020-01-01T00:00:00", "sys": 120}]
+    assert logic.avg_over_window(only_old, "sys", now) is None
+
+
+def test_avg_over_window_custom_days():
+    now = datetime(2026, 8, 23, 8, 0)
+    # with days=1, only the 08-22 reading qualifies
+    avg = logic.avg_over_window(READINGS, "sys", now, days=1)
+    assert avg == 120
