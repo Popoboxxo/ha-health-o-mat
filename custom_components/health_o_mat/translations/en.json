@@ -46,7 +46,15 @@
     "button": {
       "book_custom": "Book custom amount",
       "undo_drink": "Undo last drink",
-      "save_reading": "Save measurement"
+      "save_reading": "Save measurement",
+      "report_very_bad": "Report: Very bad",
+      "report_bad": "Report: Bad",
+      "report_okay": "Report: Okay",
+      "report_good": "Report: Good",
+      "report_great": "Report: Great"
+    },
+    "select": {
+      "wellbeing": "How are you feeling?"
     },
     "text": {
       "freetext": "Free-text drink"

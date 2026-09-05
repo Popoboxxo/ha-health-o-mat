@@ -18,11 +18,11 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
     """„Wie geht es dir?" — Status per Select oder Melden-Button."""
 
     _attr_icon = "mdi:emoticon-outline"
+    _attr_translation_key = "wellbeing"
 
     def __init__(self, coordinator, entry, store) -> None:
         super().__init__(coordinator, entry, "select_wellbeing")
         self._store = store
-        self._attr_name = "Wie geht es dir?"
         self._attr_options = [s["label"] for s in WELLBEING_STATES]
         self._by_key = {s["key"]: s for s in WELLBEING_STATES}
         self._by_label = {s["label"]: s for s in WELLBEING_STATES}

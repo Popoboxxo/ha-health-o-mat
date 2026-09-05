@@ -46,7 +46,15 @@
     "button": {
       "book_custom": "Eigenen Betrag buchen",
       "undo_drink": "Letzte Buchung löschen",
-      "save_reading": "Messung speichern"
+      "save_reading": "Messung speichern",
+      "report_very_bad": "Melden: Sehr schlecht",
+      "report_bad": "Melden: Schlecht",
+      "report_okay": "Melden: Okay",
+      "report_good": "Melden: Gut",
+      "report_great": "Melden: Super"
+    },
+    "select": {
+      "wellbeing": "Wie geht es dir?"
     },
     "text": {
       "freetext": "Freitext Getränk"

@@ -42,7 +42,13 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
 
 class QuickDrinkButton(HealthOMatButton):
-    """Vorgefertigter Getränke-Button (Label + ml aus Config)."""
+    """Vorgefertigter Getränke-Button (Label + ml aus Config).
+
+    Bewusst kein translation_key: das Label ist Freitext aus der
+    nutzerdefinierten quick_drinks-Config (z. B. "Kaffee 200ml"), keine
+    vom Code fest vergebene Bezeichnung — dafür gibt es nichts zu
+    übersetzen (Audit-Finding M-8).
+    """
 
     _attr_icon = "mdi:cup-water"
 
@@ -125,7 +131,7 @@ class WellbeingButton(HealthOMatButton):
     def __init__(self, coordinator, entry, store, status: dict) -> None:
         super().__init__(coordinator, entry, store, f"button_report_{status['key']}")
         self._status = status
-        self._attr_name = f"Melden: {status['label']}"
+        self._attr_translation_key = f"report_{status['key']}"
         self._attr_icon = str(status["icon"])
 
     @property
