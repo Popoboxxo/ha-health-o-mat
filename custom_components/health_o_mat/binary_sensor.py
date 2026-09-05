@@ -1,7 +1,10 @@
 """Binary-Sensoren: Tagesziel erreicht + Blutdruck-Warnung."""
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
@@ -46,6 +49,9 @@ class GoalReachedEntity(HealthOMatBinary):
 class BloodPressureWarningEntity(HealthOMatBinary):
     _attr_translation_key = "bp_warning"
     _attr_icon = "mdi:alert-octagon"
+    # is_on == True bedeutet: letzte Messung liegt ueber dem sys/dia-Schwellwert,
+    # also "Problem erkannt" - passt zur PROBLEM-Semantik (on = Problem).
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, coordinator, entry, store) -> None:
         super().__init__(coordinator, entry, store, "binary_bp_warning")

@@ -94,6 +94,12 @@ class HistoryDrinksSensor(HealthOMatSensor):
 
     _attr_translation_key = "history_drinks"
     _attr_icon = "mdi:format-list-bulleted"
+    # native_value ist die Anzahl Getränke im heutigen (on-read berechneten)
+    # Fenster und wird beim Tageswechsel implizit auf 0 zurückgesetzt (kein
+    # Reset-Job, siehe logic.today_sums). Ohne last_reset-Attribut wäre TOTAL
+    # semantisch falsch (HA-Statistics-Engine kann den Reset nicht als
+    # legitimen Cycle erkennen) - daher MEASUREMENT statt TOTAL.
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> int:
@@ -158,6 +164,10 @@ class BloodPressureHistorySensor(HealthOMatSensor):
 
     _attr_translation_key = "history_bp"
     _attr_icon = "mdi:heart-box-outline"
+    # native_value ist die Gesamtzahl aller je gespeicherten Messungen
+    # (store.py haengt readings nur an, es gibt keinen Loesch-/Trim-Pfad) -
+    # ein monoton steigender Lebenszaehler, analog zu LifetimeSensor.
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
     def native_value(self) -> int:
