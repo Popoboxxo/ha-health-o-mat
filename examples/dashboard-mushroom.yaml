@@ -1,0 +1,205 @@
+# HA Health-O-Mat — Mushroom-Dashboard (3 Ansichten)
+#
+# Voraussetzung: HACS-Plugin "Mushroom" installiert
+#   (HACS → Frontend → lovelace-mushroom)
+# Entity-IDs sind englisch gepinnt (unabhängig von der Systemsprache);
+# Anzeigenamen folgen automatisch de/en. Person hier: "Max" → Prefix
+# health_o_mat_max. Eigenen Personennamen ersetzen!
+# Import: Einstellungen → Dashboards → "Neues Dashboard aus YAML"
+title: Health-O-Mat (Mushroom)
+views:
+  # ---------------------------------------------------------------- Trinken --
+  - title: Trinken
+    path: trinken
+    icon: mdi:cup-water
+    cards:
+      - type: custom:mushroom-title-card
+        title: 💧 Trink-Tagebuch
+        subtitle: Heute-Ziel und Verlauf
+
+      - type: custom:mushroom-chips-card
+        chips:
+          - type: entity
+            entity: sensor.health_o_mat_max_drinks_today
+          - type: entity
+            entity: binary_sensor.health_o_mat_max_daily_goal_reached
+          - type: entity
+            entity: sensor.health_o_mat_max_lifetime_total
+
+      - type: gauge
+        entity: sensor.health_o_mat_max_daily_goal_progress
+        min: 0
+        max: 100
+        severity:
+          green: 100
+          yellow: 60
+          red: 0
+
+      - type: grid
+        columns: 3
+        square: false
+        cards:
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_glas_wasser
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_flasche_wasser
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_tasse_kaffee
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_glas_saft
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_book_custom_amount
+            icon_color: primary
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_undo_last_drink
+            icon_color: red
+
+      - type: custom:mushroom-number-card
+        entity: number.health_o_mat_max_custom_drink_amount
+        name: Eigenmenge (ml)
+        display_mode: slider
+
+      - type: custom:mushroom-template-card
+        entity: text.health_o_mat_max_log_drink_free_text
+        primary: "Freitext-Buchung"
+        secondary: 'z. B. "Kaffee 300ml" oder "0,5 l wasser" — ins Feld tippen + Enter'
+        icon: mdi:keyboard-return
+        tap_action:
+          action: more-info
+
+      - type: custom:mushroom-number-card
+        entity: number.health_o_mat_max_daily_goal
+        name: Tagesziel (ml)
+        display_mode: slider
+
+      - type: history-graph
+        title: Heute getrunken (24 h)
+        entity: sensor.health_o_mat_max_drinks_today
+        hours_to_show: 24
+
+  # -------------------------------------------------------------- Blutdruck --
+  - title: Blutdruck
+    path: blutdruck
+    icon: mdi:heart-pulse
+    cards:
+      - type: custom:mushroom-title-card
+        title: 🩺 Blutdruck
+        subtitle: Messwerte eintragen und beobachten
+
+      - type: horizontal-stack
+        cards:
+          - type: custom:mushroom-entity-card
+            entity: sensor.health_o_mat_max_blood_pressure_systolic
+            icon_color: red
+          - type: custom:mushroom-entity-card
+            entity: sensor.health_o_mat_max_blood_pressure_diastolic
+            icon_color: orange
+          - type: custom:mushroom-entity-card
+            entity: sensor.health_o_mat_max_pulse
+            icon_color: purple
+
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.health_o_mat_max_blood_pressure_warning
+            state: "on"
+        card:
+          type: custom:mushroom-template-card
+          entity: binary_sensor.health_o_mat_max_blood_pressure_warning
+          primary: "⚠️ Warnschwelle überschritten"
+          secondary: "Letzte Messung oberhalb der Schwellen — Nochmal messen!"
+          icon_color: red
+          icon: mdi:alert-octagon
+
+      - type: custom:mushroom-entity-card
+        entity: binary_sensor.health_o_mat_max_blood_pressure_warning
+
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: custom:mushroom-number-card
+            entity: number.health_o_mat_max_new_reading_systolic
+            display_mode: box
+          - type: custom:mushroom-number-card
+            entity: number.health_o_mat_max_new_reading_diastolic
+            display_mode: box
+          - type: custom:mushroom-number-card
+            entity: number.health_o_mat_max_new_reading_pulse
+            display_mode: box
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_save_measurement
+            icon_color: green
+
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: custom:mushroom-number-card
+            entity: number.health_o_mat_max_systolic_warning_threshold
+            display_mode: box
+          - type: custom:mushroom-number-card
+            entity: number.health_o_mat_max_diastolic_warning_threshold
+            display_mode: box
+
+      - type: history-graph
+        title: 7 Tage
+        entities:
+          - entity: sensor.health_o_mat_max_blood_pressure_systolic
+          - entity: sensor.health_o_mat_max_blood_pressure_diastolic
+          - entity: sensor.health_o_mat_max_pulse
+        hours_to_show: 168
+
+  # ------------------------------------------------------------ Wohlbefinden --
+  - title: Wohlbefinden
+    path: wohl_befinden
+    icon: mdi:emoticon-happy-outline
+    cards:
+      - type: custom:mushroom-title-card
+        title: 🙂 Wohlbefinden
+        subtitle: Kontinuierliche Gesundheitsleiste
+
+      - type: custom:mushroom-template-card
+        entity: select.health_o_mat_max_wellbeing
+        primary: "Gesundheitszustand"
+        secondary: >-
+          {{ { 'very_bad': '😵 Sehr schlecht',
+               'bad': '🙁 Schlecht',
+               'okay': '😐 Okay',
+               'good': '🙂 Gut',
+               'great': '😄 Super' }.get(states(entity), '— noch nicht gemeldet') }}
+        icon: >-
+          {{ { 'very_bad': 'mdi:emoticon-dead-outline',
+               'bad': 'mdi:emoticon-sad-outline',
+               'okay': 'mdi:emoticon-neutral-outline',
+               'good': 'mdi:emoticon-happy-outline',
+               'great': 'mdi:emoticon-excited-outline' }.get(states(entity), 'mdi:emoticon-outline') }}
+        multiline_secondary: true
+        tap_action:
+          action: more-info
+
+      - type: custom:mushroom-select-card
+        entity: select.health_o_mat_max_wellbeing
+
+      - type: custom:mushroom-entity-card
+        entity: sensor.health_o_mat_max_wellbeing_last_reported
+
+      - type: grid
+        columns: 5
+        square: false
+        cards:
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_report_very_bad
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_report_bad
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_report_okay
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_report_good
+          - type: custom:mushroom-button-card
+            entity: button.health_o_mat_max_report_great
+
+      - type: history-graph
+        title: 30 Tage (Balken-Timeline)
+        entity: select.health_o_mat_max_wellbeing
+        hours_to_show: 720
