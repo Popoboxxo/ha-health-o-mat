@@ -1,11 +1,11 @@
 """CSV-Export (Service-only, kein Button)."""
 from __future__ import annotations
 
-from datetime import datetime
 import os
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 from .logic import csv_filename, drinks_csv_rows, rows_to_csv_string
 from .store import HealthOMatStore
@@ -15,7 +15,7 @@ async def async_export_csv(hass: HomeAssistant, store: HealthOMatStore, call: Se
     """Schreibt Getränke-/BP-CSV(s) nach /config/health_o_mat_export/."""
     person_filter = (call.data.get("person") or "").strip().lower()
     dataset = call.data.get("dataset", "all")
-    now = datetime.now()
+    now = dt_util.now()
 
     def _resolve_entry_ids() -> list[str]:
         ids = []

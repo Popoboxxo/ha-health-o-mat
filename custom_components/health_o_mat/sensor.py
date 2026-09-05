@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity
@@ -41,13 +42,7 @@ class HealthOMatSensor(HealthOMatEntity, SensorEntity):
         return self._store.all_entries().get(self._entry.entry_id, {})
 
     def _today_sums(self) -> dict:
-        now = datetime.now()
-        rt = self._entry.runtime_data
-        return logic.window_sums(
-            self._data.get("drinks", []),
-            logic.day_start(now, rt.boundary_hour, rt.boundary_minute),
-            now,
-        )
+        return logic.today_sums(self._data.get("drinks", []), dt_util.now())
 
 
 class TodaySensor(HealthOMatSensor):
@@ -66,8 +61,8 @@ class TodaySensor(HealthOMatSensor):
     def extra_state_attributes(self) -> dict:
         sums = self._today_sums()
         rt = self._entry.runtime_data
-        now = datetime.now()
-        y_start, y_end = logic.yesterday_window(now, rt.boundary_hour, rt.boundary_minute)
+        now = dt_util.now()
+        y_start, y_end = logic.yesterday_window(now)
         yesterday = logic.window_sums(self._data.get("drinks", []), y_start, y_end)
         return {
             "drinks_count": sums["count"],
@@ -99,6 +94,12 @@ class HistoryDrinksSensor(HealthOMatSensor):
 
     _attr_translation_key = "history_drinks"
     _attr_icon = "mdi:format-list-bulleted"
+    # native_value ist die Anzahl Getränke im heutigen (on-read berechneten)
+    # Fenster und wird beim Tageswechsel implizit auf 0 zurückgesetzt (kein
+    # Reset-Job, siehe logic.today_sums). Ohne last_reset-Attribut wäre TOTAL
+    # semantisch falsch (HA-Statistics-Engine kann den Reset nicht als
+    # legitimen Cycle erkennen) - daher MEASUREMENT statt TOTAL.
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def native_value(self) -> int:
@@ -150,11 +151,10 @@ class LastReadingSensor(HealthOMatSensor):
         readings = self._sorted_readings()
         if not readings:
             return {}
-        vals = [r[self._key] for r in readings if r.get(self._key) is not None]
-        window = vals[-20:] if vals else []
+        avg = logic.avg_over_window(readings, self._key, dt_util.now())
         return {
             "measured_at": readings[-1].get("ts"),
-            "avg_7d": round(sum(window) / len(window), 1) if window else None,
+            "avg_7d": round(avg, 1) if avg is not None else None,
             "readings_total": len(readings),
         }
 
@@ -164,6 +164,10 @@ class BloodPressureHistorySensor(HealthOMatSensor):
 
     _attr_translation_key = "history_bp"
     _attr_icon = "mdi:heart-box-outline"
+    # native_value ist die Gesamtzahl aller je gespeicherten Messungen
+    # (store.py haengt readings nur an, es gibt keinen Loesch-/Trim-Pfad) -
+    # ein monoton steigender Lebenszaehler, analog zu LifetimeSensor.
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
     @property
     def native_value(self) -> int:
@@ -188,5 +192,7 @@ class WellbeingSinceSensor(HealthOMatSensor):
         ts = wb.get("ts")
         if not ts:
             return None
-        from homeassistant.util import dt as dt_util
+        # ts wird seit M-3 tz-aware geschrieben (dt_util.now().isoformat());
+        # ältere naive Bestandsdaten fängt as_local() ab (nimmt lokale
+        # HA-Zeitzone an statt sie undefiniert zu belassen).
         return dt_util.as_local(datetime.fromisoformat(ts))

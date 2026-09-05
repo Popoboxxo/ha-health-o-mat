@@ -1,10 +1,9 @@
 """Buttons: Quick-Drinks, Custom-Buchung, Undo, BP-Speichern, Wohlbefinden."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
@@ -37,13 +36,19 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
     async def _book(self, ml: int, drink_type: str, src: str) -> None:
         await self._store.add_drink(
-            self._entry.entry_id, datetime.now().isoformat(), ml, drink_type, src
+            self._entry.entry_id, dt_util.now().isoformat(), ml, drink_type, src
         )
         signal_refresh(self.hass, self._entry.entry_id)
 
 
 class QuickDrinkButton(HealthOMatButton):
-    """Vorgefertigter Getränke-Button (Label + ml aus Config)."""
+    """Vorgefertigter Getränke-Button (Label + ml aus Config).
+
+    Bewusst kein translation_key: das Label ist Freitext aus der
+    nutzerdefinierten quick_drinks-Config (z. B. "Kaffee 200ml"), keine
+    vom Code fest vergebene Bezeichnung — dafür gibt es nichts zu
+    übersetzen (Audit-Finding M-8).
+    """
 
     _attr_icon = "mdi:cup-water"
 
@@ -111,7 +116,7 @@ class SaveReadingButton(HealthOMatButton):
             raise HomeAssistantError("Erst Systolisch und Diastolisch eintragen")
         await self._store.add_reading(
             self._entry.entry_id,
-            datetime.now().isoformat(),
+            dt_util.now().isoformat(),
             int(sys_v), int(dia_v),
             int(pulse_v) if pulse_v else None,
             "", "button",
@@ -126,7 +131,7 @@ class WellbeingButton(HealthOMatButton):
     def __init__(self, coordinator, entry, store, status: dict) -> None:
         super().__init__(coordinator, entry, store, f"button_report_{status['key']}")
         self._status = status
-        self._attr_name = f"Melden: {status['label']}"
+        self._attr_translation_key = f"report_{status['key']}"
         self._attr_icon = str(status["icon"])
 
     @property
@@ -137,7 +142,7 @@ class WellbeingButton(HealthOMatButton):
         await self._store.set_wellbeing(
             self._entry.entry_id,
             self._status["key"],
-            datetime.now().isoformat(),
+            dt_util.now().isoformat(),
         )
         signal_refresh(self.hass, self._entry.entry_id)
 
