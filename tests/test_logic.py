@@ -80,6 +80,13 @@ def test_filename():
     assert name == "health_o_mat_drinks_Caro_20260822-1805.csv"
 
 
+def test_today_sums_matches_window_sums():
+    now = datetime(2026, 8, 22, 23, 0)
+    expected = logic.window_sums(DRINKS, logic.day_start(now), now)
+    assert logic.today_sums(DRINKS, now) == expected
+    assert logic.today_sums(DRINKS, now)["total_ml"] == 750
+
+
 def test_yesterday_window():
     now = datetime(2026, 8, 22, 23, 0)
     s, e = logic.yesterday_window(now)

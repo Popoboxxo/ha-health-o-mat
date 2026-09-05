@@ -57,6 +57,21 @@ def window_sums(
     }
 
 
+def today_sums(
+    drinks: Iterable[dict[str, Any]],
+    now: datetime,
+    hour: int = 0,
+    minute: int = 0,
+) -> dict[str, Any]:
+    """Summen über Getränke im laufenden Tracking-Tag [day_start(now), now).
+
+    Zentrale Aggregations-Funktion für alle Plattformen (sensor, binary_sensor, …) —
+    vermeidet duplizierte `window_sums(drinks, day_start(now), now)`-Aufrufe.
+    Rückgabe wie `window_sums`: total_ml, count, breakdown, last_ts.
+    """
+    return window_sums(drinks, day_start(now, hour, minute), now)
+
+
 def yesterday_window(now: datetime, hour: int = 0, minute: int = 0) -> tuple[datetime, datetime]:
     """Fenster des Vortags [Start(Vortag), Start(heute))."""
     this_start = day_start(now, hour, minute)
