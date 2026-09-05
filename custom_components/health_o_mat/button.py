@@ -129,7 +129,7 @@ class WellbeingButton(HealthOMatButton):
     """Meldet „Wie geht es dir?" und setzt den Select-Status."""
 
     def __init__(self, coordinator, entry, store, status: dict) -> None:
-        super().__init__(coordinator, entry, store, f"button_report_{status['key']}")
+        super().__init__(coordinator, entry, store, f"button_wellbeing_report_{status['key']}")
         self._status = status
         self._attr_translation_key = f"report_{status['key']}"
         self._attr_icon = str(status["icon"])

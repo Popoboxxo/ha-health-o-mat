@@ -30,18 +30,18 @@
   "entity": {
     "sensor": {
       "today": "Heute getrunken",
-      "goal_percent": "Tagesziel Prozent",
-      "history_drinks": "Getränke Historie",
-      "lifetime": "Gesamt (Lebenszähler)",
-      "history_bp": "Blutdruck Verlauf",
-      "bp_sys": "Blutdruck Systolisch",
-      "bp_dia": "Blutdruck Diastolisch",
+      "goal_percent": "Tagesziel-Fortschritt",
+      "history_drinks": "Getränke-Historie",
+      "lifetime": "Gesamtmenge (Lebenszähler)",
+      "history_bp": "Blutdruck-Historie",
+      "bp_sys": "Blutdruck systolisch",
+      "bp_dia": "Blutdruck diastolisch",
       "bp_pulse": "Puls",
-      "wellbeing_since": "Wohlbefinden gemeldet am"
+      "wellbeing_since": "Wohlbefinden zuletzt gemeldet"
     },
     "binary_sensor": {
       "goal_reached": "Tagesziel erreicht",
-      "bp_warning": "Blutdruck Warnung"
+      "bp_warning": "Blutdruck-Warnung"
     },
     "button": {
       "book_custom": "Eigenen Betrag buchen",
@@ -54,19 +54,28 @@
       "report_great": "Melden: Super"
     },
     "select": {
-      "wellbeing": "Wie geht es dir?"
+      "wellbeing": {
+        "name": "Wohlbefinden",
+        "state": {
+          "very_bad": "Sehr schlecht",
+          "bad": "Schlecht",
+          "okay": "Okay",
+          "good": "Gut",
+          "great": "Super"
+        }
+      }
     },
     "text": {
-      "freetext": "Freitext Getränk"
+      "freetext": "Getränk buchen (Freitext)"
     },
     "number": {
-      "daily_goal": "Tagesziel ml",
-      "custom_amount": "Eigenmenge ml",
-      "threshold_sys": "Warnschwelle Systolisch",
-      "threshold_dia": "Warnschwelle Diastolisch",
-      "input_systolic": "Eingabe Systolisch",
-      "input_diastolic": "Eingabe Diastolisch",
-      "input_pulse": "Eingabe Puls"
+      "daily_goal": "Tagesziel",
+      "custom_amount": "Eigenmenge",
+      "threshold_sys": "Warnschwelle systolisch",
+      "threshold_dia": "Warnschwelle diastolisch",
+      "input_systolic": "Neue Messung: systolisch",
+      "input_diastolic": "Neue Messung: diastolisch",
+      "input_pulse": "Neue Messung: Puls"
     }
   }
 }

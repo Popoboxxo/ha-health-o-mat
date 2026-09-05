@@ -29,15 +29,15 @@
   },
   "entity": {
     "sensor": {
-      "today": "Drunk today",
-      "goal_percent": "Daily goal percent",
+      "today": "Drinks today",
+      "goal_percent": "Daily goal progress",
       "history_drinks": "Drinks history",
       "lifetime": "Lifetime total",
       "history_bp": "Blood pressure history",
       "bp_sys": "Blood pressure systolic",
       "bp_dia": "Blood pressure diastolic",
       "bp_pulse": "Pulse",
-      "wellbeing_since": "Wellbeing reported at"
+      "wellbeing_since": "Wellbeing last reported"
     },
     "binary_sensor": {
       "goal_reached": "Daily goal reached",
@@ -54,19 +54,28 @@
       "report_great": "Report: Great"
     },
     "select": {
-      "wellbeing": "How are you feeling?"
+      "wellbeing": {
+        "name": "Wellbeing",
+        "state": {
+          "very_bad": "Very bad",
+          "bad": "Bad",
+          "okay": "Okay",
+          "good": "Good",
+          "great": "Great"
+        }
+      }
     },
     "text": {
-      "freetext": "Free-text drink"
+      "freetext": "Log drink (free text)"
     },
     "number": {
-      "daily_goal": "Daily goal ml",
-      "custom_amount": "Custom amount ml",
-      "threshold_sys": "Warning threshold systolic",
-      "threshold_dia": "Warning threshold diastolic",
-      "input_systolic": "Input systolic",
-      "input_diastolic": "Input diastolic",
-      "input_pulse": "Input pulse"
+      "daily_goal": "Daily goal",
+      "custom_amount": "Custom drink amount",
+      "threshold_sys": "Systolic warning threshold",
+      "threshold_dia": "Diastolic warning threshold",
+      "input_systolic": "New reading: systolic",
+      "input_diastolic": "New reading: diastolic",
+      "input_pulse": "New reading: pulse"
     }
   },
   "services": {
