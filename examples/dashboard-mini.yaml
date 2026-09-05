@@ -1,0 +1,43 @@
+# HA Health-O-Mat — Mini-Dashboard (eine Karte, zum Einbauen in bestehende Dashboards)
+# Person hier: "Max" → Prefix health_o_mat_max. Eigenen Personennamen ersetzen!
+type: vertical-stack
+cards:
+  - type: horizontal-stack
+    cards:
+      - type: gauge
+        entity: sensor.health_o_mat_max_daily_goal_progress
+        severity:
+          green: 100
+          yellow: 60
+          red: 0
+      - type: vertical-stack
+        cards:
+          - type: tile
+            entity: sensor.health_o_mat_max_drinks_today
+          - type: tile
+            entity: binary_sensor.health_o_mat_max_daily_goal_reached
+
+  - type: horizontal-stack
+    cards:
+      - type: tile
+        entity: sensor.health_o_mat_max_blood_pressure_systolic
+        color: red
+      - type: tile
+        entity: sensor.health_o_mat_max_blood_pressure_diastolic
+        color: orange
+      - type: tile
+        entity: sensor.health_o_mat_max_pulse
+        color: purple
+
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+      - type: button
+        entity: button.health_o_mat_max_glas_wasser
+      - type: button
+        entity: button.health_o_mat_max_flasche_wasser
+      - type: button
+        entity: button.health_o_mat_max_book_custom_amount
+      - type: button
+        entity: button.health_o_mat_max_undo_last_drink

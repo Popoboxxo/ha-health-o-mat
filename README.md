@@ -32,20 +32,44 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 3. Einstellungen → Geräte & Dienste → Integration hinzufügen → **HA Health-O-Mat**
 4. Person anlegen (pro Person einmal durchlaufen)
 
-## Entities (je Person)
+## Entities & Benennung (je Person)
 
-| Typ | Entity | Zweck |
-|---|---|---|
-| sensor | `Heute getrunken` | **ml heute** (+ Attribute: count, %, breakdown, gestern) |
-| sensor | `Tagesziel Prozent` | Gauge-fähig |
-| sensor | `Getränke Historie` | Rohdaten als JSON-Attribut |
-| sensor | `Gesamt (Lebenszähler)` | kumuliert |
-| sensor | `Blutdruck Systolisch/Diastolisch/Puls` | letzte Messung (measurement → Graph) |
-| sensor | `Blutdruck Verlauf` | letzte 30 Messungen als JSON |
-| binary_sensor | `Tagesziel erreicht` / `Blutdruck Warnung` | Status |
-| button | Quick-Drinks, Eigenen Betrag buchen, Letzte Buchung löschen, Messung speichern | Alltagseingabe |
-| text | `Freitext Getränk` | „Kaffee 300ml" → Enter = buchen |
-| number | Tagesziel, Eigenmenge, Warnschwellen, BP-Eingabefelder | Runtime-Einstellungen |
+**Sprechende englische IDs, lokalisierte Anzeigenamen:** Die Entity-IDs sind
+sprachunabhängig auf Englisch und entstehen aus dem englischen Anzeigenamen
+(`sensor.health_o_mat_max_drinks_today`), der angezeigte Name folgt der
+System-/Profilsprache von Home Assistant (de/en). Pro Person/Device lautet
+das ID-Muster:
+
+```
+<platform>.health_o_mat_<person-slug>_<name-suffix>
+z. B.  sensor.health_o_mat_caro_drinks_today
+```
+
+| Typ | Entity-ID (Suffix) | Anzeige (de/en) | Zweck |
+|---|---|---|---|
+| sensor | `drinks_today` | Heute getrunken / Drinks today | **ml heute** (+ count, %, breakdown, gestern) |
+| sensor | `daily_goal_progress` | Tagesziel-Fortschritt / Daily goal progress | Gauge-fähig |
+| sensor | `drinks_history` | Getränke-Historie / Drinks history | Rohdaten als JSON-Attribut |
+| sensor | `lifetime_total` | Gesamtmenge / Lifetime total | kumuliert |
+| sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
+| sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
+| sensor | `wellbeing_last_reported` | Wohlbefinden zuletzt gemeldet / Wellbeing last reported | Zeitstempel |
+| binary_sensor | `daily_goal_reached` / `blood_pressure_warning` | Tagesziel erreicht, Blutdruck-Warnung | Status |
+| button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Löschen/Speichern | Alltagseingabe |
+| button | `report_very_bad` … `report_great` | Melden: … / Report: … | Wohlbefinden |
+| select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
+| text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
+| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel, Eigenmenge, Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
+
+### Migration (Entity-ID-Neuregistrierung, Update von v0.2.0 oder älter)
+
+Die unique_ids wurden auf das neue Schema umgestellt: Betroffene Entities
+(Sensoren, Wohlbefinden-Select, Melden-Buttons) registrieren sich beim ersten
+Start nach dem Update **neu mit englischen IDs** (alte Einträge erscheinen als
+verwaiste Entities im Entity-Registry und können dort gelöscht werden).
+Getränke-/Messdaten bleiben erhalten — sie hängen am Config-Entry, nicht an
+der Entity-ID. Automationen/Dashboards mit alten (teils deutschen) Entity-IDs
+müssen einmalig umgestellt werden; Vorlage siehe `examples/`.
 
 ## Services
 
@@ -63,9 +87,15 @@ action: health_o_mat.export_csv
 data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all
 ```
 
-## Dashboard-Beispiel
+## Dashboard-Beispiele
 
-Siehe [`examples/dashboard.yaml`](examples/dashboard.yaml).
+- [`examples/dashboard.yaml`](examples/dashboard.yaml) — komplettes Dashboard
+  (3 Ansichten: Trinken, Blutdruck, Wohlbefinden)
+- [`examples/dashboard-mini.yaml`](examples/dashboard-mini.yaml) — Kompaktblock
+  zum Einbauen in ein bestehendes Dashboard
+
+Import: Einstellungen → Dashboards → **Dashboard hinzufügen** →
+„Neues Dashboard aus YAML" (Personennamen in den Entity-IDs anpassen).
 
 ## Lizenz
 

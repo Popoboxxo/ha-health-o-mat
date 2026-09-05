@@ -15,17 +15,20 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
 
 class WellbeingSelect(HealthOMatEntity, SelectEntity):
-    """„Wie geht es dir?" — Status per Select oder Melden-Button."""
+    """„Wie geht es dir?" — Status per Select oder Melden-Button.
 
-    _attr_icon = "mdi:emoticon-outline"
+    Options sind die rohen Status-Keys (very_bad…great); die Anzeige wird
+    über translations (entity.select.wellbeing.state.*) lokalisiert.
+    """
+
     _attr_translation_key = "wellbeing"
+    _attr_icon = "mdi:emoticon-outline"
 
     def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry, "select_wellbeing")
+        super().__init__(coordinator, entry, "select_wellbeing_state")
         self._store = store
-        self._attr_options = [s["label"] for s in WELLBEING_STATES]
+        self._attr_options = [s["key"] for s in WELLBEING_STATES]
         self._by_key = {s["key"]: s for s in WELLBEING_STATES}
-        self._by_label = {s["label"]: s for s in WELLBEING_STATES}
 
     @property
     def _data(self) -> dict:
@@ -33,16 +36,13 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        wb = self._data.get("wellbeing") or {}
-        status = wb.get("status")
-        return self._by_key[status]["label"] if status in self._by_key else None
+        return (self._data.get("wellbeing") or {}).get("status")
 
     async def async_select_option(self, option: str) -> None:
-        status = self._by_label.get(option)
-        if not status:
+        if option not in self._by_key:
             return
         await self._store.set_wellbeing(
-            self._entry.entry_id, status["key"], dt_util.now().isoformat()
+            self._entry.entry_id, option, dt_util.now().isoformat()
         )
         signal_refresh(self.hass, self._entry.entry_id)
 

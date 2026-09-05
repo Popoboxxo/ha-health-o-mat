@@ -29,44 +29,107 @@
   },
   "entity": {
     "sensor": {
-      "today": "Heute getrunken",
-      "goal_percent": "Tagesziel Prozent",
-      "history_drinks": "Getränke Historie",
-      "lifetime": "Gesamt (Lebenszähler)",
-      "history_bp": "Blutdruck Verlauf",
-      "bp_sys": "Blutdruck Systolisch",
-      "bp_dia": "Blutdruck Diastolisch",
-      "bp_pulse": "Puls",
-      "wellbeing_since": "Wohlbefinden gemeldet am"
+      "today": {
+        "name": "Heute getrunken"
+      },
+      "goal_percent": {
+        "name": "Tagesziel-Fortschritt"
+      },
+      "history_drinks": {
+        "name": "Getränke-Historie"
+      },
+      "lifetime": {
+        "name": "Gesamtmenge (Lebenszähler)"
+      },
+      "history_bp": {
+        "name": "Blutdruck-Historie"
+      },
+      "bp_sys": {
+        "name": "Blutdruck systolisch"
+      },
+      "bp_dia": {
+        "name": "Blutdruck diastolisch"
+      },
+      "bp_pulse": {
+        "name": "Puls"
+      },
+      "wellbeing_since": {
+        "name": "Wohlbefinden zuletzt gemeldet"
+      }
     },
     "binary_sensor": {
-      "goal_reached": "Tagesziel erreicht",
-      "bp_warning": "Blutdruck Warnung"
+      "goal_reached": {
+        "name": "Tagesziel erreicht"
+      },
+      "bp_warning": {
+        "name": "Blutdruck-Warnung"
+      }
     },
     "button": {
-      "book_custom": "Eigenen Betrag buchen",
-      "undo_drink": "Letzte Buchung löschen",
-      "save_reading": "Messung speichern",
-      "report_very_bad": "Melden: Sehr schlecht",
-      "report_bad": "Melden: Schlecht",
-      "report_okay": "Melden: Okay",
-      "report_good": "Melden: Gut",
-      "report_great": "Melden: Super"
+      "book_custom": {
+        "name": "Eigenen Betrag buchen"
+      },
+      "undo_drink": {
+        "name": "Letzte Buchung löschen"
+      },
+      "save_reading": {
+        "name": "Messung speichern"
+      },
+      "report_very_bad": {
+        "name": "Melden: Sehr schlecht"
+      },
+      "report_bad": {
+        "name": "Melden: Schlecht"
+      },
+      "report_okay": {
+        "name": "Melden: Okay"
+      },
+      "report_good": {
+        "name": "Melden: Gut"
+      },
+      "report_great": {
+        "name": "Melden: Super"
+      }
     },
     "select": {
-      "wellbeing": "Wie geht es dir?"
+      "wellbeing": {
+        "name": "Wohlbefinden",
+        "state": {
+          "very_bad": "Sehr schlecht",
+          "bad": "Schlecht",
+          "okay": "Okay",
+          "good": "Gut",
+          "great": "Super"
+        }
+      }
     },
     "text": {
-      "freetext": "Freitext Getränk"
+      "freetext": {
+        "name": "Getränk buchen (Freitext)"
+      }
     },
     "number": {
-      "daily_goal": "Tagesziel ml",
-      "custom_amount": "Eigenmenge ml",
-      "threshold_sys": "Warnschwelle Systolisch",
-      "threshold_dia": "Warnschwelle Diastolisch",
-      "input_systolic": "Eingabe Systolisch",
-      "input_diastolic": "Eingabe Diastolisch",
-      "input_pulse": "Eingabe Puls"
+      "daily_goal": {
+        "name": "Tagesziel"
+      },
+      "custom_amount": {
+        "name": "Eigenmenge"
+      },
+      "threshold_sys": {
+        "name": "Warnschwelle systolisch"
+      },
+      "threshold_dia": {
+        "name": "Warnschwelle diastolisch"
+      },
+      "input_systolic": {
+        "name": "Neue Messung: systolisch"
+      },
+      "input_diastolic": {
+        "name": "Neue Messung: diastolisch"
+      },
+      "input_pulse": {
+        "name": "Neue Messung: Puls"
+      }
     }
   }
 }

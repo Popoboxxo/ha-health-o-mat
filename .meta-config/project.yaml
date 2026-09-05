@@ -54,12 +54,27 @@ variables:
     # ha core check
 
     '
-  TEST_COMMANDS: 'pytest tests/
-
-    '
+  TEST_COMMANDS: |-
+    pytest tests/
+    # E2E gegen geteilte HA-Testinstanz (Etikette: /home/hermes/ha-test/README.md)
+    /home/hermes/ha-test/bin/sync <repo-dir>
+    /home/hermes/ha-test/bin/ha GET /api/states
   BUILD_COMMANDS: ''
   PROJECT_CONTEXT: |-
     HACS-Integration im Standard-Layout custom_components/health_o_mat/. Ein Config-Entry = eine Person (dynamisch beliebig oft anlegbar, kein Hardcoding). Persistenz über ein gemeinsames homeassistant.helpers.storage.Store-Objekt unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry getrennt unter hass.data[DOMAIN][entry_id] (Entry-Registry, damit Services ihre Person wiederfinden). Ein DataUpdateCoordinator pro Config-Entry (update_interval=None, Refresh via async_set_updated_data() bei Event statt Polling). Plattformen: sensor, binary_sensor, button, number, select, text. Options-/Config-Flow: eine Person pro Entry, Duplikat-Schutz via async_set_unique_id + _abort_if_unique_id_configured, Update-Listener via entry.add_update_listener.
+    Geteilte HA-Testinstanz (repo-agnostisch, mehrere Plugin-Repos): /home/hermes/ha-test
+    — Headless Home Assistant (Docker), http://127.0.0.1:8123 (nur localhost), Token:
+    /home/hermes/ha-test/.ha-state/token.json (auto-refresh). Single Source of Truth
+    (Endpunkte, Config-Flows, Storage-Details): /home/hermes/ha-test/README.md.
+    Etikette: (1) bin/sync <repo-dir> kopiert custom_components/* und startet HA neu
+    (~10–30 s) — nur die eigene Domain syncen, dazu koordinieren; Registry/Config-
+    Entries anderer Domains überleben den Neustart. (2) bin/reset löscht ALLE Daten
+    aller Plugins (danach bin/provision + Re-Sync) — nur nach Abstimmung. (3)
+    unique_ids stabil halten, NIE ändern — die geteilte Registry akkumuliert. (4)
+    bin/set-language de|en betrifft die GANZE Instanz (friendly_names aller Plugins)
+    — nur koordiniert; Erst-Registrierung der Entities mit korrekter Systemsprache
+    (obj_id-Namen entstehen nur dabei aus dem englischen Anzeigenamen). (5) Tokens
+    (.ha-state/) niemals committen oder kopieren.
   ARCHITECTURE: |-
     custom_components/health_o_mat/
       __init__.py         # Setup/Unload, Services, Options-Handling, Entry-Registry

@@ -30,12 +30,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
 
 
 class HealthOMatSensor(HealthOMatEntity, SensorEntity):
-    """Basis-Sensor."""
+    """Basis-Sensor. `key` bildet die semantische unique_id ({entry_id}_{key})."""
 
-    def __init__(self, coordinator, entry, store) -> None:
-        super().__init__(coordinator, entry, "sensor")
+    def __init__(self, coordinator, entry, store, key: str) -> None:
+        super().__init__(coordinator, entry, key)
         self._store = store
-        self._attr_unique_id = f"{entry.entry_id}_sensor_{type(self).__name__}"
 
     @property
     def _data(self) -> dict:
@@ -52,6 +51,9 @@ class TodaySensor(HealthOMatSensor):
     _attr_native_unit_of_measurement = "ml"
     _attr_state_class = SensorStateClass.TOTAL
     _attr_icon = "mdi:cup-water"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_drinks_today")
 
     @property
     def native_value(self) -> int:
@@ -81,6 +83,9 @@ class PercentSensor(HealthOMatSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:gauge"
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_goal_percent")
+
     @property
     def native_value(self) -> float:
         return round(
@@ -101,6 +106,9 @@ class HistoryDrinksSensor(HealthOMatSensor):
     # legitimen Cycle erkennen) - daher MEASUREMENT statt TOTAL.
     _attr_state_class = SensorStateClass.MEASUREMENT
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_drinks_history")
+
     @property
     def native_value(self) -> int:
         return self._today_sums()["count"]
@@ -118,6 +126,9 @@ class LifetimeSensor(HealthOMatSensor):
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:water-well"
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_lifetime_total")
+
     @property
     def native_value(self) -> int:
         return int(self._data.get("total_ml_lifetime", 0))
@@ -130,9 +141,8 @@ class LastReadingSensor(HealthOMatSensor):
     _attr_icon = "mdi:heart-pulse"
 
     def __init__(self, coordinator, entry, store, key: str, unit: str) -> None:
-        super().__init__(coordinator, entry, store)
+        super().__init__(coordinator, entry, store, f"sensor_bp_{key}")
         self._key = key
-        self._attr_unique_id = f"{entry.entry_id}_sensor_bp_{key}"
         self._attr_translation_key = f"bp_{key}"
         self._attr_native_unit_of_measurement = unit
 
@@ -169,6 +179,9 @@ class BloodPressureHistorySensor(HealthOMatSensor):
     # ein monoton steigender Lebenszaehler, analog zu LifetimeSensor.
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_bp_history")
+
     @property
     def native_value(self) -> int:
         return len(self._data.get("readings", []))
@@ -185,6 +198,9 @@ class WellbeingSinceSensor(HealthOMatSensor):
     _attr_translation_key = "wellbeing_since"
     _attr_device_class = "timestamp"
     _attr_icon = "mdi:emoticon-outline"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_wellbeing_since")
 
     @property
     def native_value(self):

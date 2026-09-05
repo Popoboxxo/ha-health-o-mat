@@ -1,36 +1,147 @@
-type: vertical-stack
-cards:
-  - type: gauge
-    entity: sensor.health_o_mat_caro_tagesziel_prozent
-    name: Caro Tagesziel
-    severity:
-      green: 100
-      yellow: 60
-      red: 0
+# HA Health-O-Mat — Beispiel-Dashboard (3 Ansichten)
+#
+# Entity-IDs folgen dem Muster  <platform>.health_o_mat_<person>_<name>
+# (engliche IDs; Anzeigenamen folgen automatisch der System-/Profilsprache).
+# Person hier: "Max" → Prefix health_o_mat_max. Eigenen Personennamen ersetzen!
+# Import: Einstellungen → Dashboards → Dashboard hinzufügen → "Neues Dashboard aus YAML"
+title: Health-O-Mat
+views:
+  # ---------------------------------------------------------------- Trinken --
+  - title: Trinken
+    path: trinken
+    icon: mdi:cup-water
+    cards:
+      - type: gauge
+        entity: sensor.health_o_mat_max_daily_goal_progress
+        min: 0
+        max: 100
+        needle: false
+        severity:
+          green: 100
+          yellow: 60
+          red: 0
 
-  - type: tiles
-    entities:
-      - entity: sensor.health_o_mat_caro_heute_getrunken
-        name: Getrunken
-      - entity: binary_sensor.health_o_mat_caro_tagesziel_erreicht
-        name: Ziel erreicht
-      - entity: sensor.health_o_mat_caro_blutdruck_systolisch
-        name: Systolisch
-      - entity: sensor.health_o_mat_caro_blutdruck_diastolisch
-        name: Diastolisch
+      - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.health_o_mat_max_drinks_today
+            color: primary
+            name: Heute
+          - type: tile
+            entity: binary_sensor.health_o_mat_max_daily_goal_reached
+            color: green
+          - type: tile
+            entity: sensor.health_o_mat_max_lifetime_total
 
-  - type: buttons
-    entities:
-      - button.health_o_mat_caro_glas_wasser
-      - button.health_o_mat_caro_flasche_wasser
-      - button.health_o_mat_caro_kaffee
-      - button.health_o_mat_caro_saft
-      - button.health_o_mat_caro_letzten_eintrag_loeschen
-      - button.health_o_mat_caro_messung_speichern
+      - type: grid
+        columns: 3
+        square: false
+        cards:
+          - type: button
+            entity: button.health_o_mat_max_glas_wasser
+          - type: button
+            entity: button.health_o_mat_max_flasche_wasser
+          - type: button
+            entity: button.health_o_mat_max_tasse_kaffee
+          - type: button
+            entity: button.health_o_mat_max_glas_saft
+          - type: button
+            entity: button.health_o_mat_max_book_custom_amount
+            icon: mdi:plus-circle-outline
+          - type: button
+            entity: button.health_o_mat_max_undo_last_drink
+            icon: mdi:undo-variant
 
-  - type: history-graph
-    entities:
-      - entity: sensor.health_o_mat_caro_blutdruck_systolisch
-      - entity: sensor.health_o_mat_caro_blutdruck_diastolisch
-      - entity: sensor.health_o_mat_caro_puls
-    hours_to_show: 168
+      - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: text.health_o_mat_max_log_drink_free_text
+            name: "Freitext: Kaffee 300ml"
+          - type: tile
+            entity: number.health_o_mat_max_custom_drink_amount
+
+      - type: history-graph
+        title: 24 h
+        entity: sensor.health_o_mat_max_drinks_today
+        hours_to_show: 24
+
+  # -------------------------------------------------------------- Blutdruck --
+  - title: Blutdruck
+    path: blutdruck
+    icon: mdi:heart-pulse
+    cards:
+      - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.health_o_mat_max_blood_pressure_systolic
+            color: red
+            vertical: true
+          - type: tile
+            entity: sensor.health_o_mat_max_blood_pressure_diastolic
+            color: orange
+            vertical: true
+          - type: tile
+            entity: sensor.health_o_mat_max_pulse
+            color: purple
+            vertical: true
+
+      - type: conditional
+        conditions:
+          - condition: state
+            entity: binary_sensor.health_o_mat_max_bp_warning
+            state: "on"
+        card:
+          type: markdown
+          content: "> ⚠️ Letzte Messung oberhalb der Warnschwellen!"
+
+      - type: entities
+        title: Messung eintragen
+        entities:
+          - entity: number.health_o_mat_max_new_reading_systolic
+          - entity: number.health_o_mat_max_new_reading_diastolic
+          - entity: number.health_o_mat_max_new_reading_pulse
+          - entity: button.health_o_mat_max_save_measurement
+          - entity: number.health_o_mat_max_systolic_warning_threshold
+          - entity: number.health_o_mat_max_diastolic_warning_threshold
+
+      - type: history-graph
+        title: 7 Tage
+        entities:
+          - entity: sensor.health_o_mat_max_blood_pressure_systolic
+          - entity: sensor.health_o_mat_max_blood_pressure_diastolic
+          - entity: sensor.health_o_mat_max_pulse
+        hours_to_show: 168
+
+  # ------------------------------------------------------------ Wohlbefinden --
+  - title: Wohlbefinden
+    path: wohl_befinden
+    icon: mdi:emoticon-happy-outline
+    cards:
+      - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: select.health_o_mat_max_wellbeing
+            vertical: true
+          - type: tile
+            entity: sensor.health_o_mat_max_wellbeing_last_reported
+            vertical: true
+
+      - type: grid
+        columns: 5
+        square: false
+        cards:
+          - type: button
+            entity: button.health_o_mat_max_report_very_bad
+          - type: button
+            entity: button.health_o_mat_max_report_bad
+          - type: button
+            entity: button.health_o_mat_max_report_okay
+          - type: button
+            entity: button.health_o_mat_max_report_good
+          - type: button
+            entity: button.health_o_mat_max_report_great
+
+      - type: history-graph
+        title: 30 Tage
+        entity: select.health_o_mat_max_wellbeing
+        hours_to_show: 720
