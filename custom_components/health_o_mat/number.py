@@ -43,7 +43,14 @@ class HealthOMatNumber(HealthOMatEntity, NumberEntity):
 
 
 class DailyGoalNumber(HealthOMatNumber):
-    """Tagesziel in ml — Laufzeit-Setting, sofort wirksam."""
+    """Tagesziel in ml.
+
+    entry.options["daily_goal_ml"] ist die einzige Quelle der Wahrheit (Audit C-2):
+    sowohl der Options-Flow als auch diese Entity schreiben ausschließlich dorthin.
+    runtime_data.daily_goal_ml ist nur noch ein Lese-Spiegel, der vom
+    entry.add_update_listener (_options_updated in __init__.py) aus entry.options
+    synchronisiert wird — Entity-Writes schreiben ihn nicht mehr direkt.
+    """
 
     _attr_translation_key = "daily_goal"
     _attr_icon = "mdi:target"
@@ -57,10 +64,25 @@ class DailyGoalNumber(HealthOMatNumber):
 
     @property
     def native_value(self) -> float:
-        return self._entry.runtime_data.daily_goal_ml
+        # entry.options zuerst (Quelle der Wahrheit), Runtime-Spiegel nur als Fallback
+        # für den kurzen Moment vor dem allerersten Options-Sync.
+        return self._entry.options.get("daily_goal_ml", self._entry.runtime_data.daily_goal_ml)
 
-    def _apply(self, value: float) -> None:
-        self._entry.runtime_data.daily_goal_ml = int(value)
+    async def async_set_native_value(self, value: float) -> None:
+        """Persistiert direkt in entry.options statt nur in runtime_data (Audit C-2).
+
+        `async_update_entry` aktualisiert `entry.options` synchron (native_value ist
+        danach sofort konsistent) und stößt den bereits registrierten Update-Listener
+        (`_options_updated`) an, der den Runtime-Spiegel nachzieht und per
+        `signal_refresh()` alle abhängigen Entities (z.B. PercentSensor,
+        GoalReachedEntity) aktualisiert. Kein separater `_apply`/`_refresh`-Pfad nötig.
+        """
+        new_options = dict(self._entry.options)
+        new_options["daily_goal_ml"] = int(value)
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+
+    def _apply(self, value: float) -> None:  # pragma: no cover - nicht mehr genutzt
+        raise NotImplementedError("DailyGoalNumber überschreibt async_set_native_value direkt")
 
 
 class CustomAmountNumber(HealthOMatNumber):

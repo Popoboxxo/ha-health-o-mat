@@ -1,8 +1,10 @@
 """Gemeinsame Basis: unique_id + Device-Kopplung für alle Entities."""
 from __future__ import annotations
 
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MANUFACTURER, MODEL
 
@@ -32,7 +34,13 @@ class HealthOMatEntity(CoordinatorEntity):
         return True
 
 
-def signal_refresh(hass, entry_id: str) -> None:
-    """Coordinator-Refresh nach Datenänderung."""
-    coordinator = hass.data[DOMAIN][entry_id]["coordinator"]
-    coordinator.async_set_updated_data(__import__("datetime").datetime.now().isoformat())
+def signal_refresh(hass: HomeAssistant, entry_id: str) -> None:
+    """Zentraler Refresh-Trigger für einen Config-Entry.
+
+    Einziger Signalweg für alle Trigger-Punkte (Person-Setup, Quick-Drink-Eintrag,
+    Service-Aufrufe, Entity-Writes) — ersetzt die vormals vierfach redundanten
+    Direktaufrufe von coordinator.async_set_updated_data() (Audit-Finding C-1).
+    """
+    info = hass.data.get(DOMAIN, {}).get(entry_id)
+    if info and "coordinator" in info:
+        info["coordinator"].async_set_updated_data(dt_util.now().isoformat())

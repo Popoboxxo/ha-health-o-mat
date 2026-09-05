@@ -1,0 +1,5 @@
+# Test dependencies for ha-health-o-mat
+# Windows-compatible, no fcntl-dependent plugins
+
+pytest>=7.0.0
+voluptuous>=0.13.0
