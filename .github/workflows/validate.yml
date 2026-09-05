@@ -24,5 +24,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.13 && uv venv .venv && uv pip install --python .venv/bin/python pytest
+      - run: uv python install 3.13 && uv venv .venv && uv pip install --python .venv/bin/python -r tests/requirements.txt
       - run: .venv/bin/python -m pytest tests/ -q
