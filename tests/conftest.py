@@ -47,6 +47,8 @@ if not _USING_REAL_HA:
     class Entity:
         """Minimal stand-in for homeassistant.helpers.entity.Entity."""
 
+    _UNDEFINED = object()  # stand-in for helpers.typing.UNDEFINED (identity sentinel)
+
     class CoordinatorEntity(Entity):
         """Minimal stand-in for homeassistant.helpers.update_coordinator.
 
@@ -210,9 +212,19 @@ if not _USING_REAL_HA:
             TextEntity=TextEntity,
         ),
         "homeassistant.helpers": _module("homeassistant.helpers"),
+        "homeassistant.helpers.typing": _module(
+            "homeassistant.helpers.typing",
+            UNDEFINED=_UNDEFINED,
+        ),
         "homeassistant.helpers.device_registry": _module(
             "homeassistant.helpers.device_registry",
             DeviceInfo=MagicMock(),
+        ),
+        "homeassistant.helpers.entity": _module(
+            "homeassistant.helpers.entity",
+            DeviceInfo=MagicMock(),
+            Entity=Entity,
+            UNDEFINED=_UNDEFINED,
         ),
         "homeassistant.helpers.storage": _module(
             "homeassistant.helpers.storage",

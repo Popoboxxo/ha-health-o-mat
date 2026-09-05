@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.typing import UNDEFINED
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -28,6 +30,30 @@ class HealthOMatEntity(CoordinatorEntity):
             model=MODEL,
         )
         self._attr_has_entity_name = True
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Objekt-IDs (Entity-ID-Suffixe) immer aus dem ENGLISCHEN Namen.
+
+        HA >= 2026.9 erzeugt für Sprachen in NATIVE_ENTITY_IDS (u. a. Deutsch)
+        Objekt-IDs in der Systemsprache — die IDs würden mit der Sprache
+        wechseln (z. B. `melder_sehr_schlecht`). Wir pinnen die Suffixe auf
+        Englisch: stabil, lesbar, sprachunabhängig. Der Anzeigename bleibt
+        davon unberührt (folgt weiterhin der Systemsprache).
+        """
+        platform_data = self.platform_data
+        if (
+            platform_data is not None
+            and type.__getattribute__(self.__class__, "name")
+            is type.__getattribute__(Entity, "name")
+        ):
+            name = self._name_internal(
+                self._object_id_device_class_name,
+                getattr(platform_data, "default_language_platform_translations", None) or {},
+            )
+            if name is not UNDEFINED:
+                return name
+        return super().suggested_object_id
 
     @property
     def available(self) -> bool:

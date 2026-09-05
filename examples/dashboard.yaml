@@ -88,7 +88,7 @@ views:
       - type: conditional
         conditions:
           - condition: state
-            entity: binary_sensor.health_o_mat_max_bp_warning
+            entity: binary_sensor.health_o_mat_max_blood_pressure_warning
             state: "on"
         card:
           type: markdown
