@@ -6,8 +6,9 @@ Schema-Stufen (STORE_SCHEMA_VERSION in const.py):
 
 Migration on-load: fehlende `schema`-Markierung gilt als v1; die Migrationskette
 bringt Alt-Bestände idempotent auf die aktuelle Stufe (REQ-HOM-102).
-Bei defektem/ungültigem Load: Datei wird als `health_o_mat.corrupt-<ts>` gesichert,
-Notification erzeugt, definierter Start mit leerem Bestand (REQ-HOM-103).
+Kaputtes JSON sichert Home Assistant selbst (Backup `*.corrupt.*` + Repairs-Eintrag) —
+hier bleibt der Fall „valides JSON, falsches Schema": Backup als
+`*.invalid-schema-<ts>` + Notification + definierter leerer Start (REQ-HOM-103).
 """
 from __future__ import annotations
 
@@ -65,29 +66,27 @@ class HealthOMatStore:
         return data
 
     async def _load_with_recovery(self) -> dict | None:
-        """Load mit Corrupt-Recovery (REQ-HOM-103).
+        """Load mit Recovery (REQ-HOM-103).
 
-        Fehler (kaputtes JSON, ungültiges Schema) → Store-Datei als Backup
-        sichern, Notification erzeugen, None zurückgeben (leerer Start).
+        Kaputtes JSON handhabt Home Assistant selbst (Backup `*.corrupt.<ts>` +
+        Repairs-Eintrag im UI) — _store.async_load() liefert dann None.
+        Hier bleibt nur der Fall „valides JSON, aber kein Health-O-Mat-Schema":
+        Datei sichern, Notification erzeugen, leer starten.
         """
-        try:
-            data = await self._store.async_load()
-        except Exception as err:  # noqa: BLE001 — Absicherung gegen kaputtes JSON
-            await self._handle_corrupt(err)
-            return None
+        data = await self._store.async_load()
         if data is None:
-            return None  # Erstanlage — kein Defekt
+            return None  # Erstanlage — oder HA-Corrupt-Recovery (Backup: *.corrupt.*)
         if not isinstance(data, dict) or "entries" not in data:
-            await self._handle_corrupt(ValueError("Store-Inhalt ohne 'entries'"))
+            await self._handle_invalid_schema()
             return None
         return data
 
-    async def _handle_corrupt(self, err: Exception) -> None:
-        """Store-Datei sichern + Notification (Executor-Job, nie blockierend)."""
-        _LOGGER.error("Health-O-Mat-Store defekt: %s — Backup + leerer Start", err)
+    async def _handle_invalid_schema(self) -> None:
+        """Store-Datei mit falschem Schema sichern + Notification (Executor-Job)."""
+        _LOGGER.error("Health-O-Mat-Store ohne 'entries'-Schema — Backup + leerer Start")
         src = self._hass.config.path(".storage", "health_o_mat")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        dst = f"{src}.corrupt-{stamp}"
+        dst = f"{src}.invalid-schema-{stamp}"
 
         def _backup() -> bool:
             if os.path.exists(src):
@@ -97,7 +96,7 @@ class HealthOMatStore:
 
         backed_up = await self._hass.async_add_executor_job(_backup)
         message = (
-            f"Der Health-O-Mat-Speicher konnte nicht gelesen werden ({err}).\n"
+            "Der Health-O-Mat-Speicher hat ein unerwartetes Format.\n"
             + (f"Die Originaldatei wurde gesichert nach:\n{dst}\n" if backed_up
                else "Keine Speicherdatei gefunden.\n")
             + "Die Integration startet mit leerem Bestand. "
@@ -105,7 +104,7 @@ class HealthOMatStore:
         )
         await self._hass.services.async_call(
             "persistent_notification", "create",
-            {"title": "HA Health-O-Mat — Speicher defekt", "message": message},
+            {"title": "HA Health-O-Mat — Speicherformat unbekannt", "message": message},
             blocking=False,
         )
 

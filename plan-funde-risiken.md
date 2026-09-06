@@ -30,7 +30,7 @@ Migration im Spiel ist.
 | REQ | Arbeitsschritte | Test-Plan |
 |---|---|---|
 | 102 | `minor_version=1` in const/Store; Migratoren-Scaffold `_migrations: dict[int, callable]`; `async_load` ruft Kette | Migrations-Unit-Tests (Alt-JSON-Fixtures v1) |
-| 103 | Corrupt-Handling: try/except um Load → Backup-Datei `health_o_mat.corrupt-<ts>`, Notification, leerer Start | Corrupt-Unit-Test, Notification-Aufruf verifiziert |
+| 103 | Corrupt-Fall: **HA handhabt kaputtes JSON nativ** (Backup + Repairs-Issue, live bewiesen) → eigene Schicht nur für Schema-Invalid (`*.invalid-schema-<ts>` + Notification) | Unit-Test, E2E: HA-Backup + Repairs-Issue + Restore |
 | 101 | Options-Flow: 4 Quick-Drink-Slots (label/ml/icon) + optionaler Anzeigename; ConfigFlow.VERSION 1→2 + `async_migrate_entry` (data→options); Button/Entity-Lesepfade auf options umstellen; `options.person`-Override in entity.py/device name + store.set_person | Migration-Tests (Alt-Entry), Options-Flow-Tests, E2E: v0.4.0-Entry updaten, Quick-Drink ändern, Reload, Buttons neu |
 | 104 | Store-`inputs` je Person (Schema 102); `InputNumber._apply` → Store; Setup lädt; Save leert | Unit-Tests, E2E: halbfüllte Eingabe überlebt Neustart |
 

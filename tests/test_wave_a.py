@@ -94,10 +94,14 @@ def test_store_migration_is_idempotent():
     assert store.raw_data()["schema"] == SCHEMA
 
 
-def test_store_corrupt_creates_backup_and_notification():
-    """[REQ-HOM-103] Defekter Load → Backup-Pfad + Notification + leerer Start."""
+def test_store_invalid_schema_creates_backup_and_notification():
+    """[REQ-HOM-103] Valides JSON ohne 'entries' → Backup + Notification + leerer Start.
+
+    (Kaputtes JSON handhabt HA selbst: Backup *.corrupt.* + Repairs-Eintrag —
+    dies hier ist nur der Schema-Fall.)
+    """
     store = _make_store()
-    store._store.async_load = AsyncMock(side_effect=ValueError("kaputtes JSON"))
+    store._store.async_load = AsyncMock(return_value={"unexpected": True})
     hass = MagicMock()
     hass.async_add_executor_job = AsyncMock(return_value=True)
     hass.services.async_call = AsyncMock()
@@ -109,20 +113,20 @@ def test_store_corrupt_creates_backup_and_notification():
     hass.services.async_call.assert_called_once()
     args = hass.services.async_call.call_args[0]
     assert args[0] == "persistent_notification"
-    assert ".corrupt-" in args[2]["message"]
+    assert ".invalid-schema-" in args[2]["message"]
 
 
-def test_store_invalid_schema_is_corrupt():
-    """[REQ-HOM-103] Store-Inhalt ohne 'entries' gilt als defekt."""
+def test_store_none_is_fresh_start_without_notification():
+    """[REQ-HOM-103] Erstanlage (None) — kein Alarm, kein Backup."""
     store = _make_store()
-    store._store.async_load = AsyncMock(return_value={"unexpected": True})
+    store._store.async_load = AsyncMock(return_value=None)
     hass = MagicMock()
-    hass.async_add_executor_job = AsyncMock(return_value=False)
-    hass.services.async_call = AsyncMock()
     store._hass = hass
 
     _run(store.async_load())
+
     assert store.raw_data() == {"entries": {}}
+    hass.services.async_call.assert_not_called()
 
 
 def _migrate_entry(entry, hass):

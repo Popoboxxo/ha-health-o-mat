@@ -141,11 +141,16 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-103 — Store-Reparaturpfad (Risiko aus F3)
 - **Priorität:** P1 · **Aufwand:** S
-- **Anforderung:** Corrupt/Schema-Fehler beim Load: Datei sichern als
-  `health_o_mat.corrupt-<ts>`, Warn-Notification mit Backup-Pfad, definiertes
-  Weiterlaufen mit leerem Bestand (statt stiller Datenverlust).
+- **Befund Live-Test (2026-09-06):** Home Assistant sichert kaputtes JSON **selbst**
+  (Backup `*.corrupt.<isotime>` + Repairs-Eintrag `storage_corruption_*` im UI) —
+  `_store.async_load()` liefert dann einfach None. Eigene Backup-Schicht dafür wäre
+  redundant und würde nie feuern.
+- **Anforderung:** Nur der Fall „valides JSON, falsches Schema“ bekommt eigene
+  Recovery: Datei sichern als `*.invalid-schema-<ts>`, Notification, definierter
+  leerer Start.
 - **Akzeptanzkriterien:**
-  - [ ] Corrupt-Unit-Test (Backup entsteht, HA läuft weiter, Notification erzeugt)
+  - [x] Schema-Invalid-Unit-Test (Backup-Pfad + Notification); Erstanlage (None) still
+  - [x] E2E bewiesen: HA-Backup + Repairs-Issue bei kaputtem JSON, Restore funktioniert
 
 #### REQ-HOM-104 — BP-Eingaben persistieren (Fix F7)
 - **Priorität:** P2 · **Aufwand:** S
