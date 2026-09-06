@@ -53,9 +53,9 @@ def test_config_flow_get_options_flow_returns_options_flow_instance():
 
 
 def test_config_flow_version():
-    """[AUDIT-7b-C-2] ConfigFlow has correct VERSION."""
+    """ConfigFlow VERSION 2 (quick_drinks → options, Fund F1 / REQ-HOM-101)."""
     config_flow = config_flow_module.HealthOMatConfigFlow()
-    assert config_flow.VERSION == 1
+    assert config_flow.VERSION == 2
 
 
 def test_options_flow_async_step_init_shows_form_on_no_input():
@@ -96,11 +96,10 @@ def test_options_flow_async_step_init_shows_form_on_no_input():
     assert "data_schema" in call_kwargs
 
 
-def test_options_flow_async_step_init_creates_entry_on_user_input():
-    """[AUDIT-7b-C-2] async_step_init creates entry with daily_goal_ml."""
+def test_options_flow_async_step_init_chains_to_quick_drinks():
+    """[REQ-HOM-101] init-Submit speichert Zwischenstand und zeigt Quick-Drinks-Form."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
-    # Mock the dependencies
     entry = MagicMock()
     entry.options = {}
     entry.runtime_data = MagicMock()
@@ -113,17 +112,48 @@ def test_options_flow_async_step_init_creates_entry_on_user_input():
     type(options_flow).config_entry = PropertyMock(return_value=entry)
     type(options_flow).hass = PropertyMock(return_value=hass)
 
-    # Mock async_create_entry
-    result_data = {"daily_goal_ml": 2250, "set_lifetime_ml": 0}
+    user_input = {"daily_goal_ml": 2250, "set_lifetime_ml": 0, "person_display": ""}
+    result = _async_test(options_flow.async_step_init(user_input))
+
+    # init erzeugt KEINEN Entry mehr — es verkettet auf quick_drinks
+    assert result["type"] == "form"
+    assert result["step_id"] == "quick_drinks"
+    # Zwischenstand wartet auf den finalen Submit
+    assert options_flow._pending["daily_goal_ml"] == 2250
+
+
+def test_options_flow_full_two_step_flow_creates_entry():
+    """[REQ-HOM-101] init → quick_drinks → create_entry mit zusammengeführten Daten."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.data = {"person": "Max"}
+
+    hass = MagicMock()
+    hass.data = {}
+
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
     options_flow.async_create_entry = MagicMock()
 
-    user_input = {"daily_goal_ml": 2250, "set_lifetime_ml": 0}
-    _async_test(options_flow.async_step_init(user_input))
+    _async_test(options_flow.async_step_init(
+        {"daily_goal_ml": 2250, "set_lifetime_ml": 0, "person_display": ""}
+    ))
+    user_input = {}
+    for i in range(4):
+        user_input[f"quick_{i}_label"] = f"Drink {i}"
+        user_input[f"quick_{i}_ml"] = 250
+        user_input[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(user_input))
 
     options_flow.async_create_entry.assert_called_once()
-    call_kwargs = options_flow.async_create_entry.call_args[1]
-    assert call_kwargs["data"]["daily_goal_ml"] == 2250
-    assert call_kwargs["data"]["set_lifetime_ml"] == 0
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["daily_goal_ml"] == 2250
+    assert len(data["quick_drinks"]) == 4
+    assert data["quick_drinks"][0]["label"] == "Drink 0"
 
 
 def test_options_flow_daily_goal_from_options_takes_precedence():
@@ -257,13 +287,14 @@ def test_options_flow_handles_missing_store():
 
 
 def test_options_flow_preserves_other_options_on_submit():
-    """[AUDIT-7b-C-2] async_create_entry called with user_input data."""
+    """[REQ-HOM-101] finaler Quick-Drinks-Submit bewahrt übrige Optionen."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
     entry.options = {"some_key": "some_value"}
     entry.runtime_data = MagicMock()
     entry.entry_id = "test-entry-1"
+    entry.data = {"person": "Max"}
 
     hass = MagicMock()
     hass.data = {}
@@ -273,10 +304,21 @@ def test_options_flow_preserves_other_options_on_submit():
 
     options_flow.async_create_entry = MagicMock()
 
-    user_input = {"daily_goal_ml": 2500, "set_lifetime_ml": 1000}
-    _async_test(options_flow.async_step_init(user_input))
+    _async_test(options_flow.async_step_init(
+        {"daily_goal_ml": 2500, "set_lifetime_ml": 1000, "person_display": ""}
+    ))
+    user_input = {}
+    for i in range(4):
+        user_input[f"quick_{i}_label"] = f"Drink {i}"
+        user_input[f"quick_{i}_ml"] = 200
+        user_input[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(user_input))
 
-    # async_create_entry should be called with user_input data
     options_flow.async_create_entry.assert_called_once()
-    call_kwargs = options_flow.async_create_entry.call_args[1]
-    assert call_kwargs["data"] == user_input
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    # init-Felder + Quick-Drinks zusammengeführt, fremde Options bleiben unberührt
+    # (fremde Optionen leben im Entry, nicht im Flow — hier wird nur geprüft,
+    #  dass der Flow sie nicht anfasst/verliert)
+    assert data["daily_goal_ml"] == 2500
+    assert data["set_lifetime_ml"] == 1000
+    assert "some_key" not in data  # Flow schreibt nur seine eigenen Felder

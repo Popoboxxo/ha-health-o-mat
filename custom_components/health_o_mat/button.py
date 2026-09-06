@@ -5,7 +5,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DEFAULT_QUICK_DRINKS, DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
 
 
@@ -17,7 +17,9 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         UndoDrinkButton(coord, entry, store),
         SaveReadingButton(coord, entry, store),
     ]
-    for i in range(len(entry.data.get("quick_drinks", []) or [])):
+    # Quick-Drinks aus entry.options (editierbar, Fund F1); Fallback auf Defaults
+    quick_drinks = entry.options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
+    for i in range(len(quick_drinks)):
         entities.append(QuickDrinkButton(coord, entry, store, i))
     from .const import WELLBEING_STATES
     for status in WELLBEING_STATES:
@@ -42,7 +44,7 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
 
 class QuickDrinkButton(HealthOMatButton):
-    """Vorgefertigter Getränke-Button (Label + ml aus Config).
+    """Vorgefertigter Getränke-Button (Label + ml aus Options-Konfiguration).
 
     Bewusst kein translation_key: das Label ist Freitext aus der
     nutzerdefinierten quick_drinks-Config (z. B. "Kaffee 200ml"), keine
@@ -54,7 +56,8 @@ class QuickDrinkButton(HealthOMatButton):
 
     def __init__(self, coordinator, entry, store, index: int) -> None:
         super().__init__(coordinator, entry, store, f"button_quick_{index}")
-        qd = entry.data.get("quick_drinks", [])[index]
+        quick_drinks = entry.options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
+        qd = quick_drinks[index]
         self._ml = int(qd.get("ml", 200))
         self._label = str(qd.get("label") or f"Quick {index + 1}")
         self._icon = str(qd.get("icon") or "mdi:cup-water")
@@ -107,8 +110,7 @@ class SaveReadingButton(HealthOMatButton):
         super().__init__(coordinator, entry, store, "button_save_reading")
 
     async def async_press(self) -> None:
-        rt = self._entry.runtime_data
-        inputs = getattr(rt, "_inputs", {})
+        inputs = self._store.inputs(self._entry.entry_id)
         sys_v = inputs.get("sys")
         dia_v = inputs.get("dia")
         pulse_v = inputs.get("pulse")
@@ -121,7 +123,7 @@ class SaveReadingButton(HealthOMatButton):
             int(pulse_v) if pulse_v else None,
             "", "button",
         )
-        rt._inputs = {}
+        await self._store.clear_inputs(self._entry.entry_id)
         signal_refresh(self.hass, self._entry.entry_id)
 
 

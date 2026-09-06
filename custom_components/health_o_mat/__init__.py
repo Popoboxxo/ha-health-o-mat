@@ -14,10 +14,11 @@ import voluptuous as vol
 from .const import (
     DEFAULT_DIA_THRESHOLD,
     DEFAULT_DAILY_GOAL_ML,
+    DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
 )
-from .entity import signal_refresh
+from .entity import effective_person, signal_refresh
 from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,7 +37,33 @@ class HealthOMatData:
         self.custom_amount_ml: int = 250
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
-        self._inputs: dict = {}
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
+    """v1 → v2: quick_drinks aus entry.data nach entry.options verlagern (Fund F1).
+
+    v1-Entries (≤ v0.4.0) hatten quick_drinks unveränderlich in entry.data —
+    Ändern war nur durch Löschen+Neu-Anlegen möglich (Datenverlust, da Store
+    entry_id-keyed ist). Ab v2 gehört die Konfiguration in entry.options.
+    """
+    if entry.version > 2:
+        _LOGGER.error(
+            "Config entry %s hat Version %s > 2 — Downgrade nicht unterstützt",
+            entry.title, entry.version,
+        )
+        return False
+    if entry.version == 1:
+        options = dict(entry.options)
+        options.setdefault(
+            "quick_drinks", [dict(qd) for qd in DEFAULT_QUICK_DRINKS]
+        )
+        new_data = {k: v for k, v in entry.data.items() if k != "quick_drinks"}
+        hass.config_entries.async_update_entry(
+            entry, data=new_data, options=options, version=2,
+        )
+        _LOGGER.info("Config entry %s: v1 → v2 migriert (quick_drinks → options)",
+                     entry.title)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -50,7 +77,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
         await store.async_load()
         shared["store"] = store
 
-    await store.set_person(entry.entry_id, entry.data.get("person", "Person"))
+    await store.set_person(entry.entry_id, effective_person(entry))
 
     lifetime_start = entry.data.get("lifetime_start_ml")
     if lifetime_start:
@@ -113,6 +140,15 @@ async def _options_updated(hass, entry) -> None:
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+
+    # Anzeige-Name geändert → Store synchron halten + Entities neu laden
+    # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
+    current_person = store.all_entries().get(entry.entry_id, {}).get("person")
+    if current_person != effective_person(entry):
+        await store.set_person(entry.entry_id, effective_person(entry))
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
+
     wanted = int(opts.get("set_lifetime_ml") or 0)
     current = int(store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0))
     if wanted and wanted != current:

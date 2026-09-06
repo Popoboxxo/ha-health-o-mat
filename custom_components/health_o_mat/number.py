@@ -14,14 +14,15 @@ from .entity import HealthOMatEntity, signal_refresh
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    store = hass.data[DOMAIN]["shared"]["store"]
     async_add_entities([
         DailyGoalNumber(coord, entry),
         CustomAmountNumber(coord, entry),
         ThresholdNumber(coord, entry, "sys"),
         ThresholdNumber(coord, entry, "dia"),
-        InputNumber(coord, entry, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"),
-        InputNumber(coord, entry, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"),
-        InputNumber(coord, entry, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"),
+        InputNumber(coord, entry, store, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"),
+        InputNumber(coord, entry, store, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"),
+        InputNumber(coord, entry, store, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"),
     ])
 
 
@@ -35,10 +36,10 @@ class HealthOMatNumber(HealthOMatEntity, NumberEntity):
         signal_refresh(self.hass, self._entry.entry_id)
 
     async def async_set_native_value(self, value: float) -> None:
-        self._apply(value)
+        await self._apply(value)
         self._refresh()
 
-    def _apply(self, value: float) -> None:
+    async def _apply(self, value: float) -> None:
         raise NotImplementedError
 
 
@@ -81,7 +82,7 @@ class DailyGoalNumber(HealthOMatNumber):
         new_options["daily_goal_ml"] = int(value)
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
-    def _apply(self, value: float) -> None:  # pragma: no cover - nicht mehr genutzt
+    async def _apply(self, value: float) -> None:  # pragma: no cover - nicht mehr genutzt
         raise NotImplementedError("DailyGoalNumber überschreibt async_set_native_value direkt")
 
 
@@ -102,7 +103,7 @@ class CustomAmountNumber(HealthOMatNumber):
     def native_value(self) -> float:
         return self._entry.runtime_data.custom_amount_ml or DEFAULT_CUSTOM_AMOUNT_ML
 
-    def _apply(self, value: float) -> None:
+    async def _apply(self, value: float) -> None:
         self._entry.runtime_data.custom_amount_ml = int(value)
 
 
@@ -123,16 +124,21 @@ class ThresholdNumber(HealthOMatNumber):
     def native_value(self) -> float:
         return getattr(self._entry.runtime_data, f"{self._key}_threshold")
 
-    def _apply(self, value: float) -> None:
+    async def _apply(self, value: float) -> None:
         setattr(self._entry.runtime_data, f"{self._key}_threshold", int(value))
 
 
 class InputNumber(HealthOMatNumber):
-    """Eingabefeld für die nächste Blutdruckmessung (Blutdruck-Manager)."""
+    """Eingabefeld für die nächste Blutdruckmessung (Blutdruck-Manager).
 
-    def __init__(self, coordinator, entry, key: str, translation_key: str,
+    Eingaben sind persistiert (Store, REQ-HOM-104): eine halbfüllte Messung
+    überlebt HA-Neustarts; save_measurement leert den Store (button.py).
+    """
+
+    def __init__(self, coordinator, entry, store, key: str, translation_key: str,
                  vmin: int, vmax: int, icon: str) -> None:
         super().__init__(coordinator, entry, f"number_input_{key}")
+        self._store = store
         self._input_key = key
         self._attr_translation_key = translation_key
         self._attr_native_min_value = vmin
@@ -142,7 +148,9 @@ class InputNumber(HealthOMatNumber):
 
     @property
     def native_value(self) -> float | None:
-        return self._entry.runtime_data._inputs.get(self._input_key)
+        return self._store.inputs(self._entry.entry_id).get(self._input_key)
 
-    def _apply(self, value: float) -> None:
-        self._entry.runtime_data._inputs[self._input_key] = value if value else None
+    async def _apply(self, value: float) -> None:
+        await self._store.set_inputs(
+            self._entry.entry_id, self._input_key, int(value) if value else None
+        )
