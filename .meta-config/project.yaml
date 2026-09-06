@@ -130,6 +130,11 @@ speech-mode: full
 tier-preset: Normal
 # When true, SE roles (se-architect, se-critic, se-developer, etc.) are upgraded one tier before preset mapping is applied. Replaces the deprecated '(SE)' suffix in tier-preset names.
 se-focus: false
+# When a provider is set to true, sync.py omits the generated agent's `model:` field entirely — every agent of that provider inherits the model of the main chat at runtime. Mutually exclusive with model-override-all per provider (sync.py fails fast on conflict).
+model-inherit-main-chat:
+  Claude: true
+  Gemini: true
+  Opencode: true
 # Maximum number of agents that a coordinator (orchestrator, feature) may run in parallel via run_in_background. Default: 2. Set to 1 to disable parallelism.
 max-parallel-agents: 2
 # The active naming/versioning conventions preset, matched against config/conventions-presets.yaml. Individual overrides via 'conventions' block. Precedence: conventions > conventions-preset > 'default'.
