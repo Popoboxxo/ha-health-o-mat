@@ -22,10 +22,9 @@ class HealthOMatEntity(CoordinatorEntity):
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        person = entry.data.get("person", "Person")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
-            name=f"Health-O-Mat {person}",
+            name=f"Health-O-Mat {effective_person(entry)}",
             manufacturer=MANUFACTURER,
             model=MODEL,
         )
@@ -58,6 +57,15 @@ class HealthOMatEntity(CoordinatorEntity):
     @property
     def available(self) -> bool:
         return True
+
+
+def effective_person(entry) -> str:
+    """Anzeige-Name der Person: options.person_display überschreibt entry.data.person.
+
+    Der Eintrag in entry.data bleibt der stabile Service-Anker (Person-Auflösung,
+    unique_id des Config-Entries); nur die Anzeige ist nachträglich korrigierbar.
+    """
+    return entry.options.get("person_display") or entry.data.get("person", "Person")
 
 
 def signal_refresh(hass: HomeAssistant, entry_id: str) -> None:

@@ -22,8 +22,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
 - 👥 **Multi-Person**: ein Config-Entry = eine Person = ein Device — beliebig viele
-- 🌙 **Tagesgrenze**: Default 0 Uhr, zur Laufzeit umstellbar; neustartfest, weil „heute"
-  on-read aus der Historie berechnet wird (kein Reset-Job, DST-fest)
+- 🌙 **Tagesgrenze**: fix 0 Uhr; neustartfest, weil „heute" on-read aus der Historie
+  berechnet wird (kein Reset-Job, DST-fest) — umstellbare Tagesgrenze ist geplant
+  ([REQ-HOM-005](docs/REQUIREMENTS.md))
 
 ## Installation (HACS)
 
@@ -150,7 +151,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 - `number.…_new_reading_systolic` / `_diastolic` / `_pulse` — Eingabefelder
   für die nächste Blutdruckmessung (mit `save_measurement`-Button übernehmen).
 
-### Migration (Entity-IDs)
+### Migration (Entity-IDs & Konfiguration)
 
 - **Update von v0.2.0 oder älter:** betroffene Entities registrieren sich
   beim ersten Start **neu mit englischen IDs**; alte Registry-Einträge
@@ -163,6 +164,10 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   → Geräte & Dienste → Device → Entitäten löschen) und HA neu starten — die
   Entities kommen mit englischen IDs zurück. Getränke-/Messdaten bleiben
   erhalten (sie hängen am Config-Entry, nicht an der Entity-ID).
+- **Update auf v0.5.0 (Quick-Drinks nach Options):** Quick-Drink-Buttons sind
+  jetzt über den Options-Dialog der Integration editierbar (vorher fest in der
+  Einrichtung verankert). Die Migration läuft beim Start automatisch
+  (Config-Entry v1 → v2) — bestehende Buttons und Daten bleiben unverändert.
 
 ## Services
 

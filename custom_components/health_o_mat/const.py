@@ -7,6 +7,9 @@ MODEL = "Health-O-Mat"
 
 # Store
 STORE_VERSION = 1
+# Schema-Stufe des Store-Inhalts (steuert die Migrationskette in store.py);
+# v1 = Ursprungsschema, v2 = +inputs (BP-Eingaben) je Person
+STORE_SCHEMA_VERSION = 2
 
 # Tagesziel / Mengen
 DEFAULT_DAILY_GOAL_ML = 2000
