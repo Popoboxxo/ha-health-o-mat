@@ -38,6 +38,13 @@ Migration im Spiel ist.
 (Getränke/BP/Wellbeing/Inputs intakt), README-Migrationsabschnitt ergänzt,
 Release v0.5.0 (kein Breaking: entry.data bleibt für Nutzer sichtbar unverändert).
 
+**Verifikation (2026-09-06):** Tiefen-Live-Test `scripts/e2e-live-test.sh`
+**88/88 Checks** auf der geteilten Instanz (Systemsprache de) — 32 Entities
+(englische IDs, deutsche Namen), Getränke/BP/Wohlbefinden-Batterien,
+Multi-Person, Export, Update-Migration v0.4.0→neu (Worktree), Corrupt-Recovery
+(HA-nativ: Backup + Repairs-Issue), Dashboards live + Lovelace-Save/Load
+(33/41 Karten). Unit: **99/99**. Ergebnisse in PR #8 dokumentiert.
+
 ## Welle B — Qualität & Support (P2) → Ziel v0.5.1
 
 | REQ | Arbeitsschritte | Test-Plan |
