@@ -24,6 +24,24 @@
         "data": {
           "daily_goal_ml": "Tagesziel in ml"
         }
+      },
+      "quick_drinks": {
+        "title": "Voreingestellte Getränke",
+        "description": "Konfiguriere die 4 Quick-Drink-Buttons für {person} (Bezeichnung, Größe in ml, Icon).",
+        "data": {
+          "quick_0_label": "Voreinstellung 1 – Bezeichnung",
+          "quick_0_ml": "Voreinstellung 1 – Größe (ml)",
+          "quick_0_icon": "Voreinstellung 1 – Icon",
+          "quick_1_label": "Voreinstellung 2 – Bezeichnung",
+          "quick_1_ml": "Voreinstellung 2 – Größe (ml)",
+          "quick_1_icon": "Voreinstellung 2 – Icon",
+          "quick_2_label": "Voreinstellung 3 – Bezeichnung",
+          "quick_2_ml": "Voreinstellung 3 – Größe (ml)",
+          "quick_2_icon": "Voreinstellung 3 – Icon",
+          "quick_3_label": "Voreinstellung 4 – Bezeichnung",
+          "quick_3_ml": "Voreinstellung 4 – Größe (ml)",
+          "quick_3_icon": "Voreinstellung 4 – Icon"
+        }
       }
     }
   },

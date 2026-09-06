@@ -24,6 +24,24 @@
         "data": {
           "daily_goal_ml": "Daily goal in ml"
         }
+      },
+      "quick_drinks": {
+        "title": "Preset drinks",
+        "description": "Configure the 4 preset-drink buttons for {person} (label, size in ml, icon).",
+        "data": {
+          "quick_0_label": "Preset 1 – Label",
+          "quick_0_ml": "Preset 1 – Size (ml)",
+          "quick_0_icon": "Preset 1 – Icon",
+          "quick_1_label": "Preset 2 – Label",
+          "quick_1_ml": "Preset 2 – Size (ml)",
+          "quick_1_icon": "Preset 2 – Icon",
+          "quick_2_label": "Preset 3 – Label",
+          "quick_2_ml": "Preset 3 – Size (ml)",
+          "quick_2_icon": "Preset 3 – Icon",
+          "quick_3_label": "Preset 4 – Label",
+          "quick_3_ml": "Preset 4 – Size (ml)",
+          "quick_3_icon": "Preset 4 – Icon"
+        }
       }
     }
   },
