@@ -63,11 +63,12 @@ export_csv:
       name: Datensatz
       description: Welche Daten exportiert werden.
       example: "all"
-      select:
-        options:
-          - label: Alles
-            value: "all"
-          - label: Getränke
-            value: "drinks"
-          - label: Blutdruck
-            value: "blood_pressure"
+      selector:
+        select:
+          options:
+            - label: Alles
+              value: "all"
+            - label: Getränke
+              value: "drinks"
+            - label: Blutdruck
+              value: "blood_pressure"
