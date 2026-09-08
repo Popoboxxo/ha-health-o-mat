@@ -3,6 +3,15 @@ project:
   prefix: hom
   short: health-o-mat
 agent-meta-version: 1.0.0
+# Orchestrator recommended, user-override allowed (default would be 'strict': mandatory, no override).
+orchestrator:
+  mode: advisory
+# Issue #694: write-capable agents commit directly on a task-boundary trigger instead of
+# always delegating to the 'git' role. secret_scan stays at its default (true).
+auto_commit:
+  mode: auto
+  triggers:
+  - task-boundary
 ai-providers:
 - Claude
 - Gemini
