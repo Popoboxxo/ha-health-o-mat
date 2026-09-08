@@ -3,10 +3,12 @@ __pycache__/
 .venv/
 
 # --- agent-meta managed (do not edit) ---
+.agents/hooks/
 .claude/
 .claude/agent-memory-local/
 .claude/agents/
 .claude/pending-tasks.md
+.claude/progress/
 .claude/settings.json
 .claude/settings.local.json
 .gemini/
