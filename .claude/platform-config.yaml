@@ -1,0 +1,10 @@
+# Projekt-Overrides für die HACS-Plattform (lokal, nicht committet)
+# Quelle der Defaults: .agent-meta/platform-configs/hacs.defaults.yaml
+platform:
+  hacs:
+    dev_instance_url: "http://127.0.0.1:8123"
+    integration_repo_url: "https://github.com/Popoboxxo/ha-health-o-mat"
+    reference_repo_url: "https://github.com/home-assistant/core"
+    # Only hacs-integration-development exists in agent-meta v1.0.0 (no
+    # hacs-integration-review counterpart yet, unlike the default.yaml example).
+    project_skills: "hacs-integration-development"

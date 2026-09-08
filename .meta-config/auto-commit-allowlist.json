@@ -1,9 +1,23 @@
 {
   "custom_script": null,
-  "eligible_roles": [],
+  "eligible_roles": [
+    "agent-meta-manager",
+    "concept-reviewer",
+    "developer",
+    "devops-engineer",
+    "documenter",
+    "ideation",
+    "orchestrator",
+    "release",
+    "requirements",
+    "senior-developer",
+    "tester"
+  ],
   "file_count_threshold": 5,
-  "mode": "off",
+  "mode": "auto",
   "secret_scan": true,
-  "triggers": [],
+  "triggers": [
+    "task-boundary"
+  ],
   "version": 1
 }
