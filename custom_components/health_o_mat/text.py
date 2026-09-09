@@ -7,7 +7,7 @@ from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DOMAIN, DRINK_LEXICON
 from .entity import HealthOMatEntity, signal_refresh
 from . import parser
 
@@ -33,7 +33,12 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
         self._last_parsed: dict = {}
 
     async def async_set_value(self, value: str) -> None:
-        result = parser.parse(value)
+        # On-read, kein Cache: entry.options["drink_lexicon"] ist einzige
+        # Quelle der Wahrheit, eine Options-Änderung wirkt sofort (kein Reload
+        # nötig). Kann ein list statt tuple sein (JSON-Storage-Roundtrip,
+        # siehe config_flow.py) — parse() greift nur per Index-Unpacking zu.
+        lexicon = self._entry.options.get("drink_lexicon") or DRINK_LEXICON
+        result = parser.parse(value, lexicon=lexicon)
         if not result.ok:
             raise HomeAssistantError(
                 f"Nicht erkannt: '{value}' ({result.error}). "

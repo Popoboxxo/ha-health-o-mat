@@ -13,9 +13,11 @@ from typing import Any
 
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.helpers import selector
 import voluptuous as vol
 
-from .const import DEFAULT_DAILY_GOAL_ML, DEFAULT_QUICK_DRINKS, DOMAIN
+from .const import DEFAULT_DAILY_GOAL_ML, DEFAULT_QUICK_DRINKS, DOMAIN, DRINK_LEXICON
+from . import parser
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +55,15 @@ def quick_drinks_from_user_input(user_input: dict[str, Any]) -> list[dict]:
         }
         for i in range(4)
     ]
+
+
+def drink_lexicon_schema(current_text: str) -> vol.Schema:
+    """Formular für das Getränke-Lexikon (mehrzeiliges Textfeld)."""
+    return vol.Schema({
+        vol.Required("drink_lexicon", default=current_text): selector.TextSelector(
+            selector.TextSelectorConfig(multiline=True)
+        ),
+    })
 
 
 class HealthOMatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -119,6 +130,10 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional("person_display",
                              default=self.config_entry.options.get("person_display")
                              or self.config_entry.data.get("person", "")): str,
+                vol.Optional(
+                    "daily_reset_hour",
+                    default=self.config_entry.options.get("daily_reset_hour", 0),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
             }),
         )
 
@@ -126,11 +141,33 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
         """Schritt 2: vier Quick-Drink-Slots editieren."""
         current = self.config_entry.options.get("quick_drinks") or _default_quick_drinks()
         if user_input is not None:
-            merged = dict(self._pending)
-            merged["quick_drinks"] = quick_drinks_from_user_input(user_input)
-            return self.async_create_entry(title="", data=merged)
+            self._pending["quick_drinks"] = quick_drinks_from_user_input(user_input)
+            return await self.async_step_drink_lexicon()
         return self.async_show_form(
             step_id="quick_drinks",
             data_schema=quick_drinks_schema(current),
             description_placeholders={"person": self.config_entry.data.get("person", "")},
+        )
+
+    async def async_step_drink_lexicon(self, user_input: dict[str, Any] | None = None):
+        """Schritt 3 (terminal): Getränke-Lexikon bearbeiten, dann Entry speichern."""
+        if user_input is not None:
+            raw_text = user_input["drink_lexicon"]
+            try:
+                lexicon = parser.parse_lexicon_text(raw_text)
+            except ValueError as err:
+                return self.async_show_form(
+                    step_id="drink_lexicon",
+                    data_schema=drink_lexicon_schema(raw_text),
+                    errors={"base": "invalid_lexicon_format"},
+                    description_placeholders={"detail": str(err)},
+                )
+            merged = dict(self._pending)
+            merged["drink_lexicon"] = lexicon
+            return self.async_create_entry(title="", data=merged)
+
+        current = self.config_entry.options.get("drink_lexicon") or DRINK_LEXICON
+        return self.async_show_form(
+            step_id="drink_lexicon",
+            data_schema=drink_lexicon_schema(parser.format_lexicon(current)),
         )

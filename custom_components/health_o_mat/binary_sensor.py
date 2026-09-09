@@ -31,7 +31,8 @@ class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
         return self._store.all_entries().get(self._entry.entry_id, {})
 
     def _today_ml(self) -> int:
-        return logic.today_sums(self._data.get("drinks", []), dt_util.now())["total_ml"]
+        hour = self._entry.options.get("daily_reset_hour", 0)
+        return logic.today_sums(self._data.get("drinks", []), dt_util.now(), hour=hour)["total_ml"]
 
 
 class GoalReachedEntity(HealthOMatBinary):
