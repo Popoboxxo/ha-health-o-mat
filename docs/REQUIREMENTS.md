@@ -53,13 +53,33 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-005 — Tagesgrenze als Option
 - **Priorität:** P1 · **Aufwand:** S
+- **Status: Erledigt (v0.6.0)** — mit einer bewussten Design-Vereinfachung, siehe
+  Akzeptanzkriterien.
 - **Beschreibung:** Tagesgrenze (0:00 / 22:00 / 04:00 / benutzerdefiniert hh:mm) als
   Option; `logic.day_start(hour, minute)` ist bereits parametrisiert.
   **Behebt Fund F2 vollständig** (schränkt REQ-HOM-110 zur Übergangslösung ein).
 - **Akzeptanzkriterien:**
-  - [ ] Options-Feld mit 4 Voreinstellungen (+ benutzerdefiniert hh:mm)
-  - [ ] Alle on-read-Fenster (heute, gestern, avg_7d) respektieren die Grenze
-  - [ ] Unit-Tests (21:59-Buchung bei 22:00-Grenze → Vortag)
+  - [x] Options-Feld — **erledigt mit vereinfachtem Design:** ein einzelnes
+    Ganzzahl-Feld `daily_reset_hour` (0–23, Options-Schritt „init", Default 0)
+    statt 4 Voreinstellungen + benutzerdefiniertem hh:mm. Minuten-Granularität
+    wurde als YAGNI bewertet (Aufwand/Nutzen) — `logic.day_start(hour, minute)`
+    bleibt intern parametrisiert und könnte eine Minute-Option später ohne
+    Breaking Change ergänzen.
+  - [x] On-read-Fenster respektieren die Grenze — **„heute" und „gestern"**:
+    ja, verdrahtet in `sensor.py` (`TodaySensor._today_sums`, `yesterday_ml`-
+    Attribut) und `binary_sensor.py` (`GoalReachedEntity._today_ml`), beide lesen
+    `entry.options["daily_reset_hour"]`. **`avg_7d`** (Blutdruck-Mittelwert,
+    `logic.avg_over_window`) ist bewusst **nicht betroffen**: es ist ein
+    rollierendes 7-Tage-Fenster (`now - 7 Tage` bis `now`), kein Tages-Bucket —
+    die Tagesgrenze ist darauf konzeptionell nicht anwendbar.
+  - [x] Unit-Tests — äquivalent abgedeckt (andere konkrete Uhrzeiten als im
+    Kriterium genannt, gleiches Szenario „Buchung kurz vor der Grenze zählt zum
+    Vortag"): `tests/test_logic.py::test_today_sums_with_custom_hour_shifts_window`
+    (05:00-Buchung bei `hour=6`), `::test_yesterday_window_with_custom_hour_matches_today_sums_boundary`,
+    plus Wiring-Regressionstests
+    `tests/test_sensor.py::test_today_sensor_uses_daily_reset_hour_from_options`
+    (+ `..._yesterday_ml_attribute_uses_same_daily_reset_hour`) und
+    `tests/test_binary_sensor.py::test_goal_reached_uses_daily_reset_hour_from_options`.
 
 ### REQ-HOM-006 — Automation-Blueprints
 - **Priorität:** P2 · **Aufwand:** S
@@ -191,10 +211,15 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-110 — README-Korrektur Tagesgrenze (Fix F2, Übergangslösung)
 - **Priorität:** P1 · **Aufwand:** S
+- **Status: Erledigt** — mit REQ-HOM-005 (v0.6.0) hinfällig geworden: die
+  Übergangslösung (README als "geplant" korrigieren) wurde durch die
+  README-Aktualisierung auf den tatsächlich fertigen Feature-Stand ersetzt.
 - **Anforderung:** README:25–26 korrigieren (Feature existiert nicht; Verweis auf
   REQ-HOM-005 als geplant). Vollständige Behebung durch 005.
 - **Akzeptanzkriterien:**
-  - [ ] README-Aussage stimmt wieder; geplanter Feature-Verweis hinterlegt
+  - [x] README-Aussage stimmt wieder — README beschreibt jetzt die
+    einstellbare Reset-Uhrzeit als fertiges Feature (kein REQ-Verweis mehr,
+    analog zu den übrigen fertigen Features im selben Abschnitt).
 
 ---
 

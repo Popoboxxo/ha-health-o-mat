@@ -22,9 +22,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
 - 👥 **Multi-Person**: ein Config-Entry = eine Person = ein Device — beliebig viele
-- 🌙 **Tagesgrenze**: fix 0 Uhr; neustartfest, weil „heute" on-read aus der Historie
-  berechnet wird (kein Reset-Job, DST-fest) — umstellbare Tagesgrenze ist geplant
-  ([REQ-HOM-005](docs/REQUIREMENTS.md))
+- 🌙 **Tagesgrenze**: einstellbare Reset-Uhrzeit (Options, 0–23 Uhr, Default 0 Uhr);
+  neustartfest, weil „heute"/„gestern" on-read aus der Historie berechnet werden
+  (kein Reset-Job, DST-fest)
 
 ## Installation (HACS)
 
@@ -131,9 +131,11 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 - `text.…_log_drink_free_text` — Freitexteingabe wie „Kaffee 300ml",
   „0,5 l wasser", „cola", „Ingwertee 400", „350". Der Parser zieht die Menge
   per Regex (ml/l, auch Dezimal mit Komma/Punkt) und ordnet die restlichen
-  Wörter über ein eingebautes Lexikon (wasser/water, kaffee/coffee, tee/tea,
+  Wörter über ein Lexikon (Default: wasser/water, kaffee/coffee, tee/tea,
   bier/beer, wein/wine, milch/milk, cola, limo, saft/juice, sekt …) einem
-  Getränketyp zu; unbekannte Typen werden wörtlich übernommen.
+  Getränketyp zu; unbekannte Typen werden wörtlich übernommen. Das Lexikon ist
+  über den Options-Dialog vollständig anpassbar (Schritt „Getränke-Lexikon",
+  ein Wort/Zeile im Format `wort=Typ,ml`).
   **Gespeichert wird nur das strukturierte Ergebnis** (Zeitstempel, ml, Typ,
   Quelle `freetext`) — der Rohtext landet **nicht** in der Historie; er bleibt
   kurzlebig in den Entity-Attributen (`last_input`, `drink_type`,
@@ -168,6 +170,11 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   jetzt über den Options-Dialog der Integration editierbar (vorher fest in der
   Einrichtung verankert). Die Migration läuft beim Start automatisch
   (Config-Entry v1 → v2) — bestehende Buttons und Daten bleiben unverändert.
+- **Update auf v0.6.0 (Getränke-Lexikon + Reset-Uhrzeit nach Options):** zwei
+  neue Options-Schritte (Getränke-Lexikon, Reset-Uhrzeit im Schritt „Tagesziel
+  & mehr"). Keine Breaking Changes, keine Migration nötig — beide Optionen
+  haben sinnvolle Defaults (eingebautes Lexikon, Reset-Uhrzeit 0 Uhr) und
+  wirken sich erst nach expliziter Änderung im Options-Dialog aus.
 
 ## Services
 
