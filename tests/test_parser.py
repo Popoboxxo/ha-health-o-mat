@@ -88,3 +88,82 @@ def test_zu_gross():
 
 def test_null():
     assert not parser.parse("0 ml").ok
+
+
+# --- Konfigurierbares Getränke-Lexikon (format_lexicon/parse_lexicon_text) ---
+
+def test_format_lexicon_parse_lexicon_text_roundtrip():
+    lexicon = parser.DRINK_LEXICON
+    text = parser.format_lexicon(lexicon)
+    assert parser.parse_lexicon_text(text) == lexicon
+
+
+def test_parse_lexicon_text_basic():
+    assert parser.parse_lexicon_text("kaffee=Kaffee,250") == {"kaffee": ("Kaffee", 250)}
+
+
+def test_parse_lexicon_text_ignores_comments_and_blank_lines():
+    text = "# comment\n\nkaffee=Kaffee,250"
+    assert parser.parse_lexicon_text(text) == {"kaffee": ("Kaffee", 250)}
+
+
+def test_parse_lexicon_text_missing_ml_raises():
+    try:
+        parser.parse_lexicon_text("kaffee=Kaffee")
+    except ValueError:
+        pass
+    else:
+        assert False, "expected ValueError"
+
+
+def test_parse_lexicon_text_ml_not_int_raises():
+    try:
+        parser.parse_lexicon_text("kaffee=Kaffee,abc")
+    except ValueError:
+        pass
+    else:
+        assert False, "expected ValueError"
+
+
+def test_parse_lexicon_text_ml_out_of_range_raises():
+    for bad in ("kaffee=Kaffee,0", "kaffee=Kaffee,20000"):
+        try:
+            parser.parse_lexicon_text(bad)
+        except ValueError:
+            pass
+        else:
+            assert False, f"expected ValueError for {bad!r}"
+
+
+def test_parse_lexicon_text_duplicate_last_wins():
+    text = "kaffee=Kaffee,250\nkaffee=Espresso,40"
+    assert parser.parse_lexicon_text(text) == {"kaffee": ("Espresso", 40)}
+
+
+def test_parse_lexicon_text_duplicate_different_case_normalizes_and_last_wins():
+    # Wort-Normalisierung (.lower()) muss VOR dem Duplikat-Vergleich greifen,
+    # sonst würden "Kaffee" und "kaffee" als zwei separate Einträge überleben.
+    text = "Kaffee=Kaffee,250\nKAFFEE=Espresso,40"
+    assert parser.parse_lexicon_text(text) == {"kaffee": ("Espresso", 40)}
+
+
+def test_parse_lexicon_text_empty_string_returns_empty_dict():
+    # Leere Options-Eingabe darf nicht crashen — Options-Flow speichert dann
+    # ein leeres Lexikon (alle Worte werden fortan als unbekannter Typ behandelt).
+    assert parser.parse_lexicon_text("") == {}
+
+
+def test_parse_lexicon_text_only_comments_and_blank_lines_returns_empty_dict():
+    text = "# nur Kommentare\n\n   \n# noch einer\n"
+    assert parser.parse_lexicon_text(text) == {}
+
+
+def test_parse_with_custom_lexicon_overrides_default():
+    r = parser.parse("kaffee", lexicon={"kaffee": ("Espresso", 40)})
+    assert r.ok and r.drink_type == "Espresso" and r.amount_ml == 40
+
+
+def test_parse_without_lexicon_arg_unchanged_regression():
+    # Regression guard: Aufruf ohne `lexicon` verhält sich exakt wie vorher.
+    r = parser.parse("kaffee 300ml")
+    assert r.ok and r.amount_ml == 300 and r.drink_type == "Kaffee"

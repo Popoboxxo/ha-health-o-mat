@@ -22,7 +22,8 @@
       "init": {
         "title": "Optionen",
         "data": {
-          "daily_goal_ml": "Tagesziel in ml"
+          "daily_goal_ml": "Tagesziel in ml",
+          "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)"
         }
       },
       "quick_drinks": {
@@ -42,7 +43,17 @@
           "quick_3_ml": "Voreinstellung 4 – Größe (ml)",
           "quick_3_icon": "Voreinstellung 4 – Icon"
         }
+      },
+      "drink_lexicon": {
+        "title": "Getränke-Lexikon",
+        "description": "Ein Eintrag pro Zeile: wort=Typ,ml (z. B. kaffee=Kaffee,250). Zeilen mit '#' am Anfang sind Kommentare.",
+        "data": {
+          "drink_lexicon": "Getränke-Lexikon"
+        }
       }
+    },
+    "error": {
+      "invalid_lexicon_format": "Ungültiger Eintrag: {detail}"
     }
   },
   "entity": {

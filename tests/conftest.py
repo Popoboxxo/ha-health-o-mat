@@ -130,6 +130,27 @@ if not _USING_REAL_HA:
         def add_suggested_values_to_schema(self, schema, suggested_values):
             return schema
 
+    class TextSelectorConfig:
+        """Minimal stand-in for homeassistant.helpers.selector.TextSelectorConfig."""
+
+        def __init__(self, **kwargs) -> None:
+            self.config = kwargs
+
+    class TextSelector:
+        """Minimal stand-in for homeassistant.helpers.selector.TextSelector.
+
+        Only instantiated (never subclassed) — used as the voluptuous value
+        validator for a schema key. A no-op passthrough is enough here since
+        the real selector's job (rendering a multiline textarea) is a
+        frontend concern, not exercised by these HA-free unit tests.
+        """
+
+        def __init__(self, config=None) -> None:
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
     class OptionsFlow:
         """Minimal stand-in for homeassistant.config_entries.OptionsFlow."""
 
@@ -229,6 +250,11 @@ if not _USING_REAL_HA:
         "homeassistant.helpers.storage": _module(
             "homeassistant.helpers.storage",
             Store=MagicMock(),
+        ),
+        "homeassistant.helpers.selector": _module(
+            "homeassistant.helpers.selector",
+            TextSelector=TextSelector,
+            TextSelectorConfig=TextSelectorConfig,
         ),
         "homeassistant.helpers.update_coordinator": _module(
             "homeassistant.helpers.update_coordinator",

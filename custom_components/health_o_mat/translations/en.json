@@ -22,7 +22,8 @@
       "init": {
         "title": "Options",
         "data": {
-          "daily_goal_ml": "Daily goal in ml"
+          "daily_goal_ml": "Daily goal in ml",
+          "daily_reset_hour": "Daily reset hour (0-23)"
         }
       },
       "quick_drinks": {
@@ -42,7 +43,17 @@
           "quick_3_ml": "Preset 4 – Size (ml)",
           "quick_3_icon": "Preset 4 – Icon"
         }
+      },
+      "drink_lexicon": {
+        "title": "Drink dictionary",
+        "description": "One entry per line: word=Type,ml (e.g. kaffee=Coffee,250). Lines starting with '#' are comments.",
+        "data": {
+          "drink_lexicon": "Drink dictionary"
+        }
       }
+    },
+    "error": {
+      "invalid_lexicon_format": "Invalid entry: {detail}"
     }
   },
   "entity": {

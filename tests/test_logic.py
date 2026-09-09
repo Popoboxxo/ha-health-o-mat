@@ -93,6 +93,30 @@ def test_yesterday_window():
     assert s == datetime(2026, 8, 21, 0, 0) and e == datetime(2026, 8, 22, 0, 0)
 
 
+# --- Konfigurierbare Reset-Uhrzeit (daily_reset_hour) ---
+
+def test_today_sums_with_custom_hour_shifts_window():
+    # 05:00-Buchung zählt bei hour=6 noch zum Vortag (Fenster beginnt erst 06:00).
+    drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
+    now = datetime(2026, 8, 22, 8, 0)
+    assert logic.today_sums(drinks, now, hour=6)["total_ml"] == 0
+    assert logic.today_sums(drinks, now, hour=0)["total_ml"] == 300
+
+
+def test_yesterday_window_with_custom_hour_matches_today_sums_boundary():
+    # yesterday_window(now, hour=h) und today_sums(..., hour=h) müssen dieselbe
+    # Tagesgrenze verwenden — sonst wird ein Getränk doppelt oder gar nicht gezählt.
+    now = datetime(2026, 8, 22, 8, 0)
+    hour = 6
+    y_start, y_end = logic.yesterday_window(now, hour=hour)
+    assert y_end == logic.day_start(now, hour=hour)
+    drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
+    yesterday_sums = logic.window_sums(drinks, y_start, y_end)
+    today_sums = logic.today_sums(drinks, now, hour=hour)
+    assert yesterday_sums["total_ml"] == 300
+    assert today_sums["total_ml"] == 0
+
+
 READINGS = [
     {"ts": "2026-08-22T08:00:00", "sys": 120, "dia": 80, "pulse": 70},
     {"ts": "2026-08-16T08:00:00", "sys": 130, "dia": 85, "pulse": 72},  # exactly 7 days before "today"

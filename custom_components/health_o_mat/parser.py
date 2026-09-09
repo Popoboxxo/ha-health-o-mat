@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from .const import DRINK_LEXICON, NO_TYPE_LABEL
+from .const import DRINK_LEXICON, MAX_AMOUNT_ML, NO_TYPE_LABEL
 
 _AMOUNT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(m\s*l|liter|litre|ltr|\bl\b)?", re.IGNORECASE)
 
@@ -38,8 +38,52 @@ def _normalize(text: str) -> str:
     return text
 
 
-def parse(text: str) -> DrinkParse:
-    """Parst eine Freitexteingabe zu Menge + Getränketyp."""
+def format_lexicon(lexicon: dict[str, tuple[str, int]]) -> str:
+    """Serialisiert ein Lexikon-Dict ins editierbare 'wort=Typ,ml'-Textformat,
+    eine Zeile pro Eintrag, in Dict-Iterationsreihenfolge."""
+    return "\n".join(f"{word}={canonical},{ml}" for word, (canonical, ml) in lexicon.items())
+
+
+def parse_lexicon_text(text: str) -> dict[str, tuple[str, int]]:
+    """Parst das mehrzeilige 'wort=Typ,ml'-Format in ein Lexikon-Dict.
+
+    Leerzeilen und Zeilen, die mit '#' beginnen, werden ignoriert.
+    Wirft ValueError (1-indizierte Zeilennummer + betroffene Zeile) bei der
+    ersten fehlerhaften Zeile: fehlendes '=' oder ',', leeres Wort/Typ, ml
+    nicht als int parsbar, ml <= 0 oder ml > MAX_AMOUNT_ML.
+    Wort wird klein geschrieben + getrimmt (muss zu parser._normalize()
+    passen); Typ wird nur getrimmt (kanonische Anzeigeform, z. B. "Kaffee").
+    """
+    result: dict[str, tuple[str, int]] = {}
+    for i, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line or "," not in line:
+            raise ValueError(f"Zeile {i}: erwartet 'wort=Typ,ml', erhalten '{raw_line}'")
+        word, _, rest = line.partition("=")
+        canonical, _, ml_raw = rest.partition(",")
+        word = word.strip().lower()
+        canonical = canonical.strip()
+        ml_raw = ml_raw.strip()
+        if not word or not canonical:
+            raise ValueError(f"Zeile {i}: Wort und Typ dürfen nicht leer sein")
+        try:
+            ml = int(ml_raw)
+        except ValueError:
+            raise ValueError(f"Zeile {i}: ml muss eine ganze Zahl sein") from None
+        if ml <= 0 or ml > MAX_AMOUNT_ML:
+            raise ValueError(f"Zeile {i}: ml muss zwischen 1 und {MAX_AMOUNT_ML} liegen")
+        result[word] = (canonical, ml)
+    return result
+
+
+def parse(text: str, lexicon: dict[str, tuple[str, int]] = DRINK_LEXICON) -> DrinkParse:
+    """Parst eine Freitexteingabe zu Menge + Getränketyp.
+
+    `lexicon` wird nie in-place verändert (nur gelesen) — der mutable
+    default `DRINK_LEXICON` ist damit sicher.
+    """
     if not text or not text.strip():
         return DrinkParse(ok=False, error="Eingabe ist leer")
 
@@ -68,8 +112,8 @@ def parse(text: str) -> DrinkParse:
 
     for word in words:
         key = word.rstrip(".!?")
-        if key in DRINK_LEXICON:
-            canonical, default_ml = DRINK_LEXICON[key]
+        if key in lexicon:
+            canonical, default_ml = lexicon[key]
             resolved_type = canonical
             if amount_ml is None:
                 amount_ml = default_ml
