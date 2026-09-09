@@ -122,8 +122,8 @@ def test_options_flow_async_step_init_chains_to_quick_drinks():
     assert options_flow._pending["daily_goal_ml"] == 2250
 
 
-def test_options_flow_full_two_step_flow_creates_entry():
-    """[REQ-HOM-101] init → quick_drinks → create_entry mit zusammengeführten Daten."""
+def test_options_flow_full_three_step_flow_creates_entry():
+    """[REQ-HOM-101] init → quick_drinks → drink_lexicon → create_entry mit zusammengeführten Daten."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -147,13 +147,20 @@ def test_options_flow_full_two_step_flow_creates_entry():
         user_input[f"quick_{i}_label"] = f"Drink {i}"
         user_input[f"quick_{i}_ml"] = 250
         user_input[f"quick_{i}_icon"] = "mdi:cup-water"
-    _async_test(options_flow.async_step_quick_drinks(user_input))
+    # quick_drinks-Submit erzeugt jetzt keinen Entry mehr — es verkettet auf drink_lexicon
+    quick_drinks_result = _async_test(options_flow.async_step_quick_drinks(user_input))
+    assert quick_drinks_result["type"] == "form"
+    assert quick_drinks_result["step_id"] == "drink_lexicon"
+    options_flow.async_create_entry.assert_not_called()
+
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     options_flow.async_create_entry.assert_called_once()
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["daily_goal_ml"] == 2250
     assert len(data["quick_drinks"]) == 4
     assert data["quick_drinks"][0]["label"] == "Drink 0"
+    assert data["drink_lexicon"] == {"kaffee": ("Kaffee", 250)}
 
 
 def test_options_flow_daily_goal_from_options_takes_precedence():
@@ -287,7 +294,7 @@ def test_options_flow_handles_missing_store():
 
 
 def test_options_flow_preserves_other_options_on_submit():
-    """[REQ-HOM-101] finaler Quick-Drinks-Submit bewahrt übrige Optionen."""
+    """[REQ-HOM-101] finaler Drink-Lexicon-Submit bewahrt übrige Optionen."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -313,12 +320,121 @@ def test_options_flow_preserves_other_options_on_submit():
         user_input[f"quick_{i}_ml"] = 200
         user_input[f"quick_{i}_icon"] = "mdi:cup-water"
     _async_test(options_flow.async_step_quick_drinks(user_input))
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     options_flow.async_create_entry.assert_called_once()
     data = options_flow.async_create_entry.call_args[1]["data"]
-    # init-Felder + Quick-Drinks zusammengeführt, fremde Options bleiben unberührt
+    # init-Felder + Quick-Drinks + Lexikon zusammengeführt, fremde Options bleiben unberührt
     # (fremde Optionen leben im Entry, nicht im Flow — hier wird nur geprüft,
     #  dass der Flow sie nicht anfasst/verliert)
     assert data["daily_goal_ml"] == 2500
     assert data["set_lifetime_ml"] == 1000
+    assert data["drink_lexicon"] == {"kaffee": ("Kaffee", 250)}
     assert "some_key" not in data  # Flow schreibt nur seine eigenen Felder
+
+
+# --- Feature 1: Getränke-Lexikon-Schritt (drink_lexicon) ---
+
+def test_drink_lexicon_step_shows_form_with_default_lexicon_text():
+    """[Spec Feature 1] Erstes Öffnen ohne gespeichertes Lexikon zeigt DRINK_LEXICON formatiert."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+
+    result = _async_test(options_flow.async_step_drink_lexicon(None))
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "drink_lexicon"
+    assert "errors" not in result or not result.get("errors")
+
+
+def test_drink_lexicon_step_invalid_text_reshows_form_with_error():
+    """[Spec Feature 1 - AC 10] Fehlerhafter Text: errors['base'], kein create_entry, Entry legt nicht an."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    options_flow.async_create_entry = MagicMock()
+
+    result = _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee"}))
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "drink_lexicon"
+    assert result["errors"] == {"base": "invalid_lexicon_format"}
+    options_flow.async_create_entry.assert_not_called()
+
+
+def test_drink_lexicon_step_reads_existing_options_lexicon():
+    """[Spec Feature 1] Vorhandenes entry.options['drink_lexicon'] wird formatiert vorbelegt."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {"drink_lexicon": {"matecha": ("Matcha-Tee", 300)}}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+
+    result = _async_test(options_flow.async_step_drink_lexicon(None))
+
+    schema_dict = result["data_schema"].schema
+    default_key = next(iter(schema_dict))
+    assert default_key.default() == "matecha=Matcha-Tee,300"
+
+
+# --- Feature 2: konfigurierbare Reset-Uhrzeit (daily_reset_hour) ---
+
+def test_init_step_schema_rejects_out_of_range_daily_reset_hour():
+    """[Spec Feature 2 - AC 2] vol.Range(min=0, max=23) lehnt 24/-1 ab."""
+    import voluptuous as vol  # noqa: PLC0415
+
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    options_flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+    result = _async_test(options_flow.async_step_init(None))
+    schema = result["data_schema"]
+
+    for bad in (24, -1):
+        try:
+            schema({"daily_goal_ml": 2000, "set_lifetime_ml": 0,
+                     "person_display": "", "daily_reset_hour": bad})
+        except vol.Invalid:
+            pass
+        else:
+            assert False, f"expected vol.Invalid for daily_reset_hour={bad}"
+
+    # 0..23 bleiben gültig — inkl. beider Grenzwerte (vol.Range ist inklusiv;
+    # ein Off-by-one bei min/max würde sonst genau hier unbemerkt bleiben).
+    for good in (0, 6, 23):
+        validated = schema({"daily_goal_ml": 2000, "set_lifetime_ml": 0,
+                             "person_display": "", "daily_reset_hour": good})
+        assert validated["daily_reset_hour"] == good
+
+
+def test_init_step_daily_reset_hour_defaults_to_zero():
+    """[Spec Feature 2] Fehlender daily_reset_hour in entry.options → Default 0 (Bestands-Verhalten)."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    options_flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+
+    result = _async_test(options_flow.async_step_init(None))
+    schema_dict = result["data_schema"].schema
+    hour_key = next(k for k in schema_dict if str(k) == "daily_reset_hour")
+    assert hour_key.default() == 0

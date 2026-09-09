@@ -231,6 +231,60 @@ def test_last_reading_sensor_for_different_keys():
     assert sensor_pulse.extra_state_attributes["avg_7d"] == 71.0
 
 
+# --- Feature 2: konfigurierbare Reset-Uhrzeit (daily_reset_hour) — TodaySensor-Wiring ---
+
+def _make_today_sensor_fixture(options=None, drinks=None):
+    """Create a TodaySensor with mocked coordinator/entry/store."""
+    coordinator = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.options = options if options is not None else {}
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = 2000
+
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={
+        "test-entry-1": {"drinks": drinks if drinks is not None else []},
+    })
+
+    sensor = sensor_module.TodaySensor(coordinator, entry, store)
+    return sensor, entry, store
+
+
+def test_today_sensor_uses_daily_reset_hour_from_options():
+    """[Spec Feature 2] TodaySensor liest entry.options['daily_reset_hour'] statt fest 0."""
+    drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
+    sensor, entry, store = _make_today_sensor_fixture(
+        options={"daily_reset_hour": 6}, drinks=drinks
+    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
+
+    # 05:00-Buchung liegt vor der 06:00-Reset-Grenze -> zählt noch zum Vortag.
+    assert sensor.native_value == 0
+
+
+def test_today_sensor_daily_reset_hour_missing_defaults_to_zero_regression():
+    """[Spec Feature 2] Ohne daily_reset_hour in entry.options: Bestandsverhalten (hour=0) unverändert."""
+    drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
+    sensor, entry, store = _make_today_sensor_fixture(options={}, drinks=drinks)
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
+
+    assert sensor.native_value == 300
+
+
+def test_today_sensor_yesterday_ml_attribute_uses_same_daily_reset_hour():
+    """[Spec Feature 2] extra_state_attributes['yesterday_ml'] nutzt dieselbe Reset-Uhrzeit
+    wie native_value — sonst würde ein Getränk je nach hour doppelt oder gar nicht gezählt."""
+    drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
+    sensor, entry, store = _make_today_sensor_fixture(
+        options={"daily_reset_hour": 6}, drinks=drinks
+    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
+
+    assert sensor.native_value == 0
+    assert sensor.extra_state_attributes["yesterday_ml"] == 300
+
+
 def test_last_reading_sensor_avg_7d_precision():
     """[AUDIT-7b-M-5] avg_7d maintains correct decimal precision."""
     readings = [
