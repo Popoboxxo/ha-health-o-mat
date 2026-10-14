@@ -46,11 +46,22 @@ add_blood_pressure:
 
 remove_last_entry:
   name: Letzte Buchung löschen
-  description: Entfernt die letzte Getränkebuchung (Undo).
+  description: Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).
   fields:
     person:
       name: Person
       description: Name der Person (leer = einzige konfigurierte Person).
+    kind:
+      name: Art
+      description: Welche Buchung entfernt wird — Getränk (Standard) oder Blutdruckmessung.
+      example: "drinks"
+      selector:
+        select:
+          options:
+            - label: Getränk
+              value: "drinks"
+            - label: Blutdruckmessung
+              value: "blood_pressure"
 
 export_csv:
   name: CSV-Export

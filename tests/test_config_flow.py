@@ -3,12 +3,15 @@
 Audit-Punkt 7b (C-2): Options flow correctly reads default from entry.options
 and persists user input back to entry.options.
 """
+
 import asyncio
 import importlib.util
 import os
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock
+
+import pytest
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -69,17 +72,9 @@ def test_options_flow_async_step_init_shows_form_on_no_input():
     entry.entry_id = "test-entry-1"
 
     hass = MagicMock()
-    hass.data = {
-        "health_o_mat": {
-            "shared": {
-                "store": MagicMock()
-            }
-        }
-    }
+    hass.data = {"health_o_mat": {"shared": {"store": MagicMock()}}}
     store = hass.data["health_o_mat"]["shared"]["store"]
-    store.all_entries = MagicMock(return_value={
-        "test-entry-1": {"total_ml_lifetime": 1000}
-    })
+    store.all_entries = MagicMock(return_value={"test-entry-1": {"total_ml_lifetime": 1000}})
 
     # Use PropertyMock to set config_entry properly
     type(options_flow).config_entry = PropertyMock(return_value=entry)
@@ -123,7 +118,8 @@ def test_options_flow_async_step_init_chains_to_quick_drinks():
 
 
 def test_options_flow_full_three_step_flow_creates_entry():
-    """[REQ-HOM-101] init → quick_drinks → drink_lexicon → create_entry mit zusammengeführten Daten."""
+    """[REQ-HOM-101] init → quick_drinks → drink_lexicon → create_entry mit
+    zusammengeführten Daten."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -139,9 +135,11 @@ def test_options_flow_full_three_step_flow_creates_entry():
     type(options_flow).hass = PropertyMock(return_value=hass)
     options_flow.async_create_entry = MagicMock()
 
-    _async_test(options_flow.async_step_init(
-        {"daily_goal_ml": 2250, "set_lifetime_ml": 0, "person_display": ""}
-    ))
+    _async_test(
+        options_flow.async_step_init(
+            {"daily_goal_ml": 2250, "set_lifetime_ml": 0, "person_display": ""}
+        )
+    )
     user_input = {}
     for i in range(4):
         user_input[f"quick_{i}_label"] = f"Drink {i}"
@@ -247,16 +245,8 @@ def test_options_flow_loads_lifetime_from_store():
 
     hass = MagicMock()
     mock_store = MagicMock()
-    mock_store.all_entries = MagicMock(return_value={
-        "test-entry-1": {"total_ml_lifetime": 5000}
-    })
-    hass.data = {
-        "health_o_mat": {
-            "shared": {
-                "store": mock_store
-            }
-        }
-    }
+    mock_store.all_entries = MagicMock(return_value={"test-entry-1": {"total_ml_lifetime": 5000}})
+    hass.data = {"health_o_mat": {"shared": {"store": mock_store}}}
 
     type(options_flow).config_entry = PropertyMock(return_value=entry)
     type(options_flow).hass = PropertyMock(return_value=hass)
@@ -311,9 +301,11 @@ def test_options_flow_preserves_other_options_on_submit():
 
     options_flow.async_create_entry = MagicMock()
 
-    _async_test(options_flow.async_step_init(
-        {"daily_goal_ml": 2500, "set_lifetime_ml": 1000, "person_display": ""}
-    ))
+    _async_test(
+        options_flow.async_step_init(
+            {"daily_goal_ml": 2500, "set_lifetime_ml": 1000, "person_display": ""}
+        )
+    )
     user_input = {}
     for i in range(4):
         user_input[f"quick_{i}_label"] = f"Drink {i}"
@@ -335,6 +327,7 @@ def test_options_flow_preserves_other_options_on_submit():
 
 # --- Feature 1: Getränke-Lexikon-Schritt (drink_lexicon) ---
 
+
 def test_drink_lexicon_step_shows_form_with_default_lexicon_text():
     """[Spec Feature 1] Erstes Öffnen ohne gespeichertes Lexikon zeigt DRINK_LEXICON formatiert."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
@@ -351,7 +344,8 @@ def test_drink_lexicon_step_shows_form_with_default_lexicon_text():
 
 
 def test_drink_lexicon_step_invalid_text_reshows_form_with_error():
-    """[Spec Feature 1 - AC 10] Fehlerhafter Text: errors['base'], kein create_entry, Entry legt nicht an."""
+    """[Spec Feature 1 - AC 10] Fehlerhafter Text: errors['base'], kein
+    create_entry, Entry legt nicht an."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -384,6 +378,7 @@ def test_drink_lexicon_step_reads_existing_options_lexicon():
 
 # --- Feature 2: konfigurierbare Reset-Uhrzeit (daily_reset_hour) ---
 
+
 def test_init_step_schema_rejects_out_of_range_daily_reset_hour():
     """[Spec Feature 2 - AC 2] vol.Range(min=0, max=23) lehnt 24/-1 ab."""
     import voluptuous as vol  # noqa: PLC0415
@@ -405,23 +400,36 @@ def test_init_step_schema_rejects_out_of_range_daily_reset_hour():
 
     for bad in (24, -1):
         try:
-            schema({"daily_goal_ml": 2000, "set_lifetime_ml": 0,
-                     "person_display": "", "daily_reset_hour": bad})
+            schema(
+                {
+                    "daily_goal_ml": 2000,
+                    "set_lifetime_ml": 0,
+                    "person_display": "",
+                    "daily_reset_hour": bad,
+                }
+            )
         except vol.Invalid:
             pass
         else:
-            assert False, f"expected vol.Invalid for daily_reset_hour={bad}"
+            raise AssertionError(f"expected vol.Invalid for daily_reset_hour={bad}")
 
     # 0..23 bleiben gültig — inkl. beider Grenzwerte (vol.Range ist inklusiv;
     # ein Off-by-one bei min/max würde sonst genau hier unbemerkt bleiben).
     for good in (0, 6, 23):
-        validated = schema({"daily_goal_ml": 2000, "set_lifetime_ml": 0,
-                             "person_display": "", "daily_reset_hour": good})
+        validated = schema(
+            {
+                "daily_goal_ml": 2000,
+                "set_lifetime_ml": 0,
+                "person_display": "",
+                "daily_reset_hour": good,
+            }
+        )
         assert validated["daily_reset_hour"] == good
 
 
 def test_init_step_daily_reset_hour_defaults_to_zero():
-    """[Spec Feature 2] Fehlender daily_reset_hour in entry.options → Default 0 (Bestands-Verhalten)."""
+    """[Spec Feature 2] Fehlender daily_reset_hour in entry.options → Default 0
+    (Bestands-Verhalten)."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -438,3 +446,79 @@ def test_init_step_daily_reset_hour_defaults_to_zero():
     schema_dict = result["data_schema"].schema
     hour_key = next(k for k in schema_dict if str(k) == "daily_reset_hour")
     assert hour_key.default() == 0
+
+
+# --- Feature 3 (REQ-HOM-109 / N-2): Retention/Archiv-Monatswert ---
+
+
+def _init_schema_via_form(options_flow):
+    options_flow.async_show_form = MagicMock(side_effect=lambda **kw: kw)
+    return _async_test(options_flow.async_step_init(None))["data_schema"]
+
+
+def test_init_step_retention_months_defaults_off_and_validates_range():
+    """[REQ-HOM-109] retention_months: Default 0 (AUS), Range 0..MAX."""
+    import voluptuous as vol  # noqa: PLC0415
+
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+
+    schema = _init_schema_via_form(options_flow)
+    retention_key = next(k for k in schema.schema if str(k) == "retention_months")
+    assert retention_key.default() == 0  # Default AUS = bisheriges Verhalten
+
+    base = {
+        "daily_goal_ml": 2000,
+        "set_lifetime_ml": 0,
+        "person_display": "",
+        "daily_reset_hour": 0,
+    }
+    max_months = config_flow_module.MAX_RETENTION_MONTHS
+    for good in (0, max_months):
+        assert schema({**base, "retention_months": good})["retention_months"] == good
+    for bad in (-1, max_months + 1):
+        with pytest.raises(vol.Invalid):
+            schema({**base, "retention_months": bad})
+
+
+def test_options_flow_persists_retention_months():
+    """[REQ-HOM-109] Der vollständige Options-Flow schreibt retention_months mit."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.data = {"person": "Max"}
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_init(
+            {
+                "daily_goal_ml": 2000,
+                "set_lifetime_ml": 0,
+                "person_display": "",
+                "retention_months": 6,
+            }
+        )
+    )
+    quick = {}
+    for i in range(4):
+        quick[f"quick_{i}_label"] = f"Drink {i}"
+        quick[f"quick_{i}_ml"] = 200
+        quick[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["retention_months"] == 6

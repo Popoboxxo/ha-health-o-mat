@@ -23,7 +23,8 @@
         "title": "Options",
         "data": {
           "daily_goal_ml": "Daily goal in ml",
-          "daily_reset_hour": "Daily reset hour (0-23)"
+          "daily_reset_hour": "Daily reset hour (0-23)",
+          "retention_months": "History retention in months (0 = off)"
         }
       },
       "quick_drinks": {
@@ -172,7 +173,17 @@
     },
     "remove_last_entry": {
       "name": "Remove last entry",
-      "description": "Removes the last drink entry (undo)."
+      "description": "Removes the last drink or blood-pressure entry (undo).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Person name (empty = the only configured person)."
+        },
+        "kind": {
+          "name": "Type",
+          "description": "Which entry to remove: drinks (default) or blood_pressure."
+        }
+      }
     },
     "export_csv": {
       "name": "CSV export",

@@ -6,6 +6,7 @@ These tests verify the actual behavior of HealthOMatStore by:
 3. Asserting on the internal state (_data dict)
 4. Verifying persistence calls
 """
+
 import asyncio
 import importlib.util
 import os
@@ -66,7 +67,7 @@ def mock_store_fixture(monkeypatch):
     # Mock Store constructor - patch it in the store_module's namespace
     # This prevents the real Store class from being called when HealthOMatStore.__init__ runs
     mock_store_class = MagicMock(return_value=mock_store_instance)
-    monkeypatch.setattr(store_module, 'Store', mock_store_class)
+    monkeypatch.setattr(store_module, "Store", mock_store_class)
 
     store = store_module.HealthOMatStore(hass)
     return store, mock_store_instance
@@ -222,7 +223,9 @@ def test_remove_last_drink_prevents_negative_lifetime(mock_store_fixture):
     # But simulate a scenario where we want to test max(0, ...)
     # Manually set to test edge case
     entry["total_ml_lifetime"] = 300
-    entry["drinks"].append({"ts": "2026-09-05T12:00:00Z", "ml": 500, "type": "juice", "src": "button"})
+    entry["drinks"].append(
+        {"ts": "2026-09-05T12:00:00Z", "ml": 500, "type": "juice", "src": "button"}
+    )
 
     # Remove this drink: should be max(0, 300 - 500) = 0
     _async_test(store.remove_last_drink(entry_id))
@@ -404,7 +407,9 @@ def test_set_wellbeing_updates_history_on_second_call(mock_store_fixture):
     # Old status should be in history (with new timestamp as per implementation)
     assert len(entry["wellbeing_history"]) == 1
     assert entry["wellbeing_history"][0]["status"] == "good"
-    assert entry["wellbeing_history"][0]["ts"] == ts_second  # Timestamp is from the update that archived it
+    assert (
+        entry["wellbeing_history"][0]["ts"] == ts_second
+    )  # Timestamp is from the update that archived it
 
     # Current status should be updated
     assert entry["wellbeing"]["status"] == "tired"
@@ -421,7 +426,7 @@ def test_set_wellbeing_history_capped_at_100(mock_store_fixture):
     # Add 101 wellbeing updates
     for i in range(101):
         status = f"status-{i}"
-        ts = f"2026-09-05T{i%24:02d}:{i%60:02d}:00Z"
+        ts = f"2026-09-05T{i % 24:02d}:{i % 60:02d}:00Z"
         _async_test(store.set_wellbeing(entry_id, status, ts))
 
     entry = store.entry(entry_id)
@@ -643,9 +648,11 @@ def test_async_load_preserves_existing_data(mock_store_fixture):
         "entries": {
             "person-1": {
                 "person": "Alice",
-                "drinks": [{"ts": "2026-09-05T10:00:00Z", "ml": 250, "type": "water", "src": "button"}],
+                "drinks": [
+                    {"ts": "2026-09-05T10:00:00Z", "ml": 250, "type": "water", "src": "button"}
+                ],
                 "readings": [],
-                "total_ml_lifetime": 250
+                "total_ml_lifetime": 250,
             }
         }
     }
@@ -658,3 +665,196 @@ def test_async_load_preserves_existing_data(mock_store_fixture):
     assert entry["person"] == "Alice"
     assert len(entry["drinks"]) == 1
     assert entry["total_ml_lifetime"] == 250
+
+
+# ============================================================================
+# Finding N-7: remove_last_reading (BP-Undo)
+# ============================================================================
+def test_remove_last_reading_removes_last_reading(mock_store_fixture):
+    """[N-7] remove_last_reading entfernt die zuletzt angehängte Messung."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_reading("person-1", "2026-09-05T10:00:00Z", 120, 80, 70))
+    _async_test(store.add_reading("person-1", "2026-09-05T11:00:00Z", 130, 85, 75))
+
+    success = _async_test(store.remove_last_reading("person-1"))
+
+    assert success is True
+    readings = store.entry("person-1")["readings"]
+    assert len(readings) == 1
+    assert readings[0]["sys"] == 120
+
+
+def test_remove_last_reading_on_empty_returns_false(mock_store_fixture):
+    """[N-7] Leerer Bestand → False (Aufrufer entscheidet über Fehlertext)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    assert _async_test(store.remove_last_reading("person-1")) is False
+    assert store.entry("person-1")["readings"] == []
+
+
+def test_remove_last_reading_does_not_touch_lifetime(mock_store_fixture):
+    """[N-7] BP-Undo lässt den Trink-Lebenszähler unberührt."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("person-1", "2026-09-05T10:00:00Z", 500, "water", "button"))
+    _async_test(store.add_reading("person-1", "2026-09-05T11:00:00Z", 120, 80, 70))
+
+    _async_test(store.remove_last_reading("person-1"))
+
+    assert store.entry("person-1")["total_ml_lifetime"] == 500
+
+
+def test_remove_last_reading_calls_async_save(mock_store_fixture):
+    """[N-7] remove_last_reading persistiert die Änderung."""
+    store, mock_store_instance = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_reading("person-1", "2026-09-05T10:00:00Z", 120, 80, 70))
+
+    mock_store_instance.async_save.reset_mock()
+    _async_test(store.remove_last_reading("person-1"))
+
+    assert mock_store_instance.async_save.call_count >= 1
+
+
+# ============================================================================
+# Finding N-2: Retention/Archiv (REQ-HOM-109)
+# ============================================================================
+def test_entry_default_includes_archived_counts(mock_store_fixture):
+    """[N-2] Neue Einträge tragen die Archiv-Kennzahlen (Default 0)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    assert store.entry("person-1")["archived_counts"] == {"drinks": 0, "readings": 0}
+
+
+def test_apply_retention_keeps_only_kept_lists_and_lifetime_unchanged(mock_store_fixture):
+    """[N-2] apply_retention ersetzt die Listen; total_ml_lifetime bleibt gleich."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry = store.entry("person-1")
+    old_drink = {"ts": "2025-01-01T00:00:00", "ml": 250, "type": "water", "src": "button"}
+    new_drink = {"ts": "2026-09-01T00:00:00", "ml": 500, "type": "water", "src": "button"}
+    old_reading = {
+        "ts": "2025-01-01T00:00:00",
+        "sys": 120,
+        "dia": 80,
+        "pulse": 70,
+        "note": "",
+        "src": "button",
+    }
+    entry["drinks"] = [old_drink, new_drink]
+    entry["readings"] = [old_reading]
+    entry["total_ml_lifetime"] = 750
+
+    _async_test(store.apply_retention("person-1", [new_drink], []))
+
+    assert entry["drinks"] == [new_drink]
+    assert entry["readings"] == []
+    # Summe/Eintragszahl der Historie bleibt unangetastet
+    assert entry["total_ml_lifetime"] == 750
+    assert entry["archived_counts"] == {"drinks": 1, "readings": 1}
+
+
+def test_append_archive_extends_archive_store(mock_store_fixture):
+    """[N-2] append_archive hängt verschobene Einträge an (separater Store)."""
+    archive, _ = mock_store_fixture
+    _async_test(archive.async_load())
+
+    drinks = [{"ts": "2025-01-01T00:00:00", "ml": 250, "type": "water", "src": "button"}]
+    readings = [{"ts": "2025-01-01T00:00:00", "sys": 120, "dia": 80}]
+
+    _async_test(archive.append_archive("person-1", drinks, readings))
+
+    e = archive.all_entries()["person-1"]
+    assert e["drinks"] == drinks
+    assert e["readings"] == readings
+
+
+def test_append_archive_is_additive(mock_store_fixture):
+    """[N-2] Mehrfaches Archivieren verliert keine bereits archivierten Einträge."""
+    archive, _ = mock_store_fixture
+    _async_test(archive.async_load())
+
+    _async_test(archive.append_archive("person-1", [{"ts": "2025-01-01"}], []))
+    _async_test(archive.append_archive("person-1", [{"ts": "2025-02-01"}], []))
+
+    assert [d["ts"] for d in archive.all_entries()["person-1"]["drinks"]] == [
+        "2025-01-01",
+        "2025-02-01",
+    ]
+
+
+# ============================================================================
+# Finding N-2: Store-Schema-Migration v2 → v3 (archived_counts)
+# ============================================================================
+def _v2_fixture() -> dict:
+    """Repräsentativer Bestand auf Schema-Stufe 2 (keine archived_counts)."""
+    return {
+        "schema": 2,
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "drinks": [
+                    {"ts": "2026-09-01T08:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+                ],
+                "readings": [],
+                "total_ml_lifetime": 250,
+                "inputs": {"sys": 120},
+            }
+        },
+    }
+
+
+def test_store_migration_v2_to_v3_adds_archived_counts(mock_store_fixture):
+    """[N-2/REQ-HOM-102] v2-Bestand → v3 ergänzt archived_counts, Daten bleiben."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(side_effect=lambda: _v2_fixture())
+
+    _async_test(store.async_load())
+
+    assert store.raw_data()["schema"] == store_module.STORE_SCHEMA_VERSION
+    e1 = store.entry("e1")
+    assert e1["archived_counts"] == {"drinks": 0, "readings": 0}
+    # Bestandsdaten unverändert
+    assert e1["drinks"] == _v2_fixture()["entries"]["e1"]["drinks"]
+    assert e1["total_ml_lifetime"] == 250
+    assert e1["inputs"] == {"sys": 120}
+
+
+def test_store_migration_v2_to_v3_is_idempotent(mock_store_fixture):
+    """[N-2/REQ-HOM-102] Erneutes Laden des migrierten Bestands ändert nichts."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(side_effect=lambda: _v2_fixture())
+    _async_test(store.async_load())
+    assert store.raw_data()["schema"] == store_module.STORE_SCHEMA_VERSION
+
+    # Bereits migrierten Bestand (schema=3) erneut laden — vorhandene Zähler
+    # dürfen dabei NICHT zurückgesetzt werden.
+    migrated = store.raw_data()
+    migrated["entries"]["e1"]["archived_counts"]["drinks"] = 7
+    mock_store_instance.async_load = AsyncMock(return_value=migrated)
+    _async_test(store.async_load())
+
+    assert store.entry("e1")["archived_counts"]["drinks"] == 7
+    assert store.raw_data()["schema"] == store_module.STORE_SCHEMA_VERSION
+
+
+def test_invalid_schema_backup_targets_own_storage_key():
+    """[N-2] Recovery sichert die EIGENE Store-Datei, nie die des Haupt-Stores."""
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value="/data/.storage/health_o_mat_archive")
+    store = store_module.HealthOMatStore(hass, storage_key="health_o_mat_archive")
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value={"unexpected": True})
+    hass.async_add_executor_job = AsyncMock(return_value=True)
+    hass.services.async_call = AsyncMock()
+
+    _async_test(store.async_load())
+
+    assert hass.config.path.call_args[0] == (".storage", "health_o_mat_archive")
+    assert store.raw_data() == {"entries": {}}

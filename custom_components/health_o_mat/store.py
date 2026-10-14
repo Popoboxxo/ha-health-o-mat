@@ -3,16 +3,20 @@
 Schema-Stufen (STORE_SCHEMA_VERSION in const.py):
 - v1: Ursprungsschema (drinks, readings, total_ml_lifetime, person, wellbeing*)
 - v2: + `inputs` je Person (persistierte BP-Eingaben, REQ-HOM-104)
+- v3: + `archived_counts` je Person (Retention/Archiv-Kennzahlen, REQ-HOM-109)
 
-Migration on-load: fehlende `schema`-Markierung gilt als v1; die Migrationskette
-bringt Alt-Bestände idempotent auf die aktuelle Stufe (REQ-HOM-102).
+Die Klasse bedient sowohl den Haupt-Store (`MAIN_STORE_KEY`) als auch den
+separaten Archiv-Store (`ARCHIVE_STORE_KEY`); beide teilen sich dieselbe
+Migrationskette. Migration on-load: fehlende `schema`-Markierung gilt als v1;
+die Migrationskette bringt Alt-Bestände idempotent auf die aktuelle Stufe
+(REQ-HOM-102).
 Kaputtes JSON sichert Home Assistant selbst (Backup `*.corrupt.*` + Repairs-Eintrag) —
 hier bleibt der Fall „valides JSON, falsches Schema": Backup als
 `*.invalid-schema-<ts>` + Notification + definierter leerer Start (REQ-HOM-103).
 """
+
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections.abc import Callable
@@ -21,7 +25,7 @@ from datetime import datetime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import STORE_SCHEMA_VERSION, STORE_VERSION
+from .const import MAIN_STORE_KEY, STORE_SCHEMA_VERSION, STORE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,18 +37,33 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     return data
 
 
+def _migrate_v2_to_v3(data: dict) -> dict:
+    """v2 → v3: `archived_counts` je Person ergänzen (Retention, idempotent)."""
+    for entry in data.get("entries", {}).values():
+        entry.setdefault("archived_counts", {"drinks": 0, "readings": 0})
+    return data
+
+
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 
 class HealthOMatStore:
-    """Append-only Historie je Person, persistiert via HA-Store."""
+    """Append-only Historie je Person, persistiert via HA-Store.
 
-    def __init__(self, hass: HomeAssistant) -> None:
+    `storage_key` unterscheidet den Haupt-Store vom Archiv-Store; die
+    Methoden sind für beide identisch, die Semantik der Aufrufer nicht.
+    """
+
+    def __init__(self, hass: HomeAssistant, storage_key: str = MAIN_STORE_KEY) -> None:
         self._hass = hass
+        self._storage_key = storage_key
         self._store = Store(
-            hass, STORE_VERSION, "health_o_mat",
+            hass,
+            STORE_VERSION,
+            storage_key,
             minor_version=STORE_SCHEMA_VERSION,
         )
         self._data: dict = {}
@@ -84,7 +103,7 @@ class HealthOMatStore:
     async def _handle_invalid_schema(self) -> None:
         """Store-Datei mit falschem Schema sichern + Notification (Executor-Job)."""
         _LOGGER.error("Health-O-Mat-Store ohne 'entries'-Schema — Backup + leerer Start")
-        src = self._hass.config.path(".storage", "health_o_mat")
+        src = self._hass.config.path(".storage", self._storage_key)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = f"{src}.invalid-schema-{stamp}"
 
@@ -97,29 +116,40 @@ class HealthOMatStore:
         backed_up = await self._hass.async_add_executor_job(_backup)
         message = (
             "Der Health-O-Mat-Speicher hat ein unerwartetes Format.\n"
-            + (f"Die Originaldatei wurde gesichert nach:\n{dst}\n" if backed_up
-               else "Keine Speicherdatei gefunden.\n")
+            + (
+                f"Die Originaldatei wurde gesichert nach:\n{dst}\n"
+                if backed_up
+                else "Keine Speicherdatei gefunden.\n"
+            )
             + "Die Integration startet mit leerem Bestand. "
             + "Bitte das Backup im GitHub-Issue anfügen, wenn Daten vermisst werden."
         )
         await self._hass.services.async_call(
-            "persistent_notification", "create",
+            "persistent_notification",
+            "create",
             {"title": "HA Health-O-Mat — Speicherformat unbekannt", "message": message},
             blocking=False,
         )
 
     def entry(self, entry_id: str) -> dict:
         return self._data["entries"].setdefault(
-            entry_id, {
-                "person": "", "drinks": [], "readings": [],
-                "total_ml_lifetime": 0, "inputs": {},
-            }
+            entry_id,
+            {
+                "person": "",
+                "drinks": [],
+                "readings": [],
+                "total_ml_lifetime": 0,
+                "inputs": {},
+                "archived_counts": {"drinks": 0, "readings": 0},
+            },
         )
 
     def all_entries(self) -> dict:
         return self._data["entries"]
 
-    async def add_drink(self, entry_id: str, ts_iso: str, ml: int, drink_type: str, src: str) -> None:
+    async def add_drink(
+        self, entry_id: str, ts_iso: str, ml: int, drink_type: str, src: str
+    ) -> None:
         e = self.entry(entry_id)
         e["drinks"].append({"ts": ts_iso, "ml": int(ml), "type": drink_type, "src": src})
         e["total_ml_lifetime"] = int(e.get("total_ml_lifetime", 0)) + int(ml)
@@ -134,12 +164,36 @@ class HealthOMatStore:
         await self._async_save()
         return True
 
-    async def add_reading(self, entry_id: str, ts_iso: str, sys_: int, dia: int, pulse: int | None,
-                          note: str = "", src: str = "button") -> None:
+    async def remove_last_reading(self, entry_id: str) -> bool:
+        """Letzte Blutdruckmessung entfernen (Undo, N-7).
+
+        Berührt `total_ml_lifetime` bewusst NICHT — Messwerte tragen keine
+        Trinkmenge. Leerer Bestand → False (Aufrufer entscheidet über Fehler).
+        """
+        e = self.entry(entry_id)
+        if not e["readings"]:
+            return False
+        e["readings"].pop()
+        await self._async_save()
+        return True
+
+    async def add_reading(
+        self,
+        entry_id: str,
+        ts_iso: str,
+        sys_: int,
+        dia: int,
+        pulse: int | None,
+        note: str = "",
+        src: str = "button",
+    ) -> None:
         reading: dict = {
-            "ts": ts_iso, "sys": int(sys_), "dia": int(dia),
+            "ts": ts_iso,
+            "sys": int(sys_),
+            "dia": int(dia),
             "pulse": int(pulse) if pulse is not None else None,
-            "note": note, "src": src,
+            "note": note,
+            "src": src,
         }
         self.entry(entry_id)["readings"].append(reading)
         await self._async_save()
@@ -176,6 +230,30 @@ class HealthOMatStore:
             del history[:-100]
         wb["status"] = status
         wb["ts"] = ts_iso
+        await self._async_save()
+
+    async def apply_retention(self, entry_id: str, kept_drinks: list, kept_readings: list) -> None:
+        """Retention anwenden: nur die behaltenen Listen speichern (REQ-HOM-109).
+
+        `total_ml_lifetime` bleibt UNVERÄNDERT — Archivieren ist ein reines
+        Verschieben der Historie, keine Summenkorrektur. Die Zahl der
+        verschobenen Einträge wird in `archived_counts` mitgeführt.
+        """
+        e = self.entry(entry_id)
+        moved_drinks = len(e.get("drinks", [])) - len(kept_drinks)
+        moved_readings = len(e.get("readings", [])) - len(kept_readings)
+        e["drinks"] = list(kept_drinks)
+        e["readings"] = list(kept_readings)
+        counts = e.setdefault("archived_counts", {"drinks": 0, "readings": 0})
+        counts["drinks"] = int(counts.get("drinks", 0)) + moved_drinks
+        counts["readings"] = int(counts.get("readings", 0)) + moved_readings
+        await self._async_save()
+
+    async def append_archive(self, entry_id: str, drinks: list, readings: list) -> None:
+        """Verschiebt Einträge in den Archiv-Store (nur anhängen)."""
+        e = self._data["entries"].setdefault(entry_id, {"drinks": [], "readings": []})
+        e.setdefault("drinks", []).extend(drinks)
+        e.setdefault("readings", []).extend(readings)
         await self._async_save()
 
     def raw_data(self) -> dict:

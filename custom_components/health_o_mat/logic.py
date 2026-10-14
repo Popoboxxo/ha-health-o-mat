@@ -2,11 +2,13 @@
 
 Enthält Tagesfenster-Berechnung, Summenbildung und CSV-Zeilenerzeugung.
 """
+
 from __future__ import annotations
 
-from collections.abc import Iterable
+import calendar
 import csv
 import io
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -106,6 +108,67 @@ def yesterday_window(now: datetime, hour: int = 0, minute: int = 0) -> tuple[dat
     """Fenster des Vortags [Start(Vortag), Start(heute))."""
     this_start = day_start(now, hour, minute)
     return this_start - timedelta(days=1), this_start
+
+
+def months_ago(now: datetime, months: int) -> datetime:
+    """Zeitpunkt `months` Kalendermonate vor *now*.
+
+    Kalendergenau (kein 30-Tage-Approx): der Tag wird auf die Länge des
+    Zielmonats geklemmt (31.03. minus 1 Monat → 28./29.02.). Ein tz-aware
+    `now` behält seine Zeitzone — das Fenster bleibt damit DST-fest.
+    """
+    total = now.month - 1 - int(months)
+    year = now.year + total // 12
+    month = total % 12 + 1
+    day = min(now.day, calendar.monthrange(year, month)[1])
+    return now.replace(year=year, month=month, day=day)
+
+
+def _parse_ts(value: Any) -> datetime | None:
+    """ISO-Zeitstempel robust parsen (ungültige/fehlende → None)."""
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _align_tz(ts: datetime, reference: datetime) -> datetime:
+    """Naive und tz-aware Zeitstempel vergleichbar machen.
+
+    Alt-Bestände (< M-3) schrieben naive Zeitstempel, neue tz-aware. Ohne
+    Angleichung würde der Vergleich `datetime` mit/ohne tzinfo einen TypeError
+    werfen. Die Referenz-Zeitzone (bzw. Naivität) wird auf den Wert übertragen.
+    """
+    if ts.tzinfo is None and reference.tzinfo is not None:
+        return ts.replace(tzinfo=reference.tzinfo)
+    if ts.tzinfo is not None and reference.tzinfo is None:
+        return ts.replace(tzinfo=None)
+    return ts
+
+
+def partition_by_cutoff(
+    items: Iterable[dict[str, Any]],
+    cutoff: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Teilt Einträge in (recent, archived) anhand eines Stichtags.
+
+    Einträge mit `ts < cutoff` wandern ins Archiv; alles ab `cutoff`
+    (inklusive) sowie Einträge ohne gültigen Zeitstempel bleiben erhalten —
+    unbekannte/fremde Daten werden nie stillschweigend archiviert.
+    Bewusst on-read als reine Funktion (kein Reset-Job, REQ-HOM-109).
+    """
+    recent: list[dict[str, Any]] = []
+    archived: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            recent.append(item)  # type: ignore[arg-type]
+            continue
+        ts = _parse_ts(item.get("ts"))
+        if ts is None:
+            recent.append(item)
+            continue
+        (archived if _align_tz(ts, cutoff) < cutoff else recent).append(item)
+    return recent, archived
 
 
 def drinks_csv_rows(drinks: Iterable[dict[str, Any]], person: str) -> list[list[str]]:
