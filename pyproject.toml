@@ -1,0 +1,41 @@
+# Project metadata for tooling only.
+#
+# This file intentionally contains NO packaging metadata (no [build-system],
+# no [project]) — the Home Assistant integration ships as-is via HACS, not as
+# a distributable Python package. Its sole purpose is to configure ruff.
+#
+# Scope notes:
+#   * ruff is a dev/CI-only tool. It is NOT a runtime or integration dependency
+#     (runtime deps live in custom_components/health_o_mat/manifest.json, test
+#     deps in tests/requirements.txt).
+#   * pytest configuration deliberately stays in pytest.ini and is not
+#     duplicated here (two config sources would silently diverge).
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+# Git submodules are separate repositories with their own lifecycle and are
+# never linted from the parent repo. `external/` is listed defensively for
+# future submodules. Markdown is excluded because ruff renders and rewrites
+# fenced Python blocks inside it; README/spec snippets are illustrative and
+# must stay exactly as authored instead of being silently reformatted.
+extend-exclude = [".agent-meta", "external", "docs", "*.md"]
+
+[tool.ruff.lint]
+# Curated baseline: pycodestyle (E/W), pyflakes (F), import sorting (I),
+# pyupgrade (UP) and flake8-bugbear (B). Kept intentionally small so every
+# rule is actually enforced and no blanket ignores accumulate.
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort (import sorting)
+    "UP", # pyupgrade
+    "B",  # flake8-bugbear
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

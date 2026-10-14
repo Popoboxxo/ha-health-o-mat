@@ -1,4 +1,5 @@
 """Tests: Freitext-Parser."""
+
 import importlib.util
 import os
 import sys
@@ -92,6 +93,7 @@ def test_null():
 
 # --- Konfigurierbares Getränke-Lexikon (format_lexicon/parse_lexicon_text) ---
 
+
 def test_format_lexicon_parse_lexicon_text_roundtrip():
     lexicon = parser.DRINK_LEXICON
     text = parser.format_lexicon(lexicon)
@@ -113,7 +115,7 @@ def test_parse_lexicon_text_missing_ml_raises():
     except ValueError:
         pass
     else:
-        assert False, "expected ValueError"
+        raise AssertionError("expected ValueError")
 
 
 def test_parse_lexicon_text_ml_not_int_raises():
@@ -122,7 +124,7 @@ def test_parse_lexicon_text_ml_not_int_raises():
     except ValueError:
         pass
     else:
-        assert False, "expected ValueError"
+        raise AssertionError("expected ValueError")
 
 
 def test_parse_lexicon_text_ml_out_of_range_raises():
@@ -132,7 +134,7 @@ def test_parse_lexicon_text_ml_out_of_range_raises():
         except ValueError:
             pass
         else:
-            assert False, f"expected ValueError for {bad!r}"
+            raise AssertionError(f"expected ValueError for {bad!r}")
 
 
 def test_parse_lexicon_text_duplicate_last_wins():

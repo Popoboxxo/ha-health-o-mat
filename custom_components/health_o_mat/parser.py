@@ -3,10 +3,11 @@
 Grammatik (DE/EN, Reihenfolge frei): ``<typ>? <menge>? [ml|l]?``
 Beispiele: „Kaffee 300ml", „0,5 l wasser", „cola", „350", „Ingwertee 400".
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 
 from .const import DRINK_LEXICON, MAX_AMOUNT_ML, NO_TYPE_LABEL
 

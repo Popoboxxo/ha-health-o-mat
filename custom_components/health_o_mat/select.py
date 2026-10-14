@@ -1,4 +1,5 @@
 """Select: „Wie geht es dir?" mit 5 Smileys (manuell setzbar)."""
+
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
@@ -41,9 +42,7 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         if option not in self._by_key:
             return
-        await self._store.set_wellbeing(
-            self._entry.entry_id, option, dt_util.now().isoformat()
-        )
+        await self._store.set_wellbeing(self._entry.entry_id, option, dt_util.now().isoformat())
         signal_refresh(self.hass, self._entry.entry_id)
 
     @property

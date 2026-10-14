@@ -1,4 +1,5 @@
 """Binary-Sensoren: Tagesziel erreicht + Blutdruck-Warnung."""
+
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import (
@@ -7,18 +8,20 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.util import dt as dt_util
 
+from . import logic
 from .const import DOMAIN
 from .entity import HealthOMatEntity
-from . import logic
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    async_add_entities([
-        GoalReachedEntity(coord, entry, store),
-        BloodPressureWarningEntity(coord, entry, store),
-    ])
+    async_add_entities(
+        [
+            GoalReachedEntity(coord, entry, store),
+            BloodPressureWarningEntity(coord, entry, store),
+        ]
+    )
 
 
 class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
@@ -64,5 +67,4 @@ class BloodPressureWarningEntity(HealthOMatBinary):
             return False
         last = sorted(readings, key=lambda r: r.get("ts", ""))[-1]
         rt = self._entry.runtime_data
-        return (last.get("sys", 0) >= rt.sys_threshold
-                or last.get("dia", 0) >= rt.dia_threshold)
+        return last.get("sys", 0) >= rt.sys_threshold or last.get("dia", 0) >= rt.dia_threshold

@@ -1,4 +1,5 @@
 """Gemeinsame Basis: unique_id + Device-Kopplung für alle Entities."""
+
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
@@ -41,11 +42,9 @@ class HealthOMatEntity(CoordinatorEntity):
         davon unberührt (folgt weiterhin der Systemsprache).
         """
         platform_data = self.platform_data
-        if (
-            platform_data is not None
-            and type.__getattribute__(self.__class__, "name")
-            is type.__getattribute__(Entity, "name")
-        ):
+        if platform_data is not None and type.__getattribute__(
+            self.__class__, "name"
+        ) is type.__getattribute__(Entity, "name"):
             name = self._name_internal(
                 self._object_id_device_class_name,
                 getattr(platform_data, "default_language_platform_translations", None) or {},
