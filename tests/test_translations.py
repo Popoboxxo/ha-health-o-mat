@@ -73,9 +73,7 @@ def test_req_hom_107_key_tree_parity(lang: str) -> None:
     master = _load(_MASTER)
     other = _load(_TRANSLATIONS[lang])
     divergence = _first_divergence(master, other)
-    assert divergence is None, (
-        f"translations/{lang}.json weicht von strings.json ab — {divergence}"
-    )
+    assert divergence is None, f"translations/{lang}.json weicht von strings.json ab — {divergence}"
 
 
 @pytest.mark.parametrize("lang", sorted(_TRANSLATIONS))
