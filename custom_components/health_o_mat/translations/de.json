@@ -23,7 +23,8 @@
         "title": "Optionen",
         "data": {
           "daily_goal_ml": "Tagesziel in ml",
-          "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)"
+          "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)",
+          "retention_months": "Aufbewahrung der Historie in Monaten (0 = aus)"
         }
       },
       "quick_drinks": {
@@ -159,6 +160,34 @@
       "input_pulse": {
         "name": "Neue Messung: Puls"
       }
+    }
+  },
+  "services": {
+    "add_drink": {
+      "name": "Getränk buchen",
+      "description": "Bucht eine Getränkemenge für eine Person."
+    },
+    "add_blood_pressure": {
+      "name": "Blutdruckmessung speichern",
+      "description": "Speichert systolischen/diastolischen Wert und optional Puls."
+    },
+    "remove_last_entry": {
+      "name": "Letzte Buchung löschen",
+      "description": "Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Name der Person (leer = einzige konfigurierte Person)."
+        },
+        "kind": {
+          "name": "Art",
+          "description": "Welche Buchung entfernt wird: drinks (Standard) oder blood_pressure."
+        }
+      }
+    },
+    "export_csv": {
+      "name": "CSV-Export",
+      "description": "Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/."
     }
   }
 }

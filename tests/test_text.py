@@ -1,4 +1,5 @@
 """Tests: FreeTextDrinkEntity — konfigurierbares Getränke-Lexikon (on-read)."""
+
 import asyncio
 import importlib.util
 import os

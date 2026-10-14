@@ -1,11 +1,11 @@
 """Number-Entities: Runtime-Settings + BP-Eingabefelder."""
+
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
 
 from .const import (
     DEFAULT_CUSTOM_AMOUNT_ML,
-    DEFAULT_DAILY_GOAL_ML,
     DOMAIN,
     MAX_AMOUNT_ML,
 )
@@ -15,15 +15,21 @@ from .entity import HealthOMatEntity, signal_refresh
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    async_add_entities([
-        DailyGoalNumber(coord, entry),
-        CustomAmountNumber(coord, entry),
-        ThresholdNumber(coord, entry, "sys"),
-        ThresholdNumber(coord, entry, "dia"),
-        InputNumber(coord, entry, store, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"),
-        InputNumber(coord, entry, store, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"),
-        InputNumber(coord, entry, store, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"),
-    ])
+    async_add_entities(
+        [
+            DailyGoalNumber(coord, entry),
+            CustomAmountNumber(coord, entry),
+            ThresholdNumber(coord, entry, "sys"),
+            ThresholdNumber(coord, entry, "dia"),
+            InputNumber(
+                coord, entry, store, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"
+            ),
+            InputNumber(
+                coord, entry, store, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"
+            ),
+            InputNumber(coord, entry, store, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"),
+        ]
+    )
 
 
 class HealthOMatNumber(HealthOMatEntity, NumberEntity):
@@ -135,8 +141,17 @@ class InputNumber(HealthOMatNumber):
     überlebt HA-Neustarts; save_measurement leert den Store (button.py).
     """
 
-    def __init__(self, coordinator, entry, store, key: str, translation_key: str,
-                 vmin: int, vmax: int, icon: str) -> None:
+    def __init__(
+        self,
+        coordinator,
+        entry,
+        store,
+        key: str,
+        translation_key: str,
+        vmin: int,
+        vmax: int,
+        icon: str,
+    ) -> None:
         super().__init__(coordinator, entry, f"number_input_{key}")
         self._store = store
         self._input_key = key

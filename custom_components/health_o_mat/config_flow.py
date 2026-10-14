@@ -6,18 +6,25 @@ Schema-Versionen:
   quick_drinks + person_display liegen in entry.options und sind editierbar.
 async_migrate_entry verlagert bestehende Werte bei Update ohne Datenverlust.
 """
+
 from __future__ import annotations
 
 import logging
 from typing import Any
 
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
-import voluptuous as vol
 
-from .const import DEFAULT_DAILY_GOAL_ML, DEFAULT_QUICK_DRINKS, DOMAIN, DRINK_LEXICON
 from . import parser
+from .const import (
+    DEFAULT_DAILY_GOAL_ML,
+    DEFAULT_QUICK_DRINKS,
+    DOMAIN,
+    DRINK_LEXICON,
+    MAX_RETENTION_MONTHS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,13 +41,11 @@ def quick_drinks_schema(current: list[dict]) -> vol.Schema:
     slots = {}
     for i in range(4):
         qd = current[i] if i < len(current) else {}
-        slots[vol.Required(f"quick_{i}_label",
-                           default=qd.get("label", f"Quick {i + 1}"))] = str
-        slots[vol.Required(f"quick_{i}_ml",
-                           default=int(qd.get("ml", 200)))] = vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=10000))
-        slots[vol.Optional(f"quick_{i}_icon",
-                           default=qd.get("icon", "mdi:cup-water"))] = str
+        slots[vol.Required(f"quick_{i}_label", default=qd.get("label", f"Quick {i + 1}"))] = str
+        slots[vol.Required(f"quick_{i}_ml", default=int(qd.get("ml", 200)))] = vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=10000)
+        )
+        slots[vol.Optional(f"quick_{i}_icon", default=qd.get("icon", "mdi:cup-water"))] = str
     return vol.Schema(slots)
 
 
@@ -59,11 +64,13 @@ def quick_drinks_from_user_input(user_input: dict[str, Any]) -> list[dict]:
 
 def drink_lexicon_schema(current_text: str) -> vol.Schema:
     """Formular für das Getränke-Lexikon (mehrzeiliges Textfeld)."""
-    return vol.Schema({
-        vol.Required("drink_lexicon", default=current_text): selector.TextSelector(
-            selector.TextSelectorConfig(multiline=True)
-        ),
-    })
+    return vol.Schema(
+        {
+            vol.Required("drink_lexicon", default=current_text): selector.TextSelector(
+                selector.TextSelectorConfig(multiline=True)
+            ),
+        }
+    )
 
 
 class HealthOMatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -113,28 +120,42 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_quick_drinks()
         current_goal = self.config_entry.options.get("daily_goal_ml")
         if current_goal is None:
-            current_goal = getattr(self.config_entry.runtime_data, "daily_goal_ml",
-                                   DEFAULT_DAILY_GOAL_ML) \
-                if self.config_entry.runtime_data else DEFAULT_DAILY_GOAL_ML
+            current_goal = (
+                getattr(self.config_entry.runtime_data, "daily_goal_ml", DEFAULT_DAILY_GOAL_ML)
+                if self.config_entry.runtime_data
+                else DEFAULT_DAILY_GOAL_ML
+            )
         lifetime = 0
         store = self.hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
         if store:
             e = store.all_entries().get(self.config_entry.entry_id, {})
             lifetime = int(e.get("total_ml_lifetime", 0))
+        current_retention = self.config_entry.options.get("retention_months") or 0
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required("daily_goal_ml", default=current_goal): vol.All(
-                    vol.Coerce(int), vol.Range(min=500, max=10000)),
-                vol.Optional("set_lifetime_ml", default=lifetime): vol.All(vol.Coerce(int)),
-                vol.Optional("person_display",
-                             default=self.config_entry.options.get("person_display")
-                             or self.config_entry.data.get("person", "")): str,
-                vol.Optional(
-                    "daily_reset_hour",
-                    default=self.config_entry.options.get("daily_reset_hour", 0),
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("daily_goal_ml", default=current_goal): vol.All(
+                        vol.Coerce(int), vol.Range(min=500, max=10000)
+                    ),
+                    vol.Optional("set_lifetime_ml", default=lifetime): vol.All(vol.Coerce(int)),
+                    vol.Optional(
+                        "person_display",
+                        default=self.config_entry.options.get("person_display")
+                        or self.config_entry.data.get("person", ""),
+                    ): str,
+                    vol.Optional(
+                        "daily_reset_hour",
+                        default=self.config_entry.options.get("daily_reset_hour", 0),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+                    # Retention/Archiv (REQ-HOM-109): 0 = AUS (Default, exakt bisheriges
+                    # Verhalten); >0 = Einträge älter als X Monate beim Start archivieren.
+                    vol.Optional(
+                        "retention_months",
+                        default=int(current_retention),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)),
+                }
+            ),
         )
 
     async def async_step_quick_drinks(self, user_input: dict[str, Any] | None = None):

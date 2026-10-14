@@ -3,13 +3,16 @@
 Audit-Punkt 7b (M-5): LastReadingSensor correctly calls logic.avg_over_window()
 for 7-day average and includes it in extra_state_attributes as avg_7d.
 """
-import asyncio
+
 import importlib.util
+import json
 import os
 import sys
 import types
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
+
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -46,11 +49,13 @@ def _make_last_reading_sensor_fixture(key="sys", readings_data=None):
     store = MagicMock()
     if readings_data is None:
         readings_data = []
-    store.all_entries = MagicMock(return_value={
-        "test-entry-1": {
-            "readings": readings_data,
+    store.all_entries = MagicMock(
+        return_value={
+            "test-entry-1": {
+                "readings": readings_data,
+            }
         }
-    })
+    )
 
     sensor = sensor_module.LastReadingSensor(coordinator, entry, store, key, "mmHg")
 
@@ -68,9 +73,7 @@ def test_last_reading_sensor_avg_7d_basic():
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
 
     # Mock dt_util.now() to a fixed point in time for testing
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -87,9 +90,7 @@ def test_last_reading_sensor_avg_7d_rounded():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -106,9 +107,7 @@ def test_last_reading_sensor_avg_7d_excludes_outside_window():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -126,9 +125,7 @@ def test_last_reading_sensor_avg_7d_with_none_values():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("dia", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -141,9 +138,7 @@ def test_last_reading_sensor_avg_7d_with_none_values():
 def test_last_reading_sensor_avg_7d_empty_readings():
     """[AUDIT-7b-M-5] avg_7d is None when no readings in window."""
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", [])
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -159,9 +154,7 @@ def test_last_reading_sensor_avg_7d_all_old_readings():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -179,9 +172,7 @@ def test_last_reading_sensor_extra_attributes_complete():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -211,9 +202,7 @@ def test_last_reading_sensor_for_different_keys():
         {"ts": "2026-08-16T08:00:00", "sys": 130, "dia": 85, "pulse": 72},
     ]
 
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     # Test sys
     sensor_sys, _, _ = _make_last_reading_sensor_fixture("sys", readings)
@@ -233,6 +222,7 @@ def test_last_reading_sensor_for_different_keys():
 
 # --- Feature 2: konfigurierbare Reset-Uhrzeit (daily_reset_hour) — TodaySensor-Wiring ---
 
+
 def _make_today_sensor_fixture(options=None, drinks=None):
     """Create a TodaySensor with mocked coordinator/entry/store."""
     coordinator = MagicMock()
@@ -243,9 +233,11 @@ def _make_today_sensor_fixture(options=None, drinks=None):
     entry.runtime_data.daily_goal_ml = 2000
 
     store = MagicMock()
-    store.all_entries = MagicMock(return_value={
-        "test-entry-1": {"drinks": drinks if drinks is not None else []},
-    })
+    store.all_entries = MagicMock(
+        return_value={
+            "test-entry-1": {"drinks": drinks if drinks is not None else []},
+        }
+    )
 
     sensor = sensor_module.TodaySensor(coordinator, entry, store)
     return sensor, entry, store
@@ -264,7 +256,8 @@ def test_today_sensor_uses_daily_reset_hour_from_options():
 
 
 def test_today_sensor_daily_reset_hour_missing_defaults_to_zero_regression():
-    """[Spec Feature 2] Ohne daily_reset_hour in entry.options: Bestandsverhalten (hour=0) unverändert."""
+    """[Spec Feature 2] Ohne daily_reset_hour in entry.options: Bestandsverhalten
+    (hour=0) unverändert."""
     drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
     sensor, entry, store = _make_today_sensor_fixture(options={}, drinks=drinks)
     sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
@@ -293,9 +286,7 @@ def test_last_reading_sensor_avg_7d_precision():
     ]
 
     sensor, entry, store = _make_last_reading_sensor_fixture("sys", readings)
-    sensor_module.dt_util.now = MagicMock(
-        return_value=datetime(2026, 8, 23, 8, 0)
-    )
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 23, 8, 0))
 
     attrs = sensor.extra_state_attributes
 
@@ -303,3 +294,162 @@ def test_last_reading_sensor_avg_7d_precision():
     assert attrs["avg_7d"] == 120.0
     # Verify it's rounded to 1 decimal
     assert isinstance(attrs["avg_7d"], float)
+
+
+# --- Welle 1 Backend-Hygiene (Findings N-1, N-3, N-4, N-9) ---
+
+
+def _make_store_sensor(sensor_cls, person_data):
+    """Create a store-backed sensor with mocked coordinator/entry/store."""
+    coordinator = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = 2000
+
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={"test-entry-1": person_data})
+    return sensor_cls(coordinator, entry, store)
+
+
+# N-1: Getränke-Historie im State-Attribut begrenzt (Cap) + total_count
+
+
+def test_history_drinks_entries_json_capped_to_last_100():
+    """[N-1] >100 Buchungen: entries_json enthält genau die letzten 100."""
+    drinks = [
+        {"ts": f"2026-01-01T{i // 60:02d}:{i % 60:02d}:00", "ml": 10, "type": "Wasser"}
+        for i in range(150)
+    ]
+    sensor = _make_store_sensor(sensor_module.HistoryDrinksSensor, {"drinks": drinks})
+
+    attrs = sensor.extra_state_attributes
+    entries = json.loads(attrs["entries_json"])
+
+    assert len(entries) == 100
+    # nach ts sortiert -> die letzten 100 (Indizes 50..149)
+    assert entries == sorted(drinks, key=lambda d: d["ts"])[-100:]
+    assert entries[0]["ts"] == drinks[50]["ts"]
+    assert entries[-1]["ts"] == drinks[149]["ts"]
+    assert attrs["total_count"] == 150
+
+
+def test_history_drinks_entries_json_keeps_all_below_limit():
+    """[N-1] <=100 Buchungen: alle bleiben im Attribut, total_count passt."""
+    drinks = [{"ts": f"2026-01-01T00:00:{i:02d}", "ml": 10, "type": "Wasser"} for i in range(3)]
+    sensor = _make_store_sensor(sensor_module.HistoryDrinksSensor, {"drinks": drinks})
+
+    attrs = sensor.extra_state_attributes
+
+    assert len(json.loads(attrs["entries_json"])) == 3
+    assert attrs["total_count"] == 3
+
+
+def test_history_drinks_entries_json_empty():
+    """[N-1] Keine Buchungen: leeres Attribut + total_count 0."""
+    sensor = _make_store_sensor(sensor_module.HistoryDrinksSensor, {"drinks": []})
+
+    attrs = sensor.extra_state_attributes
+
+    assert json.loads(attrs["entries_json"]) == []
+    assert attrs["total_count"] == 0
+
+
+# N-3: TodaySensor ist ein resettender Tageszähler (TOTAL + last_reset)
+
+
+def test_today_sensor_state_class_stays_total():
+    """[N-3] state_class bleibt TOTAL (kein MEASUREMENT-Wechsel)."""
+    sensor, _, _ = _make_today_sensor_fixture()
+    assert sensor._attr_state_class == SensorStateClass.TOTAL
+
+
+def test_today_sensor_last_reset_matches_day_start_with_reset_hour():
+    """[N-3] last_reset = day_start(now, daily_reset_hour)."""
+    sensor, _, _ = _make_today_sensor_fixture(options={"daily_reset_hour": 6})
+    now = datetime(2026, 8, 22, 8, 0)
+    sensor_module.dt_util.now = MagicMock(return_value=now)
+
+    assert sensor.last_reset == logic_module.day_start(now, hour=6)
+    assert sensor.last_reset == datetime(2026, 8, 22, 6, 0)
+
+
+def test_today_sensor_last_reset_defaults_to_midnight_regression():
+    """[N-3] Ohne daily_reset_hour: last_reset = Mitternacht (Bestandsverhalten)."""
+    sensor, _, _ = _make_today_sensor_fixture(options={})
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
+
+    assert sensor.last_reset == datetime(2026, 8, 22, 0, 0)
+
+
+# N-4: BloodPressureHistorySensor ist kein Langzeit-Zähler
+
+
+def test_blood_pressure_history_state_class_measurement():
+    """[N-4] Anzahl Messungen -> MEASUREMENT statt TOTAL_INCREASING."""
+    sensor = _make_store_sensor(sensor_module.BloodPressureHistorySensor, {"readings": []})
+
+    assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+    assert sensor._attr_state_class != SensorStateClass.TOTAL_INCREASING
+
+
+# N-9: device_class für Mengen (volume) und Druck (pressure)
+
+
+def test_today_sensor_device_class_volume():
+    """[N-9] TodaySensor -> VOLUME, HA-valid native unit 'mL'."""
+    sensor, _, _ = _make_today_sensor_fixture()
+    assert sensor._attr_device_class == SensorDeviceClass.VOLUME
+    assert sensor._attr_native_unit_of_measurement == "mL"
+
+
+def test_lifetime_sensor_device_class_volume():
+    """[N-9] LifetimeSensor -> VOLUME, HA-valid native unit 'mL'."""
+    sensor = _make_store_sensor(sensor_module.LifetimeSensor, {"total_ml_lifetime": 1234})
+    assert sensor._attr_device_class == SensorDeviceClass.VOLUME
+    assert sensor._attr_native_unit_of_measurement == "mL"
+
+
+def test_last_reading_sensor_device_class_pressure_for_sys_and_dia():
+    """[N-9] sys/dia (mmHg) -> PRESSURE."""
+    for key in ("sys", "dia"):
+        sensor, _, _ = _make_last_reading_sensor_fixture(key, [])
+        assert sensor._attr_device_class == SensorDeviceClass.PRESSURE
+        assert sensor._attr_native_unit_of_measurement == "mmHg"
+
+
+def test_last_reading_sensor_pulse_has_no_device_class():
+    """[N-9] Puls (BPM) bleibt bewusst ohne device_class."""
+    sensor, _, _ = _make_last_reading_sensor_fixture("pulse", [])
+    assert sensor._attr_device_class is None
+
+
+def test_volume_sensors_use_valid_ml_unit_others_unchanged():
+    """[N-9] VOLUME-Sensoren tragen 'mL' (HA-gültig); mmHg/BPM/% unverändert.
+
+    Regression guard: nur die beiden VOLUME-Sensoren kippen auf 'mL', alle
+    übrigen Einheiten bleiben exakt wie zuvor.
+    """
+    today, _, _ = _make_today_sensor_fixture()
+    lifetime = _make_store_sensor(sensor_module.LifetimeSensor, {"total_ml_lifetime": 1234})
+    percent = _make_store_sensor(sensor_module.PercentSensor, {"drinks": []})
+
+    # Only the two VOLUME sensors switch to the HA-valid casing.
+    assert today._attr_native_unit_of_measurement == "mL"
+    assert lifetime._attr_native_unit_of_measurement == "mL"
+
+    # Everything else is untouched (units as wired in sensor.py: sys/dia mmHg,
+    # pulse BPM) — build the entities with their real units, the shared
+    # _make_last_reading_sensor_fixture hardcodes "mmHg".
+    for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
+        coordinator = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test-entry-1"
+        entry.runtime_data = MagicMock()
+        store = MagicMock()
+        store.all_entries = MagicMock(return_value={"test-entry-1": {"readings": []}})
+        bp = sensor_module.LastReadingSensor(coordinator, entry, store, key, unit)
+        assert bp._attr_native_unit_of_measurement == unit
+
+    assert percent._attr_native_unit_of_measurement == "%"

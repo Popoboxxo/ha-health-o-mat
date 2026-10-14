@@ -11,7 +11,7 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 
 ## Features
 
-- 💧 **Getränke-Tracking**: „Wie viel habe ich heute getrunken?" — sauberer ml-Sensor,
+- 💧 **Getränke-Tracking**: „Wie viel habe ich heute getrunken?" — sauberer mL-Sensor,
   Prozent-Gauge, Breakdown nach Getränketyp
 - 🔘 **Quick-Drink-Buttons** (Glas Wasser 200 · Flasche 500 · Kaffee 250 · Saft 200)
   + Custom-Menge + **Freitextfeld** mit Parser: `Kaffee 300ml`, `0,5 l wasser`,
@@ -25,6 +25,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 - 🌙 **Tagesgrenze**: einstellbare Reset-Uhrzeit (Options, 0–23 Uhr, Default 0 Uhr);
   neustartfest, weil „heute"/„gestern" on-read aus der Historie berechnet werden
   (kein Reset-Job, DST-fest)
+- 🗄️ **Optionale Aufbewahrung**: Historie älter als X Monate wandert beim Start ins
+  Archiv (Options „Aufbewahrung", Default aus); Summen/Lebenszähler bleiben
+  unverändert, der CSV-Export umfasst das Archiv
 
 ## Installation (HACS)
 
@@ -54,9 +57,9 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 | Typ | Entity-ID (Suffix) | Anzeige (de/en) | Zweck |
 |---|---|---|---|
-| sensor | `drinks_today` | Heute getrunken / Drinks today | **ml heute** (+ count, %, breakdown, gestern) |
+| sensor | `drinks_today` | Heute getrunken / Drinks today | **mL heute** (+ count, %, breakdown, gestern) |
 | sensor | `daily_goal_progress` | Tagesziel-Fortschritt / Daily goal progress | Gauge-fähig |
-| sensor | `drinks_history` | Getränke-Historie / Drinks history | Rohdaten als JSON-Attribut |
+| sensor | `drinks_history` | Getränke-Historie / Drinks history | letzte 100 Buchungen als JSON + Gesamtzahl |
 | sensor | `lifetime_total` | Gesamtmenge / Lifetime total | kumuliert |
 | sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
 | sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
@@ -72,23 +75,27 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 **Sensoren**
 
-- `sensor.…_drinks_today` — getrunkene Menge des heutigen Tagesfensters in ml.
-  Attribute: `drinks_count` (Buchungen heute), `percent_of_goal` (Fortschritt),
-  `breakdown_by_type` (JSON: ml je Getränketyp), `last_drink_at`,
-  `yesterday_ml` (Vortag, gleiche Tagesgrenze).
+- `sensor.…_drinks_today` — getrunkene Menge des heutigen Tagesfensters in mL
+  (`device_class: volume`, `state_class: total` mit `last_reset` = Beginn des
+  laufenden Tagesfensters). Attribute: `drinks_count` (Buchungen heute),
+  `percent_of_goal` (Fortschritt), `breakdown_by_type` (JSON: mL je Getränketyp),
+  `last_drink_at`, `yesterday_ml` (Vortag, gleiche Tagesgrenze).
 - `sensor.…_daily_goal_progress` — Prozent des Tagesziels (0–100), für
   Gauge-/Bar-Karten; `state_class: measurement` → Verlaufsgraph.
 - `sensor.…_drinks_history` — Zustand = Anzahl Buchungen heute; Attribut
-  `entries_json` = komplette Rohhistorie als JSON (Zeitstempel, ml, Typ,
-  Quelle). Für Automatisierungen und Backup-Zwecke.
-- `sensor.…_lifetime_total` — kumulierte Gesamtmenge in ml seit Start
-  (`state_class: total_increasing` → Langzeitstatistik ohne Zähler-Rücksetzungen).
-  Startwert beim Integration-Setup eintragbar (z. B. Migration vom alten
-  Wasser-Zähler).
+  `entries_json` = die **letzten 100** Buchungen als JSON (Zeitstempel, mL, Typ,
+  Quelle) und `total_count` = Gesamtzahl aller Buchungen. Der Cap hält das
+  State-Objekt/den Recorder klein; der Vollbestand bleibt im Store und im
+  CSV-Export. Für Automatisierungen und Backup-Zwecke.
+- `sensor.…_lifetime_total` — kumulierte Gesamtmenge in mL seit Start
+  (`device_class: volume`, `state_class: total_increasing` → Langzeitstatistik
+  ohne Zähler-Rücksetzungen). Startwert beim Integration-Setup eintragbar (z. B.
+  Migration vom alten Wasser-Zähler).
 - `sensor.…_blood_pressure_systolic` / `_diastolic` / `_pulse` — die letzte
-  gemessene Messung (mmHg / BPM, `state_class: measurement` → HA-Historie
-  zeichnet automatisch auf). Attribute: `measured_at`, `avg_7d` (Mittelwert
-  über ein echtes rollierendes 7-Tage-Fenster), `readings_total`.
+  gemessene Messung (sys/dia mmHg mit `device_class: pressure`, Puls BPM,
+  `state_class: measurement` → HA-Historie zeichnet automatisch auf). Attribute:
+  `measured_at`, `avg_7d` (Mittelwert über ein echtes rollierendes
+  7-Tage-Fenster), `readings_total`.
 - `sensor.…_blood_pressure_history` — Zustand = Gesamtzahl der Messungen;
   Attribut `history_json` = die letzten 30 Messungen als JSON.
 - `sensor.…_wellbeing_last_reported` — Zeitstempel der letzten
@@ -175,6 +182,11 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   & mehr"). Keine Breaking Changes, keine Migration nötig — beide Optionen
   haben sinnvolle Defaults (eingebautes Lexikon, Reset-Uhrzeit 0 Uhr) und
   wirken sich erst nach expliziter Änderung im Options-Dialog aus.
+- **Optionale Aufbewahrung (Retention):** neue Options-Option „Aufbewahrung"
+  (Monate, Default aus = 0). Aktiviert verschiebt ein Startlauf Einträge älter
+  als die gewählte Monatszahl in einen Archiv-Store (Store-Schema v3, Migration
+  automatisch); Summen und Lebenszähler bleiben unverändert, der CSV-Export
+  umfasst weiterhin die volle Historie.
 
 ## Services
 
@@ -186,7 +198,7 @@ action: health_o_mat.add_blood_pressure
 data: { person: "Caro", systolic: 124, diastolic: 82, pulse: 64 }
 
 action: health_o_mat.remove_last_entry
-data: { person: "Caro", kind: "drinks" }
+data: { person: "Caro", kind: "drinks" }   # drinks (Default) | blood_pressure
 
 action: health_o_mat.export_csv
 data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all

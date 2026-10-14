@@ -1,4 +1,5 @@
 """Buttons: Quick-Drinks, Custom-Buchung, Undo, BP-Speichern, Wohlbefinden."""
+
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
@@ -22,6 +23,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     for i in range(len(quick_drinks)):
         entities.append(QuickDrinkButton(coord, entry, store, i))
     from .const import WELLBEING_STATES
+
     for status in WELLBEING_STATES:
         entities.append(WellbeingButton(coord, entry, store, status))
     async_add_entities(entities)
@@ -119,9 +121,11 @@ class SaveReadingButton(HealthOMatButton):
         await self._store.add_reading(
             self._entry.entry_id,
             dt_util.now().isoformat(),
-            int(sys_v), int(dia_v),
+            int(sys_v),
+            int(dia_v),
             int(pulse_v) if pulse_v else None,
-            "", "button",
+            "",
+            "button",
         )
         await self._store.clear_inputs(self._entry.entry_id)
         signal_refresh(self.hass, self._entry.entry_id)
@@ -152,5 +156,6 @@ class WellbeingButton(HealthOMatButton):
 def build_wellbeing_buttons(hass, entry, store):
     """5 Melden-Buttons (einer pro Status) für Wohlbefinden."""
     from .const import WELLBEING_STATES
+
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     return [WellbeingButton(coord, entry, store, status) for status in WELLBEING_STATES]

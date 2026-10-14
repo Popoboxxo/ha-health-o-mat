@@ -1,19 +1,22 @@
 """HA Health-O-Mat — Integration Setup."""
+
 from __future__ import annotations
 
 import logging
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
-import voluptuous as vol
 
+from . import logic
 from .const import (
-    DEFAULT_DIA_THRESHOLD,
+    ARCHIVE_STORE_KEY,
     DEFAULT_DAILY_GOAL_ML,
+    DEFAULT_DIA_THRESHOLD,
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
@@ -23,8 +26,14 @@ from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON,
-             Platform.TEXT, Platform.NUMBER, Platform.SELECT]
+PLATFORMS = [
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.TEXT,
+    Platform.NUMBER,
+    Platform.SELECT,
+]
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
 
@@ -49,20 +58,21 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
     if entry.version > 2:
         _LOGGER.error(
             "Config entry %s hat Version %s > 2 — Downgrade nicht unterstützt",
-            entry.title, entry.version,
+            entry.title,
+            entry.version,
         )
         return False
     if entry.version == 1:
         options = dict(entry.options)
-        options.setdefault(
-            "quick_drinks", [dict(qd) for qd in DEFAULT_QUICK_DRINKS]
-        )
+        options.setdefault("quick_drinks", [dict(qd) for qd in DEFAULT_QUICK_DRINKS])
         new_data = {k: v for k, v in entry.data.items() if k != "quick_drinks"}
         hass.config_entries.async_update_entry(
-            entry, data=new_data, options=options, version=2,
+            entry,
+            data=new_data,
+            options=options,
+            version=2,
         )
-        _LOGGER.info("Config entry %s: v1 → v2 migriert (quick_drinks → options)",
-                     entry.title)
+        _LOGGER.info("Config entry %s: v1 → v2 migriert (quick_drinks → options)", entry.title)
     return True
 
 
@@ -84,7 +94,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
         await store.set_lifetime_start(entry.entry_id, int(lifetime_start))
 
     coordinator = DataUpdateCoordinator(
-        hass, _LOGGER,
+        hass,
+        _LOGGER,
         name=f"health_o_mat_{entry.entry_id}",
         update_method=lambda: dt_util.now().isoformat(),
         update_interval=None,
@@ -102,9 +113,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
 
     _register_services(hass)
     _apply_options(hass, entry)
+    await _apply_retention(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     return True
+
+
+def _retention_months(entry) -> int:
+    """Retention in Monaten aus den Options (0/ungültig = AUS)."""
+    try:
+        return int(entry.options.get("retention_months") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _get_archive_store(hass: HomeAssistant) -> HealthOMatStore:
+    """Archiv-Store einmalig anlegen/laden (Shared-Bereich)."""
+    shared: dict = hass.data[DOMAIN].setdefault("shared", {})
+    archive = shared.get("archive_store")
+    if archive is None:
+        archive = HealthOMatStore(hass, storage_key=ARCHIVE_STORE_KEY)
+        await archive.async_load()
+        shared["archive_store"] = archive
+    return archive
+
+
+async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -> None:
+    """Optionale Retention beim Setup (REQ-HOM-109).
+
+    Default AUS (0/None): sofortiger No-op — exakt das bisherige Verhalten,
+    nichts wird verschoben und kein Archiv-Store angelegt. Aktiv: Einträge
+    älter als `retention_months` wandern on-read ins Archiv; der Lebenszähler
+    bleibt unverändert.
+    """
+    months = _retention_months(entry)
+    if months <= 0:
+        return
+    current = store.entry(entry.entry_id)
+    cutoff = logic.months_ago(dt_util.now(), months)
+    kept_drinks, moved_drinks = logic.partition_by_cutoff(current.get("drinks", []), cutoff)
+    kept_readings, moved_readings = logic.partition_by_cutoff(current.get("readings", []), cutoff)
+    if not moved_drinks and not moved_readings:
+        return
+    archive = await _get_archive_store(hass)
+    await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
+    await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)
+    signal_refresh(hass, entry.entry_id)
 
 
 def _apply_options(hass: HomeAssistant, entry) -> None:
@@ -153,6 +207,8 @@ async def _options_updated(hass, entry) -> None:
     current = int(store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0))
     if wanted and wanted != current:
         await store.set_lifetime_start(entry.entry_id, wanted)
+    # Retention nach Options-Änderung anwenden (idempotent, No-op wenn AUS).
+    await _apply_retention(hass, entry, store)
     signal_refresh(hass, entry.entry_id)
 
 
@@ -164,22 +220,29 @@ async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
 
 
 def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
-    """Person aus einem Service-Call auflösen (Name → Entry)."""
+    """Person aus einem Service-Call auflösen (Name → Entry).
+
+    Eingleisig statt O(n²): die Config-Entries werden EINMAL in ein
+    `{entry_id: person_slug}`-Lookup indexiert; danach genügt ein einziger
+    Durchlauf über die Runtime-Registry. Person-Matching und Fehlersemantik
+    (keine Person / mehrere ohne Angabe / nicht gefunden) bleiben unverändert.
+    """
     wanted = (call.data.get("person") or "").strip().lower()
+
+    # Person-Matching über entry.data["person"] (stabiler Service-Anker) —
+    # person_display (Options) ist reine Anzeige und hier bewusst irrelevant.
+    persons = {
+        cfg_entry.entry_id: (cfg_entry.data.get("person", "") or "").strip().lower()
+        for cfg_entry in hass.config_entries.async_entries(DOMAIN)
+    }
+
     matches = []
     for key, value in hass.data.get(DOMAIN, {}).items():
         if key in ("shared", "signal"):
             continue
         if not isinstance(value, dict) or "coordinator" not in value:
             continue
-        person = ""
-        # Person aus Entry-Daten lesen (Registry speichert nur Runtime)
-        from homeassistant.config_entries import ConfigEntry  # noqa: PLC0415
-        for cfg_entry in hass.config_entries.async_entries(DOMAIN):
-            if cfg_entry.entry_id == key:
-                person = cfg_entry.data.get("person", "")
-                break
-        matches.append((key, value, person.strip().lower()))
+        matches.append((key, value, persons.get(key, "")))
 
     if not matches:
         raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
@@ -187,7 +250,8 @@ def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
         if len(matches) > 1:
             names = ", ".join(m[2] for m in matches)
             raise ServiceValidationError(
-                f"Mehrere Personen vorhanden ({names}) — bitte 'person' angeben")
+                f"Mehrere Personen vorhanden ({names}) — bitte 'person' angeben"
+            )
         return matches[0][0], matches[0][1]
     for key, value, person in matches:
         if person == wanted:
@@ -207,7 +271,9 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("amount_ml muss zwischen 1 und 10000 liegen")
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         await store.add_drink(
-            entry_id, dt_util.now().isoformat(), ml,
+            entry_id,
+            dt_util.now().isoformat(),
+            ml,
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
         )
@@ -218,60 +284,83 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         pulse = call.data.get("pulse")
         await store.add_reading(
-            entry_id, dt_util.now().isoformat(),
-            int(call.data["systolic"]), int(call.data["diastolic"]),
+            entry_id,
+            dt_util.now().isoformat(),
+            int(call.data["systolic"]),
+            int(call.data["diastolic"]),
             int(pulse) if pulse else None,
-            call.data.get("note") or "", "service",
+            call.data.get("note") or "",
+            "service",
         )
         signal_refresh(hass, entry_id)
 
     async def remove_last_entry(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        removed = await store.remove_last_drink(entry_id)
-        if not removed:
-            raise ServiceValidationError("Keine Getränke zum Entfernen")
+        kind = call.data.get("kind") or "drinks"
+        if kind == "blood_pressure":
+            removed = await store.remove_last_reading(entry_id)
+            if not removed:
+                raise ServiceValidationError("Keine Blutdruckmessungen zum Entfernen")
+        else:
+            removed = await store.remove_last_drink(entry_id)
+            if not removed:
+                raise ServiceValidationError("Keine Getränke zum Entfernen")
         signal_refresh(hass, entry_id)
 
     async def export_csv(call: ServiceCall) -> None:
-        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        shared = hass.data.get(DOMAIN, {}).get("shared", {})
+        store: HealthOMatStore = shared.get("store")
         from .exporter import async_export_csv
-        await async_export_csv(hass, store, call)
+
+        await async_export_csv(hass, store, call, archive_store=shared.get("archive_store"))
 
     hass.services.async_register(
-        DOMAIN, "add_drink",
-        schema=vol.Schema({
-            vol.Required("amount_ml"): vol.Coerce(int),
-            vol.Optional("drink_type"): str,
-            vol.Optional("person"): str,
-            vol.Optional("source"): str,
-        }),
+        DOMAIN,
+        "add_drink",
+        schema=vol.Schema(
+            {
+                vol.Required("amount_ml"): vol.Coerce(int),
+                vol.Optional("drink_type"): str,
+                vol.Optional("person"): str,
+                vol.Optional("source"): str,
+            }
+        ),
         service_func=add_drink,
     )
     hass.services.async_register(
-        DOMAIN, "add_blood_pressure",
-        schema=vol.Schema({
-            vol.Required("systolic"): vol.Coerce(int),
-            vol.Required("diastolic"): vol.Coerce(int),
-            vol.Optional("pulse"): vol.Coerce(int),
-            vol.Optional("person"): str,
-            vol.Optional("note"): str,
-        }),
+        DOMAIN,
+        "add_blood_pressure",
+        schema=vol.Schema(
+            {
+                vol.Required("systolic"): vol.Coerce(int),
+                vol.Required("diastolic"): vol.Coerce(int),
+                vol.Optional("pulse"): vol.Coerce(int),
+                vol.Optional("person"): str,
+                vol.Optional("note"): str,
+            }
+        ),
         service_func=add_blood_pressure,
     )
     hass.services.async_register(
-        DOMAIN, "remove_last_entry",
-        schema=vol.Schema({
-            vol.Optional("person"): str,
-            vol.Optional("kind", default="drinks"): str,
-        }),
+        DOMAIN,
+        "remove_last_entry",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Optional("kind", default="drinks"): vol.In(["drinks", "blood_pressure"]),
+            }
+        ),
         service_func=remove_last_entry,
     )
     hass.services.async_register(
-        DOMAIN, "export_csv",
-        schema=vol.Schema({
-            vol.Optional("person"): str,
-            vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
-        }),
+        DOMAIN,
+        "export_csv",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+            }
+        ),
         service_func=export_csv,
     )

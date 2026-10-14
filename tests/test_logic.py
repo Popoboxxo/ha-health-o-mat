@@ -1,9 +1,10 @@
 """Tests: Tagesfenster, Summen und CSV (reine Logik)."""
+
 import importlib.util
 import os
 import sys
 import types
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -95,6 +96,7 @@ def test_yesterday_window():
 
 # --- Konfigurierbare Reset-Uhrzeit (daily_reset_hour) ---
 
+
 def test_today_sums_with_custom_hour_shifts_window():
     # 05:00-Buchung zählt bei hour=6 noch zum Vortag (Fenster beginnt erst 06:00).
     drinks = [{"ts": "2026-08-22T05:00:00", "ml": 300, "type": "Kaffee"}]
@@ -119,9 +121,24 @@ def test_yesterday_window_with_custom_hour_matches_today_sums_boundary():
 
 READINGS = [
     {"ts": "2026-08-22T08:00:00", "sys": 120, "dia": 80, "pulse": 70},
-    {"ts": "2026-08-16T08:00:00", "sys": 130, "dia": 85, "pulse": 72},  # exactly 7 days before "today"
-    {"ts": "2026-08-10T08:00:00", "sys": 999, "dia": 999, "pulse": 999},  # outside window, must be excluded
-    {"ts": "2026-08-20T08:00:00", "sys": 110, "dia": None, "pulse": None},  # None value for dia/pulse
+    {
+        "ts": "2026-08-16T08:00:00",
+        "sys": 130,
+        "dia": 85,
+        "pulse": 72,
+    },  # exactly 7 days before "today"
+    {
+        "ts": "2026-08-10T08:00:00",
+        "sys": 999,
+        "dia": 999,
+        "pulse": 999,
+    },  # outside window, must be excluded
+    {
+        "ts": "2026-08-20T08:00:00",
+        "sys": 110,
+        "dia": None,
+        "pulse": None,
+    },  # None value for dia/pulse
     {"ts": "kaputt", "sys": 500, "dia": 500, "pulse": 500},  # invalid ts, must be excluded
 ]
 
@@ -160,3 +177,66 @@ def test_avg_over_window_custom_days():
     # with days=1, only the 08-22 reading qualifies
     avg = logic.avg_over_window(READINGS, "sys", now, days=1)
     assert avg == 120
+
+
+# --- Retention/Archiv (REQ-HOM-109, Finding N-2) ---
+
+
+def test_months_ago_calendar_exact():
+    """[REQ-HOM-109] X Kalendermonate zurück — kein 30-Tage-Approx."""
+    assert logic.months_ago(datetime(2026, 10, 14), 6) == datetime(2026, 4, 14)
+    assert logic.months_ago(datetime(2026, 10, 14), 1) == datetime(2026, 9, 14)
+
+
+def test_months_ago_clamps_to_shorter_target_month():
+    """[REQ-HOM-109] 31.03. minus 1 Monat → 28.02. (Tag wird geklemmt)."""
+    assert logic.months_ago(datetime(2026, 3, 31), 1) == datetime(2026, 2, 28)
+    # Schaltjahr: 31.03.2028 minus 1 Monat → 29.02.2028
+    assert logic.months_ago(datetime(2028, 3, 31), 1) == datetime(2028, 2, 29)
+
+
+def test_months_ago_year_rollover():
+    """[REQ-HOM-109] Monatsarithmetik rollt korrekt über Jahresgrenzen."""
+    assert logic.months_ago(datetime(2026, 1, 15), 1) == datetime(2025, 12, 15)
+    assert logic.months_ago(datetime(2026, 1, 15), 13) == datetime(2024, 12, 15)
+
+
+def test_months_ago_preserves_timezone():
+    """[REQ-HOM-109] tz-aware `now` behält Zeitzone (DST-festes Fenster)."""
+    tz = timezone(timedelta(hours=2))
+    now = datetime(2026, 10, 14, 12, 30, tzinfo=tz)
+    cutoff = logic.months_ago(now, 2)
+    assert cutoff == datetime(2026, 8, 14, 12, 30, tzinfo=tz)
+    assert cutoff.tzinfo is tz
+
+
+def test_partition_by_cutoff_splits_old_and_recent():
+    """[REQ-HOM-109] Einträge vor dem Stichtag ins Archiv, ab Stichtag bleiben."""
+    cutoff = datetime(2026, 4, 14)
+    items = [
+        {"ts": "2026-04-13T23:59:59", "ml": 1},
+        {"ts": "2026-04-14T00:00:00", "ml": 2},  # exakt Stichtag → bleibt
+        {"ts": "2026-05-01T00:00:00", "ml": 3},
+    ]
+    recent, archived = logic.partition_by_cutoff(items, cutoff)
+    assert [i["ml"] for i in archived] == [1]
+    assert [i["ml"] for i in recent] == [2, 3]
+
+
+def test_partition_by_cutoff_keeps_invalid_and_missing_ts():
+    """[REQ-HOM-109] Unbekannte Daten werden NIE stillschweigend archiviert."""
+    cutoff = datetime(2026, 4, 14)
+    items = [{"ts": "kaputt"}, {"ml": 5}, {"ts": None}]
+    recent, archived = logic.partition_by_cutoff(items, cutoff)
+    assert archived == []
+    assert recent == items
+
+
+def test_partition_by_cutoff_mixes_naive_and_aware_without_typeerror():
+    """[REQ-HOM-109] Alt-Bestand (naive ts) + new (aware) brechen nicht ab."""
+    cutoff = datetime(2026, 4, 14, tzinfo=UTC)
+    old = {"ts": "2026-01-01T00:00:00"}  # naive, älter → Archiv
+    new = {"ts": "2026-10-14T00:00:00+00:00"}  # aware, neuer → bleibt
+    recent, archived = logic.partition_by_cutoff([old, new], cutoff)
+    assert archived == [old]
+    assert recent == [new]

@@ -1,4 +1,5 @@
 """Text-Entity: Freitext-Eingabe „Kaffee 300ml" mit Parser."""
+
 from __future__ import annotations
 
 import json
@@ -7,9 +8,9 @@ from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from . import parser
 from .const import DOMAIN, DRINK_LEXICON
 from .entity import HealthOMatEntity, signal_refresh
-from . import parser
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:

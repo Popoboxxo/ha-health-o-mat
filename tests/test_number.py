@@ -3,12 +3,13 @@
 Audit-Punkt 7b (C-2): DailyGoalNumber.async_set_native_value() must persist to
 entry.options["daily_goal_ml"] via hass.config_entries.async_update_entry().
 """
+
 import asyncio
 import importlib.util
 import os
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")

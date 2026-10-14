@@ -4,10 +4,11 @@ binary_sensor.py hatte bislang keine eigene Testdatei; ergänzt hier gezielt
 die Abdeckung für die neue Reset-Uhrzeit-Verdrahtung (Spec Feature 2), analog
 zum Muster in test_sensor.py.
 """
+
+import importlib.util
 import os
 import sys
 import types
-import importlib.util
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -44,9 +45,11 @@ def _make_goal_reached_fixture(options=None, drinks=None, daily_goal_ml=500):
     entry.runtime_data.daily_goal_ml = daily_goal_ml
 
     store = MagicMock()
-    store.all_entries = MagicMock(return_value={
-        "test-entry-1": {"drinks": drinks if drinks is not None else []},
-    })
+    store.all_entries = MagicMock(
+        return_value={
+            "test-entry-1": {"drinks": drinks if drinks is not None else []},
+        }
+    )
 
     entity = binary_sensor_module.GoalReachedEntity(coordinator, entry, store)
     return entity, entry, store
@@ -66,11 +69,10 @@ def test_goal_reached_uses_daily_reset_hour_from_options():
 
 
 def test_goal_reached_daily_reset_hour_missing_defaults_to_zero_regression():
-    """[Spec Feature 2] Ohne daily_reset_hour in entry.options: Bestandsverhalten (hour=0) unverändert."""
+    """[Spec Feature 2] Ohne daily_reset_hour in entry.options: Bestandsverhalten
+    (hour=0) unverändert."""
     drinks = [{"ts": "2026-08-22T05:00:00", "ml": 500, "type": "Kaffee"}]
-    entity, entry, store = _make_goal_reached_fixture(
-        options={}, drinks=drinks, daily_goal_ml=500
-    )
+    entity, entry, store = _make_goal_reached_fixture(options={}, drinks=drinks, daily_goal_ml=500)
     binary_sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 8, 0))
 
     assert entity.is_on is True

@@ -1,4 +1,5 @@
 """CSV-Export (Service-only, kein Button)."""
+
 from __future__ import annotations
 
 import os
@@ -11,11 +12,31 @@ from .logic import csv_filename, drinks_csv_rows, rows_to_csv_string
 from .store import HealthOMatStore
 
 
-async def async_export_csv(hass: HomeAssistant, store: HealthOMatStore, call: ServiceCall) -> str:
-    """Schreibt Getränke-/BP-CSV(s) nach /config/health_o_mat_export/."""
+async def async_export_csv(
+    hass: HomeAssistant,
+    store: HealthOMatStore,
+    call: ServiceCall,
+    archive_store: HealthOMatStore | None = None,
+) -> str:
+    """Schreibt Getränke-/BP-CSV(s) nach /config/health_o_mat_export/.
+
+    `archive_store` (Retention, REQ-HOM-109) wird — falls vorhanden — mit den
+    aktuellen Daten zusammengeführt, damit der Export weiterhin die vollständige
+    Historie enthält. Ohne Archiv (Default AUS) bleibt das Verhalten identisch.
+    """
     person_filter = (call.data.get("person") or "").strip().lower()
     dataset = call.data.get("dataset", "all")
     now = dt_util.now()
+
+    def _combined(eid: str, data: dict) -> tuple[list, list]:
+        """Getränke/Readings des Haupt-Stores + Archiv je Person."""
+        drinks = list(data.get("drinks", []))
+        readings = list(data.get("readings", []))
+        if archive_store is not None:
+            archived = archive_store.all_entries().get(eid, {})
+            drinks += list(archived.get("drinks", []))
+            readings += list(archived.get("readings", []))
+        return drinks, readings
 
     def _resolve_entry_ids() -> list[str]:
         ids = []
@@ -36,23 +57,27 @@ async def async_export_csv(hass: HomeAssistant, store: HealthOMatStore, call: Se
         for eid in entry_ids:
             data = store.all_entries()[eid]
             person = data.get("person") or "Person"
+            drinks, readings = _combined(eid, data)
             if dataset in ("drinks", "all"):
-                rows = drinks_csv_rows(data.get("drinks", []), person)
+                rows = drinks_csv_rows(drinks, person)
                 name = csv_filename("drinks", person, now)
                 path = os.path.join(export_dir, name)
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
                     f.write(rows_to_csv_string(rows))
                 written.append(path)
             if dataset in ("blood_pressure", "all"):
-                rows = [["zeitstempel", "person", "systolisch", "diastolisch",
-                         "puls", "notiz"]]
-                for r in sorted(data.get("readings", []), key=lambda x: x.get("ts", "")):
-                    rows.append([
-                        r.get("ts", ""), person,
-                        str(r.get("sys", "")), str(r.get("dia", "")),
-                        "" if r.get("pulse") is None else str(r["pulse"]),
-                        r.get("note", ""),
-                    ])
+                rows = [["zeitstempel", "person", "systolisch", "diastolisch", "puls", "notiz"]]
+                for r in sorted(readings, key=lambda x: x.get("ts", "")):
+                    rows.append(
+                        [
+                            r.get("ts", ""),
+                            person,
+                            str(r.get("sys", "")),
+                            str(r.get("dia", "")),
+                            "" if r.get("pulse") is None else str(r["pulse"]),
+                            r.get("note", ""),
+                        ]
+                    )
                 name = csv_filename("bloodpressure", person, now)
                 path = os.path.join(export_dir, name)
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
@@ -68,9 +93,9 @@ async def async_export_csv(hass: HomeAssistant, store: HealthOMatStore, call: Se
         raise ServiceValidationError("Keine Daten zum Exportieren")
 
     await hass.services.async_call(
-        "persistent_notification", "create",
-        {"title": "HA Health-O-Mat Export",
-         "message": "Exportiert:\n" + "\n".join(paths)},
+        "persistent_notification",
+        "create",
+        {"title": "HA Health-O-Mat Export", "message": "Exportiert:\n" + "\n".join(paths)},
         blocking=False,
     )
     return paths[0]
