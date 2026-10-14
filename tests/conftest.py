@@ -7,6 +7,7 @@ Attempts real import first; falls back to a set of hand-built fake
 This conftest is auto-loaded by pytest and patches sys.modules before
 any custom_components imports happen.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,6 +17,7 @@ from unittest.mock import MagicMock
 # Attempt real import first (for testing with actual HA installation)
 try:
     import homeassistant  # noqa: F401
+
     _USING_REAL_HA = True
 except ImportError:
     _USING_REAL_HA = False
@@ -86,8 +88,16 @@ if not _USING_REAL_HA:
         predictably instead of silently accepting/returning Mocks.
         """
 
-        def __init__(self, hass=None, logger=None, *, name=None,
-                     update_method=None, update_interval=None, **kwargs) -> None:
+        def __init__(
+            self,
+            hass=None,
+            logger=None,
+            *,
+            name=None,
+            update_method=None,
+            update_interval=None,
+            **kwargs,
+        ) -> None:
             self.hass = hass
             self.logger = logger
             self.name = name
@@ -223,6 +233,7 @@ if not _USING_REAL_HA:
             "homeassistant.components.sensor",
             SensorEntity=SensorEntity,
             SensorStateClass=MagicMock(),
+            SensorDeviceClass=MagicMock(),
         ),
         "homeassistant.components.select": _module(
             "homeassistant.components.select",

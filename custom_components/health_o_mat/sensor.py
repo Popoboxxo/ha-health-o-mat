@@ -1,15 +1,20 @@
 """Sensor-Plattform: Aggregate + Verlauf + BP-Werte je Person."""
+
 from __future__ import annotations
 
-from datetime import datetime
 import json
+from datetime import datetime
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
-from .entity import HealthOMatEntity
 from . import logic
+from .const import DOMAIN, HISTORY_ATTRIBUTE_LIMIT
+from .entity import HealthOMatEntity
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -49,12 +54,25 @@ class TodaySensor(HealthOMatSensor):
     """Sauberer Mengen-Sensor in ml für „Heute"."""
 
     _attr_translation_key = "today"
-    _attr_native_unit_of_measurement = "ml"
+    # HA-valid unit for SensorDeviceClass.VOLUME is "mL" (not "ml"); with "ml"
+    # HA logs a "not a valid unit" warning and offers no native conversion (N-9).
+    _attr_native_unit_of_measurement = "mL"
+    _attr_device_class = SensorDeviceClass.VOLUME
+    # Tageszähler: state_class TOTAL ist korrekt, weil das Fenster täglich
+    # (on-read) zurücksetzt. Damit die HA-Statistics-Engine den Tagesreset als
+    # legitimen Cycle statt als Anomalie/Abnahme erkennt, meldet last_reset
+    # den Beginn des aktuellen Tagesfensters (Finding N-3).
     _attr_state_class = SensorStateClass.TOTAL
     _attr_icon = "mdi:cup-water"
 
     def __init__(self, coordinator, entry, store) -> None:
         super().__init__(coordinator, entry, store, "sensor_drinks_today")
+
+    @property
+    def last_reset(self) -> datetime:
+        """Beginn des laufenden Tracking-Tags (dieselbe Grenze wie native_value)."""
+        hour = self._entry.options.get("daily_reset_hour", 0)
+        return logic.day_start(dt_util.now(), hour=hour)
 
     @property
     def native_value(self) -> int:
@@ -117,14 +135,24 @@ class HistoryDrinksSensor(HealthOMatSensor):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {"entries_json": json.dumps(self._data.get("drinks", []), ensure_ascii=False)}
+        # N-1: nur die letzten HISTORY_ATTRIBUTE_LIMIT Buchungen (nach ts
+        # sortiert) landen im State-Attribut — sonst wächst das State-Objekt
+        # und der Recorder unbegrenzt mit. Die Gesamtzahl bleibt über
+        # total_count sichtbar; der Rohdaten-Vollbestand liegt weiterhin im
+        # Store bzw. im CSV-Export.
+        drinks = sorted(self._data.get("drinks", []), key=lambda d: d.get("ts", ""))
+        return {
+            "entries_json": json.dumps(drinks[-HISTORY_ATTRIBUTE_LIMIT:], ensure_ascii=False),
+            "total_count": len(drinks),
+        }
 
 
 class LifetimeSensor(HealthOMatSensor):
     """Kumulierter Lebenszähler."""
 
     _attr_translation_key = "lifetime"
-    _attr_native_unit_of_measurement = "ml"
+    _attr_native_unit_of_measurement = "mL"
+    _attr_device_class = SensorDeviceClass.VOLUME
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_icon = "mdi:water-well"
 
@@ -147,6 +175,9 @@ class LastReadingSensor(HealthOMatSensor):
         self._key = key
         self._attr_translation_key = f"bp_{key}"
         self._attr_native_unit_of_measurement = unit
+        # N-9: sys/dia sind Druckwerte (mmHg) → device_class PRESSURE.
+        # Puls (BPM) ist keine Druckgröße und bleibt bewusst ohne device_class.
+        self._attr_device_class = SensorDeviceClass.PRESSURE if key in ("sys", "dia") else None
 
     def _sorted_readings(self) -> list[dict]:
         return sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))
@@ -177,9 +208,11 @@ class BloodPressureHistorySensor(HealthOMatSensor):
     _attr_translation_key = "history_bp"
     _attr_icon = "mdi:heart-box-outline"
     # native_value ist die Gesamtzahl aller je gespeicherten Messungen
-    # (store.py haengt readings nur an, es gibt keinen Loesch-/Trim-Pfad) -
-    # ein monoton steigender Lebenszaehler, analog zu LifetimeSensor.
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    # (store.py haengt readings nur an, es gibt keinen Loesch-/Trim-Pfad).
+    # Bewusst MEASUREMENT statt TOTAL_INCREASING: "Anzahl Messungen gesamt" ist
+    # kein sinnvoller Langzeit-Zaehler (der Statistics-Graph zeigt sonst nur
+    # eine monotone, mehrwertfreie Summe) — Finding N-4.
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator, entry, store) -> None:
         super().__init__(coordinator, entry, store, "sensor_bp_history")
