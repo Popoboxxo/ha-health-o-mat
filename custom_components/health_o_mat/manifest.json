@@ -5,6 +5,9 @@
     "@Popoboxxo"
   ],
   "config_flow": true,
+  "dependencies": [
+    "frontend"
+  ],
   "documentation": "https://github.com/Popoboxxo/ha-health-o-mat",
   "integration_type": "device",
   "iot_class": "calculated",

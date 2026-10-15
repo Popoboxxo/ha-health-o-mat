@@ -22,7 +22,9 @@ from .const import (
     DOMAIN,
 )
 from .entity import effective_person, signal_refresh
+from .frontend import async_setup_frontend, async_unregister_frontend
 from .store import HealthOMatStore
+from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _register_services(hass)
+    await _async_setup_frontend_layer(hass)
     _apply_options(hass, entry)
     await _apply_retention(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
@@ -216,7 +219,27 @@ async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+        if not _has_runtime_entries(hass):
+            # Letzter Entry entladen → Frontend-Fallback zurückbauen (defensiv:
+            # ein Fehler hier darf den Unload-Status nicht kippen).
+            try:
+                await async_unregister_frontend(hass)
+            except Exception:  # noqa: BLE001 - Rückbau ist nie unload-kritisch
+                _LOGGER.exception("Health-O-Mat: Frontend-Rückbau fehlgeschlagen")
     return unload_ok
+
+
+def _has_runtime_entries(hass: HomeAssistant) -> bool:
+    """True, solange noch mindestens ein Entry Runtime-Daten hält."""
+    registry = hass.data.get(DOMAIN)
+    if not isinstance(registry, dict):
+        return False
+    for key, value in registry.items():
+        if key in ("shared", "signal"):
+            continue
+        if isinstance(value, dict) and "coordinator" in value:
+            return True
+    return False
 
 
 def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
@@ -257,6 +280,22 @@ def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
         if person == wanted:
             return key, value
     raise ServiceValidationError(f"Person '{wanted}' nicht gefunden")
+
+
+async def _async_setup_frontend_layer(hass: HomeAssistant) -> None:
+    """Card (Frontend) + WS-API einmalig für die ganze Domain registrieren.
+
+    Wird von JEDEM Entry-Setup aufgerufen; beide Funktionen sind intern
+    idempotent (Marker im Shared-Bereich), es entsteht also keine
+    Doppel-Registrierung über mehrere Entries. Der Guard hier ist die zweite
+    Verteidigungslinie: die UI-Ebene ist ein Zusatz zur Entity-Ebene und darf
+    ein Entity-Setup nie zum Scheitern bringen.
+    """
+    try:
+        await async_register_ws_api(hass)
+        await async_setup_frontend(hass)
+    except Exception:  # noqa: BLE001 - UI-Ebene ist nie setup-kritisch
+        _LOGGER.exception("Health-O-Mat: Frontend-/WS-Ebene nicht registrierbar")
 
 
 def _register_services(hass: HomeAssistant) -> None:
