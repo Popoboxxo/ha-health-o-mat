@@ -453,3 +453,241 @@ def test_volume_sensors_use_valid_ml_unit_others_unchanged():
         assert bp._attr_native_unit_of_measurement == unit
 
     assert percent._attr_native_unit_of_measurement == "%"
+
+
+# --- Welle 2 / 2A: WHO-Kategorie (REQ-HOM-001) + Trends (REQ-HOM-002) ---
+
+
+def test_bp_category_sensor_classifies_last_reading():
+    """[REQ-HOM-001] native_value = WHO-Kategorie der LETZTEN Messung."""
+    readings = [
+        {"ts": "2026-08-21T08:00:00", "sys": 115, "dia": 75, "pulse": 60},
+        {"ts": "2026-08-22T08:00:00", "sys": 145, "dia": 92, "pulse": 70},
+    ]
+    sensor = _make_store_sensor(sensor_module.BloodPressureCategorySensor, {"readings": readings})
+
+    assert sensor.native_value == "grade_1"
+    # REQ-HOM-001 nennt den Sensor `blood_pressure_category`; der Translation-Key
+    # entspricht dem (die Familie rendert aus dem englischen Namen
+    # "Blood pressure category" dieselbe object_id).
+    assert sensor._attr_translation_key == "blood_pressure_category"
+    attrs = sensor.extra_state_attributes
+    assert attrs["measured_at"] == "2026-08-22T08:00:00"
+    assert attrs["systolic"] == 145
+    assert attrs["diastolic"] == 92
+
+
+def test_bp_category_sensor_unknown_without_readings():
+    """[REQ-HOM-001] Ohne Messung → None (HA: unknown), keine Attribute."""
+    sensor = _make_store_sensor(sensor_module.BloodPressureCategorySensor, {"readings": []})
+
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes == {}
+
+
+def test_bp_category_sensor_crisis_and_higher_axis():
+    """[REQ-HOM-001] Krise nur bei beiden strengen Grenzen; sonst Grad 3."""
+    crisis = _make_store_sensor(
+        sensor_module.BloodPressureCategorySensor,
+        {"readings": [{"ts": "2026-08-22T08:00:00", "sys": 200, "dia": 125}]},
+    )
+    assert crisis.native_value == "crisis"
+
+    isolated = _make_store_sensor(
+        sensor_module.BloodPressureCategorySensor,
+        {"readings": [{"ts": "2026-08-22T08:00:00", "sys": 200, "dia": 90}]},
+    )
+    assert isolated.native_value == "grade_3"
+
+
+def test_drinks_trend_sensor_state_unit_and_attributes():
+    """[REQ-HOM-002] drinks_trend: Prozent-State + today/prev_week als Attribute."""
+    now = datetime(2026, 8, 8, 12, 0)
+    sensor_module.dt_util.now = MagicMock(return_value=now)
+    drinks = [
+        {"ts": "2026-08-07T09:00:00", "ml": 700, "type": "Wasser"},
+        {"ts": "2026-08-08T09:00:00", "ml": 1400, "type": "Wasser"},
+    ]
+    sensor = _make_store_sensor(sensor_module.DrinksTrendSensor, {"drinks": drinks})
+
+    assert sensor._attr_translation_key == "drinks_trend"
+    assert sensor._attr_native_unit_of_measurement == "%"
+    assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+    assert sensor.native_value == 1300.0
+    attrs = sensor.extra_state_attributes
+    assert attrs["today_ml"] == 1400
+    assert attrs["prev_week_avg_ml"] == 100.0
+
+
+def test_drinks_trend_sensor_unknown_without_previous_week():
+    """[REQ-HOM-002] Ohne Vorwochendaten → None (unknown), keine Attribute."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 8, 12, 0))
+    sensor = _make_store_sensor(sensor_module.DrinksTrendSensor, {"drinks": []})
+
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes == {}
+
+
+def test_bp_trend_sensor_direction_state_and_deltas():
+    """[REQ-HOM-002] bp_trend: Richtungs-State + sys/dia-Delta als Attribute."""
+    now = datetime(2026, 8, 13, 8, 0)
+    sensor_module.dt_util.now = MagicMock(return_value=now)
+    readings = [
+        {"ts": "2026-08-01T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-02T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-10T08:00:00", "sys": 150, "dia": 90},
+        {"ts": "2026-08-11T08:00:00", "sys": 150, "dia": 90},
+    ]
+    sensor = _make_store_sensor(sensor_module.BpTrendSensor, {"readings": readings})
+
+    assert sensor._attr_translation_key == "bp_trend"
+    assert sensor.native_value == "rising"
+    attrs = sensor.extra_state_attributes
+    assert attrs["sys_delta"] == 20.0
+    assert attrs["dia_delta"] == 10.0
+    assert attrs["sys_avg_recent"] == 150.0
+    assert attrs["sys_avg_previous"] == 130.0
+
+
+def test_bp_trend_sensor_unknown_with_less_than_three_readings():
+    """[REQ-HOM-002] < 3 Messungen → None (unknown)."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 13, 8, 0))
+    sensor = _make_store_sensor(
+        sensor_module.BpTrendSensor,
+        {"readings": [{"ts": "2026-08-10T08:00:00", "sys": 150, "dia": 90}]},
+    )
+
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes == {}
+
+
+def test_setup_entry_registers_new_wave2_sensors():
+    """[REQ-HOM-001/002] async_setup_entry hängt die neuen Sensoren ein."""
+    import asyncio
+
+    added: list = []
+
+    def _add(entities):
+        added.extend(entities)
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = 2000
+    coord = MagicMock()
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={"test-entry-1": {}})
+    hass.data = {
+        "health_o_mat": {
+            entry.entry_id: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    asyncio.run(sensor_module.async_setup_entry(hass, entry, _add))
+
+    keys = {e._attr_unique_id for e in added}
+    assert "test-entry-1_sensor_bp_category" in keys
+    assert "test-entry-1_sensor_drinks_trend" in keys
+    assert "test-entry-1_sensor_bp_trend" in keys
+
+
+# --- Welle 2 / 2B: Streak (REQ-HOM-003) + Koffein (REQ-HOM-004) ---
+
+
+def test_goal_streak_sensor_state_and_best_attribute():
+    """[REQ-HOM-003] native_value = laufende Serie; best_streak als Attribut."""
+    now = datetime(2026, 8, 22, 12, 0)
+    sensor_module.dt_util.now = MagicMock(return_value=now)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 2000, "type": "Wasser"},
+        {"ts": "2026-08-21T09:00:00", "ml": 2000, "type": "Wasser"},
+        {"ts": "2026-08-20T09:00:00", "ml": 2000, "type": "Wasser"},
+        {"ts": "2026-08-18T09:00:00", "ml": 2000, "type": "Wasser"},  # Lücke am 19.
+    ]
+    sensor = _make_store_sensor(sensor_module.GoalStreakSensor, {"drinks": drinks})
+
+    assert sensor._attr_translation_key == "goal_streak"
+    assert sensor._attr_native_unit_of_measurement == "d"
+    assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+    assert sensor.native_value == 3
+    assert sensor.extra_state_attributes["best_streak"] == 3
+
+
+def test_goal_streak_sensor_today_not_reached_runs_to_yesterday():
+    """[REQ-HOM-003] Heute nicht erreicht ⇒ Serie endet gestern."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 12, 0))
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 500, "type": "Wasser"},
+        {"ts": "2026-08-21T09:00:00", "ml": 2000, "type": "Wasser"},
+        {"ts": "2026-08-20T09:00:00", "ml": 2000, "type": "Wasser"},
+    ]
+    sensor = _make_store_sensor(sensor_module.GoalStreakSensor, {"drinks": drinks})
+
+    assert sensor.native_value == 2
+
+
+def test_goal_streak_sensor_empty_history():
+    """[REQ-HOM-003] Leere Historie ⇒ 0 State, best_streak 0."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 12, 0))
+    sensor = _make_store_sensor(sensor_module.GoalStreakSensor, {"drinks": []})
+
+    assert sensor.native_value == 0
+    assert sensor.extra_state_attributes["best_streak"] == 0
+
+
+def test_caffeine_today_sensor_state_and_breakdown_attribute():
+    """[REQ-HOM-004] Koffein-Sensor: mg-State + Breakdown-Attribut (JSON)."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 12, 0))
+    drinks = [{"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"}]
+    sensor = _make_store_sensor(sensor_module.CaffeineTodaySensor, {"drinks": drinks})
+
+    assert sensor._attr_translation_key == "caffeine_today"
+    assert sensor._attr_native_unit_of_measurement == "mg"
+    assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+    assert sensor.native_value == 100.0
+    assert json.loads(sensor.extra_state_attributes["caffeine_by_type_mg"]) == {"Kaffee": 100.0}
+
+
+def test_caffeine_today_sensor_zero_without_caffeine_drinks():
+    """[REQ-HOM-004] Nur koffeinfreie Getränke ⇒ 0 mg, leerer Breakdown."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 8, 22, 12, 0))
+    drinks = [{"ts": "2026-08-22T09:00:00", "ml": 500, "type": "Wasser"}]
+    sensor = _make_store_sensor(sensor_module.CaffeineTodaySensor, {"drinks": drinks})
+
+    assert sensor.native_value == 0.0
+    assert json.loads(sensor.extra_state_attributes["caffeine_by_type_mg"]) == {}
+
+
+def test_setup_entry_registers_goal_streak_and_caffeine_sensors():
+    """[REQ-HOM-003/004] async_setup_entry hängt Streak- und Koffein-Sensor ein."""
+    import asyncio
+
+    added: list = []
+
+    def _add(entities):
+        added.extend(entities)
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = 2000
+    coord = MagicMock()
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={"test-entry-1": {}})
+    hass.data = {
+        "health_o_mat": {
+            entry.entry_id: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    asyncio.run(sensor_module.async_setup_entry(hass, entry, _add))
+
+    keys = {e._attr_unique_id for e in added}
+    assert "test-entry-1_sensor_goal_streak" in keys
+    assert "test-entry-1_sensor_caffeine_today" in keys

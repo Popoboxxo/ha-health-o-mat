@@ -18,6 +18,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   `cola`, `Ingwertee 400` — alles funktioniert
 - 🩺 **Blutdruck**: Eingabefelder (sys/dia/puls) + Speichern-Button, Verlaufs-Sensoren,
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
+- 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
+  Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak) und **geschätztes** Koffein
+  heute — je eine Entity für den Entscheidungswert, Details als Attribute
 - ↩️ **Undo-Button** für die letzte Buchung
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
@@ -64,6 +67,11 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
 | sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
 | sensor | `wellbeing_last_reported` | Wohlbefinden zuletzt gemeldet / Wellbeing last reported | Zeitstempel |
+| sensor | `blood_pressure_category` | Blutdruck-Kategorie / Blood pressure category | WHO-Kategorie der letzten Messung (optimal … hypertensive Krise) |
+| sensor | `drinks_trend` | Trink-Trend / Drinks trend | ± % heute vs. Vorwochen-Ø (mL) |
+| sensor | `blood_pressure_trend` | Blutdruck-Trend / Blood pressure trend | steigend/fallend/stabil aus 7-Tage-Mitteln |
+| sensor | `goal_streak` | Ziel-Serie / Goal streak | Tage in Folge mit erreichtem Tagesziel (+ Bestwert) |
+| sensor | `caffeine_today` | Koffein heute / Caffeine today | **geschätzte** mg Koffein heute |
 | binary_sensor | `daily_goal_reached` / `blood_pressure_warning` | Tagesziel erreicht, Blutdruck-Warnung | Status |
 | button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Löschen/Speichern | Alltagseingabe |
 | button | `report_very_bad` … `report_great` | Melden: … / Report: … | Wohlbefinden |
@@ -100,6 +108,32 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   Attribut `history_json` = die letzten 30 Messungen als JSON.
 - `sensor.…_wellbeing_last_reported` — Zeitstempel der letzten
   Wohlbefinden-Meldung (`device_class: timestamp`).
+
+**Abgeleitete Metriken**
+
+- `sensor.…_blood_pressure_category` — WHO-Kategorie der letzten Messung
+  (`optimal`, `normal`, `high_normal`, `grade_1`, `grade_2`, `grade_3`,
+  `crisis`; de/en übersetzt). Es zählt die höhere der beiden Achsen (sys/dia);
+  die hypertensive Krise greift bei sys > 180 **und** dia > 120. Ohne Messung →
+  `unknown`. Attribute: `measured_at`, `systolic`, `diastolic`.
+- `sensor.…_drinks_trend` — Prozentänderung der heutigen Menge gegenüber dem
+  Tages-Ø der sieben vollständigen Vorwochentage (`%`, `state_class: measurement`;
+  das Ø wird immer durch 7 geteilt, buchungsfreie Tage zählen als 0). Ohne
+  Vorwochendaten (Ø = 0) → `unknown`. Attribute: `today_ml`, `prev_week_avg_ml`.
+- `sensor.…_blood_pressure_trend` — Richtung des Blutdrucks aus zwei
+  aneinandergrenzenden 7-Tage-Mitteln (`rising` / `falling` / `stable`, de/en
+  übersetzt); „stabil" unter 2 mmHg Delta. Weniger als 3 gültige Messungen
+  (sys **und** dia) → `unknown`. Attribute: `sys_delta`, `dia_delta`,
+  `sys_avg_recent`, `sys_avg_previous`.
+- `sensor.…_goal_streak` — Anzahl Tage in Folge mit erreichtem Tagesziel
+  (on-read, dieselbe Tagesgrenze wie „heute"; der laufende Tag zählt nur mit,
+  wenn das Ziel bereits erreicht ist). Einheit Tage (`d`). Attribut
+  `best_streak` = längste Serie der gesamten Historie.
+- `sensor.…_caffeine_today` — **grobe Schätzung** der Koffeinzufuhr des
+  laufenden Tages in mg (`state_class: measurement`) anhand einer mg/100-ml-Tabelle
+  je Getränketyp (`const.py`); unbekannte Typen und „Eigen" zählen als 0 mg.
+  Attribut `caffeine_by_type_mg` = JSON mit mg je koffeinhaltigem Getränketyp.
+  Reale Werte schwanken stark — **keine medizinische Aussage**.
 
 **Binary-Sensoren**
 

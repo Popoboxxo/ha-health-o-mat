@@ -27,6 +27,11 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         HistoryDrinksSensor(coord, entry, store),
         LifetimeSensor(coord, entry, store),
         BloodPressureHistorySensor(coord, entry, store),
+        BloodPressureCategorySensor(coord, entry, store),
+        DrinksTrendSensor(coord, entry, store),
+        BpTrendSensor(coord, entry, store),
+        GoalStreakSensor(coord, entry, store),
+        CaffeineTodaySensor(coord, entry, store),
         WellbeingSinceSensor(coord, entry, store),
     ]
     for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
@@ -225,6 +230,183 @@ class BloodPressureHistorySensor(HealthOMatSensor):
     def extra_state_attributes(self) -> dict:
         readings = sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))[-30:]
         return {"history_json": json.dumps(readings, ensure_ascii=False)}
+
+
+class BloodPressureCategorySensor(HealthOMatSensor):
+    """WHO-Kategorie der letzten Messung (REQ-HOM-001).
+
+    Native_value ist der Kategorie-Key (optimal … crisis) und wird über
+    ``entity.sensor.blood_pressure_category.state.*`` lokalisiert. Ohne Messung
+    → None (HA zeigt `unknown`). Sekundärwerte der klassifizierten Messung
+    liegen als Attribute bei — keine eigene Entity je Wert.
+    """
+
+    _attr_translation_key = "blood_pressure_category"
+    _attr_icon = "mdi:heart-pulse"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_bp_category")
+
+    def _sorted_readings(self) -> list[dict]:
+        return sorted(self._data.get("readings", []), key=lambda r: r.get("ts", ""))
+
+    @property
+    def native_value(self) -> str | None:
+        readings = self._sorted_readings()
+        if not readings:
+            return None
+        last = readings[-1]
+        return logic.bp_category(last.get("sys"), last.get("dia"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        readings = self._sorted_readings()
+        if not readings:
+            return {}
+        last = readings[-1]
+        return {
+            "measured_at": last.get("ts"),
+            "systolic": last.get("sys"),
+            "diastolic": last.get("dia"),
+        }
+
+
+class DrinksTrendSensor(HealthOMatSensor):
+    """Getränke-Trend: heute vs. Tages-Ø der Vorwoche in % (REQ-HOM-002).
+
+    Ohne Vorwochendaten (Ø = 0) gibt es keine sinnvolle Prozentänderung →
+    None (`unknown`). today_ml und prev_week_avg_ml sind Attribute.
+    """
+
+    _attr_translation_key = "drinks_trend"
+    _attr_native_unit_of_measurement = "%"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:chart-timeline-variant"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_drinks_trend")
+
+    def _trend(self) -> dict | None:
+        hour = self._entry.options.get("daily_reset_hour", 0)
+        return logic.drinks_trend(self._data.get("drinks", []), dt_util.now(), hour=hour)
+
+    @property
+    def native_value(self) -> float | None:
+        trend = self._trend()
+        return None if trend is None else trend["percent"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        trend = self._trend()
+        if trend is None:
+            return {}
+        return {
+            "today_ml": trend["today_ml"],
+            "prev_week_avg_ml": trend["prev_week_avg_ml"],
+        }
+
+
+class BpTrendSensor(HealthOMatSensor):
+    """Blutdruck-Trend: steigend/fallend/stabil über 7-Tage-Mittel (REQ-HOM-002).
+
+    Native_value ist die Richtung (rising/falling/stable) und wird über
+    ``entity.sensor.bp_trend.state.*`` lokalisiert. < 3 gültige Messungen →
+    None (`unknown`). sys-/dia-Deltas und die Mittelwerte liegen als Attribute
+    bei — keine eigene Entity je Teilwert.
+    """
+
+    _attr_translation_key = "bp_trend"
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_bp_trend")
+
+    def _trend(self) -> dict | None:
+        readings = self._data.get("readings", [])
+        return logic.bp_trend(readings, dt_util.now())
+
+    @property
+    def native_value(self) -> str | None:
+        trend = self._trend()
+        return None if trend is None else trend["direction"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        trend = self._trend()
+        if trend is None:
+            return {}
+        return {
+            "sys_delta": trend["sys_delta"],
+            "dia_delta": trend["dia_delta"],
+            "sys_avg_recent": trend["sys_avg_recent"],
+            "sys_avg_previous": trend["sys_avg_previous"],
+        }
+
+
+class GoalStreakSensor(HealthOMatSensor):
+    """Tage in Folge mit erreichtem Tagesziel (REQ-HOM-003).
+
+    Native_value ist die laufende Serie in Tagen; der heutige Tag zählt nur mit,
+    wenn das Ziel bereits erreicht ist. `best_streak` (längste Serie) liegt als
+    Attribut bei — kein eigener Sensor je Teilwert (Design-Regel Review §5).
+    """
+
+    _attr_translation_key = "goal_streak"
+    _attr_native_unit_of_measurement = "d"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:fire"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_goal_streak")
+
+    def _streak(self) -> dict:
+        hour = self._entry.options.get("daily_reset_hour", 0)
+        return logic.goal_streak(
+            self._data.get("drinks", []),
+            self._entry.runtime_data.daily_goal_ml,
+            dt_util.now(),
+            hour=hour,
+        )
+
+    @property
+    def native_value(self) -> int:
+        return self._streak()["current_streak"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"best_streak": self._streak()["best_streak"]}
+
+
+class CaffeineTodaySensor(HealthOMatSensor):
+    """Geschätzte Koffeinzufuhr heute in mg (REQ-HOM-004).
+
+    Grobe Schätzung anhand der mg/100-ml-Tabelle in `const.py` — ausdrücklich
+    KEINE medizinische Aussage. Der mg-Anteil je Getränketyp liegt als
+    JSON-Attribut bei (nur Typen mit > 0 mg); die nackte Summe wäre ohne
+    Zuordnung wenig hilfreich.
+    """
+
+    _attr_translation_key = "caffeine_today"
+    _attr_native_unit_of_measurement = "mg"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:coffee-outline"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_caffeine_today")
+
+    def _caffeine(self) -> dict:
+        hour = self._entry.options.get("daily_reset_hour", 0)
+        return logic.caffeine_today(self._data.get("drinks", []), dt_util.now(), hour=hour)
+
+    @property
+    def native_value(self) -> float:
+        return self._caffeine()["total_mg"]
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "caffeine_by_type_mg": json.dumps(self._caffeine()["breakdown"], ensure_ascii=False)
+        }
 
 
 class WellbeingSinceSensor(HealthOMatSensor):

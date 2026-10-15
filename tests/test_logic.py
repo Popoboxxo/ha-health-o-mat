@@ -6,6 +6,8 @@ import sys
 import types
 from datetime import UTC, datetime, timedelta, timezone
 
+import pytest
+
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
 )
@@ -28,6 +30,7 @@ def _load(name: str):
 
 
 logic = _load("logic")
+const = _load("const")
 
 
 def test_day_start_midnight():
@@ -240,3 +243,415 @@ def test_partition_by_cutoff_mixes_naive_and_aware_without_typeerror():
     recent, archived = logic.partition_by_cutoff([old, new], cutoff)
     assert archived == [old]
     assert recent == [new]
+
+
+# --- WHO-Blutdruck-Klassifikation (REQ-HOM-001) ---
+
+
+@pytest.mark.parametrize(
+    ("sys", "dia", "expected"),
+    [
+        # Optimal / normal / hoch-normal an den exakten Grenzen
+        (119, 79, "optimal"),
+        (120, 79, "normal"),  # systolische Achse treibt
+        (119, 80, "normal"),  # diastolische Achse treibt
+        (129, 84, "normal"),
+        (130, 84, "high_normal"),
+        (129, 85, "high_normal"),
+        (139, 89, "high_normal"),
+        # Grad 1
+        (140, 89, "grade_1"),
+        (139, 90, "grade_1"),
+        (159, 99, "grade_1"),
+        # Grad 2
+        (160, 99, "grade_2"),
+        (159, 100, "grade_2"),
+        (179, 109, "grade_2"),
+        # Grad 3
+        (180, 90, "grade_3"),  # isoliert systolisch
+        (170, 110, "grade_3"),  # isoliert diastolisch
+        (200, 90, "grade_3"),  # isoliert systolisch, KEINE Krise
+        (170, 125, "grade_3"),  # diastolisch hoch, systolisch nicht >180
+        # Hypertensive Krise nur wenn BEIDE streng überschritten
+        (181, 121, "crisis"),
+        (250, 130, "crisis"),
+    ],
+)
+def test_bp_category_boundaries(sys: int, dia: int, expected: str) -> None:
+    """[REQ-HOM-001] WHO-Kategorie inkl. Grenzwerte und "höherer Wert zählt"."""
+    assert logic.bp_category(sys, dia) == expected
+
+
+def test_bp_category_higher_axis_wins():
+    """[REQ-HOM-001] Die höhere der beiden Achsen-Kategorien zählt."""
+    assert logic.bp_category(110, 95) == "grade_1"  # sys optimal, dia Grad 1
+    assert logic.bp_category(165, 70) == "grade_2"  # sys Grad 2, dia optimal
+    assert logic.bp_category(130, 88) == "high_normal"
+
+
+def test_bp_category_missing_values_return_none():
+    """[REQ-HOM-001] Fehlender Wert → None (Sensor: unknown)."""
+    assert logic.bp_category(None, 80) is None
+    assert logic.bp_category(120, None) is None
+    assert logic.bp_category(None, None) is None
+
+
+def test_bp_category_pulse_independent_of_classification():
+    """[REQ-HOM-001] Puls beeinflusst die Kategorie nicht."""
+    assert logic.bp_category(120, 80) == "normal"
+
+
+# --- Trend-Metriken (REQ-HOM-002) ---
+
+
+def _daily_drinks(now: datetime, days_back: int, ml: int) -> list[dict]:
+    """Drei Buchungen pro Tag für `days_back` volle Tage vor dem heutigen Start."""
+    out: list[dict] = []
+    start = logic.day_start(now)
+    for day in range(1, days_back + 1):
+        base = start - timedelta(days=day)
+        for hour in (8, 12, 18):
+            out.append(
+                {"ts": (base + timedelta(hours=hour)).isoformat(), "ml": ml // 3, "type": "Wasser"}
+            )
+    return out
+
+
+def test_drinks_trend_none_when_prev_week_average_zero():
+    """[REQ-HOM-002] Vorwochen-Ø = 0 ⇒ keine sinnvolle Prozentänderung → None."""
+    now = datetime(2026, 8, 8, 12, 0)
+    today = [{"ts": "2026-08-08T09:00:00", "ml": 500, "type": "Wasser"}]
+    assert logic.drinks_trend(today, now) is None
+    assert logic.drinks_trend([], now) is None
+
+
+def test_drinks_trend_positive_percent():
+    """[REQ-HOM-002] Heute über dem Vorwochen-Ø ⇒ positives Prozent."""
+    now = datetime(2026, 8, 8, 12, 0)
+    drinks = _daily_drinks(now, 7, 1200)  # Ø 1200 ml/Tag
+    drinks.append({"ts": "2026-08-08T09:00:00", "ml": 1800, "type": "Wasser"})
+    trend = logic.drinks_trend(drinks, now)
+    assert trend is not None
+    assert trend["percent"] == 50.0
+    assert trend["today_ml"] == 1800
+    assert trend["prev_week_avg_ml"] == 1200.0
+
+
+def test_drinks_trend_negative_percent():
+    """[REQ-HOM-002] Heute unter dem Vorwochen-Ø ⇒ negatives Prozent."""
+    now = datetime(2026, 8, 8, 12, 0)
+    drinks = _daily_drinks(now, 7, 900)  # Ø 900 ml/Tag (900/3 ganzzahlig)
+    drinks.append({"ts": "2026-08-08T09:00:00", "ml": 450, "type": "Wasser"})
+    trend = logic.drinks_trend(drinks, now)
+    assert trend is not None
+    assert trend["percent"] == -50.0
+    assert trend["today_ml"] == 450
+
+
+def test_drinks_trend_day_without_drinks_counts_as_zero():
+    """[REQ-HOM-002] Das Ø teilt immer durch 7 — Leertage zählen als 0."""
+    now = datetime(2026, 8, 8, 12, 0)
+    # nur 1 der 7 Vorwochentage hat 700 ml → Ø 100 ml/Tag
+    drinks = [{"ts": "2026-08-07T09:00:00", "ml": 700, "type": "Wasser"}]
+    drinks.append({"ts": "2026-08-08T09:00:00", "ml": 200, "type": "Wasser"})
+    trend = logic.drinks_trend(drinks, now)
+    assert trend is not None
+    assert trend["prev_week_avg_ml"] == 100.0
+    assert trend["percent"] == 100.0
+
+
+def test_drinks_trend_excludes_older_than_previous_week():
+    """[REQ-HOM-002] Buchungen älter als 7 Tage fließen nicht in den Ø ein."""
+    now = datetime(2026, 8, 8, 12, 0)
+    drinks = [{"ts": "2026-07-01T09:00:00", "ml": 9999, "type": "Wasser"}]
+    drinks.append({"ts": "2026-08-07T09:00:00", "ml": 700, "type": "Wasser"})
+    drinks.append({"ts": "2026-08-08T09:00:00", "ml": 700, "type": "Wasser"})
+    trend = logic.drinks_trend(drinks, now)
+    assert trend is not None
+    assert trend["prev_week_avg_ml"] == 100.0
+
+
+def test_drinks_trend_respects_daily_reset_hour():
+    """[REQ-HOM-002] Tagesgrenze via daily_reset_hour verschiebt das Fenster."""
+    now = datetime(2026, 8, 8, 8, 0)
+    drinks = [{"ts": "2026-08-08T05:00:00", "ml": 300, "type": "Kaffee"}]
+    trend6 = logic.drinks_trend(drinks, now, hour=6)
+    # hour=6: die 05:00-Buchung gehört noch zum Vortag → heute 0, Ø 300/7
+    # → -100.0 %.
+    assert trend6 is not None
+    assert trend6["today_ml"] == 0
+    assert trend6["percent"] == -100.0
+
+
+BP_TREND_READINGS = [
+    # Vorwoche: niedrige Werte
+    {"ts": "2026-08-01T08:00:00", "sys": 130, "dia": 80, "pulse": 70},
+    {"ts": "2026-08-02T08:00:00", "sys": 130, "dia": 80, "pulse": 70},
+    {"ts": "2026-08-03T08:00:00", "sys": 130, "dia": 80, "pulse": 70},
+    # letzte 7 Tage: höhere Werte
+    {"ts": "2026-08-10T08:00:00", "sys": 150, "dia": 90, "pulse": 70},
+    {"ts": "2026-08-11T08:00:00", "sys": 150, "dia": 90, "pulse": 70},
+    {"ts": "2026-08-12T08:00:00", "sys": 150, "dia": 90, "pulse": 70},
+]
+
+
+def test_bp_trend_requires_min_three_readings():
+    """[REQ-HOM-002] < 3 gültige Messungen ⇒ None (Sensor: unknown)."""
+    now = datetime(2026, 8, 13, 8, 0)
+    assert logic.bp_trend(BP_TREND_READINGS[:2], now) is None
+    assert logic.bp_trend([], now) is None
+    # Genau 3 Messungen (2 Vorwoche + 1 letzte Woche) reichen → Ergebnis.
+    three = [
+        {"ts": "2026-08-01T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-02T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-10T08:00:00", "sys": 150, "dia": 90},
+    ]
+    assert logic.bp_trend(three, now) is not None
+
+
+def test_bp_trend_rising():
+    """[REQ-HOM-002] Höheres 7-Tage-Mittel ⇒ rising mit sys/dia-Delta."""
+    now = datetime(2026, 8, 13, 8, 0)
+    trend = logic.bp_trend(BP_TREND_READINGS, now)
+    assert trend is not None
+    assert trend["direction"] == "rising"
+    assert trend["sys_delta"] == 20.0
+    assert trend["dia_delta"] == 10.0
+    assert trend["sys_avg_recent"] == 150.0
+    assert trend["sys_avg_previous"] == 130.0
+
+
+def test_bp_trend_falling():
+    """[REQ-HOM-002] Niedrigeres 7-Tage-Mittel ⇒ falling."""
+    now = datetime(2026, 8, 13, 8, 0)
+    flipped = [{**r, "sys": 270 - r["sys"], "dia": 170 - r["dia"]} for r in BP_TREND_READINGS]
+    trend = logic.bp_trend(flipped, now)
+    assert trend is not None
+    assert trend["direction"] == "falling"
+    assert trend["sys_delta"] == -20.0
+
+
+def test_bp_trend_stable_within_threshold():
+    """[REQ-HOM-002] |sys-Delta| < 2 mmHg ⇒ stable."""
+    now = datetime(2026, 8, 13, 8, 0)
+    readings = [
+        {"ts": "2026-08-01T08:00:00", "sys": 139, "dia": 82},
+        {"ts": "2026-08-02T08:00:00", "sys": 139, "dia": 82},
+        {"ts": "2026-08-10T08:00:00", "sys": 140, "dia": 82},
+        {"ts": "2026-08-11T08:00:00", "sys": 140, "dia": 82},
+    ]
+    trend = logic.bp_trend(readings, now)
+    assert trend is not None
+    assert trend["direction"] == "stable"
+    assert trend["sys_delta"] == 1.0
+
+
+def test_bp_trend_none_without_previous_week_data():
+    """[REQ-HOM-002] Ohne Messungen im Vorfenster kein Delta ⇒ None."""
+    now = datetime(2026, 8, 13, 8, 0)
+    recent_only = [r for r in BP_TREND_READINGS if r["ts"] >= "2026-08-10"]
+    assert logic.bp_trend(recent_only, now) is None
+
+
+def test_bp_trend_dia_delta_none_when_diastolic_missing():
+    """[REQ-HOM-002] Fehlende dia-Werte ⇒ dia_delta None, sys-Trend bleibt."""
+    now = datetime(2026, 8, 13, 8, 0)
+    readings = [
+        {"ts": "2026-08-01T08:00:00", "sys": 130, "dia": None},
+        {"ts": "2026-08-02T08:00:00", "sys": 130, "dia": None},
+        {"ts": "2026-08-10T08:00:00", "sys": 150, "dia": 90},
+        {"ts": "2026-08-11T08:00:00", "sys": 150, "dia": 90},
+        {"ts": "2026-08-12T08:00:00", "sys": 150, "dia": 90},
+    ]
+    trend = logic.bp_trend(readings, now)
+    assert trend is not None
+    assert trend["direction"] == "rising"
+    assert trend["dia_delta"] is None
+
+
+# --- Streak-Sensor (REQ-HOM-003) ---
+
+
+def _morning(day: datetime, ml: int, dtype: str = "Wasser") -> dict:
+    """Eine Morgen-Buchung am gegebenen Tag."""
+    return {"ts": (day.replace(hour=9, minute=0)).isoformat(), "ml": ml, "type": dtype}
+
+
+def test_goal_streak_empty_history_is_zero():
+    """[REQ-HOM-003] Leere Historie ⇒ 0/0."""
+    now = datetime(2026, 8, 22, 12, 0)
+    assert logic.goal_streak([], 2000, now) == {"current_streak": 0, "best_streak": 0}
+
+
+def test_goal_streak_counts_consecutive_goal_days():
+    """[REQ-HOM-003] Drei Tage in Folge mit erreichtem Ziel (heute erreicht)."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        _morning(datetime(2026, 8, 22), 1000),
+        _morning(datetime(2026, 8, 21), 1500),
+        _morning(datetime(2026, 8, 20), 1000),
+        _morning(datetime(2026, 8, 18), 2000),  # Lücke am 19.
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 3, "best_streak": 3}
+
+
+def test_goal_streak_today_not_reached_runs_to_yesterday():
+    """[REQ-HOM-003] Heute noch nicht erreicht ⇒ Serie endet gestern."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        _morning(datetime(2026, 8, 22), 500),  # 500 < 1000
+        _morning(datetime(2026, 8, 21), 1000),
+        _morning(datetime(2026, 8, 20), 1000),
+        _morning(datetime(2026, 8, 19), 1000),
+        _morning(datetime(2026, 8, 18), 400),
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 3, "best_streak": 3}
+
+
+def test_goal_streak_gap_breaks_series_and_best_can_exceed_current():
+    """[REQ-HOM-003] Lücke bricht die laufende Serie; best_streak > current."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        _morning(datetime(2026, 8, 22), 1000),  # 2er-Serie bis heute
+        _morning(datetime(2026, 8, 21), 1000),
+        _morning(datetime(2026, 8, 20), 100),  # Lücke
+        _morning(datetime(2026, 8, 19), 1000),  # 3er-Serie
+        _morning(datetime(2026, 8, 18), 1000),
+        _morning(datetime(2026, 8, 17), 1000),
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 2, "best_streak": 3}
+
+
+def test_goal_streak_exact_goal_counts_but_one_ml_less_does_not():
+    """[REQ-HOM-003] Ziel exakt erreicht zählt; 1 ml darunter bricht."""
+    now = datetime(2026, 8, 22, 12, 0)
+    reached = [_morning(datetime(2026, 8, 22), 1000)]
+    missed = [_morning(datetime(2026, 8, 22), 999)]
+    assert logic.goal_streak(reached, 1000, now) == {"current_streak": 1, "best_streak": 1}
+    assert logic.goal_streak(missed, 1000, now) == {"current_streak": 0, "best_streak": 0}
+
+
+def test_goal_streak_multiple_bookings_on_same_day_sum_up():
+    """[REQ-HOM-003] Mehrere Buchungen desselben Tages werden summiert."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 600, "type": "Wasser"},
+        {"ts": "2026-08-22T15:00:00", "ml": 400, "type": "Wasser"},
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 1, "best_streak": 1}
+
+
+def test_goal_streak_respects_daily_reset_hour():
+    """[REQ-HOM-003] Tagesgrenze via daily_reset_hour verschiebt die Tagesschlüssel."""
+    now = datetime(2026, 8, 22, 8, 0)
+    drinks = [
+        {"ts": "2026-08-22T05:00:00", "ml": 1000, "type": "Wasser"},  # vor 06:00
+        {"ts": "2026-08-22T07:00:00", "ml": 1000, "type": "Wasser"},  # nach 06:00
+    ]
+    # hour=6: 05:00 gehört zum 21., 07:00 zum 22. → zwei erreichte Tage
+    assert logic.goal_streak(drinks, 1000, now, hour=6) == {
+        "current_streak": 2,
+        "best_streak": 2,
+    }
+    # hour=0: beide am 22. → nur ein erreichtes Tag
+    assert logic.goal_streak(drinks, 1000, now, hour=0) == {
+        "current_streak": 1,
+        "best_streak": 1,
+    }
+
+
+def test_goal_streak_before_reset_boundary_belongs_to_previous_day():
+    """[REQ-HOM-003] Buchung kurz vor der Grenze zählt zum Vortag — Serie bleibt."""
+    now = datetime(2026, 8, 22, 8, 0)
+    drinks = [
+        {"ts": "2026-08-22T05:59:00", "ml": 1000, "type": "Wasser"},
+        {"ts": "2026-08-21T05:30:00", "ml": 1000, "type": "Wasser"},
+    ]
+    # hour=6: 22.05:59 → 21., 21.05:30 → 20. → Serie über 21.+20., heute (22.) offen
+    assert logic.goal_streak(drinks, 1000, now, hour=6) == {
+        "current_streak": 2,
+        "best_streak": 2,
+    }
+
+
+def test_goal_streak_non_positive_goal_is_zero():
+    """[REQ-HOM-003] Ziel <= 0 ist undefiniert ⇒ 0/0 (kein „immer erreicht")."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [_morning(datetime(2026, 8, 22), 1000)]
+    assert logic.goal_streak(drinks, 0, now) == {"current_streak": 0, "best_streak": 0}
+
+
+def test_goal_streak_skips_invalid_timestamps():
+    """[REQ-HOM-003] Ungültiger/fehlender ts bricht die Ableitung nicht ab."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        {"ts": "kaputt", "ml": 5000, "type": "Wasser"},
+        {"ml": 5000, "type": "Wasser"},
+        _morning(datetime(2026, 8, 22), 1000),
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 1, "best_streak": 1}
+
+
+# --- Koffein-Tagessensor (REQ-HOM-004) ---
+
+
+def test_caffeine_today_no_drinks_is_zero():
+    """[REQ-HOM-004] Keine Getränke ⇒ 0 mg, leerer Breakdown."""
+    now = datetime(2026, 8, 22, 12, 0)
+    assert logic.caffeine_today([], now) == {"total_mg": 0.0, "breakdown": {}}
+
+
+def test_caffeine_today_scales_with_ml():
+    """[REQ-HOM-004] mg skalieren linear mit der Menge (mg je 100 ml)."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [{"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"}]
+    result = logic.caffeine_today(drinks, now)
+    # 250 ml * 40 mg/100 ml = 100 mg
+    assert result["total_mg"] == 100.0
+    assert result["breakdown"] == {"Kaffee": 100.0}
+
+
+def test_caffeine_today_sums_multiple_types():
+    """[REQ-HOM-004] Mehrere Typen werden je Typ und in Summe erfasst."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        {"ts": "2026-08-22T08:00:00", "ml": 250, "type": "Kaffee"},  # 100 mg
+        {"ts": "2026-08-22T10:00:00", "ml": 40, "type": "Espresso"},  # 80 mg
+        {"ts": "2026-08-22T11:00:00", "ml": 330, "type": "Cola"},  # 33 mg
+    ]
+    result = logic.caffeine_today(drinks, now)
+    assert result["breakdown"] == {"Kaffee": 100.0, "Espresso": 80.0, "Cola": 33.0}
+    assert result["total_mg"] == 213.0
+
+
+def test_caffeine_today_unknown_and_eigen_types_are_zero():
+    """[REQ-HOM-004] Unbekannter Typ und „Eigen" ⇒ 0 mg, nicht im Breakdown."""
+    now = datetime(2026, 8, 22, 12, 0)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 500, "type": "Eigen"},
+        {"ts": "2026-08-22T10:00:00", "ml": 500, "type": "Unbekannt"},
+        {"ts": "2026-08-22T11:00:00", "ml": 300, "type": "Wasser"},  # koffeinfrei
+    ]
+    result = logic.caffeine_today(drinks, now)
+    assert result["total_mg"] == 0.0
+    assert result["breakdown"] == {}
+
+
+def test_caffeine_today_respects_daily_reset_hour_and_other_days():
+    """[REQ-HOM-004] Nur das heutige Fenster zählt; daily_reset_hour verschiebt es."""
+    now = datetime(2026, 8, 22, 8, 0)
+    drinks = [
+        {"ts": "2026-08-21T20:00:00", "ml": 250, "type": "Kaffee"},  # Vortag
+        {"ts": "2026-08-22T05:00:00", "ml": 250, "type": "Kaffee"},  # vor 06:00-Grenze
+        {"ts": "2026-08-22T07:00:00", "ml": 250, "type": "Kaffee"},  # heute
+    ]
+    # hour=6: nur die 07:00-Buchung liegt im heutigen Fenster → 100 mg
+    assert logic.caffeine_today(drinks, now, hour=6)["total_mg"] == 100.0
+    # hour=0: 05:00 + 07:00 gehören heute (Vortag 20:00 nicht) → 200 mg
+    assert logic.caffeine_today(drinks, now, hour=0)["total_mg"] == 200.0
+
+
+def test_caffeine_table_covers_every_canonical_lexicon_type():
+    """[REQ-HOM-004] Schätztabelle kennt jeden kanonischen DRINK_LEXICON-Typ."""
+    canonical = {canonical_name for canonical_name, _default_ml in const.DRINK_LEXICON.values()}
+    assert canonical <= set(const.CAFFEINE_MG_PER_100ML)

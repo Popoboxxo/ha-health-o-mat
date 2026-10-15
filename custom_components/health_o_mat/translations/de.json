@@ -85,6 +85,35 @@
       },
       "wellbeing_since": {
         "name": "Wohlbefinden zuletzt gemeldet"
+      },
+      "blood_pressure_category": {
+        "name": "Blutdruck-Kategorie",
+        "state": {
+          "optimal": "Optimal",
+          "normal": "Normal",
+          "high_normal": "Hoch-normal",
+          "grade_1": "Grad 1",
+          "grade_2": "Grad 2",
+          "grade_3": "Grad 3",
+          "crisis": "Hypertensive Krise"
+        }
+      },
+      "drinks_trend": {
+        "name": "Trink-Trend"
+      },
+      "bp_trend": {
+        "name": "Blutdruck-Trend",
+        "state": {
+          "rising": "Steigend",
+          "falling": "Fallend",
+          "stable": "Stabil"
+        }
+      },
+      "goal_streak": {
+        "name": "Ziel-Serie"
+      },
+      "caffeine_today": {
+        "name": "Koffein heute"
       }
     },
     "binary_sensor": {

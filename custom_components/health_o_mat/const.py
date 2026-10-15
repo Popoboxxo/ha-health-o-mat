@@ -77,6 +77,25 @@ DRINK_LEXICON: dict[str, tuple[str, int]] = {
     "milk": ("Milch", 200),
 }
 
+# Geschätzte Koffeinmenge je kanonischem Getränketyp in mg pro 100 ml
+# (REQ-HOM-004). GROBE SCHÄTZWERTE — keine medizinische Aussage: reale Werte
+# schwanken stark nach Sorte, Brühstärke, Zubereitung und Hersteller.
+# Schlüssel sind exakt die kanonischen Typen aus DRINK_LEXICON; unbekannte
+# Typen und der Label NO_TYPE_LABEL („Eigen") gelten als 0 mg.
+CAFFEINE_MG_PER_100ML: dict[str, float] = {
+    "Wasser": 0.0,
+    "Kaffee": 40.0,  # Filterkaffee, grob ~80-100 mg je 250-ml-Tasse
+    "Espresso": 200.0,  # ~80 mg je 40-ml-Shot
+    "Tee": 20.0,  # Schwarztee, grob ~50-60 mg je 300-ml-Tasse
+    "Saft": 0.0,
+    "Cola": 10.0,  # ~34 mg je 330-ml-Dose
+    "Limonade": 0.0,
+    "Bier": 0.0,
+    "Wein": 0.0,
+    "Sekt": 0.0,
+    "Milch": 0.0,
+}
+
 # Wohlbefinden „Wie geht es dir?": key, Anzeigename, Emoji, MDI-Icon
 WELLBEING_STATES: list[dict] = [
     {
