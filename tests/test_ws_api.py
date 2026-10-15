@@ -15,7 +15,7 @@ import sys
 import types
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import voluptuous as vol
@@ -79,15 +79,43 @@ class FakeHass:
 
 
 class FakeConnection:
-    def __init__(self) -> None:
+    def __init__(self, user_id: str | None = "user-1") -> None:
         self.results: list[tuple] = []
         self.errors: list[tuple] = []
+        self.events: list[tuple] = []
+        self.subscriptions: dict = {}
+        self.user = SimpleNamespace(id=user_id) if user_id else None
 
-    def send_result(self, msg_id, result) -> None:
+    def send_result(self, msg_id, result=None) -> None:
         self.results.append((msg_id, result))
 
     def send_error(self, msg_id, code, message) -> None:
         self.errors.append((msg_id, code, message))
+
+    def send_event(self, msg_id, event) -> None:
+        self.events.append((msg_id, event))
+
+
+class FakeCoordinator:
+    """Coordinator-Fake: Listener-Verwaltung wie `DataUpdateCoordinator`."""
+
+    def __init__(self) -> None:
+        self.listeners: list = []
+        self.updated: list = []
+
+    def async_add_listener(self, update_callback, context=None):
+        self.listeners.append(update_callback)
+
+        def _remove() -> None:
+            if update_callback in self.listeners:
+                self.listeners.remove(update_callback)
+
+        return _remove
+
+    def async_set_updated_data(self, data) -> None:
+        self.updated.append(data)
+        for listener in list(self.listeners):
+            listener()
 
 
 def _entry(
@@ -118,6 +146,33 @@ def _store(data: dict):
     store = MagicMock()
     store.all_entries.return_value = data
     return store
+
+
+def _write_store() -> MagicMock:
+    """Store-Fake mit async-Write-Methoden (Aufrufe + Rückgaben injizierbar)."""
+    store = MagicMock()
+    store.all_entries.return_value = {}
+    store.add_drink = AsyncMock()
+    store.add_reading = AsyncMock()
+    store.set_wellbeing = AsyncMock()
+    store.remove_last_drink = AsyncMock(return_value=True)
+    store.remove_last_reading = AsyncMock(return_value=True)
+    return store
+
+
+def _write_hass(store, entries: list, coordinators: dict | None = None) -> FakeHass:
+    """Fake-Hass mit Shared-Store + Runtime-Registry (je Entry ein Coordinator)."""
+    hass = FakeHass(entries)
+    registry: dict = {"shared": {"store": store}}
+    for entry in entries:
+        coordinator = (coordinators or {}).get(entry.entry_id, FakeCoordinator())
+        registry[entry.entry_id] = {
+            "coordinator": coordinator,
+            "store": store,
+            "data": MagicMock(),
+        }
+    hass.data[DOMAIN] = registry
+    return hass
 
 
 # --- Resolver (rein) --------------------------------------------------------
@@ -485,9 +540,21 @@ def test_panel_data_survives_broken_store(monkeypatch):
 
 # --- Registrierung ----------------------------------------------------------
 
+_ALL_COMMANDS = (
+    ws_api.COMMAND_LIST_PERSONS,
+    ws_api.COMMAND_PANEL_DATA,
+    ws_api.COMMAND_BOOK_DRINK,
+    ws_api.COMMAND_UNDO_LAST,
+    ws_api.COMMAND_SAVE_MEASUREMENT,
+    ws_api.COMMAND_SET_WELLBEING,
+    ws_api.COMMAND_SUBSCRIBE,
+    ws_api.COMMAND_GET_UI_SETTINGS,
+    ws_api.COMMAND_SET_UI_SETTINGS,
+)
+
 
 def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
-    """Zweimaliges Registrieren erzeugt keine Duplikate; Schema verlangt entry_id."""
+    """Zweimaliges Registrieren erzeugt keine Duplikate; Schemas sind strikt."""
     hass = FakeHass()
     calls: list[tuple] = []
 
@@ -499,45 +566,87 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
     asyncio.run(ws_api.async_register_ws_api(hass))
     asyncio.run(ws_api.async_register_ws_api(hass))
 
-    assert [command for command, _handler, _schema in calls] == [
-        ws_api.COMMAND_LIST_PERSONS,
-        ws_api.COMMAND_PANEL_DATA,
-    ]
+    assert [command for command, _handler, _schema in calls] == list(_ALL_COMMANDS)
     assert ws_api.shared_data(hass)[ws_api.WS_MARKER] is True
 
     # async_response wandelt die Coroutine in den (synchronen) WS-Handler
     for _command, handler, _schema in calls:
         assert not asyncio.iscoroutinefunction(handler)
 
-    panel_schema = calls[1][2]
+    schemas = {command: schema for command, _handler, schema in calls}
+
+    # panel_data: entry_id Pflicht
     with pytest.raises(vol.Invalid):
-        panel_schema({"id": 1, "type": ws_api.COMMAND_PANEL_DATA})
+        schemas[ws_api.COMMAND_PANEL_DATA]({"id": 1, "type": ws_api.COMMAND_PANEL_DATA})
     assert (
-        panel_schema({"id": 1, "type": ws_api.COMMAND_PANEL_DATA, "entry_id": "e1"})["entry_id"]
+        schemas[ws_api.COMMAND_PANEL_DATA](
+            {"id": 1, "type": ws_api.COMMAND_PANEL_DATA, "entry_id": "e1"}
+        )["entry_id"]
         == "e1"
     )
 
+    # book_drink: ml Pflicht und bereichsgeprüft
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_BOOK_DRINK](
+            {"id": 1, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1"}
+        )
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_BOOK_DRINK](
+            {"id": 1, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 0}
+        )
+    assert (
+        schemas[ws_api.COMMAND_BOOK_DRINK](
+            {"id": 1, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 250}
+        )["ml"]
+        == 250
+    )
+
+    # save_measurement: sys/dia Pflicht und bereichsgeprüft
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_SAVE_MEASUREMENT](
+            {"id": 1, "type": ws_api.COMMAND_SAVE_MEASUREMENT, "entry_id": "e1", "sys": 120}
+        )
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_SAVE_MEASUREMENT](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 10,
+            }
+        )
+
+    # set_wellbeing: key Pflicht
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_SET_WELLBEING](
+            {"id": 1, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1"}
+        )
+
+    # subscribe: entry_id optional (ohne → alle Personen)
+    assert schemas[ws_api.COMMAND_SUBSCRIBE]({"id": 1, "type": ws_api.COMMAND_SUBSCRIBE})["id"] == 1
+
+    # set_ui_settings: selected_person + prefs optional
+    assert schemas[ws_api.COMMAND_SET_UI_SETTINGS](
+        {"id": 1, "type": ws_api.COMMAND_SET_UI_SETTINGS, "prefs": {"compact": True}}
+    )["prefs"] == {"compact": True}
+
 
 def test_register_ws_api_uses_real_registration():
-    """Echte Registrierung (ohne Mock): Kommandos + Schemas landen in hass.data."""
+    """Echte Registrierung (ohne Mock): alle Kommandos + Schemas landen in hass.data."""
     hass = FakeHass()
 
     asyncio.run(ws_api.async_register_ws_api(hass))
 
     handlers = hass.data["websocket_api"]
-    assert set(handlers) == {ws_api.COMMAND_LIST_PERSONS, ws_api.COMMAND_PANEL_DATA}
+    assert set(handlers) == set(_ALL_COMMANDS)
 
-    done_handlers = [handler for handler, _schema in handlers.values()]
-    for handler in done_handlers:
+    for handler, _schema in handlers.values():
         assert not asyncio.iscoroutinefunction(handler)  # async_response → sync
 
-    _handler, panel_schema = handlers[ws_api.COMMAND_PANEL_DATA]
+    _handler, book_schema = handlers[ws_api.COMMAND_BOOK_DRINK]
     with pytest.raises(vol.Invalid):
-        panel_schema({"id": 3, "type": ws_api.COMMAND_PANEL_DATA})  # entry_id fehlt
-    assert (
-        panel_schema({"id": 3, "type": ws_api.COMMAND_PANEL_DATA, "entry_id": "e1"})["entry_id"]
-        == "e1"
-    )
+        book_schema({"id": 3, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1"})  # ml fehlt
 
 
 def test_list_persons_handler_sends_result(monkeypatch):
@@ -556,3 +665,613 @@ def test_list_persons_handler_sends_result(monkeypatch):
     assert connection.results == [
         (5, {"persons": [{"entry_id": "e1", "display_name": "Caro", "device_id": None}]})
     ]
+
+
+# --- Undo-Kind-Normalisierung (rein) ----------------------------------------
+
+
+def test_normalize_undo_kind_aliases():
+    """`drink`/`drinks` → Getränke, `blood_pressure` → BP, fehlend → Getränke."""
+    assert ws_api.normalize_undo_kind(None) == "drinks"
+    assert ws_api.normalize_undo_kind("") == "drinks"
+    assert ws_api.normalize_undo_kind("drink") == "drinks"
+    assert ws_api.normalize_undo_kind("DRINKS") == "drinks"
+    assert ws_api.normalize_undo_kind(" blood_pressure ") == "blood_pressure"
+    assert ws_api.normalize_undo_kind("tea") is None
+    assert ws_api.normalize_undo_kind(5) is None
+
+
+# --- book_drink -------------------------------------------------------------
+
+
+def _now(monkeypatch) -> None:
+    monkeypatch.setattr(ws_api.dt_util, "now", lambda: NOW)
+
+
+def test_book_drink_calls_store_and_refreshes(monkeypatch):
+    """book_drink bucht ml+Typ über `store.add_drink` und triggert den Refresh."""
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_BOOK_DRINK,
+                "entry_id": "e1",
+                "ml": 250,
+                "drink_type": "Kaffee",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [(1, None)]
+    store.add_drink.assert_awaited_once()
+    entry_id, ts, ml, drink_type, src = store.add_drink.await_args.args
+    assert (entry_id, ml, drink_type) == ("e1", 250, "Kaffee")
+    assert ts == NOW.isoformat()
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+def test_book_drink_defaults_drink_type_to_eigen(monkeypatch):
+    """Ohne `drink_type` wird der neutrale Standardtyp 'Eigen' gebucht."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 2, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 300},
+        )
+    )
+
+    assert store.add_drink.await_args.args[3] == "Eigen"
+
+
+@pytest.mark.parametrize("ml", [0, -5, 10001])
+def test_book_drink_invalid_ml_sends_error(monkeypatch, ml):
+    """ml außerhalb 1..10000 → `invalid_format`, kein Store-Schreibzugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 3, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": ml},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    store.add_drink.assert_not_called()
+
+
+def test_book_drink_unknown_entry_sends_error(monkeypatch):
+    """Unbekannte/nicht geladene entry_id → sauberer WS-Fehler (kein Crash)."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "nope", "ml": 250},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "not_found"
+    store.add_drink.assert_not_called()
+
+
+# --- undo_last --------------------------------------------------------------
+
+
+def test_undo_last_drinks_default(monkeypatch):
+    """Ohne kind entfernt undo_last das letzte Getränk."""
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 1, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1"},
+        )
+    )
+
+    assert connection.results == [(1, None)]
+    store.remove_last_drink.assert_awaited_once_with("e1")
+    store.remove_last_reading.assert_not_called()
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+def test_undo_last_drink_alias(monkeypatch):
+    """Der Alias `drink` (Singular) zielt ebenfalls auf Getränke."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 2, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "drink"},
+        )
+    )
+
+    store.remove_last_drink.assert_awaited_once_with("e1")
+    store.remove_last_reading.assert_not_called()
+
+
+def test_undo_last_blood_pressure(monkeypatch):
+    """kind='blood_pressure' entfernt die letzte Messung."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {
+                "id": 3,
+                "type": ws_api.COMMAND_UNDO_LAST,
+                "entry_id": "e1",
+                "kind": "blood_pressure",
+            },
+        )
+    )
+
+    store.remove_last_reading.assert_awaited_once_with("e1")
+    store.remove_last_drink.assert_not_called()
+
+
+def test_undo_last_empty_sends_error(monkeypatch):
+    """Leerer Bestand → `not_found`-Fehler statt stiller Erfolg."""
+    _now(monkeypatch)
+    store = _write_store()
+    store.remove_last_drink = AsyncMock(return_value=False)
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1"},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "not_found"
+
+
+def test_undo_last_unknown_kind_sends_error(monkeypatch):
+    """Unbekanntes kind → `invalid_format`, kein Store-Zugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 5, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "tea"},
+        )
+    )
+
+    assert connection.errors[0][1] == "invalid_format"
+    store.remove_last_drink.assert_not_called()
+    store.remove_last_reading.assert_not_called()
+
+
+# --- save_measurement -------------------------------------------------------
+
+
+def test_save_measurement_saves_and_refreshes(monkeypatch):
+    """Gültige Messung geht (inkl. pulse/note) an `store.add_reading`."""
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 130,
+                "dia": 85,
+                "pulse": 68,
+                "note": "morgens",
+            },
+        )
+    )
+
+    assert connection.results == [(1, None)]
+    entry_id, ts, sys_, dia, pulse, note, src = store.add_reading.await_args.args
+    assert (entry_id, sys_, dia, pulse, note) == ("e1", 130, 85, 68, "morgens")
+    assert ts == NOW.isoformat()
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+def test_save_measurement_pulse_optional(monkeypatch):
+    """Ohne pulse bleibt der Wert None (kein Coerce in die Store-Methode)."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+            },
+        )
+    )
+
+    assert store.add_reading.await_args.args[4] is None
+
+
+@pytest.mark.parametrize(
+    "sys_value,dia_value",
+    [(10, 80), (300, 80), (120, 10), (120, 999)],
+)
+def test_save_measurement_out_of_range_sends_error(monkeypatch, sys_value, dia_value):
+    """sys/dia außerhalb MIN_BP_VALUE..MAX_BP_VALUE → `invalid_format`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 3,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": sys_value,
+                "dia": dia_value,
+            },
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    store.add_reading.assert_not_called()
+
+
+def test_save_measurement_unknown_entry_sends_error(monkeypatch):
+    """Unbekannte entry_id → `not_found`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 4,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "nope",
+                "sys": 120,
+                "dia": 80,
+            },
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    store.add_reading.assert_not_called()
+
+
+# --- set_wellbeing ----------------------------------------------------------
+
+
+def test_set_wellbeing_valid_key(monkeypatch):
+    """Gültiger Wohlbefinden-Key wird mit Zeitstempel persistiert."""
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 1, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": "good"},
+        )
+    )
+
+    assert connection.results == [(1, None)]
+    store.set_wellbeing.assert_awaited_once_with("e1", "good", NOW.isoformat())
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+@pytest.mark.parametrize("key", ["bogus", "", None, 5])
+def test_set_wellbeing_invalid_key_sends_error(monkeypatch, key):
+    """Unbekannter/leerer Key → `invalid_format`, kein Schreibzugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 2, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": key},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    store.set_wellbeing.assert_not_called()
+
+
+# --- subscribe --------------------------------------------------------------
+
+
+def test_subscribe_registers_listener_and_pushes_refresh():
+    """Ein Coordinator-Refresh pusht `{type:refresh, entry_id}` an die Verbindung."""
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_subscribe(
+            hass,
+            connection,
+            {"id": 7, "type": ws_api.COMMAND_SUBSCRIBE, "entry_id": "e1"},
+        )
+    )
+
+    assert connection.results == [(7, None)]
+    assert len(coordinator.listeners) == 1
+    assert 7 in connection.subscriptions
+
+    ws_api.signal_refresh(hass, "e1")
+
+    assert connection.events == [(7, {"type": "refresh", "entry_id": "e1"})]
+
+
+def test_subscribe_unsubscribe_stops_events():
+    """Nach dem Unsubscribe kommen keine weiteren Events (Listener entfernt)."""
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_subscribe(
+            hass,
+            connection,
+            {"id": 8, "type": ws_api.COMMAND_SUBSCRIBE, "entry_id": "e1"},
+        )
+    )
+    ws_api.signal_refresh(hass, "e1")
+
+    connection.subscriptions[8]()
+
+    assert coordinator.listeners == []
+    ws_api.signal_refresh(hass, "e1")
+    assert len(connection.events) == 1  # nur das Event vor dem Unsubscribe
+
+
+def test_subscribe_without_entry_listens_all_persons():
+    """Ohne entry_id werden ALLE geladenen Personen abonniert."""
+    store = _write_store()
+    c1, c2 = FakeCoordinator(), FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1"), _entry("e2")], {"e1": c1, "e2": c2})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_subscribe(hass, connection, {"id": 9, "type": ws_api.COMMAND_SUBSCRIBE})
+    )
+
+    assert len(c1.listeners) == 1
+    assert len(c2.listeners) == 1
+
+    ws_api.signal_refresh(hass, "e2")
+    assert connection.events == [(9, {"type": "refresh", "entry_id": "e2"})]
+
+    connection.subscriptions[9]()
+    assert c1.listeners == [] and c2.listeners == []
+
+
+def test_subscribe_unknown_entry_sends_error():
+    """Unbekannte entry_id → `not_found`, keine Subscription registriert."""
+    hass = _write_hass(_write_store(), [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_subscribe(
+            hass,
+            connection,
+            {"id": 10, "type": ws_api.COMMAND_SUBSCRIBE, "entry_id": "nope"},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "not_found"
+    assert connection.subscriptions == {}
+
+
+# --- UI-Einstellungen -------------------------------------------------------
+
+
+class FakeUiStore:
+    """Minimaler In-Memory-Ersatz für `HealthOMatUiStore` (pro User)."""
+
+    instances: list = []
+
+    def __init__(self, hass) -> None:
+        self.users: dict = {}
+        self.loads = 0
+        FakeUiStore.instances.append(self)
+
+    async def async_load(self) -> None:
+        self.loads += 1
+
+    def get(self, user_id):
+        return dict(self.users.get(user_id) or {"selected_person": None, "prefs": {}})
+
+    async def async_set(self, user_id, **updates):
+        current = dict(self.users.get(user_id) or {"selected_person": None, "prefs": {}})
+        for key, value in updates.items():
+            if key == "prefs" and isinstance(value, dict):
+                current["prefs"] = {**current.get("prefs", {}), **value}
+            else:
+                current[key] = value
+        self.users[user_id] = current
+        return dict(current)
+
+
+def test_ui_settings_roundtrip_per_user(monkeypatch):
+    """get/set_ui_settings persistieren je HA-Nutzer; Lazy-Init ist idempotent."""
+    FakeUiStore.instances = []
+    monkeypatch.setattr(ws_api, "HealthOMatUiStore", FakeUiStore)
+    hass = FakeHass()
+    connection = FakeConnection(user_id="user-42")
+
+    asyncio.run(
+        ws_api.websocket_get_ui_settings(
+            hass, connection, {"id": 1, "type": ws_api.COMMAND_GET_UI_SETTINGS}
+        )
+    )
+    assert connection.results[0][1] == {"selected_person": None, "prefs": {}}
+
+    asyncio.run(
+        ws_api.websocket_set_ui_settings(
+            hass,
+            connection,
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_SET_UI_SETTINGS,
+                "selected_person": "e1",
+                "prefs": {"compact": True},
+            },
+        )
+    )
+    assert connection.results[1][1] == {"selected_person": "e1", "prefs": {"compact": True}}
+
+    asyncio.run(
+        ws_api.websocket_get_ui_settings(
+            hass, connection, {"id": 3, "type": ws_api.COMMAND_GET_UI_SETTINGS}
+        )
+    )
+    assert connection.results[2][1] == {"selected_person": "e1", "prefs": {"compact": True}}
+
+    # Lazy-Init: genau EINE Instanz, genau EIN Load über drei Aufrufe.
+    assert len(FakeUiStore.instances) == 1
+    assert FakeUiStore.instances[0].loads == 1
+
+
+def test_ui_settings_isolated_between_users(monkeypatch):
+    """Settings sind je HA-Nutzer getrennt (kein Überschreiben)."""
+    FakeUiStore.instances = []
+    monkeypatch.setattr(ws_api, "HealthOMatUiStore", FakeUiStore)
+    hass = FakeHass()
+    user_a = FakeConnection(user_id="user-a")
+    user_b = FakeConnection(user_id="user-b")
+
+    asyncio.run(
+        ws_api.websocket_set_ui_settings(
+            hass,
+            user_a,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_SET_UI_SETTINGS,
+                "selected_person": "e1",
+            },
+        )
+    )
+    asyncio.run(
+        ws_api.websocket_get_ui_settings(
+            hass, user_b, {"id": 2, "type": ws_api.COMMAND_GET_UI_SETTINGS}
+        )
+    )
+
+    assert user_a.results[0][1]["selected_person"] == "e1"
+    assert user_b.results[0][1] == {"selected_person": None, "prefs": {}}
+
+
+def test_set_ui_settings_prefs_merge(monkeypatch):
+    """`prefs` werden flach gemergt (bestehende Schlüssel bleiben)."""
+    FakeUiStore.instances = []
+    monkeypatch.setattr(ws_api, "HealthOMatUiStore", FakeUiStore)
+    hass = FakeHass()
+    connection = FakeConnection(user_id="user-1")
+
+    asyncio.run(
+        ws_api.websocket_set_ui_settings(
+            hass,
+            connection,
+            {"id": 1, "type": ws_api.COMMAND_SET_UI_SETTINGS, "prefs": {"compact": True}},
+        )
+    )
+    asyncio.run(
+        ws_api.websocket_set_ui_settings(
+            hass,
+            connection,
+            {"id": 2, "type": ws_api.COMMAND_SET_UI_SETTINGS, "prefs": {"theme": "dark"}},
+        )
+    )
+
+    assert connection.results[1][1]["prefs"] == {"compact": True, "theme": "dark"}
+
+
+def test_set_ui_settings_without_user_sends_error(monkeypatch):
+    """Ohne angemeldeten Benutzer → `unauthorized`, nichts persistiert."""
+    FakeUiStore.instances = []
+    monkeypatch.setattr(ws_api, "HealthOMatUiStore", FakeUiStore)
+    hass = FakeHass()
+    connection = FakeConnection(user_id=None)
+
+    asyncio.run(
+        ws_api.websocket_set_ui_settings(
+            hass,
+            connection,
+            {"id": 5, "type": ws_api.COMMAND_SET_UI_SETTINGS, "selected_person": "e1"},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    assert FakeUiStore.instances == []  # gar nicht erst initialisiert
