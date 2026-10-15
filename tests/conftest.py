@@ -14,6 +14,8 @@ import sys
 import types
 from unittest.mock import MagicMock
 
+import voluptuous as vol
+
 # Attempt real import first (for testing with actual HA installation)
 try:
     import homeassistant  # noqa: F401
@@ -192,6 +194,45 @@ if not _USING_REAL_HA:
             setattr(mod, attr_name, value)
         return mod
 
+    # --- Frontend / HTTP / Lovelace / WebSocket shims (wave 3) -------------
+    # These modules are the handful that MUST behave for real rather than as
+    # a bare MagicMock: the tests assert on what they write into `hass.data`
+    # (static path list, extra-JS URL set, Lovelace resources, WS handlers),
+    # so a swallowing Mock would make every such assertion vacuous.
+    DATA_EXTRA_MODULE_URL = "frontend_extra_module_url"
+    LOVELACE_DATA = "lovelace"
+    WS_API_DATA = "websocket_api"
+
+    def add_extra_js_url(hass, url: str) -> None:
+        hass.data.setdefault(DATA_EXTRA_MODULE_URL, set()).add(url)
+
+    def remove_extra_js_url(hass, url: str) -> None:
+        hass.data.setdefault(DATA_EXTRA_MODULE_URL, set()).discard(url)
+
+    class StaticPathConfig:
+        """Minimal stand-in for homeassistant.components.http.StaticPathConfig."""
+
+        def __init__(self, url_path: str, path: str, cache_headers: bool = True) -> None:
+            self.url_path = url_path
+            self.path = path
+            self.cache_headers = cache_headers
+
+    def websocket_async_register_command(hass, command, handler, schema) -> None:
+        hass.data.setdefault(WS_API_DATA, {})[command] = (handler, schema)
+
+    def websocket_async_response(func):
+        """Wrap a coroutine handler in the sync callable the WS dispatcher expects."""
+
+        def _async_response(*args, **kwargs):
+            coro = func(*args, **kwargs)
+            hass = args[0] if args else None
+            if hasattr(hass, "async_create_task"):
+                hass.async_create_task(coro)
+            else:  # no running loop in the test fakes — drop it without a warning
+                coro.close()
+
+        return _async_response
+
     _FAKE_MODULES: dict[str, types.ModuleType] = {
         "homeassistant": _module("homeassistant"),
         "homeassistant.core": _module(
@@ -243,6 +284,30 @@ if not _USING_REAL_HA:
             "homeassistant.components.text",
             TextEntity=TextEntity,
         ),
+        "homeassistant.components.frontend": _module(
+            "homeassistant.components.frontend",
+            DATA_EXTRA_MODULE_URL=DATA_EXTRA_MODULE_URL,
+            add_extra_js_url=add_extra_js_url,
+            remove_extra_js_url=remove_extra_js_url,
+        ),
+        "homeassistant.components.http": _module(
+            "homeassistant.components.http",
+            StaticPathConfig=StaticPathConfig,
+        ),
+        "homeassistant.components.lovelace": _module("homeassistant.components.lovelace"),
+        "homeassistant.components.lovelace.const": _module(
+            "homeassistant.components.lovelace.const",
+            LOVELACE_DATA=LOVELACE_DATA,
+        ),
+        "homeassistant.components.websocket_api": _module(
+            "homeassistant.components.websocket_api",
+            ERR_NOT_FOUND="not_found",
+            BASE_COMMAND_MESSAGE_SCHEMA=vol.Schema(
+                {vol.Required("id"): int, vol.Required("type"): str}
+            ),
+            async_register_command=websocket_async_register_command,
+            async_response=websocket_async_response,
+        ),
         "homeassistant.helpers": _module("homeassistant.helpers"),
         "homeassistant.helpers.typing": _module(
             "homeassistant.helpers.typing",
@@ -251,6 +316,13 @@ if not _USING_REAL_HA:
         "homeassistant.helpers.device_registry": _module(
             "homeassistant.helpers.device_registry",
             DeviceInfo=MagicMock(),
+            async_get=MagicMock(),
+            async_entries_for_config_entry=MagicMock(),
+        ),
+        "homeassistant.helpers.entity_registry": _module(
+            "homeassistant.helpers.entity_registry",
+            async_get=MagicMock(),
+            async_entries_for_config_entry=MagicMock(),
         ),
         "homeassistant.helpers.entity": _module(
             "homeassistant.helpers.entity",
@@ -276,3 +348,16 @@ if not _USING_REAL_HA:
 
     for _mod_name, _mod_obj in _FAKE_MODULES.items():
         sys.modules.setdefault(_mod_name, _mod_obj)
+
+    # Pre-loading a module in sys.modules skips the import machinery's usual
+    # parent wiring, so `from homeassistant.components import websocket_api`
+    # and `from homeassistant.helpers import device_registry` would fail with
+    # AttributeError. Give every package-like fake a `__path__` and register
+    # each child as an attribute of its parent module to make those forms work.
+    _PACKAGE_NAMES = {name.rpartition(".")[0] for name in _FAKE_MODULES if "." in name}
+    for _mod_name, _mod_obj in _FAKE_MODULES.items():
+        if _mod_name in _PACKAGE_NAMES and not hasattr(_mod_obj, "__path__"):
+            _mod_obj.__path__ = []
+        _parent_name, _, _child = _mod_name.rpartition(".")
+        if _child and _parent_name in _FAKE_MODULES:
+            setattr(_FAKE_MODULES[_parent_name], _child, _mod_obj)
