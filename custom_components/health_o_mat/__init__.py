@@ -167,6 +167,24 @@ async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -
     signal_refresh(hass, entry.entry_id)
 
 
+def _mirror_bp_thresholds(rt, opts: dict) -> None:
+    """BP-Schwellen aus entry.options in den Runtime-Spiegel übernehmen.
+
+    entry.options ist die Quelle der Wahrheit; rt.sys_threshold/rt.dia_threshold
+    sind nur Lese-Spiegel für binary_sensor.py (BP-Warnung). Nur ein gesetzter,
+    gültiger Zahlenwert überschreibt den Default — fehlende ('None'/leer) oder
+    unbrauchbare (nicht-numerische) Werte lassen den Runtime-Spiegel unverändert.
+    """
+    for key in ("sys_threshold", "dia_threshold"):
+        value = opts.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            setattr(rt, key, int(value))
+        except (TypeError, ValueError):
+            continue
+
+
 def _apply_options(hass: HomeAssistant, entry) -> None:
     """Options-Werte zur Laufzeit übernehmen.
 
@@ -180,6 +198,7 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     opts = entry.options or {}
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
+    _mirror_bp_thresholds(rt, opts)
     if opts.get("set_lifetime_ml") is not None:
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         current = store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0)
@@ -199,6 +218,7 @@ async def _options_updated(hass, entry) -> None:
     opts = entry.options or {}
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
+    _mirror_bp_thresholds(rt, opts)
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
 
     # Anzeige-Name geändert → Store synchron halten + Entities neu laden
