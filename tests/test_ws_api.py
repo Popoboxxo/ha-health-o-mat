@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import voluptuous as vol
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -59,8 +60,18 @@ class RegEntry:
 
 
 class FakeConfigEntries:
+    """Config-Entries-Fake inkl. `async_update_entry`-Spur.
+
+    `async_update_entry` protokolliert VOR dem Setzen die alten Options
+    (`before`) — so lässt sich belegen, dass das Kommando nicht direkt in
+    `entry.options` schreibt. Danach werden die registrierten
+    update-Listener aufgerufen, genau wie HA es beim echten Pfad tut
+    (`entry.add_update_listener` → `_options_updated`).
+    """
+
     def __init__(self, entries: list) -> None:
         self.entries = list(entries)
+        self.updates: list[dict] = []
 
     def async_entries(self, domain: str) -> list:
         return list(self.entries)
@@ -71,6 +82,14 @@ class FakeConfigEntries:
                 return entry
         return None
 
+    def async_update_entry(self, entry, **kwargs) -> bool:
+        self.updates.append({"entry_id": entry.entry_id, "before": dict(entry.options), **kwargs})
+        for key, value in kwargs.items():
+            setattr(entry, key, value)
+        for listener in list(getattr(entry, "_update_listeners", [])):
+            listener(entry)
+        return True
+
 
 class FakeHass:
     def __init__(self, entries: list | None = None) -> None:
@@ -79,12 +98,12 @@ class FakeHass:
 
 
 class FakeConnection:
-    def __init__(self, user_id: str | None = "user-1") -> None:
+    def __init__(self, user_id: str | None = "user-1", is_admin: bool = False) -> None:
         self.results: list[tuple] = []
         self.errors: list[tuple] = []
         self.events: list[tuple] = []
         self.subscriptions: dict = {}
-        self.user = SimpleNamespace(id=user_id) if user_id else None
+        self.user = SimpleNamespace(id=user_id, is_admin=is_admin) if user_id else None
 
     def send_result(self, msg_id, result=None) -> None:
         self.results.append((msg_id, result))
@@ -130,7 +149,7 @@ def _entry(
     opts = dict(options or {})
     if display is not None:
         opts["person_display"] = display
-    return SimpleNamespace(
+    entry = SimpleNamespace(
         entry_id=entry_id,
         data={"person": person},
         options=opts,
@@ -140,6 +159,13 @@ def _entry(
             dia_threshold=dia_threshold,
         ),
     )
+    # update-Listener-Verwaltung wie beim echten ConfigEntry (nur für den
+    # Options-Pfad genutzt: `entry.add_update_listener(_options_updated)`).
+    entry._update_listeners = []
+    entry.add_update_listener = lambda listener: (
+        entry._update_listeners.append(listener) or (lambda: None)
+    )
+    return entry
 
 
 def _store(data: dict):
@@ -550,6 +576,9 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_SUBSCRIBE,
     ws_api.COMMAND_GET_UI_SETTINGS,
     ws_api.COMMAND_SET_UI_SETTINGS,
+    ws_api.COMMAND_GET_SETTINGS,
+    ws_api.COMMAND_SET_SETTINGS,
+    ws_api.COMMAND_EXPORT_CSV,
 )
 
 
@@ -631,6 +660,43 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
         {"id": 1, "type": ws_api.COMMAND_SET_UI_SETTINGS, "prefs": {"compact": True}}
     )["prefs"] == {"compact": True}
 
+    # get_settings: entry_id Pflicht
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_GET_SETTINGS]({"id": 1, "type": ws_api.COMMAND_GET_SETTINGS})
+
+    # set_settings: entry_id Pflicht, Settings-Felder durchgereicht (Wertprüfung
+    # übernimmt parse_settings_message), unbekannte Felder hart abgewiesen.
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_SET_SETTINGS]({"id": 1, "type": ws_api.COMMAND_SET_SETTINGS})
+    parsed = schemas[ws_api.COMMAND_SET_SETTINGS](
+        {
+            "id": 1,
+            "type": ws_api.COMMAND_SET_SETTINGS,
+            "entry_id": "e1",
+            "daily_goal_ml": 2500,
+            "quick_drinks": [{"key": "a", "label": "A", "ml": 200, "icon": "mdi:cup-water"}],
+        }
+    )
+    assert parsed["daily_goal_ml"] == 2500
+    assert parsed["quick_drinks"][0]["ml"] == 200
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_SET_SETTINGS](
+            {"id": 1, "type": ws_api.COMMAND_SET_SETTINGS, "entry_id": "e1", "bogus": 1}
+        )
+
+    # export_csv: entry_id/dataset optional, unbekannte Felder abgewiesen
+    assert (
+        schemas[ws_api.COMMAND_EXPORT_CSV](
+            {"id": 1, "type": ws_api.COMMAND_EXPORT_CSV, "entry_id": "e1", "dataset": "drinks"}
+        )["dataset"]
+        == "drinks"
+    )
+    assert (
+        schemas[ws_api.COMMAND_EXPORT_CSV]({"id": 1, "type": ws_api.COMMAND_EXPORT_CSV})["id"] == 1
+    )
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_EXPORT_CSV]({"id": 1, "type": ws_api.COMMAND_EXPORT_CSV, "bogus": 1})
+
 
 def test_register_ws_api_uses_real_registration():
     """Echte Registrierung (ohne Mock): alle Kommandos + Schemas landen in hass.data."""
@@ -647,6 +713,36 @@ def test_register_ws_api_uses_real_registration():
     _handler, book_schema = handlers[ws_api.COMMAND_BOOK_DRINK]
     with pytest.raises(vol.Invalid):
         book_schema({"id": 3, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1"})  # ml fehlt
+
+
+def test_register_ws_api_guards_exactly_the_admin_commands(monkeypatch):
+    """Der Admin-Guard wird NUR auf die admin-only Kommandos angewendet."""
+    hass = FakeHass()
+    calls: list[tuple] = []
+    guarded: list = []
+
+    class _Guarded:
+        """Marker: `_admin_guard` wurde für diesen Handler aufgerufen."""
+
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+    def _spy_register(hass, command, handler, schema):
+        calls.append((command, isinstance(handler, _Guarded)))
+
+    def _spy_guard(handler):
+        guarded.append(handler)
+        return _Guarded(handler)
+
+    monkeypatch.setattr(ws_api.websocket_api, "async_register_command", _spy_register)
+    monkeypatch.setattr(ws_api, "_admin_guard", _spy_guard)
+
+    asyncio.run(ws_api.async_register_ws_api(hass))
+
+    assert len(calls) == len(_ALL_COMMANDS)
+    assert len(guarded) == len(ws_api.ADMIN_ONLY_COMMANDS)
+    for command, is_guarded in calls:
+        assert is_guarded is (command in ws_api.ADMIN_ONLY_COMMANDS)
 
 
 def test_list_persons_handler_sends_result(monkeypatch):
@@ -1275,3 +1371,714 @@ def test_set_ui_settings_without_user_sends_error(monkeypatch):
     assert connection.results == []
     assert connection.errors[0][1] == "unauthorized"
     assert FakeUiStore.instances == []  # gar nicht erst initialisiert
+
+
+# --- Admin/Settings + Export (L3) -------------------------------------------
+# Schreibrechte: Settings/Export admin-only, Alltag (book_drink & Co.) für alle.
+
+SETTINGS_DEFAULTS = {
+    "daily_goal_ml": 2000,
+    "daily_reset_hour": 0,
+    "person_display": "Caro",
+    "sys_threshold": 140,
+    "dia_threshold": 90,
+    "retention_months": 0,
+    "enable_sidebar_panel": False,
+}
+
+
+def _settings_hass(entry) -> FakeHass:
+    """Fake-Hass mit geladenem Entry, Shared-Store und Service-Aufruf-Spy."""
+    hass = _write_hass(_write_store(), [entry])
+    hass.services = SimpleNamespace(async_call=AsyncMock())
+    return hass
+
+
+def _settings_msg(command: str, msg_id: int = 1, **extra) -> dict:
+    return {"id": msg_id, "type": command, **extra}
+
+
+def _admin_connection() -> FakeConnection:
+    return FakeConnection(is_admin=True)
+
+
+# --- get_settings -----------------------------------------------------------
+
+
+def test_get_settings_returns_options_in_options_flow_shape():
+    """`get_settings` liefert exakt die Options (inkl. Textform des Lexikons)."""
+    entry = _entry(
+        "e1",
+        options={
+            "daily_goal_ml": 2500,
+            "daily_reset_hour": 5,
+            "person_display": "Caro (Privat)",
+            "quick_drinks": [
+                {
+                    "key": "glas_wasser",
+                    "label": "Glas Wasser",
+                    "ml": 200,
+                    "icon": "mdi:glass-water",
+                }
+            ],
+            # JSON-Roundtrip der Options: Lexikon-Werte kommen als Listen zurück.
+            "drink_lexicon": {"wasser": ["Wasser", 250], "kaffee": ["Kaffee", 250]},
+            "sys_threshold": 135,
+            "dia_threshold": 85,
+            "retention_months": 6,
+            "enable_sidebar_panel": True,
+        },
+    )
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_get_settings(
+            hass, connection, _settings_msg(ws_api.COMMAND_GET_SETTINGS, entry_id="e1")
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [
+        (
+            1,
+            {
+                "daily_goal_ml": 2500,
+                "daily_reset_hour": 5,
+                "person_display": "Caro (Privat)",
+                "quick_drinks": [
+                    {
+                        "key": "glas_wasser",
+                        "label": "Glas Wasser",
+                        "ml": 200,
+                        "icon": "mdi:glass-water",
+                    }
+                ],
+                "drink_lexicon": "wasser=Wasser,250\nkaffee=Kaffee,250",
+                "sys_threshold": 135,
+                "dia_threshold": 85,
+                "retention_months": 6,
+                "enable_sidebar_panel": True,
+            },
+        )
+    ]
+
+
+def test_get_settings_defaults_when_options_empty():
+    """Leere Options → Options-Flow-Defaults (Ziel aus Runtime-Spiegel)."""
+    entry = _entry("e1", person="Caro")
+
+    result = ws_api.build_settings(entry)
+
+    assert {key: result[key] for key in SETTINGS_DEFAULTS} == SETTINGS_DEFAULTS
+    assert [qd["key"] for qd in result["quick_drinks"]] == [
+        qd["key"] for qd in ws_api.DEFAULT_QUICK_DRINKS
+    ]
+    assert result["drink_lexicon"].startswith("wasser=Wasser,250")
+    assert result["drink_lexicon"] == ws_api.format_lexicon_text(ws_api.DRINK_LEXICON)
+
+
+def test_get_settings_empty_quick_drinks_option_falls_back_to_default():
+    """Eine leere quick_drinks-Option fällt auf das Standard-Set zurück."""
+    entry = _entry("e1", options={"quick_drinks": []})
+
+    assert len(ws_api.build_settings(entry)["quick_drinks"]) == len(ws_api.DEFAULT_QUICK_DRINKS)
+
+
+def test_get_settings_uses_runtime_mirror_for_untouched_options():
+    """Nie gesetzte Option → Runtime-Spiegel (kein hartkodierter Default)."""
+    entry = _entry("e1", goal=2800, sys_threshold=125, dia_threshold=75)
+
+    result = ws_api.build_settings(entry)
+
+    assert result["daily_goal_ml"] == 2800
+    assert result["sys_threshold"] == 125
+    assert result["dia_threshold"] == 75
+
+
+def test_get_settings_unknown_entry_sends_error():
+    """Unbekannte/nicht geladene entry_id → `not_found`."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_get_settings(
+            hass, connection, _settings_msg(ws_api.COMMAND_GET_SETTINGS, entry_id="nope")
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "not_found"
+
+
+@pytest.mark.parametrize("user_id", [None, "user-1"])
+def test_get_settings_requires_admin(user_id):
+    """Ohne Admin-Recht (oder ohne User) → `unauthorized`, kein Ergebnis."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = FakeConnection(user_id=user_id, is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_get_settings(
+            hass, connection, _settings_msg(ws_api.COMMAND_GET_SETTINGS, entry_id="e1")
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+
+
+# --- set_settings -----------------------------------------------------------
+
+
+def test_set_settings_persists_via_async_update_entry_and_fires_listener():
+    """Schreibt NUR über `async_update_entry` (Options-Listener-Pfad)."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000, "retention_months": 3})
+    hass = _settings_hass(entry)
+    listener = MagicMock()
+    entry.add_update_listener(listener)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                daily_goal_ml=3000,
+                daily_reset_hour=4,
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    # Genau EIN Schreibzugriff — über genau den Listener-Pfad.
+    assert len(hass.config_entries.updates) == 1
+    record = hass.config_entries.updates[0]
+    assert record["entry_id"] == "e1"
+    # Kein Direktschreiben vor dem Aufruf: die alten Options waren noch unverändert.
+    assert record["before"] == {"daily_goal_ml": 2000, "retention_months": 3}
+    # Merge: nur die übergebenen Felder ändern sich, der Rest bleibt erhalten.
+    assert record["options"] == {
+        "daily_goal_ml": 3000,
+        "daily_reset_hour": 4,
+        "retention_months": 3,
+    }
+    assert entry.options == record["options"]
+    listener.assert_called_once_with(entry)
+
+    # Antwort = neue Settings (gleiches Format wie get_settings).
+    result = connection.results[0][1]
+    assert result["daily_goal_ml"] == 3000
+    assert result["daily_reset_hour"] == 4
+    assert result["retention_months"] == 3
+    assert set(result) == set(SETTINGS_DEFAULTS) | {"quick_drinks", "drink_lexicon"}
+
+
+def test_set_settings_persists_canonical_quick_drinks():
+    """Quick-Drinks werden in der Options-Flow-Repräsentation persistiert."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                quick_drinks=[
+                    {"key": "slot_0", "label": "Glas Wasser", "ml": 200},
+                    {"key": "slot_1", "label": "Kaffee", "ml": 250, "icon": "mdi:coffee"},
+                ],
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]["quick_drinks"]
+    # Fehlendes icon bekommt den Standard; Reihenfolge bleibt erhalten.
+    assert stored == [
+        {"key": "slot_0", "label": "Glas Wasser", "ml": 200, "icon": "mdi:cup-water"},
+        {"key": "slot_1", "label": "Kaffee", "ml": 250, "icon": "mdi:coffee"},
+    ]
+
+
+def test_set_settings_persists_person_display_and_panel_toggle():
+    """person_display und enable_sidebar_panel landen (typkorrekt) in den Options."""
+    entry = _entry("e1", person="caro")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                person_display="Caro",
+                enable_sidebar_panel=True,
+            ),
+        )
+    )
+
+    stored = hass.config_entries.updates[0]["options"]
+    assert stored["person_display"] == "Caro"
+    assert stored["enable_sidebar_panel"] is True
+    assert connection.results[0][1]["person_display"] == "Caro"
+    assert connection.results[0][1]["enable_sidebar_panel"] is True
+
+
+def test_set_settings_retention_zero_disables_archiving():
+    """retention_months=0 schaltet das Archiv ab (nicht „nicht gesetzt")."""
+    entry = _entry("e1", options={"retention_months": 12})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", retention_months=0),
+        )
+    )
+
+    assert hass.config_entries.updates[0]["options"]["retention_months"] == 0
+    assert connection.results[0][1]["retention_months"] == 0
+
+
+def test_set_settings_lexicon_parsed_like_the_options_flow():
+    """Lexikon-Text → exakt die Dict-Repräsentation des Options-Flows."""
+    text = "# Kommentar\nWasser=Wasser,500\nKaffee=Kaffee,250\n"
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", drink_lexicon=text),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]["drink_lexicon"]
+    expected = ws_api.parser.parse_lexicon_text(text)
+    assert expected == {"wasser": ("Wasser", 500), "kaffee": ("Kaffee", 250)}
+    assert stored == expected
+    # Antwort enthält wieder die Textform (Hin- und Rückweg sind stabil).
+    assert connection.results[0][1]["drink_lexicon"] == "wasser=Wasser,500\nkaffee=Kaffee,250"
+
+
+@pytest.mark.parametrize(
+    "text,line",
+    [
+        ("wasser=Wasser,250\nkaputt\nkaffee=Kaffee,250", 2),
+        ("wasser=Wasser,250\nkaffee=Kaffee\n", 2),
+        ("wasser=Wasser,250\nkaffee=Kaffee,0\n", 2),
+        ("wasser=Wasser,250\n=Kaffee,250\n", 2),
+    ],
+)
+def test_set_settings_invalid_lexicon_line_reports_line_number(text, line):
+    """Ungültige Lexikon-Zeile → `invalid_format` MIT Zeilenangabe, kein Write."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", drink_lexicon=text),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    message = connection.errors[0][2]
+    assert "Getränke-Lexikon" in message
+    assert f"Zeile {line}" in message
+    assert hass.config_entries.updates == []  # nichts persistiert
+
+
+def test_set_settings_lexicon_wrong_type_sends_error():
+    """drink_lexicon muss Text sein (kein stiller No-op)."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", drink_lexicon=42),
+        )
+    )
+
+    assert connection.errors[0][1] == "invalid_format"
+    assert "drink_lexicon" in connection.errors[0][2]
+    assert hass.config_entries.updates == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"daily_goal_ml": 0},
+        {"daily_goal_ml": -10},
+        {"daily_goal_ml": "viel"},
+        {"daily_reset_hour": 24},
+        {"daily_reset_hour": -1},
+        {"sys_threshold": 10},
+        {"sys_threshold": 999},
+        {"dia_threshold": 10},
+        {"dia_threshold": 999},
+        {"retention_months": -1},
+        {"retention_months": "x"},
+        {"quick_drinks": []},
+        {"quick_drinks": "kein-liste"},
+        {"quick_drinks": [{"key": "a", "label": "A"}]},
+        {"quick_drinks": [{"key": "a", "label": "A", "ml": 0}]},
+        {"quick_drinks": [{"key": "a", "label": "A", "ml": 99999}]},
+        {"enable_sidebar_panel": "vielleicht"},
+    ],
+)
+def test_set_settings_rejects_invalid_values(payload):
+    """Bereichs-/Typfehler → `invalid_format` mit Feldpfad, kein Schreibzugriff."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", **payload),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    field = next(iter(payload))
+    assert field in connection.errors[0][2]
+    assert hass.config_entries.updates == []
+    assert entry.options == {"daily_goal_ml": 2000}
+
+
+def test_set_settings_without_any_field_sends_error():
+    """Payload ohne bekanntes Feld → klarer Fehler statt stillem Erfolg."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass, connection, _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1")
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    assert "Keine Einstellung" in connection.errors[0][2]
+    assert hass.config_entries.updates == []
+
+
+def test_set_settings_accepts_boundary_values():
+    """Grenzwerte der Bereiche sind gültig (daily_reset_hour 0/23, Schwellen)."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                daily_reset_hour=23,
+                sys_threshold=40,
+                dia_threshold=260,
+                retention_months=ws_api.MAX_RETENTION_MONTHS,
+                daily_goal_ml=1,
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]
+    assert (stored["daily_reset_hour"], stored["sys_threshold"]) == (23, 40)
+    assert (stored["dia_threshold"], stored["retention_months"]) == (260, 120)
+
+
+def test_set_settings_non_admin_denied_without_any_write():
+    """Nicht-Admin → `unauthorized` und KEIN Options-Schreibzugriff."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", daily_goal_ml=3000),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    assert hass.config_entries.updates == []
+    assert entry.options == {"daily_goal_ml": 2000}
+
+
+def test_set_settings_unknown_entry_sends_error():
+    """Unbekannte entry_id → `not_found`, kein Schreibzugriff."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="nope", daily_goal_ml=2500),
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    assert hass.config_entries.updates == []
+
+
+def test_parse_settings_message_ignores_non_settings_keys():
+    """Nur bekannte Settings-Schlüssel werden übernommen (id/type bleiben außen vor)."""
+    updates, error = ws_api.parse_settings_message(
+        {"id": 1, "type": ws_api.COMMAND_SET_SETTINGS, "entry_id": "e1", "daily_goal_ml": 2500}
+    )
+
+    assert error is None
+    assert updates == {"daily_goal_ml": 2500}
+
+
+# --- export_csv -------------------------------------------------------------
+
+
+def test_export_csv_trigger_calls_existing_service():
+    """Der Trigger ruft den BESTEHENDEN Service mit Personen-Anker auf."""
+    entry = _entry("e1", person="caro", display="Caro (Privat)")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1", dataset="drinks"),
+        )
+    )
+
+    assert connection.errors == []
+    hass.services.async_call.assert_awaited_once_with(
+        ws_api.DOMAIN,
+        "export_csv",
+        {"dataset": "drinks", "person": "Caro (Privat)"},
+        blocking=True,
+    )
+    assert connection.results == [
+        (
+            1,
+            {
+                "ok": True,
+                "entry_id": "e1",
+                "person": "Caro (Privat)",
+                "dataset": "drinks",
+            },
+        )
+    ]
+
+
+def test_export_csv_without_entry_exports_all_persons():
+    """Ohne entry_id → wie der Service: alle Personen, Dataset-Default 'all'."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV))
+    )
+
+    hass.services.async_call.assert_awaited_once_with(
+        ws_api.DOMAIN, "export_csv", {"dataset": "all"}, blocking=True
+    )
+    assert connection.results[0][1]["person"] is None
+    assert connection.results[0][1]["dataset"] == "all"
+
+
+def test_export_csv_unknown_dataset_sends_error():
+    """Unbekannter Datensatz → `invalid_format`, kein Service-Aufruf."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1", dataset="pdf"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    hass.services.async_call.assert_not_called()
+
+
+def test_export_csv_unknown_entry_sends_error():
+    """Unbekannte entry_id → `not_found`, kein Service-Aufruf."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="nope")
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    hass.services.async_call.assert_not_called()
+
+
+@pytest.mark.parametrize("exc_type", [ServiceValidationError, HomeAssistantError])
+def test_export_csv_service_error_is_structured(exc_type):
+    """HA-Fehler des Services → eigener, strukturierter Fehlercode."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    hass.services.async_call = AsyncMock(side_effect=exc_type("Keine Daten zum Exportieren"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1")
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "export_failed"
+    assert connection.errors[0][2] == "Keine Daten zum Exportieren"
+
+
+def test_export_csv_requires_admin():
+    """Nicht-Admin → `unauthorized`, der Service wird nicht aufgerufen."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1")
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    hass.services.async_call.assert_not_called()
+
+
+# --- Admin-Gate: Alltag bleibt offen ----------------------------------------
+
+
+def test_is_admin_connection_fail_closed():
+    """Kein/teilweiser User → kein Admin-Recht (fail-closed)."""
+    assert ws_api.is_admin_connection(FakeConnection(is_admin=True)) is True
+    assert ws_api.is_admin_connection(FakeConnection(is_admin=False)) is False
+    assert ws_api.is_admin_connection(FakeConnection(user_id=None)) is False
+    assert ws_api.is_admin_connection(SimpleNamespace(user=None)) is False
+    assert ws_api.is_admin_connection(SimpleNamespace(user=SimpleNamespace())) is False
+
+
+def test_admin_only_commands_are_marked():
+    """Nur Settings/Export sind admin-only — Alltagsschreiber sind es nicht."""
+    assert ws_api.ADMIN_ONLY_COMMANDS == {
+        ws_api.COMMAND_GET_SETTINGS,
+        ws_api.COMMAND_SET_SETTINGS,
+        ws_api.COMMAND_EXPORT_CSV,
+    }
+    for command in (
+        ws_api.COMMAND_BOOK_DRINK,
+        ws_api.COMMAND_UNDO_LAST,
+        ws_api.COMMAND_SAVE_MEASUREMENT,
+        ws_api.COMMAND_SET_WELLBEING,
+        ws_api.COMMAND_PANEL_DATA,
+    ):
+        assert command not in ws_api.ADMIN_ONLY_COMMANDS
+
+
+def test_everyday_write_commands_stay_open_for_non_admins(monkeypatch):
+    """Buchen/Melden funktioniert weiterhin für Nicht-Admins."""
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_BOOK_DRINK,
+                "entry_id": "e1",
+                "ml": 250,
+            },
+        )
+    )
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 2, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": "good"},
+        )
+    )
+
+    assert connection.errors == []
+    store.add_drink.assert_awaited_once()
+    store.set_wellbeing.assert_awaited_once()
+
+
+def test_admin_guard_wraps_with_require_admin_when_available(monkeypatch):
+    """Ist `require_admin` vorhanden, wird der (synchrone) Handler gewrappt."""
+    calls: list = []
+
+    def _fake_require_admin(handler):
+        calls.append(handler)
+
+        def _guarded(hass, connection, msg):
+            return handler(hass, connection, msg)
+
+        return _guarded
+
+    monkeypatch.setattr(ws_api.websocket_api, "require_admin", _fake_require_admin, raising=False)
+    handler = object()
+
+    assert ws_api._admin_guard(handler) is not handler
+    assert calls == [handler]
+
+
+def test_admin_guard_falls_back_without_require_admin(monkeypatch):
+    """Ohne `require_admin` bleibt der explizite Handler-Check die Sperre."""
+    monkeypatch.delattr(ws_api.websocket_api, "require_admin", raising=False)
+    handler = object()
+
+    assert ws_api._admin_guard(handler) is handler
+
+
+def test_format_lexicon_text_tolerates_broken_stored_value():
+    """Unbrauchbar gespeichertes Lexikon → Standard-Lexikon (kein Crash)."""
+    assert ws_api.format_lexicon_text(None).startswith("wasser=Wasser,250")
+    assert ws_api.format_lexicon_text({"kaputt": "kein-paar"}).startswith("wasser=Wasser,250")
+    assert ws_api.format_lexicon_text({"wasser": ["Wasser", 250]}) == "wasser=Wasser,250"

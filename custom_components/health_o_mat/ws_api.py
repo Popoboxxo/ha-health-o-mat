@@ -14,27 +14,33 @@ statt eines Crashs.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from . import logic
+from . import logic, parser
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
+    DEFAULT_QUICK_DRINKS,
+    DEFAULT_RETENTION_MONTHS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    DRINK_LEXICON,
     MAX_AMOUNT_ML,
     MAX_BP_VALUE,
+    MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
     WELLBEING_STATES,
 )
 from .entity import effective_person, signal_refresh
 from .frontend import shared_data
+from .panel import OPTION_ENABLE_SIDEBAR_PANEL
 from .ui_store import HealthOMatUiStore
 
 try:  # HA-Kernkomponente; Import bleibt tolerant, damit das Paket auch ohne
@@ -84,6 +90,17 @@ COMMAND_SET_WELLBEING = "health_o_mat/set_wellbeing"
 COMMAND_SUBSCRIBE = "health_o_mat/subscribe"
 COMMAND_GET_UI_SETTINGS = "health_o_mat/get_ui_settings"
 COMMAND_SET_UI_SETTINGS = "health_o_mat/set_ui_settings"
+COMMAND_GET_SETTINGS = "health_o_mat/get_settings"
+COMMAND_SET_SETTINGS = "health_o_mat/set_settings"
+COMMAND_EXPORT_CSV = "health_o_mat/export_csv"
+
+# Admin-only (Konzept §8.4, Entscheidung 4): Settings lesen/schreiben und
+# Export sind Verwaltungsvorgänge. Die Alltags-Schreibkommandos
+# (book_drink/undo_last/save_measurement/set_wellbeing) bleiben für ALLE
+# angemeldeten User offen — bewusst KEIN Admin-Gate dort.
+ADMIN_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {COMMAND_GET_SETTINGS, COMMAND_SET_SETTINGS, COMMAND_EXPORT_CSV}
+)
 
 # Untergrenze für eine Getränke-Buchung (Obergrenze ist MAX_AMOUNT_ML aus const).
 MIN_DRINK_ML = 1
@@ -110,6 +127,87 @@ else:  # pragma: no cover - nur ohne WS-Komponente
     ERR_NOT_FOUND = "not_found"
     ERR_INVALID_FORMAT = "invalid_format"
     ERR_UNAUTHORIZED = "unauthorized"
+
+# Eigener Fehlercode: der bestehende `export_csv`-Service meldet fachliche
+# Probleme als `ServiceValidationError` (z. B. „Keine Daten zum Exportieren").
+ERR_EXPORT_FAILED = "export_failed"
+
+
+# --- Admin-/Settings-Kommandos (L3, Konzept §4.5/§8.4) ---------------------
+# Persistenz läuft AUSSCHLIESSLICH über `async_update_entry(entry, options=…)`
+# (löst den bestehenden Options-Listener `_options_updated` aus) bzw. über den
+# bestehenden `health_o_mat.export_csv`-Service — kein Zweitweg, kein direkter
+# Runtime-Schreibzugriff.
+
+# Options-Schlüssel, die die Admin-Maske liest/schreibt — exakt die Schlüssel
+# des Options-Flows (config_flow.py), inkl. `enable_sidebar_panel` aus panel.py.
+SETTINGS_KEYS: tuple[str, ...] = (
+    "daily_goal_ml",
+    "daily_reset_hour",
+    "person_display",
+    "quick_drinks",
+    "drink_lexicon",
+    "sys_threshold",
+    "dia_threshold",
+    "retention_months",
+    OPTION_ENABLE_SIDEBAR_PANEL,
+)
+
+# Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
+EXPORT_DATASETS: tuple[str, ...] = ("drinks", "blood_pressure", "all")
+DEFAULT_EXPORT_DATASET = "all"
+
+DEFAULT_QUICK_DRINK_ICON = "mdi:cup-water"
+
+
+def _any_value(value: Any) -> Any:
+    """Passthrough-Validator für die WS-Whitelist der Settings-Kommandos.
+
+    HA-WebSocket-Schemas sind `PREVENT_EXTRA`, unbekannte Felder werden also
+    schon am Transportrand abgewiesen. Die WERTE werden bewusst nicht hier,
+    sondern feldgenau in `parse_settings_message()` geprüft — nur so gibt es
+    präzise Meldungen (Feldpfad, Lexikon-Zeilennummer) statt generischer
+    Schema-Fehler.
+    """
+    return value
+
+
+# Feldgenaue Validierung eines `set_settings`-Payloads.
+SETTINGS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("daily_goal_ml"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("daily_reset_hour"): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+        vol.Optional("person_display"): str,
+        # Quick-Drinks: dieselben 4 Felder, die der Options-Flow schreibt
+        # (config_flow.quick_drinks_from_user_input) — gleiche Repräsentation.
+        vol.Optional("quick_drinks"): vol.All(
+            [
+                vol.Schema(
+                    {
+                        vol.Required("key"): str,
+                        vol.Required("label"): str,
+                        vol.Required("ml"): vol.All(
+                            vol.Coerce(int), vol.Range(min=MIN_DRINK_ML, max=MAX_AMOUNT_ML)
+                        ),
+                        vol.Optional("icon", default=DEFAULT_QUICK_DRINK_ICON): str,
+                    }
+                )
+            ],
+            vol.Length(min=1),
+        ),
+        vol.Optional("sys_threshold"): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
+        ),
+        vol.Optional("dia_threshold"): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
+        ),
+        # Retention: 0 = AUS (exakt bisheriges Verhalten, REQ-HOM-109).
+        vol.Optional("retention_months"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)
+        ),
+        vol.Optional(OPTION_ENABLE_SIDEBAR_PANEL): vol.Boolean(),
+    }
+)
 
 
 # --- Reine Auflösungs-/Rechenfunktionen (HA-frei testbar) -------------------
@@ -540,11 +638,33 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Optional("prefs"): dict,
             },
         ),
+        (COMMAND_GET_SETTINGS, websocket_get_settings, {vol.Required("entry_id"): str}),
+        (
+            COMMAND_SET_SETTINGS,
+            websocket_set_settings,
+            {
+                vol.Required("entry_id"): str,
+                # Whitelist statt Vorab-Validierung: HA-Schemas sind PREVENT_EXTRA,
+                # die Feldprüfung passiert feldgenau in `parse_settings_message`
+                # (präzise Meldungen inkl. Lexikon-Zeilennummer).
+                **{vol.Optional(key): _any_value for key in SETTINGS_KEYS},
+            },
+        ),
+        (
+            COMMAND_EXPORT_CSV,
+            websocket_export_csv,
+            {vol.Optional("entry_id"): str, vol.Optional("dataset"): _any_value},
+        ),
     )
     for command, handler, extra in commands:
-        websocket_api.async_register_command(
-            hass, command, websocket_api.async_response(handler), _schema(command, extra)
-        )
+        wrapped = websocket_api.async_response(handler)
+        if command in ADMIN_ONLY_COMMANDS:
+            # HAs `require_admin` ist ein SYNCHRONER Wrapper und ruft den inneren
+            # Handler ohne `await` — die Reihenfolge ist deshalb zwingend
+            # `require_admin(async_response(handler))` (umgekehrt erzeugt
+            # `async_response` einen Task für `None`).
+            wrapped = _admin_guard(wrapped)
+        websocket_api.async_register_command(hass, command, wrapped, _schema(command, extra))
     shared[WS_MARKER] = True
 
 
@@ -751,3 +871,246 @@ async def websocket_set_ui_settings(
     if "prefs" in msg:
         updates["prefs"] = msg["prefs"]
     connection.send_result(msg["id"], await store.async_set(user_id, **updates))
+
+
+# --- Admin/Settings + Export (L3) -------------------------------------------
+# Schreibrechte (Konzept §8.4, Entscheidung 4): Settings/Export admin-only,
+# Alltag (Buchen/Melden) für alle. Die Sperre sitzt doppelt: HA-seitig als
+# `require_admin`-Wrapper (falls die installierte HA-Version ihn anbietet) und
+# im Handler als expliziter `connection.user.is_admin`-Check — fail-closed,
+# damit auch Umgebungen ohne `require_admin` (Fake-/Teil-Stacks) geschützt sind.
+
+
+def is_admin_connection(connection: Any) -> bool:
+    """True nur bei angemeldetem User mit `is_admin` (fehlend/None → False)."""
+    user = getattr(connection, "user", None)
+    if user is None:
+        return False
+    return bool(getattr(user, "is_admin", False))
+
+
+def _admin_guard(handler: Any) -> Any:
+    """Wrappt einen (bereits synchronen) Handler in HAs `require_admin`.
+
+    Fehlt `require_admin` (ältere HA-Version, Fake-Umgebung), bleibt der
+    explizite Check in den Handlern die wirksame Sperre.
+    """
+    require_admin = getattr(websocket_api, "require_admin", None)
+    if require_admin is None:  # pragma: no cover - nur ohne require_admin
+        return handler
+    return require_admin(handler)
+
+
+def _send_unauthorized(connection: Any, msg: dict[str, Any]) -> None:
+    """Nicht-Admin → derselbe Fehlercode, den HAs `require_admin` auslöst."""
+    connection.send_error(
+        msg["id"],
+        ERR_UNAUTHORIZED,
+        "Dieses Kommando ist Administratoren vorbehalten",
+    )
+
+
+def _option_int(entry: Any, key: str, mirror_attr: str, default: int) -> int:
+    """Ganzzahlige Einstellung: Options → Runtime-Spiegel → Default.
+
+    `entry.options` ist die Quelle der Wahrheit; der Runtime-Spiegel
+    (`entry.runtime_data`) wird nur als Fallback gelesen, wenn die Option noch
+    nie gesetzt wurde.
+    """
+    options = getattr(entry, "options", None) or {}
+    if options.get(key) is not None:
+        return _as_int(options[key], default)
+    mirror = getattr(getattr(entry, "runtime_data", None), mirror_attr, None)
+    return default if mirror is None else _as_int(mirror, default)
+
+
+def _lexicon_pairs(lexicon: Any) -> dict[str, tuple[str, int]]:
+    """Lexikon defensiv normalisieren: {wort: (Typ, ml)}.
+
+    Options-Werte überleben einen JSON-Roundtrip (HA persistiert sie), Tupel
+    kommen also als 2-elementige Listen zurück — beide Formen sind gültig.
+    Unbrauchbare Einträge werden übersprungen statt zu crashen.
+    """
+    if not isinstance(lexicon, Mapping):
+        return {}
+    pairs: dict[str, tuple[str, int]] = {}
+    for word, value in lexicon.items():
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            continue
+        pairs[str(word)] = (str(value[0]), _as_int(value[1], 0))
+    return pairs
+
+
+def format_lexicon_text(lexicon: Any) -> str:
+    """Lexikon (Dict-Repräsentation) → Textform des Options-Flows.
+
+    Nutzt exakt `parser.format_lexicon` — dieselbe Serialisierung wie der
+    Options-Flow (config_flow.async_step_drink_lexicon), keine zweite Quelle.
+    Fallback auf das Standard-Lexikon, wenn nichts Brauchbares gespeichert ist.
+    """
+    pairs = _lexicon_pairs(lexicon) or _lexicon_pairs(DRINK_LEXICON)
+    return parser.format_lexicon(pairs)
+
+
+def _quick_drinks(entry: Any) -> list[dict[str, Any]]:
+    """Quick-Drinks der Option, sonst das Standard-Set (frische Kopien)."""
+    options = getattr(entry, "options", None) or {}
+    stored = options.get("quick_drinks")
+    source = stored if isinstance(stored, list) and stored else DEFAULT_QUICK_DRINKS
+    return [
+        {
+            "key": str(item.get("key") or ""),
+            "label": str(item.get("label") or ""),
+            "ml": _as_int(item.get("ml"), 0),
+            "icon": str(item.get("icon") or DEFAULT_QUICK_DRINK_ICON),
+        }
+        for item in source
+        if isinstance(item, Mapping)
+    ]
+
+
+def build_settings(entry: Any) -> dict[str, Any]:
+    """Antwort-Payload für `get_settings` (auch Pflichtformat der set-Antwort).
+
+    Alle Werte kommen ausschließlich aus `entry.options` (mit Options-Flow-
+    Defaults, wenn nichts gesetzt ist) — kein Zweit-Datenmodell.
+    """
+    options = getattr(entry, "options", None) or {}
+    return {
+        "daily_goal_ml": _option_int(
+            entry, "daily_goal_ml", "daily_goal_ml", DEFAULT_DAILY_GOAL_ML
+        ),
+        "daily_reset_hour": _as_int(options.get("daily_reset_hour"), 0),
+        "person_display": effective_person(entry),
+        "quick_drinks": _quick_drinks(entry),
+        "drink_lexicon": format_lexicon_text(options.get("drink_lexicon")),
+        "sys_threshold": _option_int(
+            entry, "sys_threshold", "sys_threshold", DEFAULT_SYS_THRESHOLD
+        ),
+        "dia_threshold": _option_int(
+            entry, "dia_threshold", "dia_threshold", DEFAULT_DIA_THRESHOLD
+        ),
+        "retention_months": _as_int(options.get("retention_months"), DEFAULT_RETENTION_MONTHS),
+        OPTION_ENABLE_SIDEBAR_PANEL: bool(options.get(OPTION_ENABLE_SIDEBAR_PANEL, False)),
+    }
+
+
+def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """WS-Payload → (Options-Updates, Fehlermeldung). Reine Funktion.
+
+    Es werden ausschließlich bekannte Settings-Schlüssel übernommen. Skalare
+    Felder laufen durch `SETTINGS_SCHEMA` (Bereiche aus const.py), das
+    `drink_lexicon` durch `parser.parse_lexicon_text()` — dieselbe Funktion, die
+    der Options-Flow benutzt, also exakt dieselbe Dict-Repräsentation
+    (`{wort: (Typ, ml)}`). Lexikon-Fehler tragen die Zeilennummer mit.
+    """
+    raw = {key: msg[key] for key in SETTINGS_KEYS if key in msg}
+    if not raw:
+        return {}, f"Keine Einstellung übergeben (erlaubt: {', '.join(SETTINGS_KEYS)})"
+
+    updates: dict[str, Any] = {}
+    if "drink_lexicon" in raw:
+        raw_text = raw.pop("drink_lexicon")
+        if not isinstance(raw_text, str):
+            return {}, (
+                "Ungültige Einstellung 'drink_lexicon': erwartet Text, "
+                f"erhalten {type(raw_text).__name__}"
+            )
+        try:
+            updates["drink_lexicon"] = parser.parse_lexicon_text(raw_text)
+        except ValueError as err:
+            return {}, f"Getränke-Lexikon: {err}"
+
+    try:
+        updates.update(SETTINGS_SCHEMA(raw))
+    except vol.Invalid as err:
+        field = ".".join(str(part) for part in err.path) or "settings"
+        return {}, f"Ungültige Einstellung '{field}': {err.msg}"
+    return updates, None
+
+
+async def websocket_get_settings(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/get_settings` → Admin-Maske einer Person (nur Admin)."""
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    entry_id = msg["entry_id"]
+    entry = _runtime_entry(hass, entry_id)
+    if entry is None:
+        _send_entry_error(connection, msg, entry_id)
+        return
+    connection.send_result(msg["id"], build_settings(entry))
+
+
+async def websocket_set_settings(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/set_settings` → Einstellungen einer Person (nur Admin).
+
+    Persistiert ausschließlich über `async_update_entry(entry, options=merged)`:
+    das ist der Pfad, an dem der bestehende Options-Listener `_options_updated`
+    hängt (Sync von Runtime-Spiegel, Retention, Panel-Status, Refresh).
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    entry_id = msg["entry_id"]
+    entry = _runtime_entry(hass, entry_id)
+    if entry is None:
+        _send_entry_error(connection, msg, entry_id)
+        return
+    updates, error = parse_settings_message(msg)
+    if error is not None:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, error)
+        return
+    merged = {**(getattr(entry, "options", None) or {}), **updates}
+    hass.config_entries.async_update_entry(entry, options=merged)
+    connection.send_result(msg["id"], build_settings(entry))
+
+
+async def websocket_export_csv(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/export_csv` → bestehenden CSV-Service auslösen (nur Admin).
+
+    Kein Zweitweg: der Service schreibt nach /config/health_o_mat_export/ und
+    kennt Person-/Dataset-Filter sowie das Retention-Archiv. Ohne `entry_id`
+    wird — wie beim Service — über alle Personen exportiert.
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    dataset = msg.get("dataset") or DEFAULT_EXPORT_DATASET
+    if dataset not in EXPORT_DATASETS:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"Unbekannter Datensatz: {dataset!r} (erlaubt: {', '.join(EXPORT_DATASETS)})",
+        )
+        return
+
+    entry_id = msg.get("entry_id")
+    service_data: dict[str, Any] = {"dataset": dataset}
+    if entry_id is not None:
+        entry = _runtime_entry(hass, entry_id)
+        if entry is None:
+            _send_entry_error(connection, msg, entry_id)
+            return
+        # Der Service filtert über den Store-Personen-Schlüssel, der dem
+        # effektiven Anzeigenamen entspricht (store.set_person im Setup).
+        service_data["person"] = effective_person(entry)
+
+    try:
+        await hass.services.async_call(DOMAIN, "export_csv", service_data, blocking=True)
+    except HomeAssistantError as err:
+        # Deckt `ServiceValidationError` (fachlich, z. B. „Keine Daten") und
+        # `ServiceNotFound` (kein Entry geladen) ab — beides strukturiert
+        # zurückmelden statt als `unknown_error` zu verpuffen.
+        connection.send_error(msg["id"], ERR_EXPORT_FAILED, str(err))
+        return
+
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "entry_id": entry_id,
+            "person": service_data.get("person"),
+            "dataset": dataset,
+        },
+    )
