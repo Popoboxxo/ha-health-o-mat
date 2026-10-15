@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.ci-venv/
 
 # --- agent-meta managed (do not edit) ---
 .agents/hooks/

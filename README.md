@@ -259,6 +259,34 @@ Entity-Referenzen, und im geteilten HA-Testsystem (`/home/hermes/ha-test`)
 verifiziert `bin/check-dashboards examples/*.yaml`, dass jede referenzierte
 Entity in der laufenden Instanz tatsächlich existiert.
 
+## Mitgelieferte Karte (Custom Card)
+
+Die Integration liefert eine eigene Lovelace-Karte mit — eine kompakte
+Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
+
+- 💧 **Hydration-Ring** — heutige Menge vs. Tagesziel (Prozent + mL), dazu
+  Buchungen und der gestrige Wert
+- 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit WHO-Kategorie und
+  Warnhinweis, wenn sie über den konfigurierten Schwellen liegt
+- 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt
+- ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
+  Buchung zurücknehmen
+
+Die Karte wird unter `/health_o_mat/health-o-mat-card.js` ausgeliefert und beim
+Setup automatisch als Lovelace-Ressource registriert (idempotent) — die
+Ressource muss **nicht** von Hand hinzugefügt werden. Eine zusätzliche
+Frontend-Abhängigkeit (z. B. Mushroom) ist **nicht** nötig.
+
+Einbindung in eine Dashboard-Ansicht per YAML:
+
+```yaml
+type: custom:health-o-mat-card
+entry_id: <config-entry-id>   # optional — ohne Angabe erscheint eine Personenauswahl
+```
+
+Ohne `entry_id` (bzw. bei mehreren Personen) zeigt die Karte automatisch eine
+Personenauswahl.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).
