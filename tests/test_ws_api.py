@@ -272,22 +272,29 @@ def test_entity_ids_for_entry_uses_registry_per_config_entry(monkeypatch):
     assert mapping["bp_category"] == "sensor.caro_bp_category"
 
 
-# --- compute_pace -----------------------------------------------------------
+# --- pace_label (String-Vertrag der UI) -------------------------------------
 
 
-def test_compute_pace_labels():
-    """Pace-Label aus Ist-Stand vs. linearem Soll-Verlauf (8 h von 24 h = 1/3)."""
-    # Soll bei 1/3 des Tages: 2000/3 ≈ 667 ml, Toleranz 200 ml
-    assert ws_api.compute_pace(300, 2000, NOW, 4) == "behind"
-    assert ws_api.compute_pace(700, 2000, NOW, 4) == "on_track"
-    assert ws_api.compute_pace(1200, 2000, NOW, 4) == "ahead"
-    assert ws_api.compute_pace(2000, 2000, NOW, 4) == "goal_reached"
+def test_pace_label_maps_status_and_goal_reached():
+    """`pace_label` bildet den Logik-Status auf den UI-String ab (+goal_reached)."""
+    assert ws_api.pace_label({"status": "ahead"}, 1500, 2000) == "ahead"
+    assert ws_api.pace_label({"status": "on_track"}, 1000, 2000) == "on_track"
+    assert ws_api.pace_label({"status": "behind"}, 500, 2000) == "behind"
+    # Ziel erreicht (auch exakt) hat Vorrang vor dem Logik-Status.
+    assert ws_api.pace_label({"status": "ahead"}, 2000, 2000) == "goal_reached"
+    assert ws_api.pace_label({"status": "ahead"}, 2500, 2000) == "goal_reached"
 
 
-def test_compute_pace_without_goal():
+def test_pace_label_without_goal_is_none():
     """Ohne (positives) Tagesziel gibt es keinen Soll-Verlauf → None."""
-    assert ws_api.compute_pace(500, 0, NOW, 4) is None
-    assert ws_api.compute_pace(500, -1, NOW, 4) is None
+    assert ws_api.pace_label({"status": None}, 500, 0) is None
+    assert ws_api.pace_label({"status": None}, 500, -1) is None
+
+
+def test_pace_label_tolerates_missing_status():
+    """Fehlender/ungültiger Status → None statt eines falschen Labels."""
+    assert ws_api.pace_label({}, 500, 2000) is None
+    assert ws_api.pace_label({"status": 42}, 500, 2000) is None
 
 
 # --- list_persons -----------------------------------------------------------
@@ -440,6 +447,73 @@ def test_panel_data_full_payload(monkeypatch):
     assert payload["entities"]["drinks_today"] == "sensor.caro_drinks_today"
     assert payload["entities"]["bp_history"] == "sensor.caro_bp_history"
     assert set(payload["entities"]) == set(ws_api.ENTITY_SUFFIXES)
+
+
+# L2-Panel-JS liest `today.pace` als String; diese Menge ist der stabile Vertrag.
+_PACE_LABELS = {"goal_reached", "ahead", "on_track", "behind"}
+
+
+@pytest.mark.parametrize(
+    ("ml", "expected_pace"),
+    [
+        (1300, "ahead"),  # Soll bei Halbzeit 1000, Toleranz 200 → +300
+        (1000, "on_track"),  # exakt auf dem Soll
+        (600, "behind"),  # -400 → unter dem Band
+        (2000, "goal_reached"),  # Ziel erreicht (Vorrang vor "ahead")
+    ],
+)
+def test_panel_data_pace_uses_logic_hydration_pace(monkeypatch, ml, expected_pace):
+    """`today.pace` liefert echte Labels aus `logic.hydration_pace` (reset_hour=0)."""
+    data = {"e1": {"drinks": [{"ts": "2026-10-15T09:00:00", "ml": ml, "type": "Wasser"}]}}
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 0})
+    hass = _panel_hass(data, entry, [], monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["today"]["pace"] == expected_pace
+    assert payload["today"]["pace"] in _PACE_LABELS
+
+
+def test_panel_data_pace_detail_fields_are_additive(monkeypatch):
+    """Zusätzliche Detailwerte (expected/delta/forecast) ohne Umbenennung."""
+    data = {"e1": {"drinks": [{"ts": "2026-10-15T09:00:00", "ml": 1300, "type": "Wasser"}]}}
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 0})
+    hass = _panel_hass(data, entry, [], monkeypatch)
+
+    today = ws_api.build_panel_data(hass, "e1", NOW)["today"]
+
+    # Bestehender Vertrag unverändert …
+    assert today["ml"] == 1300
+    assert today["percent"] == 65.0
+    assert today["pace"] == "ahead"
+    # … plus neue, rein additive Felder.
+    assert today["expected_ml"] == 1000.0
+    assert today["delta_ml"] == 300.0
+    assert today["forecast_ml"] == 2600.0
+
+
+def test_panel_data_pace_detail_fields_without_goal_are_none(monkeypatch):
+    """Ohne Ziel: pace + Detailwerte None (kein Soll-Verlauf), kein Crash."""
+    entry = _entry(goal=0, options={"daily_goal_ml": 0, "daily_reset_hour": 0})
+    hass = _panel_hass({"e1": {"drinks": []}}, entry, [], monkeypatch)
+
+    today = ws_api.build_panel_data(hass, "e1", NOW)["today"]
+
+    assert today["pace"] is None
+    assert today["expected_ml"] is None
+    assert today["delta_ml"] is None
+    assert today["forecast_ml"] is None
+
+
+def test_panel_data_pace_never_emits_unknown_label(monkeypatch):
+    """`today.pace` bleibt über alle Ist-Stände auf die bekannten Labels begrenzt."""
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 0})
+    for ml in (0, 100, 600, 1000, 1300, 2000, 5000):
+        data = {"e1": {"drinks": [{"ts": "2026-10-15T09:00:00", "ml": ml, "type": "Wasser"}]}}
+        hass = _panel_hass(data, entry, [], monkeypatch)
+
+        assert ws_api.build_panel_data(hass, "e1", NOW)["today"]["pace"] in _PACE_LABELS
 
 
 def test_panel_data_person_anchor_is_stable_service_anchor(monkeypatch):

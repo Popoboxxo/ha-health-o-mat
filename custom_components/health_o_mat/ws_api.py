@@ -76,9 +76,6 @@ ENTITY_SUFFIXES: dict[str, str] = {
 BP_ENTRIES_LIMIT = 30
 WELLBEING_HISTORY_LIMIT = 30
 
-# Toleranzband für die Pace-Bewertung (Anteil des Tagesziels).
-PACE_TOLERANCE_RATIO = 0.1
-
 WS_MARKER = "ws_api_registered"
 
 COMMAND_LIST_PERSONS = "health_o_mat/list_persons"
@@ -238,29 +235,20 @@ def resolve_entity_ids(entries: Iterable[Any], entry_id: str) -> dict[str, str |
     }
 
 
-def compute_pace(today_ml: int, goal_ml: int, now: datetime, hour: int = 0) -> str | None:
-    """Grober Tages-Pace gegenüber dem linearen Soll-Verlauf (Platzhalter).
+def pace_label(pace: dict[str, Any], today_ml: int, goal_ml: int) -> str | None:
+    """UI-Pace-String aus dem `logic.hydration_pace`-Ergebnis (stabiler Vertrag).
 
-    Bewusst hier statt in `logic.py`: die im Konzept (Abschnitt 6.3) geplante
-    Funktion `logic.hydration_pace` existiert noch nicht; bis dahin liefert
-    diese kleine reine Vergleichsrechnung ein UI-taugliches Label
-    (`goal_reached` / `ahead` / `on_track` / `behind`). `None`, wenn kein Ziel
-    gesetzt ist — ohne Ziel gibt es keinen sinnvollen Soll-Verlauf.
+    Das L2-Panel-JS liest `today.pace` als STRING mit den Werten
+    `goal_reached` | `ahead` | `on_track` | `behind` (oder `None` ohne Ziel).
+    `goal_reached` wird hier vergeben (`actual_ml >= goal_ml`), die Logik-Schicht
+    liefert nur ahead/on_track/behind. Ohne (positives) Ziel → None.
     """
-    goal = int(goal_ml)
-    if goal <= 0:
+    if goal_ml <= 0:
         return None
-    if int(today_ml) >= goal:
+    if today_ml >= goal_ml:
         return "goal_reached"
-    elapsed = (now - logic.day_start(now, hour=hour)).total_seconds()
-    progress = min(max(elapsed / 86400.0, 0.0), 1.0)
-    expected = goal * progress
-    tolerance = goal * PACE_TOLERANCE_RATIO
-    if today_ml > expected + tolerance:
-        return "ahead"
-    if today_ml < expected - tolerance:
-        return "behind"
-    return "on_track"
+    status = pace.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -349,6 +337,7 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
     today_ml = int(sums["total_ml"])
     y_start, y_end = logic.yesterday_window(now, hour=reset_hour)
     yesterday_ml = int(logic.window_sums(drinks, y_start, y_end)["total_ml"])
+    pace = logic.hydration_pace(drinks, now, goal_ml, hour=reset_hour)
 
     return {
         "entry_id": entry_id,
@@ -365,7 +354,12 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
             "count": int(sums["count"]),
             "breakdown": dict(sums["breakdown"]),
             "yesterday_ml": yesterday_ml,
-            "pace": compute_pace(today_ml, goal_ml, now, reset_hour),
+            # String-Label (stabiler UI-Vertrag) + additive Detailwerte aus
+            # `logic.hydration_pace` (neue Keys, nichts Bestehendes umbenannt).
+            "pace": pace_label(pace, today_ml, goal_ml),
+            "expected_ml": pace["expected_ml"],
+            "delta_ml": pace["delta_ml"],
+            "forecast_ml": pace["forecast_ml"],
         },
         "bp": _bp_block(entry, readings, now),
         "wellbeing": _wellbeing_block(data),
