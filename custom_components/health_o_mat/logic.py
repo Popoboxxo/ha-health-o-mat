@@ -41,11 +41,10 @@ def window_sums(
     breakdown: dict[str, int] = {}
     last_ts: str | None = None
     for d in drinks:
-        try:
-            ts = datetime.fromisoformat(d["ts"])
-        except (KeyError, TypeError, ValueError):
+        ts = _normalize_ts(d.get("ts"), start)
+        if ts is None:
             continue
-        if start <= ts < end:
+        if _in_window(ts, start, end):
             ml = int(d.get("ml", 0))
             total += ml
             count += 1
@@ -93,11 +92,10 @@ def avg_over_window(
     start = now - timedelta(days=days)
     values: list[float] = []
     for r in readings:
-        try:
-            ts = datetime.fromisoformat(r["ts"])
-        except (KeyError, TypeError, ValueError):
+        ts = _normalize_ts(r.get("ts"), now)
+        if ts is None:
             continue
-        if start <= ts <= now:
+        if _in_window(ts, start, now, inclusive_end=True):
             val = r.get(key)
             if val is not None:
                 values.append(val)
@@ -148,6 +146,49 @@ def _align_tz(ts: datetime, reference: datetime) -> datetime:
     return ts
 
 
+def _normalize_ts(value: Any, reference: datetime) -> datetime | None:
+    """Zentraler, HA-freier Zeitstempel-Normalisierer.
+
+    Parst `value` defensiv (ungültige/fehlende Werte → None, werden vom
+    Aufrufer übersprungen) und gleicht die Zeitzone an `reference` an:
+    ein naiver Wert übernimmt die Zeitzone des übergebenen Fenster-/`now`-Werts
+    (`reference.tzinfo`), ein tz-aware Wert bleibt UNVERÄNDERT. Damit ist der
+    Vergleich mit einem tz-aware Fenster (z. B. aus `dt_util.now()`) auch für
+    Alt-Bestand mit naiven Zeitstempeln (< M-3) ohne TypeError möglich.
+    """
+    ts = _parse_ts(value)
+    if ts is None:
+        return None
+    return _align_tz(ts, reference)
+
+
+def _in_window(
+    ts: datetime, start: datetime, end: datetime, *, inclusive_end: bool = False
+) -> bool:
+    """Defensiver Fenstervergleich; unerwarteter TypeError → False.
+
+    Prüft `start <= ts < end` (bzw. `start <= ts <= end` mit
+    `inclusive_end=True`). `_normalize_ts` sollte gemischte Naivität bereits
+    ausgeschlossen haben — der Try/Except ist die zweite Verteidigungslinie,
+    damit ein unerwarteter Typkonflikt einen Sensor-Read nicht zum Absturz
+    bringt (sondern den Eintrag still übergeht).
+    """
+    try:
+        if inclusive_end:
+            return start <= ts <= end
+        return start <= ts < end
+    except TypeError:
+        return False
+
+
+def _is_before(ts: datetime, reference: datetime) -> bool:
+    """Defensiver `<`-Vergleich; unerwarteter TypeError → False."""
+    try:
+        return ts < reference
+    except TypeError:
+        return False
+
+
 def partition_by_cutoff(
     items: Iterable[dict[str, Any]],
     cutoff: datetime,
@@ -165,11 +206,11 @@ def partition_by_cutoff(
         if not isinstance(item, dict):
             recent.append(item)  # type: ignore[arg-type]
             continue
-        ts = _parse_ts(item.get("ts"))
+        ts = _normalize_ts(item.get("ts"), cutoff)
         if ts is None:
             recent.append(item)
             continue
-        (archived if _align_tz(ts, cutoff) < cutoff else recent).append(item)
+        (archived if _is_before(ts, cutoff) else recent).append(item)
     return recent, archived
 
 
@@ -329,10 +370,10 @@ def _avg_in_range(
     """
     values: list[float] = []
     for r in readings:
-        ts = _parse_ts(r.get("ts"))
+        ts = _normalize_ts(r.get("ts"), start)
         if ts is None:
             continue
-        if start <= _align_tz(ts, start) < end:
+        if _in_window(ts, start, end):
             val = r.get(key)
             if val is not None:
                 values.append(val)
@@ -345,11 +386,11 @@ def _count_valid_bp(readings: Iterable[dict[str, Any]], start: datetime, end: da
     """Anzahl Messungen mit sys UND dia im Fenster [start, end)."""
     count = 0
     for r in readings:
-        ts = _parse_ts(r.get("ts"))
+        ts = _normalize_ts(r.get("ts"), start)
         if ts is None:
             continue
         has_both = r.get("sys") is not None and r.get("dia") is not None
-        if start <= _align_tz(ts, start) < end and has_both:
+        if has_both and _in_window(ts, start, end):
             count += 1
     return count
 

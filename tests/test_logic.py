@@ -655,3 +655,230 @@ def test_caffeine_table_covers_every_canonical_lexicon_type():
     """[REQ-HOM-004] Schätztabelle kennt jeden kanonischen DRINK_LEXICON-Typ."""
     canonical = {canonical_name for canonical_name, _default_ml in const.DRINK_LEXICON.values()}
     assert canonical <= set(const.CAFFEINE_MG_PER_100ML)
+
+
+# --- Zeitzonen-Robustheit: Alt-Bestand (naive ts) + aware Fenster ---
+#
+# Regression: `window_sums`/`avg_over_window` parsten `ts` im try, verglichen
+# aber AUSSERHALB — ein naiver Alt-Zeitstempel gegen ein tz-aware Fenster
+# (`dt_util.now()`) warf `TypeError: can't compare offset-naive and offset-aware
+# datetimes` und riss den Sensor-Read ab. Zentrale Normalisierung `_normalize_ts`
+# weist naiven Werten die Zeitzone der Referenz zu; `_in_window` fängt Restfälle.
+
+_TZ = timezone(timedelta(hours=2))
+
+
+def test_normalize_ts_assigns_reference_tz_to_naive():
+    """[TZ] Naiver ts übernimmt die Zeitzone der Referenz."""
+    ref = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    ts = logic._normalize_ts("2026-08-22T09:00:00", ref)
+    assert ts is not None and ts.tzinfo is not None and ts.utcoffset() == timedelta(hours=2)
+    assert ts.hour == 9  # Wanduhrzeit bleibt, nur die tz wird ergänzt
+
+
+def test_normalize_ts_leaves_aware_value_unchanged():
+    """[TZ] Ein tz-aware ts bleibt UNVERÄNDERT (eigene Zone wird nicht ersetzt)."""
+    ref = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    aware = datetime(2026, 8, 22, 9, 0, tzinfo=timezone(timedelta(hours=5)))
+    assert logic._normalize_ts(aware.isoformat(), ref) == aware
+
+
+def test_normalize_ts_invalid_or_missing_returns_none():
+    """[TZ] Ungültige/fehlende Werte → None (werden übersprungen, kein Crash)."""
+    ref = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    assert logic._normalize_ts("kaputt", ref) is None
+    assert logic._normalize_ts(None, ref) is None
+    assert logic._normalize_ts(12345, ref) is None
+
+
+def test_in_window_defensive_on_tz_mismatch():
+    """[TZ] `_in_window` fängt unerwarteten TypeError defensiv ab (→ False)."""
+    naive = datetime(2026, 8, 22, 9, 0)
+    aware_start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    aware_end = datetime(2026, 8, 22, 23, 0, tzinfo=_TZ)
+    assert logic._in_window(naive, aware_start, aware_end) is False
+
+
+def test_window_sums_naive_ts_with_aware_window_no_crash():
+    """[TZ] Naiver Alt-ts gegen aware Fenster → kein Crash, korrekte Summe."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"}]
+    sums = logic.window_sums(drinks, start, end)
+    assert sums["total_ml"] == 250
+    assert sums["count"] == 1
+    assert sums["breakdown"] == {"Kaffee": 250}
+
+
+def test_window_sums_naive_ts_interpreted_as_local_tz_not_utc():
+    """[TZ] Naive Wanduhrzeit = lokale Zeitzone, NICHT UTC.
+
+    11:00 als lokal (+02:00) liegt vor dem 12:00-Ende; als UTC (13:00 lokal)
+    läge es dahinter. Das Getränk MUSS also zählen.
+    """
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T11:00:00", "ml": 300, "type": "Wasser"}]
+    assert logic.window_sums(drinks, start, end)["total_ml"] == 300
+
+
+def test_window_sums_mixed_naive_and_aware_ts():
+    """[TZ] Gemischte naive + aware Einträge: keine Crash, korrekte Summen."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"},  # naive
+        {"ts": "2026-08-22T10:00:00+02:00", "ml": 500, "type": "Wasser"},  # aware
+        {"ts": "2026-08-21T20:00:00", "ml": 999, "type": "Wasser"},  # Vortag
+        {"ts": "kaputt", "ml": 999},
+    ]
+    sums = logic.window_sums(drinks, start, end)
+    assert sums["total_ml"] == 750
+    assert sums["count"] == 2
+    assert sums["breakdown"] == {"Kaffee": 250, "Wasser": 500}
+
+
+def test_window_sums_empty_list():
+    """[TZ] Leere Liste → Null-Summe, kein Crash."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    assert logic.window_sums([], start, end) == {
+        "total_ml": 0,
+        "count": 0,
+        "breakdown": {},
+        "last_ts": None,
+    }
+
+
+def test_window_sums_only_naive_ts():
+    """[TZ] Ausschließlich naive Zeitstempel gegen aware Fenster."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T08:00:00", "ml": 100, "type": "Wasser"}]
+    assert logic.window_sums(drinks, start, end)["total_ml"] == 100
+
+
+def test_window_sums_only_aware_ts():
+    """[TZ] Ausschließlich aware Zeitstempel (Regression, unverändert)."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T08:00:00+02:00", "ml": 100, "type": "Wasser"}]
+    assert logic.window_sums(drinks, start, end)["total_ml"] == 100
+
+
+def test_window_sums_all_invalid_or_missing_ts_skipped():
+    """[TZ] Nur ungültige/fehlende ts → alles übersprungen, keine Summe."""
+    start = datetime(2026, 8, 22, 0, 0, tzinfo=_TZ)
+    end = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "kaputt", "ml": 500}, {"ml": 500}, {"ts": None, "ml": 500}]
+    sums = logic.window_sums(drinks, start, end)
+    assert sums["total_ml"] == 0 and sums["count"] == 0
+
+
+def test_today_sums_naive_ts_with_aware_now_no_crash():
+    """[TZ] `today_sums` (delegiert an window_sums) mit aware `now`."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"},  # naive
+        {"ts": "2026-08-22T10:00:00+02:00", "ml": 500, "type": "Wasser"},  # aware
+        {"ts": "2026-08-21T09:00:00", "ml": 999, "type": "Wasser"},  # Vortag
+    ]
+    sums = logic.today_sums(drinks, now)
+    assert sums["total_ml"] == 750
+    assert sums["count"] == 2
+
+
+def test_today_sums_naive_after_now_on_same_day_still_bound():
+    """[TZ] Naive Buchung 13:00 mit aware now 12:00 → liegt (lokal) in der Zukunft."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T13:00:00", "ml": 500, "type": "Wasser"}]
+    assert logic.today_sums(drinks, now)["total_ml"] == 0
+
+
+def test_avg_over_window_naive_ts_with_aware_now_no_crash():
+    """[TZ] `avg_over_window` mit naive Alt-Messungen + aware `now`."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    readings = [
+        {"ts": "2026-08-22T09:00:00", "sys": 120},  # naive, im Fenster
+        {"ts": "2026-08-21T09:00:00+02:00", "sys": 140},  # aware, im Fenster
+        {"ts": "kaputt", "sys": 999},
+    ]
+    assert logic.avg_over_window(readings, "sys", now) == (120 + 140) / 2
+
+
+def test_avg_over_window_mixed_tz_boundary_excluded():
+    """[TZ] Gemischte Einträge außerhalb des Fensters werden korrekt ausgeschlossen."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    readings = [
+        {"ts": "2026-08-10T09:00:00", "sys": 100},  # naive, > 7 Tage alt
+        {"ts": "2026-08-22T09:00:00+02:00", "sys": 200},  # aware, heute
+    ]
+    assert logic.avg_over_window(readings, "sys", now) == 200
+
+
+def test_avg_over_window_only_naive_and_only_aware():
+    """[TZ] Nur naive bzw. nur aware Einträge liefern denselben Schnitt."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    naive = [{"ts": "2026-08-22T09:00:00", "sys": 120}]
+    aware = [{"ts": "2026-08-22T09:00:00+02:00", "sys": 120}]
+    assert logic.avg_over_window(naive, "sys", now) == 120
+    assert logic.avg_over_window(aware, "sys", now) == 120
+
+
+def test_avg_over_window_empty_and_all_invalid_with_aware_now():
+    """[TZ] Leere Liste und ausschließlich ungültige ts → None (kein Crash)."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    assert logic.avg_over_window([], "sys", now) is None
+    assert logic.avg_over_window([{"ts": "kaputt", "sys": 1}, {"sys": 2}], "sys", now) is None
+
+
+def test_bp_trend_mixed_naive_and_aware_no_crash():
+    """[TZ] `bp_trend` (`_count_valid_bp`/`_avg_in_range`) mit gemischten ts."""
+    now = datetime(2026, 8, 13, 8, 0, tzinfo=_TZ)
+    readings = [
+        # Vorwoche: naive Zeitstempel
+        {"ts": "2026-08-01T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-02T08:00:00", "sys": 130, "dia": 80},
+        {"ts": "2026-08-03T08:00:00", "sys": 130, "dia": 80},
+        # letzte 7 Tage: aware Zeitstempel
+        {"ts": "2026-08-10T08:00:00+02:00", "sys": 150, "dia": 90},
+        {"ts": "2026-08-11T08:00:00+02:00", "sys": 150, "dia": 90},
+        {"ts": "2026-08-12T08:00:00+02:00", "sys": 150, "dia": 90},
+    ]
+    trend = logic.bp_trend(readings, now)
+    assert trend is not None
+    assert trend["direction"] == "rising"
+    assert trend["sys_delta"] == 20.0
+
+
+def test_goal_streak_mixed_naive_and_aware_no_crash():
+    """[TZ] `goal_streak` (`_daily_totals_by_day`) mit gemischten ts."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 1500, "type": "Wasser"},  # naive
+        {"ts": "2026-08-21T09:00:00+02:00", "ml": 1500, "type": "Wasser"},  # aware
+        {"ts": "kaputt", "ml": 5000, "type": "Wasser"},
+    ]
+    assert logic.goal_streak(drinks, 1000, now) == {"current_streak": 2, "best_streak": 2}
+
+
+def test_drinks_trend_mixed_naive_and_aware_no_crash():
+    """[TZ] `drinks_trend` mit aware `now` und gemischten ts."""
+    now = datetime(2026, 8, 8, 12, 0, tzinfo=_TZ)
+    drinks = [
+        {"ts": "2026-08-07T09:00:00", "ml": 700, "type": "Wasser"},  # naive, Vorwoche
+        {"ts": "2026-08-06T09:00:00+02:00", "ml": 700, "type": "Wasser"},  # aware, Vorwoche
+        {"ts": "2026-08-08T09:00:00", "ml": 100, "type": "Wasser"},  # naive, heute
+    ]
+    trend = logic.drinks_trend(drinks, now)
+    assert trend is not None
+    assert trend["today_ml"] == 100
+    assert trend["prev_week_avg_ml"] == 200.0
+    assert trend["percent"] == -50.0
+
+
+def test_caffeine_today_naive_ts_with_aware_now_no_crash():
+    """[TZ] `caffeine_today` mit naive Alt-Buchungen + aware `now`."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [{"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"}]
+    assert logic.caffeine_today(drinks, now)["total_mg"] == 100.0
