@@ -25,6 +25,7 @@ from .const import (
     DRINK_LEXICON,
     MAX_RETENTION_MONTHS,
 )
+from .panel import OPTION_ENABLE_SIDEBAR_PANEL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -154,6 +155,16 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                         "retention_months",
                         default=int(current_retention),
                     ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)),
+                    # Opt-in-Sidebar-Panel (CONCEPT-UI §8.3): Default AUS; der
+                    # bestehende Wert wird unverändert als Default übernommen.
+                    # `bool` (nicht `vol.Boolean()`) ist Pflicht: nur `bool`
+                    # serialisiert zu einem Boolean-Toggle im Options-Dialog.
+                    vol.Optional(
+                        OPTION_ENABLE_SIDEBAR_PANEL,
+                        default=bool(
+                            self.config_entry.options.get(OPTION_ENABLE_SIDEBAR_PANEL, False)
+                        ),
+                    ): bool,
                 }
             ),
         )
