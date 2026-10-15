@@ -7,7 +7,8 @@ allein zu lassen.
 **Grundlage:** [`REVIEW-2026-10-14.md`](REVIEW-2026-10-14.md) (Ist-Zustand + Findings).
 **Use-Case:** Getränke-Tracking, Blutdruck, Wohlbefinden — pro Person, mehrere
 Personen parallel.
-**Status:** Konzept (nichts implementiert). Datum 2026-10-14.
+**Status:** Konzept — Phase 1 (L1 Card + WS-Basis) umgesetzt (Branch
+`feat/ui-card`, 2026-10-15). Datum 2026-10-14.
 
 ---
 
@@ -291,7 +292,7 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 | Phase | Inhalt | Nutzen | Abhängig |
 |---|---|---|---|
 | **0** | Backend-Hygiene (Review Welle 1: N-1, N-3/4, N-9, N-2, N-5, N-6, N-7, N-8) | bessere Graphen/Support/Stabilität — **für jedes** Dashboard | — |
-| **1** | `frontend.py` + `www/health-o-mat-card.js` (L1): Hydration-Ring, letzte BP-Werte, Wellbeing, Quick-Aktionen. Vanilla-Web-Component, keine Build-Toolchain | sofort sichtbarer Mehrwert, einbettbar | Phase 0 (device_class, state_class) |
+| **1** ✅ | `frontend.py` + `www/health-o-mat-card.js` (L1): Hydration-Ring, letzte BP-Werte, Wellbeing, Quick-Aktionen. Vanilla-Web-Component, keine Build-Toolchain | sofort sichtbarer Mehrwert, einbettbar | Phase 0 (device_class, state_class) |
 | **2** | Feature-Sensoren 001/002/003 + `logic.py`-Erweiterung; Karte zeigt Badge/Trend/Streak | entscheidungsrelevante Metriken | — (parallel zu 1) |
 | **3** | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
 | **4** | Admin/Export/Backup im Panel (L3), optional CSV-Import (REQ-HOM-007) | Verwaltung an einem Ort | Phase 3 |
@@ -299,6 +300,12 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 
 **Empfehlung:** Phase 0 strikt zuerst. Die UI auf unbounded Attributen und falschen
 `state_class` aufzusetzen erzeugt sichtbare Fehler, die man später teuer nachzieht.
+
+**Stand (2026-10-15, Branch `feat/ui-card`):** Phase 0 ✅ (Review-Welle 1) und
+Phase 1 ✅ umgesetzt — L1-Card (`www/health-o-mat-card.js`) plus WS-Basis
+(`list_persons`, `panel_data`) und automatische Lovelace-Ressourcen-Registrierung.
+Die JS-Card hat keine CI-Tests; ein Live-E2E auf `ha-test` steht aus. Phasen 2–5
+sind offen.
 
 ---
 
