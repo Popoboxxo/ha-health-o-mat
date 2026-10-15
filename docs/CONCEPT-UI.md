@@ -8,7 +8,9 @@ allein zu lassen.
 **Use-Case:** Getränke-Tracking, Blutdruck, Wohlbefinden — pro Person, mehrere
 Personen parallel.
 **Status:** Konzept — Phase 1 (L1 Card + WS-Basis) umgesetzt (Branch
-`feat/ui-card`, 2026-10-15). Datum 2026-10-14.
+`feat/ui-card`, 2026-10-15) und Phase 3 (L2 Panel + `ui_store` +
+WS-Schreibpfad/`subscribe`) umgesetzt (Branch `feat/ui-panel`, 2026-10-15).
+Datum 2026-10-14.
 
 ---
 
@@ -294,18 +296,22 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 | **0** | Backend-Hygiene (Review Welle 1: N-1, N-3/4, N-9, N-2, N-5, N-6, N-7, N-8) | bessere Graphen/Support/Stabilität — **für jedes** Dashboard | — |
 | **1** ✅ | `frontend.py` + `www/health-o-mat-card.js` (L1): Hydration-Ring, letzte BP-Werte, Wellbeing, Quick-Aktionen. Vanilla-Web-Component, keine Build-Toolchain | sofort sichtbarer Mehrwert, einbettbar | Phase 0 (device_class, state_class) |
 | **2** | Feature-Sensoren 001/002/003 + `logic.py`-Erweiterung; Karte zeigt Badge/Trend/Streak | entscheidungsrelevante Metriken | — (parallel zu 1) |
-| **3** | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
+| **3** ✅ | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
 | **4** | Admin/Export/Backup im Panel (L3), optional CSV-Import (REQ-HOM-007) | Verwaltung an einem Ort | Phase 3 |
 | **5** | Release-Härtung: `release-check.yml`, optionaler Frontend-Smoke (Playwright wie Sofabaton) | sichere Releases | — |
 
 **Empfehlung:** Phase 0 strikt zuerst. Die UI auf unbounded Attributen und falschen
 `state_class` aufzusetzen erzeugt sichtbare Fehler, die man später teuer nachzieht.
 
-**Stand (2026-10-15, Branch `feat/ui-card`):** Phase 0 ✅ (Review-Welle 1) und
-Phase 1 ✅ umgesetzt — L1-Card (`www/health-o-mat-card.js`) plus WS-Basis
-(`list_persons`, `panel_data`) und automatische Lovelace-Ressourcen-Registrierung.
-Die JS-Card hat keine CI-Tests; ein Live-E2E auf `ha-test` steht aus. Phasen 2–5
-sind offen.
+**Stand (2026-10-15, Branch `feat/ui-panel`):** Phase 0 ✅ (Review-Welle 1),
+Phase 1 ✅ (L1-Card `www/health-o-mat-card.js` + WS-Basis `list_persons`/
+`panel_data` + automatische Lovelace-Ressourcen-Registrierung) und Phase 3 ✅
+(L2-Panel `www/health-o-mat-panel.js` + `panel.py` + `ui_store.py` +
+WS-Schreibpfad `book_drink`/`undo_last`/`save_measurement`/`set_wellbeing` +
+`subscribe`-Refresh-Stream + `get/set_ui_settings`; opt-in über
+`enable_sidebar_panel`, Default aus) umgesetzt. Die JS-Card **und das Panel**
+haben keine CI-Tests; ein Live-E2E auf `ha-test` steht aus. Offen sind Phase 4
+(Admin/Export/Backup im Panel) und Phase 5 (Release-Härtung).
 
 ---
 
@@ -320,6 +326,8 @@ sind offen.
    mit Erkennung eines separat via HACS installierten Plugins (Dedupe), wie Sofabaton.
 3. **Panel-Default:** Sidebar automatisch aktivieren (Sofabaton) vs. opt-in per
    Option. → Vorschlag: opt-in über Device-/Options-Schalter (weniger Überraschung).
+   **✅ umgesetzt (opt-in, Option `enable_sidebar_panel`, Default aus; Branch
+   `feat/ui-panel`, 2026-10-15)** — die Entscheidung selbst bleibt unverändert.
 4. **Schreibrechte:** Panel-Schreibzugriffe für alle HA-User vs. nur Admin? →
    Vorschlag: Buchen/Melden für alle (Alltag), Settings/Export admin-only.
 5. **Datenschutz:** Panel zeigt Gesundheitsdaten im Browser-Cache des Users. →

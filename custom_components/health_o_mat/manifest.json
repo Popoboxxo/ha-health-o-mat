@@ -10,7 +10,8 @@
   "config_flow": true,
   "dependencies": [
     "frontend",
-    "http"
+    "http",
+    "panel_custom"
   ],
   "documentation": "https://github.com/Popoboxxo/ha-health-o-mat",
   "integration_type": "device",

@@ -200,14 +200,49 @@ if not _USING_REAL_HA:
     # (static path list, extra-JS URL set, Lovelace resources, WS handlers),
     # so a swallowing Mock would make every such assertion vacuous.
     DATA_EXTRA_MODULE_URL = "frontend_extra_module_url"
+    DATA_PANELS = "frontend_panels"
     LOVELACE_DATA = "lovelace"
     WS_API_DATA = "websocket_api"
+    PANEL_CUSTOM_DATA = "panel_custom_panels"
 
     def add_extra_js_url(hass, url: str) -> None:
         hass.data.setdefault(DATA_EXTRA_MODULE_URL, set()).add(url)
 
     def remove_extra_js_url(hass, url: str) -> None:
         hass.data.setdefault(DATA_EXTRA_MODULE_URL, set()).discard(url)
+
+    def async_remove_panel(hass, frontend_url_path: str, *, warn_if_unknown: bool = True) -> None:
+        """Minimal stand-in for frontend.async_remove_panel (sync, callback)."""
+        hass.data.setdefault(DATA_PANELS, {}).pop(frontend_url_path, None)
+
+    async def async_register_panel(
+        hass,
+        frontend_url_path: str,
+        webcomponent_name: str,
+        sidebar_title=None,
+        sidebar_icon=None,
+        js_url=None,
+        module_url=None,
+        embed_iframe=False,
+        trust_external=False,
+        config=None,
+        require_admin=False,
+        config_panel_domain=None,
+    ) -> None:
+        """Minimal stand-in for panel_custom.async_register_panel.
+
+        Records the panel in `hass.data` so idempotency/registration can be
+        observed; mirrors the argument names of HA 2026.2.
+        """
+        hass.data.setdefault(PANEL_CUSTOM_DATA, {})[frontend_url_path] = {
+            "webcomponent_name": webcomponent_name,
+            "sidebar_title": sidebar_title,
+            "sidebar_icon": sidebar_icon,
+            "js_url": js_url,
+            "module_url": module_url,
+            "config": config,
+            "require_admin": require_admin,
+        }
 
     class StaticPathConfig:
         """Minimal stand-in for homeassistant.components.http.StaticPathConfig."""
@@ -287,8 +322,15 @@ if not _USING_REAL_HA:
         "homeassistant.components.frontend": _module(
             "homeassistant.components.frontend",
             DATA_EXTRA_MODULE_URL=DATA_EXTRA_MODULE_URL,
+            DATA_PANELS=DATA_PANELS,
             add_extra_js_url=add_extra_js_url,
             remove_extra_js_url=remove_extra_js_url,
+            async_remove_panel=async_remove_panel,
+        ),
+        "homeassistant.components.panel_custom": _module(
+            "homeassistant.components.panel_custom",
+            DOMAIN="panel_custom",
+            async_register_panel=async_register_panel,
         ),
         "homeassistant.components.http": _module(
             "homeassistant.components.http",

@@ -287,6 +287,34 @@ entry_id: <config-entry-id>   # optional — ohne Angabe erscheint eine Personen
 Ohne `entry_id` (bzw. bei mehreren Personen) zeigt die Karte automatisch eine
 Personenauswahl.
 
+Die Karte liefert die Integration immer mit — unabhängig vom unten beschriebenen
+Panel.
+
+## Sidebar-Panel (optional)
+
+Optional liefert die Integration ein **Sidebar-Panel** `health-o-mat-panel` —
+eine app-artige Vollbild-Ansicht, die sich als eigener Menüpunkt in die
+HA-Seitenleiste einklinkt:
+
+- 👥 **Mehr-Personen-Übersicht** — eine Kachel je Person (Hydration-Ring, letzte
+  Blutdruckwerte, Wohlbefinden), inklusive Status
+- 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
+  Messen und Melden funktionieren direkt aus dem Panel
+- 🔄 **Live-Aktualisierung** — Schreibvorgänge und externe Änderungen landen ohne
+  Neuladen im Panel (WebSocket-Refresh statt Polling)
+- 🙋 **Per-User-Auswahl** — das Panel merkt sich je HA-Nutzer die zuletzt gewählte
+  Person (nur ein UI-Zustand, **keine** Gesundheitsdaten)
+
+**Das Panel ist opt-in (Default aus).** Ein-/ausgeschaltet wird es pro Person im
+Options-Dialog der Integration über den Schalter **„Sidebar-Panel anzeigen"**
+(`enable_sidebar_panel`): Einstellungen → Geräte & Dienste → **HA Health-O-Mat**
+→ *Konfigurieren* → Optionen → Schalter setzen. Sobald **eine** Person das Panel
+aktiviert, teilen sich alle Personen **ein** gemeinsames Sidebar-Panel
+(„Health-O-Mat"); ohne gesetzte Option bleibt die Seitenleiste unverändert.
+
+Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
+unberührt und funktioniert unabhängig vom Panel.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).

@@ -24,7 +24,8 @@
         "data": {
           "daily_goal_ml": "Daily goal in ml",
           "daily_reset_hour": "Daily reset hour (0-23)",
-          "retention_months": "History retention in months (0 = off)"
+          "retention_months": "History retention in months (0 = off)",
+          "enable_sidebar_panel": "Show sidebar panel"
         }
       },
       "quick_drinks": {

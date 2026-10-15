@@ -522,3 +522,80 @@ def test_options_flow_persists_retention_months():
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["retention_months"] == 6
+
+
+# --- Feature 4 (CONCEPT-UI §8.3): Opt-in-Sidebar-Panel ---
+
+
+def test_init_step_sidebar_panel_defaults_off():
+    """[CONCEPT-UI §8.3] enable_sidebar_panel: Default AUS (bisheriges Verhalten)."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+
+    schema = _init_schema_via_form(options_flow)
+    key = next(k for k in schema.schema if str(k) == "enable_sidebar_panel")
+    assert key.default() is False
+    # `bool` (nicht `vol.Boolean()`) ist Pflicht — nur `bool` serialisiert im
+    # Options-Dialog zu einem Boolean-Toggle (vol.Boolean ist nicht konvertierbar).
+    assert schema.schema[key] is bool
+
+
+def test_init_step_sidebar_panel_reads_existing_value():
+    """[CONCEPT-UI §8.3] Bestehender Wert wird unverändert als Default übernommen."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = {"enable_sidebar_panel": True}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+
+    schema = _init_schema_via_form(options_flow)
+    key = next(k for k in schema.schema if str(k) == "enable_sidebar_panel")
+    assert key.default() is True
+
+
+def test_options_flow_persists_sidebar_panel_option():
+    """[CONCEPT-UI §8.3] Der Options-Flow schreibt enable_sidebar_panel mit."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.data = {"person": "Max"}
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_init(
+            {
+                "daily_goal_ml": 2000,
+                "set_lifetime_ml": 0,
+                "person_display": "",
+                "retention_months": 0,
+                "enable_sidebar_panel": True,
+            }
+        )
+    )
+    quick = {}
+    for i in range(4):
+        quick[f"quick_{i}_label"] = f"Drink {i}"
+        quick[f"quick_{i}_ml"] = 200
+        quick[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["enable_sidebar_panel"] is True

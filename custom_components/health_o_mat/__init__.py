@@ -23,6 +23,7 @@ from .const import (
 )
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
+from .panel import async_apply_panel_state, async_unregister_panel
 from .store import HealthOMatStore
 from .ws_api import async_register_ws_api
 
@@ -116,6 +117,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     _register_services(hass)
     await _async_setup_frontend_layer(hass)
     _apply_options(hass, entry)
+    # Opt-in-Sidebar-Panel (L2) erst NACH der Options-Auswertung anwenden.
+    await _async_apply_panel_layer(hass)
     await _apply_retention(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
@@ -212,6 +215,8 @@ async def _options_updated(hass, entry) -> None:
         await store.set_lifetime_start(entry.entry_id, wanted)
     # Retention nach Options-Änderung anwenden (idempotent, No-op wenn AUS).
     await _apply_retention(hass, entry, store)
+    # Opt-in-Sidebar-Panel: Option enable/disable → Panel registrieren/entfernen.
+    await _async_apply_panel_layer(hass)
     signal_refresh(hass, entry.entry_id)
 
 
@@ -226,6 +231,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
                 await async_unregister_frontend(hass)
             except Exception:  # noqa: BLE001 - Rückbau ist nie unload-kritisch
                 _LOGGER.exception("Health-O-Mat: Frontend-Rückbau fehlgeschlagen")
+            try:
+                await async_unregister_panel(hass)
+            except Exception:  # noqa: BLE001 - Rückbau ist nie unload-kritisch
+                _LOGGER.exception("Health-O-Mat: Panel-Rückbau fehlgeschlagen")
     return unload_ok
 
 
@@ -296,6 +305,21 @@ async def _async_setup_frontend_layer(hass: HomeAssistant) -> None:
         await async_setup_frontend(hass)
     except Exception:  # noqa: BLE001 - UI-Ebene ist nie setup-kritisch
         _LOGGER.exception("Health-O-Mat: Frontend-/WS-Ebene nicht registrierbar")
+
+
+async def _async_apply_panel_layer(hass: HomeAssistant) -> None:
+    """Wendet den Opt-in-Zustand des Sidebar-Panels an (defensiv).
+
+    Das Panel ist domain-weit EIN Element: es wird registriert, sobald
+    mindestens ein Entry die Option `enable_sidebar_panel` gesetzt hat, und
+    andernfalls entfernt. `async_apply_panel_state` ist idempotent (Marker im
+    Shared-Bereich), mehrfache Aufrufe erzeugen also keine Doppel-Registrierung.
+    Die UI-Ebene ist ein Zusatz und darf das Setup nie zum Scheitern bringen.
+    """
+    try:
+        await async_apply_panel_state(hass, hass.config_entries.async_entries(DOMAIN))
+    except Exception:  # noqa: BLE001 - UI-Ebene ist nie setup-kritisch
+        _LOGGER.exception("Health-O-Mat: Sidebar-Panel-Zustand nicht anwendbar")
 
 
 def _register_services(hass: HomeAssistant) -> None:

@@ -28,10 +28,14 @@ from .const import (
     DEFAULT_DIA_THRESHOLD,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    MAX_AMOUNT_ML,
+    MAX_BP_VALUE,
+    MIN_BP_VALUE,
     WELLBEING_STATES,
 )
-from .entity import effective_person
+from .entity import effective_person, signal_refresh
 from .frontend import shared_data
+from .ui_store import HealthOMatUiStore
 
 try:  # HA-Kernkomponente; Import bleibt tolerant, damit das Paket auch ohne
     # WebSocket-Komponente importierbar ist (Frontend-Ebene ist optional).
@@ -73,6 +77,39 @@ WS_MARKER = "ws_api_registered"
 
 COMMAND_LIST_PERSONS = "health_o_mat/list_persons"
 COMMAND_PANEL_DATA = "health_o_mat/panel_data"
+COMMAND_BOOK_DRINK = "health_o_mat/book_drink"
+COMMAND_UNDO_LAST = "health_o_mat/undo_last"
+COMMAND_SAVE_MEASUREMENT = "health_o_mat/save_measurement"
+COMMAND_SET_WELLBEING = "health_o_mat/set_wellbeing"
+COMMAND_SUBSCRIBE = "health_o_mat/subscribe"
+COMMAND_GET_UI_SETTINGS = "health_o_mat/get_ui_settings"
+COMMAND_SET_UI_SETTINGS = "health_o_mat/set_ui_settings"
+
+# Untergrenze für eine Getränke-Buchung (Obergrenze ist MAX_AMOUNT_ML aus const).
+MIN_DRINK_ML = 1
+
+# Undo-Ziel-Typen (empfängt die schon normalisierte Form).
+UNDO_DRINK = "drinks"
+UNDO_BLOOD_PRESSURE = "blood_pressure"
+_UNDO_ALIASES: dict[str, str] = {
+    "drink": UNDO_DRINK,
+    "drinks": UNDO_DRINK,
+    "blood_pressure": UNDO_BLOOD_PRESSURE,
+}
+
+# Shared-Bereich: Lazy-Singleton des Per-User-UI-Stores.
+UI_STORE_MARKER = "ui_store"
+UI_STORE_LOADED_MARKER = "ui_store_loaded"
+
+# WS-Fehlercodes (defensiv: die Konstante fehlt evtl. in Fake-/Teil-Umgebungen).
+if websocket_api is not None:  # pragma: no branch - websocket_api ist fast immer da
+    ERR_NOT_FOUND = getattr(websocket_api, "ERR_NOT_FOUND", "not_found")
+    ERR_INVALID_FORMAT = getattr(websocket_api, "ERR_INVALID_FORMAT", "invalid_format")
+    ERR_UNAUTHORIZED = getattr(websocket_api, "ERR_UNAUTHORIZED", "unauthorized")
+else:  # pragma: no cover - nur ohne WS-Komponente
+    ERR_NOT_FOUND = "not_found"
+    ERR_INVALID_FORMAT = "invalid_format"
+    ERR_UNAUTHORIZED = "unauthorized"
 
 
 # --- Reine Auflösungs-/Rechenfunktionen (HA-frei testbar) -------------------
@@ -146,6 +183,27 @@ def _wellbeing_state(key: Any) -> dict | None:
         if state["key"] == key:
             return state
     return None
+
+
+def normalize_undo_kind(kind: Any) -> str | None:
+    """Freies `kind` → kanonisches Undo-Ziel (None = unbekannt/ungültig).
+
+    Akzeptiert die Service-Aliase (`drink`/`drinks` → Getränke,
+    `blood_pressure` → Blutdruck) und behandelt fehlend/leer wie Getränke
+    (Rückwärtskompatibilität zur bisherigen Service-Semantik).
+    """
+    if kind is None or kind == "":
+        return UNDO_DRINK
+    if not isinstance(kind, str):
+        return None
+    return _UNDO_ALIASES.get(kind.strip().lower())
+
+
+def user_id_of(connection: Any) -> str | None:
+    """HA-User-ID einer WebSocket-Verbindung (None, wenn anonym/nicht verfügbar)."""
+    user = getattr(connection, "user", None)
+    uid = getattr(user, "id", None)
+    return str(uid) if uid else None
 
 
 # --- Aufbau der Antwort-Payloads -------------------------------------------
@@ -323,6 +381,47 @@ def _store(hass: HomeAssistant) -> Any | None:
     return shared.get("store")
 
 
+def _registry(hass: HomeAssistant) -> dict[str, Any]:
+    """Runtime-Registry der Integration (leer, wenn nicht geladen)."""
+    registry = hass.data.get(DOMAIN)
+    return registry if isinstance(registry, dict) else {}
+
+
+def _coordinator(hass: HomeAssistant, entry_id: str) -> Any | None:
+    """Coordinator einer geladenen Person (None = unbekannt/nicht geladen)."""
+    info = _registry(hass).get(entry_id)
+    if isinstance(info, dict):
+        return info.get("coordinator")
+    return None
+
+
+def _entry_ready(hass: HomeAssistant, entry_id: str) -> bool:
+    """True, wenn `entry_id` zu einer geladenen Person mit Coordinator gehört."""
+    return _coordinator(hass, entry_id) is not None
+
+
+def _send_entry_error(connection: Any, msg: dict[str, Any], entry_id: str) -> None:
+    """Sauberer WS-Fehler für eine unbekannte/nicht geladene Person."""
+    connection.send_error(
+        msg["id"],
+        ERR_NOT_FOUND,
+        f"Unbekannte oder nicht geladene Person: {entry_id}",
+    )
+
+
+async def _ui_store(hass: HomeAssistant) -> HealthOMatUiStore:
+    """Per-User-UI-Store lazily anlegen/laden (idempotent, pro Prozess einmal)."""
+    shared = shared_data(hass)
+    store = shared.get(UI_STORE_MARKER)
+    if store is None:
+        store = HealthOMatUiStore(hass)
+        shared[UI_STORE_MARKER] = store
+    if not shared.get(UI_STORE_LOADED_MARKER):
+        await store.async_load()
+        shared[UI_STORE_LOADED_MARKER] = True
+    return store
+
+
 def _device_id(hass: HomeAssistant, entry_id: str) -> str | None:
     """Device-ID des Personen-Devices (None, wenn nicht vorhanden)."""
     if dr is None:  # pragma: no cover - nur ohne Device-Registry
@@ -386,25 +485,66 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
     shared = shared_data(hass)
     if shared.get(WS_MARKER):
         return
-    websocket_api.async_register_command(
-        hass,
-        COMMAND_LIST_PERSONS,
-        websocket_api.async_response(websocket_list_persons),
-        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
-            {vol.Required("type"): COMMAND_LIST_PERSONS}
-        ),
-    )
-    websocket_api.async_register_command(
-        hass,
-        COMMAND_PANEL_DATA,
-        websocket_api.async_response(websocket_panel_data),
-        websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+
+    def _schema(command: str, extra: dict[Any, Any]) -> Any:
+        return websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend(
+            {vol.Required("type"): command, **extra}
+        )
+
+    commands: tuple[tuple[str, Any, dict[Any, Any]], ...] = (
+        (COMMAND_LIST_PERSONS, websocket_list_persons, {}),
+        (COMMAND_PANEL_DATA, websocket_panel_data, {vol.Required("entry_id"): str}),
+        (
+            COMMAND_BOOK_DRINK,
+            websocket_book_drink,
             {
-                vol.Required("type"): COMMAND_PANEL_DATA,
                 vol.Required("entry_id"): str,
-            }
+                vol.Required("ml"): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_DRINK_ML, max=MAX_AMOUNT_ML)
+                ),
+                vol.Optional("drink_type"): str,
+            },
+        ),
+        (
+            COMMAND_UNDO_LAST,
+            websocket_undo_last,
+            {vol.Required("entry_id"): str, vol.Optional("kind"): str},
+        ),
+        (
+            COMMAND_SAVE_MEASUREMENT,
+            websocket_save_measurement,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("sys"): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
+                ),
+                vol.Required("dia"): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
+                ),
+                vol.Optional("pulse"): vol.Coerce(int),
+                vol.Optional("note"): str,
+            },
+        ),
+        (
+            COMMAND_SET_WELLBEING,
+            websocket_set_wellbeing,
+            {vol.Required("entry_id"): str, vol.Required("key"): str},
+        ),
+        (COMMAND_SUBSCRIBE, websocket_subscribe, {vol.Optional("entry_id"): str}),
+        (COMMAND_GET_UI_SETTINGS, websocket_get_ui_settings, {}),
+        (
+            COMMAND_SET_UI_SETTINGS,
+            websocket_set_ui_settings,
+            {
+                vol.Optional("selected_person"): vol.Any(str, None),
+                vol.Optional("prefs"): dict,
+            },
         ),
     )
+    for command, handler, extra in commands:
+        websocket_api.async_register_command(
+            hass, command, websocket_api.async_response(handler), _schema(command, extra)
+        )
     shared[WS_MARKER] = True
 
 
@@ -426,3 +566,188 @@ async def websocket_panel_data(hass: HomeAssistant, connection: Any, msg: dict[s
         )
         return
     connection.send_result(msg["id"], payload)
+
+
+# --- Schreibkommandos (Panel, L2) -------------------------------------------
+# Alle Schreiber laufen über DIESELBEN Store-Methoden und denselben
+# Signalweg (`signal_refresh`) wie die Services — kein Zweitweg für Daten.
+
+
+async def websocket_book_drink(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/book_drink` → Getränk buchen (ml 1..MAX_AMOUNT_ML)."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    ml = _as_int(msg.get("ml"), 0)
+    if ml < MIN_DRINK_ML or ml > MAX_AMOUNT_ML:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"ml muss zwischen {MIN_DRINK_ML} und {MAX_AMOUNT_ML} liegen",
+        )
+        return
+    await store.add_drink(
+        entry_id,
+        dt_util.now().isoformat(),
+        ml,
+        msg.get("drink_type") or "Eigen",
+        "panel",
+    )
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+async def websocket_undo_last(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/undo_last` → letzten Eintrag entfernen (drinks|blood_pressure)."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    kind = normalize_undo_kind(msg.get("kind"))
+    if kind is None:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: drinks, blood_pressure)",
+        )
+        return
+    if kind == UNDO_BLOOD_PRESSURE:
+        removed = await store.remove_last_reading(entry_id)
+        what = "Blutdruckmessungen"
+    else:
+        removed = await store.remove_last_drink(entry_id)
+        what = "Getränke"
+    if not removed:
+        connection.send_error(msg["id"], ERR_NOT_FOUND, f"Keine {what} zum Entfernen")
+        return
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+async def websocket_save_measurement(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/save_measurement` → Blutdruckmessung speichern."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    sys_value = _as_int(msg.get("sys"), 0)
+    dia_value = _as_int(msg.get("dia"), 0)
+    if not (MIN_BP_VALUE <= sys_value <= MAX_BP_VALUE) or not (
+        MIN_BP_VALUE <= dia_value <= MAX_BP_VALUE
+    ):
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"sys/dia müssen zwischen {MIN_BP_VALUE} und {MAX_BP_VALUE} liegen",
+        )
+        return
+    pulse = msg.get("pulse")
+    await store.add_reading(
+        entry_id,
+        dt_util.now().isoformat(),
+        sys_value,
+        dia_value,
+        int(pulse) if pulse is not None else None,
+        msg.get("note") or "",
+        "panel",
+    )
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+async def websocket_set_wellbeing(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/set_wellbeing` → Wohlbefinden melden (Key-validiert)."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    key = msg.get("key")
+    if _wellbeing_state(key) is None:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, f"Unbekannter Wohlbefinden-Key: {key}")
+        return
+    await store.set_wellbeing(entry_id, key, dt_util.now().isoformat())
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+# --- Live-Subscription ------------------------------------------------------
+
+
+def _wait_for_refresh(connection: Any, msg_id: int, entry_id: str, coordinator: Any) -> Any:
+    """Coordinator-Listener, der jeder Refresh als `refresh`-Event pusht."""
+
+    def _on_update() -> None:
+        connection.send_event(msg_id, {"type": "refresh", "entry_id": entry_id})
+
+    return coordinator.async_add_listener(_on_update)
+
+
+def _unsubscriber(removers: list[Any]) -> Any:
+    """Sammel-Unsubscribe für eine Subscription (defensiv/idempotent)."""
+
+    def _unsubscribe() -> None:
+        for remove in removers:
+            try:
+                remove()
+            except Exception:  # noqa: BLE001 - Abmelden ist nie kritisch
+                _LOGGER.debug("Health-O-Mat: WS-Listener nicht abmeldbar", exc_info=True)
+
+    return _unsubscribe
+
+
+async def websocket_subscribe(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/subscribe` → Live-Refresh-Events für eine/alle Personen."""
+    entry_id = msg.get("entry_id")
+    if entry_id is not None:
+        if not _entry_ready(hass, entry_id):
+            _send_entry_error(connection, msg, entry_id)
+            return
+        targets = [(entry_id, _coordinator(hass, entry_id))]
+    else:
+        targets = [
+            (key, info.get("coordinator"))
+            for key, info in _registry(hass).items()
+            if isinstance(info, dict) and info.get("coordinator") is not None
+        ]
+    removers = [
+        _wait_for_refresh(connection, msg["id"], key, coordinator) for key, coordinator in targets
+    ]
+    connection.subscriptions[msg["id"]] = _unsubscriber(removers)
+    connection.send_result(msg["id"])
+
+
+# --- UI-Einstellungen je HA-Nutzer ------------------------------------------
+
+
+async def websocket_get_ui_settings(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/get_ui_settings` → gespeicherte Settings des HA-Nutzers."""
+    store = await _ui_store(hass)
+    connection.send_result(msg["id"], store.get(user_id_of(connection)))
+
+
+async def websocket_set_ui_settings(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/set_ui_settings` → Settings des HA-Nutzers persistieren."""
+    user_id = user_id_of(connection)
+    if user_id is None:
+        connection.send_error(msg["id"], ERR_UNAUTHORIZED, "Kein angemeldeter Benutzer")
+        return
+    store = await _ui_store(hass)
+    updates: dict[str, Any] = {}
+    if "selected_person" in msg:
+        updates["selected_person"] = msg["selected_person"]
+    if "prefs" in msg:
+        updates["prefs"] = msg["prefs"]
+    connection.send_result(msg["id"], await store.async_set(user_id, **updates))
