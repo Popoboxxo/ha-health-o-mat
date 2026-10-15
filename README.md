@@ -312,6 +312,31 @@ Options-Dialog der Integration über den Schalter **„Sidebar-Panel anzeigen"**
 aktiviert, teilen sich alle Personen **ein** gemeinsames Sidebar-Panel
 („Health-O-Mat"); ohne gesetzte Option bleibt die Seitenleiste unverändert.
 
+### Admin-/Settings-Ansicht (L3, nur für HA-Administratoren)
+
+Ist der angemeldete HA-Nutzer **Administrator**, zeigt das Panel zusätzlich eine
+**⚙️ Settings-Ansicht**. Dort lassen sich die Einstellungen einer Person an
+**einem** Ort verwalten (dieselben Schlüssel wie der Options-Dialog — nur als
+eine scrollbare Maske statt drei erzwungener Options-Schritte):
+
+- 🎯 **Tagesziel** (mL) und **Reset-Uhrzeit** (0–23 Uhr)
+- 🏷️ **Anzeigename** der Person
+- 🥤 **Quick-Drink-Slots** (4, je Label/Icon/mL)
+- 📖 **Getränke-Lexikon** — eine Zeile je Wort im Format `wort=Typ,ml`, mit
+  Zeilen-Validierung (die Fehlermeldung nennt die betroffene Zeile)
+- 🩺 **Blutdruck-Warnschwellen** (sys/dia) — wirken zur Laufzeit sofort auf den
+  Blutdruck-Warn-Binary-Sensor
+- 🗄️ **Aufbewahrung** (Retention in Monaten)
+- 📌 **Sidebar-Panel-Schalter** (Opt-in)
+- 📄 **CSV-Export** direkt aus dem Panel anstoßen (`drinks` / `blood_pressure` /
+  `all`, geschrieben nach `/config/health_o_mat_export/`)
+
+**Schreibrechte:** Die **Alltagseingaben bleiben für alle HA-Nutzer offen** —
+Buchen, Messen, Melden und Undo funktionieren unabhängig von Admin-Rechten. Nur
+die **Settings-Ansicht und der Export sind auf HA-Administratoren beschränkt**
+und serverseitig hart abgesichert; Nicht-Admins erhalten einen sauberen Fehler
+statt Zugriff.
+
 Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
 unberührt und funktioniert unabhängig vom Panel.
 
