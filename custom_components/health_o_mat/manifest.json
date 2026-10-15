@@ -1,12 +1,16 @@
 {
   "domain": "health_o_mat",
   "name": "HA Health-O-Mat",
+  "after_dependencies": [
+    "lovelace"
+  ],
   "codeowners": [
     "@Popoboxxo"
   ],
   "config_flow": true,
   "dependencies": [
-    "frontend"
+    "frontend",
+    "http"
   ],
   "documentation": "https://github.com/Popoboxxo/ha-health-o-mat",
   "integration_type": "device",
