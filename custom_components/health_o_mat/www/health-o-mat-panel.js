@@ -20,13 +20,22 @@
  * Views:
  *   - overview: responsive grid, one tile per person (L2 start)
  *   - detail:   tabs Trinken | Blutdruck | Wohlbefinden (concept 4.2–4.4)
+ *   - settings: admin-only per-person admin form (concept 4.5 + §8.4)
+ *
+ * Admin surface (L3): the `settings` view is reachable ONLY for
+ * `hass.user.is_admin` — this UI gate is ADDITIONAL to the server gate, never a
+ * substitute for it. `health_o_mat/get_settings`, `set_settings` and
+ * `export_csv` are admin-gated server-side; a non-admin only ever receives a WS
+ * error, which is surfaced as plain text and never breaks the panel.
  *
  * Robustness: missing entities/states, per-person load errors, and WS write
- * errors are surfaced without ever breaking the panel.
+ * errors are surfaced without ever breaking the panel. The settings form is
+ * never re-rendered from a background `hass` update (it holds unsaved user
+ * input); only explicit actions rebuild it.
  */
 
 const PANEL_TAG = "health-o-mat-panel";
-const PANEL_VERSION = "0.1.0";
+const PANEL_VERSION = "0.2.0";
 
 /* Quick drinks for the "Trinken" tab. `type` is the canonical drink label
  * stored on the drink (`store.add_drink`), used for the caffeine breakdown. */
@@ -75,7 +84,53 @@ const WS = {
   setWellbeing: "health_o_mat/set_wellbeing",
   getUiSettings: "health_o_mat/get_ui_settings",
   setUiSettings: "health_o_mat/set_ui_settings",
+  // Admin-only (server-gated; see "Admin surface" above).
+  getSettings: "health_o_mat/get_settings",
+  setSettings: "health_o_mat/set_settings",
+  exportCsv: "health_o_mat/export_csv",
 };
+
+/* Admin settings form. Structural limits mirror the backend schema so obvious
+ * mistakes are caught before a round-trip; they are NOT a security boundary —
+ * the server validates everything again. They are deliberately never STRICTER
+ * than the server (ws_api.SETTINGS_SCHEMA), otherwise a value the server would
+ * accept could not be saved. */
+const SETTINGS_LIMITS = {
+  goalMin: 1,
+  goalMax: 20000,
+  resetMin: 0,
+  resetMax: 23,
+  // Both BP thresholds are validated as const.MIN_BP_VALUE..MAX_BP_VALUE
+  // server-side (40..260) — one shared pair, intentionally.
+  thresholdMin: 40,
+  thresholdMax: 260,
+  retentionMin: 0,
+  retentionMax: 120,
+  quickMlMin: 1,
+  quickMlMax: 10000,
+  maxQuickDrinks: 4,
+  minQuickDrinks: 1,
+};
+
+/* Display fallbacks used ONLY when `get_settings` omits a key (the contract
+ * lists every key, so this is a defensive default, not a data model). The
+ * numbers mirror const.py (DEFAULT_DAILY_GOAL_ML, DEFAULT_SYS_THRESHOLD, …). */
+const SETTINGS_FALLBACKS = {
+  daily_goal_ml: 2000,
+  daily_reset_hour: 0,
+  sys_threshold: 140,
+  dia_threshold: 90,
+  retention_months: 0,
+  enable_sidebar_panel: false,
+  quick_icon: "mdi:cup-water",
+};
+
+/* Export datasets (mirrors the `export_csv` service schema). */
+const EXPORT_DATASETS = [
+  { value: "all", label: "Alles" },
+  { value: "drinks", label: "Getränke" },
+  { value: "blood_pressure", label: "Blutdruck" },
+];
 
 const RING_RADIUS = 42;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -256,7 +311,7 @@ const PANEL_CSS = `
   .bp-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .field { display: flex; flex-direction: column; gap: 4px; font-size: .8rem;
     color: var(--secondary-text-color, #727272); min-width: 0; }
-  .field input {
+  .field input, .field select, .field textarea {
     width: 100%; min-height: 48px; padding: 8px 10px; font: inherit;
     border-radius: 10px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
     background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
@@ -286,6 +341,41 @@ const PANEL_CSS = `
   .wb-hist .emoji { font-size: 1.3rem; line-height: 1; }
 
   .muted { color: var(--secondary-text-color, #727272); font-size: .85rem; }
+
+  /* --- Admin/Settings (L3, concept 4.5 / §8.4) --------------------------- */
+  .settings-form { display: flex; flex-direction: column; gap: 12px; }
+  .settings-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 600px) { .settings-grid { grid-template-columns: repeat(2, 1fr); } }
+  .hint { font-size: .75rem; color: var(--secondary-text-color, #727272); line-height: 1.35; }
+  .field code, .settings-form code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .8rem;
+  }
+  .field textarea {
+    min-height: 190px; resize: vertical; line-height: 1.45;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .85rem;
+  }
+  .qd-list { display: flex; flex-direction: column; gap: 10px; }
+  .qd-slot {
+    display: grid; grid-template-columns: 1fr; gap: 8px; padding: 10px;
+    border-radius: 12px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+    background: var(--secondary-background-color, rgba(0,0,0,.02));
+  }
+  @media (min-width: 700px) {
+    .qd-slot { grid-template-columns: 2fr 1fr 2fr auto; align-items: end; }
+  }
+  .qd-slot .btn { min-height: 44px; min-width: 44px; padding: 10px 12px; }
+  .check { display: flex; align-items: center; gap: 10px; font-size: .95rem; min-height: 48px; }
+  .check input { width: 22px; height: 22px; flex: none; }
+  .export-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 600px) { .export-row { grid-template-columns: 1fr auto; align-items: end; } }
+  .settings-status { border-radius: 12px; padding: 10px 12px; font-size: .9rem; font-weight: 600; }
+  .settings-status.ok { color: var(--success-color, #43a047); background: rgba(67,160,71,.14); }
+  .settings-status.err { color: var(--error-color, #db4437); background: rgba(219,68,55,.14); }
+  .settings-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+  .settings-actions .btn { flex: 1 1 190px; }
+  .card-title { font-weight: 600; font-size: .95rem; }
 `;
 
 /* --- pure helpers --------------------------------------------------------- */
@@ -318,6 +408,56 @@ function errMsg(err) {
   } catch (_e) {
     return String(err);
   }
+}
+
+/* Integer from a form field: "" / garbage -> null, "3,5" -> 4 (rounded). */
+function intOrNull(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim().replace(",", ".");
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/* WS error -> display text. Home Assistant rejects `callWS` with an object that
+ * carries `code`/`message` and (for validated commands) `translation_placeholders`
+ * — the backend puts the offending lexicon line there, so it is appended instead
+ * of being swallowed by `errMsg`. */
+function wsErrorText(err) {
+  const base = errMsg(err);
+  const ph = err && err.translation_placeholders;
+  if (ph && typeof ph === "object") {
+    if (ph.detail) return `${base}: ${String(ph.detail)}`;
+    const parts = Object.keys(ph)
+      .filter((k) => ph[k] != null && ph[k] !== "")
+      .map((k) => `${k}=${ph[k]}`);
+    if (parts.length) return `${base} (${parts.join(", ")})`;
+  }
+  return base;
+}
+
+/* Normalised quick-drink list, used for both dirty-checking and payloads. */
+function normalizeQuickDrinks(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, SETTINGS_LIMITS.maxQuickDrinks)
+    .filter((d) => d && typeof d === "object")
+    .map((d) => ({
+      key: d.key == null ? "" : String(d.key),
+      label: String(d.label == null ? "" : d.label).trim(),
+      ml: toNumber(d.ml, 0),
+      icon: String(d.icon == null ? "" : d.icon),
+    }));
+}
+
+/* Attribute-safe string (never prints "null"/"undefined" into `value=`). */
+function attrValue(value) {
+  return value === null || value === undefined ? "" : escapeHtml(String(value));
+}
+
+function datasetLabel(value) {
+  const hit = EXPORT_DATASETS.find((d) => d.value === value);
+  return hit ? hit.label : String(value == null ? "" : value);
 }
 
 function relativeTime(iso) {
@@ -408,9 +548,19 @@ class HealthOMatPanel extends HTMLElement {
     this._data = {}; // entry_id -> panel_data payload
     this._entryErrors = {}; // entry_id -> error text
 
-    this._view = "overview"; // "overview" | "detail"
+    this._view = "overview"; // "overview" | "detail" | "settings"
     this._selectedEntry = "";
     this._tab = "drink"; // "drink" | "bp" | "wellbeing"
+
+    // --- admin settings view (L3) ---
+    this._settingsEntry = "";
+    this._settings = {}; // entry_id -> get_settings payload
+    this._settingsErrors = {}; // entry_id -> load error text
+    this._quickDraft = []; // working copy of the 4 quick-drink slots
+    this._settingsBusy = false;
+    this._settingsStatus = null; // { ok: boolean, text: string }
+    this._exportBusy = false;
+    this._exportResult = null; // { ok: boolean, text: string }
 
     this._booted = false;
     this._loading = false;
@@ -429,8 +579,10 @@ class HealthOMatPanel extends HTMLElement {
 
     this._onClick = this._onClick.bind(this);
     this._onSubmit = this._onSubmit.bind(this);
+    this._onChange = this._onChange.bind(this);
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("submit", this._onSubmit);
+    this.shadowRoot.addEventListener("change", this._onChange);
   }
 
   /* ---- Home Assistant panel API ------------------------------------------- */
@@ -443,6 +595,10 @@ class HealthOMatPanel extends HTMLElement {
       return;
     }
     if (this._loading) return;
+    // The settings form holds unsaved user input and needs no live entity
+    // values — a background render would clobber it. Only explicit actions
+    // (save / person switch / reload) rebuild that view.
+    if (this._view === "settings") return;
     // Live values come straight from hass.states; just re-render.
     this._scheduleRender();
   }
@@ -462,6 +618,7 @@ class HealthOMatPanel extends HTMLElement {
   disconnectedCallback() {
     this.shadowRoot.removeEventListener("click", this._onClick);
     this.shadowRoot.removeEventListener("submit", this._onSubmit);
+    this.shadowRoot.removeEventListener("change", this._onChange);
     this._unsubscribe();
     if (this._refreshTimer) {
       clearTimeout(this._refreshTimer);
@@ -610,7 +767,7 @@ class HealthOMatPanel extends HTMLElement {
     this._pending.clear();
     if (!ids.length) return;
     await Promise.all(ids.map((id) => this._loadEntry(id)));
-    this._render();
+    if (this._view !== "settings") this._render();
   }
 
   /* ---- Navigation --------------------------------------------------------- */
@@ -679,6 +836,403 @@ class HealthOMatPanel extends HTMLElement {
       this._manualBusy = false;
       this._render();
     }
+  }
+
+  /* ---- Admin settings (L3, concept 4.5 / §8.4) ----------------------------- */
+
+  /* UI gate only — the server gates get_settings/set_settings/export_csv hard
+   * as well, so this is an affordance, never the boundary. */
+  _isAdmin() {
+    const user = this._hass && this._hass.user;
+    return !!(user && user.is_admin);
+  }
+
+  _openSettings() {
+    if (!this._isAdmin()) return;
+    const persons = this._persons || [];
+    if (!persons.length) return;
+    // Prefer the person currently open in the detail view, then the last
+    // settings selection, then the first person.
+    const preferred = this._selectedEntry || this._settingsEntry || "";
+    const entryId = persons.some((p) => p.entry_id === preferred)
+      ? preferred
+      : persons[0].entry_id;
+    this._view = "settings";
+    this._actionError = null;
+    this._formError = null;
+    this._settingsStatus = null;
+    this._exportResult = null;
+    this._settingsEntry = entryId;
+    // The quick-drink draft belongs to exactly one person — always re-sync it,
+    // otherwise a cached switch would re-use the previous person's slots.
+    this._syncQuickDrafts(this._settings[entryId]);
+    if (!this._settings[entryId]) {
+      this._loadSettings(entryId).then(() => {
+        if (this._view === "settings") this._render();
+      });
+    }
+    this._render();
+  }
+
+  _selectSettingsPerson(entryId) {
+    if (!entryId || entryId === this._settingsEntry) return;
+    this._settingsEntry = entryId;
+    this._settingsStatus = null;
+    this._exportResult = null;
+    this._syncQuickDrafts(this._settings[entryId]);
+    if (!this._settings[entryId]) {
+      this._loadSettings(entryId).then(() => {
+        if (this._view === "settings") this._render();
+      });
+    }
+    this._render();
+  }
+
+  async _loadSettings(entryId) {
+    if (!entryId) return;
+    try {
+      const res = await this._ws({ type: WS.getSettings, entry_id: entryId });
+      if (res && typeof res === "object") {
+        this._settings[entryId] = res;
+        delete this._settingsErrors[entryId];
+        if (this._settingsEntry === entryId) this._syncQuickDrafts(res);
+      } else {
+        this._settingsErrors[entryId] = "Leere Antwort auf get_settings.";
+        delete this._settings[entryId];
+      }
+    } catch (err) {
+      this._settingsErrors[entryId] = wsErrorText(err);
+    }
+  }
+
+  async _reloadSettings() {
+    const entryId = this._settingsEntry;
+    if (!entryId || this._settingsBusy) return;
+    this._settingsBusy = true;
+    this._settingsStatus = null;
+    this._exportResult = null;
+    this._syncSettingsButtons();
+    this._updateStatusDom();
+    try {
+      await this._loadSettings(entryId);
+      await this._reloadPersons();
+    } finally {
+      this._settingsBusy = false;
+      this._render();
+    }
+  }
+
+  async _reloadPersons() {
+    try {
+      const res = await this._ws({ type: WS.listPersons });
+      this._persons = normalizePersons(res && res.persons);
+    } catch (_e) {
+      // Keep the previous list; the settings view stays usable.
+    }
+  }
+
+  _syncQuickDrafts(settings) {
+    this._quickDraft = normalizeQuickDrinks(settings && settings.quick_drinks);
+  }
+
+  /* DOM -> draft. Called before any add/remove and before saving so typed but
+   * not-yet-submitted edits are never dropped by a re-render. */
+  _readQuickDraftsFromDom() {
+    const slots = this.shadowRoot.querySelectorAll("[data-slot]");
+    if (!slots.length) return;
+    const out = [];
+    slots.forEach((slotEl) => {
+      const index = slotEl.getAttribute("data-slot");
+      out.push({
+        key: slotEl.getAttribute("data-key") || "",
+        label: String(this._slotField(index, "qd-label", "") || ""),
+        ml: toNumber(this._slotField(index, "qd-ml", ""), NaN),
+        icon: String(this._slotField(index, "qd-icon", "") || ""),
+      });
+    });
+    this._quickDraft = out;
+  }
+
+  _slotField(index, field, fallback) {
+    const el = this.shadowRoot.querySelector(`[data-field="${field}"][data-index="${index}"]`);
+    if (!el) return fallback;
+    return el.value == null ? fallback : el.value;
+  }
+
+  _addQuickSlot() {
+    this._readQuickDraftsFromDom();
+    if (this._quickDraft.length >= SETTINGS_LIMITS.maxQuickDrinks) return;
+    this._quickDraft.push({
+      key: "",
+      label: "",
+      ml: 250,
+      icon: SETTINGS_FALLBACKS.quick_icon,
+    });
+    this._render();
+  }
+
+  _removeQuickSlot(index) {
+    this._readQuickDraftsFromDom();
+    if (!Number.isFinite(index) || index < 0 || index >= this._quickDraft.length) return;
+    this._quickDraft.splice(index, 1);
+    this._render();
+  }
+
+  /* --- form <-> payload ---------------------------------------------------- */
+
+  _readField(name, fallback) {
+    const el = this.shadowRoot.querySelector(`[data-field="${name}"]`);
+    if (!el) return fallback;
+    return el.value == null ? fallback : el.value;
+  }
+
+  /* Validate + normalise the whole form. Returns { payload, errors }. */
+  _collectSettingsPayload() {
+    const errors = [];
+    const L = SETTINGS_LIMITS;
+
+    const goal = intOrNull(this._readField("daily_goal_ml", ""));
+    if (goal === null || goal < L.goalMin || goal > L.goalMax) {
+      errors.push(`Tagesziel: ganze Zahl zwischen ${L.goalMin} und ${L.goalMax} ml.`);
+    }
+    const reset = intOrNull(this._readField("daily_reset_hour", ""));
+    if (reset === null || reset < L.resetMin || reset > L.resetMax) {
+      errors.push(`Reset-Uhrzeit: ganze Zahl zwischen ${L.resetMin} und ${L.resetMax}.`);
+    }
+    const display = String(this._readField("person_display", "") || "").trim();
+    const sys = intOrNull(this._readField("sys_threshold", ""));
+    if (sys === null || sys < L.thresholdMin || sys > L.thresholdMax) {
+      errors.push(`Systolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+    }
+    const dia = intOrNull(this._readField("dia_threshold", ""));
+    if (dia === null || dia < L.thresholdMin || dia > L.thresholdMax) {
+      errors.push(`Diastolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+    }
+    const retention = intOrNull(this._readField("retention_months", ""));
+    if (retention === null || retention < L.retentionMin || retention > L.retentionMax) {
+      errors.push(`Retention: ${L.retentionMin} (aus) bis ${L.retentionMax} Monate.`);
+    }
+
+    const lexiconEl = this.shadowRoot.querySelector('[data-field="drink_lexicon"]');
+    const lexicon = lexiconEl && lexiconEl.value != null ? String(lexiconEl.value) : "";
+    // Guard against wiping the lexicon with an accidental empty textarea; the
+    // server re-validates the 'word=Type,ml' format and reports the line.
+    if (!lexicon.trim()) {
+      errors.push("Getränke-Lexikon: mindestens eine Zeile (wort=Typ,ml) erforderlich.");
+    }
+
+    const sidebarEl = this.shadowRoot.querySelector('[data-field="enable_sidebar_panel"]');
+    const sidebar = !!(sidebarEl && sidebarEl.checked);
+
+    this._readQuickDraftsFromDom();
+    const quick = [];
+    this._quickDraft.forEach((slot, i) => {
+      const label = String(slot.label == null ? "" : slot.label).trim();
+      if (!label) return; // empty label = removed slot
+      const ml = toNumber(slot.ml, NaN);
+      if (!Number.isFinite(ml) || ml < L.quickMlMin || ml > L.quickMlMax) {
+        errors.push(
+          `Quick-Drink ${i + 1}: ml zwischen ${L.quickMlMin} und ${L.quickMlMax}.`
+        );
+        return;
+      }
+      quick.push({
+        key: String(slot.key == null ? "" : slot.key).trim() || `slot_${i}`,
+        label,
+        ml: Math.round(ml),
+        icon: String(slot.icon == null ? "" : slot.icon).trim() || SETTINGS_FALLBACKS.quick_icon,
+      });
+    });
+    // The server requires at least one quick drink (vol.Length(min=1)); catch it
+    // here so the user gets a precise message instead of a schema error.
+    if (quick.length < L.minQuickDrinks) {
+      errors.push(
+        `Quick-Drinks: mindestens ${L.minQuickDrinks} Slot mit Label erforderlich.`
+      );
+    }
+
+    return {
+      errors,
+      payload: {
+        daily_goal_ml: goal,
+        daily_reset_hour: reset,
+        person_display: display,
+        quick_drinks: quick,
+        drink_lexicon: lexicon,
+        sys_threshold: sys,
+        dia_threshold: dia,
+        retention_months: retention,
+        enable_sidebar_panel: sidebar,
+      },
+    };
+  }
+
+  /* Only the fields that actually differ from the loaded settings are sent
+   * (PATCH semantics of `set_settings`). */
+  _changedSettings(entryId, payload) {
+    const current = this._settings[entryId];
+    if (!current || typeof current !== "object") return Object.assign({}, payload);
+    const sameNum = (a, b) => toNumber(a, NaN) === toNumber(b, NaN);
+    const out = {};
+    if (!sameNum(payload.daily_goal_ml, current.daily_goal_ml)) {
+      out.daily_goal_ml = payload.daily_goal_ml;
+    }
+    if (!sameNum(payload.daily_reset_hour, current.daily_reset_hour)) {
+      out.daily_reset_hour = payload.daily_reset_hour;
+    }
+    if (String(current.person_display == null ? "" : current.person_display) !== payload.person_display) {
+      out.person_display = payload.person_display;
+    }
+    if (
+      JSON.stringify(normalizeQuickDrinks(current.quick_drinks)) !==
+      JSON.stringify(normalizeQuickDrinks(payload.quick_drinks))
+    ) {
+      out.quick_drinks = payload.quick_drinks;
+    }
+    if (
+      String(current.drink_lexicon == null ? "" : current.drink_lexicon) !== payload.drink_lexicon
+    ) {
+      out.drink_lexicon = payload.drink_lexicon;
+    }
+    if (!sameNum(payload.sys_threshold, current.sys_threshold)) {
+      out.sys_threshold = payload.sys_threshold;
+    }
+    if (!sameNum(payload.dia_threshold, current.dia_threshold)) {
+      out.dia_threshold = payload.dia_threshold;
+    }
+    if (!sameNum(payload.retention_months, current.retention_months)) {
+      out.retention_months = payload.retention_months;
+    }
+    if (!!current.enable_sidebar_panel !== payload.enable_sidebar_panel) {
+      out.enable_sidebar_panel = payload.enable_sidebar_panel;
+    }
+    return out;
+  }
+
+  async _submitSettings() {
+    const entryId = this._settingsEntry;
+    if (!entryId || this._settingsBusy) return;
+
+    const collected = this._collectSettingsPayload();
+    if (collected.errors.length) {
+      this._settingsStatus = { ok: false, text: collected.errors.join(" ") };
+      this._updateStatusDom();
+      return;
+    }
+    const changes = this._changedSettings(entryId, collected.payload);
+    if (!Object.keys(changes).length) {
+      this._settingsStatus = { ok: true, text: "Keine Änderungen." };
+      this._updateStatusDom();
+      return;
+    }
+
+    this._settingsBusy = true;
+    this._settingsStatus = { ok: true, text: "Speichere…" };
+    this._syncSettingsButtons();
+    this._updateStatusDom();
+    try {
+      const message = Object.assign({ type: WS.setSettings, entry_id: entryId }, changes);
+      const res = await this._ws(message);
+      if (res && typeof res === "object") {
+        this._settings[entryId] = res;
+        delete this._settingsErrors[entryId];
+      } else {
+        // Older/newer backend without an echo: re-read the authoritative state.
+        await this._loadSettings(entryId);
+      }
+      this._syncQuickDrafts(this._settings[entryId]);
+      await this._reloadPersons();
+      this._settingsBusy = false;
+      this._settingsStatus = { ok: true, text: "Einstellungen gespeichert." };
+      // Full re-render: the form is now rebuilt from the (reloaded) server state.
+      this._render();
+      this._loadEntry(entryId);
+    } catch (err) {
+      // Keep the form DOM untouched so the user's input survives the error.
+      this._settingsBusy = false;
+      this._settingsStatus = { ok: false, text: wsErrorText(err) };
+      this._syncSettingsButtons();
+      this._updateStatusDom();
+    }
+  }
+
+  async _runExport() {
+    const entryId = this._settingsEntry;
+    if (!entryId || this._exportBusy) return;
+    const sel = this.shadowRoot.querySelector('[data-field="export_dataset"]');
+    const dataset = sel && sel.value ? String(sel.value) : "all";
+    this._exportBusy = true;
+    this._exportResult = { ok: true, text: "Export läuft…" };
+    // Targeted DOM updates only — a full re-render would drop unsaved edits.
+    this._syncExportButton();
+    this._updateExportResultDom();
+    try {
+      const res = await this._ws({ type: WS.exportCsv, entry_id: entryId, dataset });
+      this._exportResult = { ok: true, text: this._exportResultText(res) };
+    } catch (err) {
+      this._exportResult = { ok: false, text: wsErrorText(err) };
+    } finally {
+      this._exportBusy = false;
+      this._syncExportButton();
+      this._updateExportResultDom();
+    }
+  }
+
+  /* The export WS result shape is backend-defined; render defensively. */
+  _exportResultText(res) {
+    if (res == null) return "Export abgeschlossen.";
+    if (typeof res === "string") return res;
+    if (typeof res !== "object") return String(res);
+    if (Array.isArray(res.files) && res.files.length) {
+      return `Exportiert: ${res.files.map((f) => String(f)).join(", ")}`;
+    }
+    if (res.files && typeof res.files === "object") {
+      const names = Object.keys(res.files).map((k) => String(res.files[k]));
+      if (names.length) return `Exportiert: ${names.join(", ")}`;
+    }
+    if (res.filename) return `Exportiert: ${String(res.filename)}`;
+    if (res.path) return `Exportiert: ${String(res.path)}`;
+    if (res.message) return String(res.message);
+    if (res.ok === true) {
+      // Backend contract: { ok: true, entry_id, person, dataset }.
+      const parts = [];
+      if (res.person) parts.push(String(res.person));
+      if (res.dataset) parts.push(datasetLabel(res.dataset));
+      const what = parts.length ? ` (${parts.join(" \u00B7 ")})` : "";
+      return `Export ausgel\u00F6st${what} \u2192 /config/health_o_mat_export/`;
+    }
+    if (typeof res.count === "number") return `Export abgeschlossen (${res.count} Zeilen).`;
+    try {
+      return JSON.stringify(res);
+    } catch (_e) {
+      return "Export abgeschlossen.";
+    }
+  }
+
+  /* --- in-place DOM updates (never clobber the form) ----------------------- */
+
+  _syncSettingsButtons() {
+    const btn = this.shadowRoot.querySelector("[data-save-button]");
+    if (!btn) return;
+    if (this._settingsBusy) btn.setAttribute("disabled", "");
+    else btn.removeAttribute("disabled");
+  }
+
+  _syncExportButton() {
+    const btn = this.shadowRoot.querySelector('[data-action="export"]');
+    if (!btn) return;
+    if (this._exportBusy) btn.setAttribute("disabled", "");
+    else btn.removeAttribute("disabled");
+  }
+
+  _updateStatusDom() {
+    const node = this.shadowRoot.querySelector("[data-settings-status]");
+    if (node) node.innerHTML = this._settingsStatusHtml();
+  }
+
+  _updateExportResultDom() {
+    const node = this.shadowRoot.querySelector("[data-export-result]");
+    if (node) node.innerHTML = this._exportResultHtml();
   }
 
   /* ---- Write actions ------------------------------------------------------ */
@@ -871,14 +1425,20 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   _topbarHtml() {
+    const multi = (this._persons || []).length > 1;
     const back =
-      this._view === "detail" && (this._persons || []).length > 1
+      this._view === "settings" || (this._view === "detail" && multi)
         ? `<button class="icon-btn" data-action="back" type="button" aria-label="Zurück zur Übersicht">\u2190</button>`
         : "";
     const refreshing = this._manualBusy ? " disabled" : "";
+    const gear =
+      this._isAdmin() && this._view !== "settings"
+        ? `<button class="icon-btn" data-action="settings" type="button" aria-label="Einstellungen" title="Einstellungen">\u2699\uFE0F</button>`
+        : "";
     return `<div class="topbar">
         ${back}
         <div class="title"><span aria-hidden="true">\u{1F4A7}</span><span class="name">Health-O-Mat</span></div>
+        ${gear}
         <button class="icon-btn" data-action="refresh" type="button" aria-label="Aktualisieren"${refreshing}>\u21BB</button>
       </div>`;
   }
@@ -897,6 +1457,9 @@ class HealthOMatPanel extends HTMLElement {
     if (!this._persons.length) {
       return `<div class="content">${this._message("Keine Person eingerichtet.", false)}</div>`;
     }
+    if (this._view === "settings" && this._isAdmin()) {
+      return `<div class="content">${this._settingsHtml()}</div>`;
+    }
     if (this._view === "detail" && this._selectedEntry) {
       return `<div class="content">${this._detailHtml()}</div>`;
     }
@@ -908,6 +1471,210 @@ class HealthOMatPanel extends HTMLElement {
       ? `<button class="btn ghost" data-action="retry" type="button">Erneut versuchen</button>`
       : "";
     return `<div class="msg${isError ? " error" : ""}">${escapeHtml(text)}${retry}</div>`;
+  }
+
+  /* ---- Admin/Settings (L3, concept 4.5) ----------------------------------- */
+
+  _settingsHtml() {
+    const head = `<div class="person-head"><span class="dot"></span><span>Einstellungen</span></div>`;
+    const persons = this._persons || [];
+    if (!persons.length) {
+      return `${head}${this._message("Keine Person eingerichtet.", false)}`;
+    }
+    // Keep the selection in sync with the rendered person list.
+    let entryId = this._settingsEntry;
+    if (!entryId || !persons.some((p) => p.entry_id === entryId)) {
+      entryId = (this._selectedEntry && persons.some((p) => p.entry_id === this._selectedEntry)
+        ? this._selectedEntry
+        : persons[0].entry_id);
+      this._settingsEntry = entryId;
+    }
+
+    const selector =
+      persons.length > 1
+        ? `<div class="card">
+            <label class="field">Person
+              <select data-action="settings-person">${this._settingsPersonOptions(entryId)}</select>
+            </label>
+          </div>`
+        : "";
+
+    const settings = this._settings[entryId];
+    const loadError = this._settingsErrors[entryId];
+    if (!settings) {
+      const inner = loadError
+        ? this._message(loadError, true)
+        : this._message("Lade Einstellungen\u2026", false);
+      return `${head}${selector}${inner}`;
+    }
+    return `${head}${selector}${this._settingsFormHtml(settings, entryId, loadError)}`;
+  }
+
+  _settingsPersonOptions(entryId) {
+    return (this._persons || [])
+      .map(
+        (p) =>
+          `<option value="${escapeHtml(p.entry_id)}"${p.entry_id === entryId ? " selected" : ""}>${escapeHtml(p.display_name)}</option>`
+      )
+      .join("");
+  }
+
+  _settingsFormHtml(settings, entryId, loadError) {
+    const s = settings || {};
+    const goal =
+      s.daily_goal_ml == null ? SETTINGS_FALLBACKS.daily_goal_ml : s.daily_goal_ml;
+    const reset =
+      s.daily_reset_hour == null ? SETTINGS_FALLBACKS.daily_reset_hour : s.daily_reset_hour;
+    const sys = s.sys_threshold == null ? SETTINGS_FALLBACKS.sys_threshold : s.sys_threshold;
+    const dia = s.dia_threshold == null ? SETTINGS_FALLBACKS.dia_threshold : s.dia_threshold;
+    const retention =
+      s.retention_months == null ? SETTINGS_FALLBACKS.retention_months : s.retention_months;
+    const sidebar = s.enable_sidebar_panel === true;
+    const lexicon = s.drink_lexicon == null ? "" : String(s.drink_lexicon);
+    const display = s.person_display == null ? "" : String(s.person_display);
+
+    const banner = loadError
+      ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(loadError)}</div>`
+      : "";
+
+    return `<form class="settings-form" data-form="settings">
+        ${banner}
+        <div class="card">
+          <div class="card-title">Allgemein</div>
+          <div class="settings-grid">
+            <label class="field">Tagesziel (ml)
+              <input type="number" inputmode="numeric" data-field="daily_goal_ml"
+                min="${SETTINGS_LIMITS.goalMin}" max="${SETTINGS_LIMITS.goalMax}"
+                value="${attrValue(goal)}" />
+            </label>
+            <label class="field">Tages-Reset (Stunde, 0\u201323)
+              <input type="number" inputmode="numeric" data-field="daily_reset_hour"
+                min="${SETTINGS_LIMITS.resetMin}" max="${SETTINGS_LIMITS.resetMax}"
+                value="${attrValue(reset)}" />
+            </label>
+            <label class="field">Anzeigename
+              <input type="text" data-field="person_display" autocomplete="off"
+                value="${attrValue(display)}" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Quick-Drinks (max. ${SETTINGS_LIMITS.maxQuickDrinks})</div>
+          <div class="muted">Ein leer gelassenes Label entfernt den Slot.</div>
+          <div class="qd-list">${this._quickSlotsHtml()}</div>
+          <button class="btn ghost" type="button" data-action="qd-add"
+            ${this._quickDraft.length >= SETTINGS_LIMITS.maxQuickDrinks ? "disabled" : ""}>
+            \uFF0B Slot hinzufügen
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Getränke-Lexikon</div>
+          <div class="hint">
+            Eine Zeile pro Eintrag: <code>wort=Typ,ml</code>
+            (z.\u00A0B. <code>kaffee=Kaffee,250</code>). Zeilen mit <code>#</code> sind Kommentare.
+          </div>
+          <label class="field">Lexikon
+            <textarea data-field="drink_lexicon" rows="10" spellcheck="false"
+              autocapitalize="off" autocomplete="off">${escapeHtml(lexicon)}</textarea>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Blutdruck-Warnschwellen</div>
+          <div class="settings-grid">
+            <label class="field">Systolisch
+              <input type="number" inputmode="numeric" data-field="sys_threshold"
+                min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
+                value="${attrValue(sys)}" />
+            </label>
+            <label class="field">Diastolisch
+              <input type="number" inputmode="numeric" data-field="dia_threshold"
+                min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
+                value="${attrValue(dia)}" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Datenhaltung</div>
+          <div class="settings-grid">
+            <label class="field">Retention (Monate, 0 = aus)
+              <input type="number" inputmode="numeric" data-field="retention_months"
+                min="${SETTINGS_LIMITS.retentionMin}" max="${SETTINGS_LIMITS.retentionMax}"
+                value="${attrValue(retention)}" />
+            </label>
+          </div>
+          <label class="check">
+            <input type="checkbox" data-field="enable_sidebar_panel"${sidebar ? " checked" : ""} />
+            <span>Sidebar-Panel anzeigen</span>
+          </label>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Export</div>
+          <div class="muted">Schreibt CSV-Dateien nach <code>/config/health_o_mat_export/</code>.</div>
+          <div class="export-row">
+            <label class="field">Datensatz
+              <select data-field="export_dataset">
+                ${EXPORT_DATASETS.map(
+                  (d) => `<option value="${escapeHtml(d.value)}">${escapeHtml(d.label)}</option>`
+                ).join("")}
+              </select>
+            </label>
+            <button class="btn" type="button" data-action="export"
+              ${this._exportBusy ? "disabled" : ""}>\u2B07 CSV-Export</button>
+          </div>
+          <div data-export-result>${this._exportResultHtml()}</div>
+        </div>
+
+        <div data-settings-status>${this._settingsStatusHtml()}</div>
+
+        <div class="settings-actions">
+          <button class="btn" type="submit" data-save-button
+            ${this._settingsBusy ? "disabled" : ""}>\u{1F4BE} Speichern</button>
+          <button class="btn ghost" type="button" data-action="settings-reload"
+            ${this._settingsBusy ? "disabled" : ""}>\u21BB Neu laden</button>
+        </div>
+      </form>`;
+  }
+
+  _quickSlotsHtml() {
+    const fallbackIcon = SETTINGS_FALLBACKS.quick_icon;
+    return this._quickDraft
+      .map(
+        (slot, i) => `<div class="qd-slot" data-slot="${i}" data-key="${escapeHtml(slot.key || "")}">
+          <label class="field">Label
+            <input type="text" data-field="qd-label" data-index="${i}" autocomplete="off"
+              value="${attrValue(slot.label)}" placeholder="z.\u00A0B. Glas Wasser" />
+          </label>
+          <label class="field">ml
+            <input type="number" inputmode="numeric" data-field="qd-ml" data-index="${i}"
+              min="${SETTINGS_LIMITS.quickMlMin}" max="${SETTINGS_LIMITS.quickMlMax}"
+              value="${attrValue(slot.ml)}" />
+          </label>
+          <label class="field">Icon
+            <input type="text" data-field="qd-icon" data-index="${i}" autocomplete="off"
+              value="${attrValue(slot.icon || fallbackIcon)}" placeholder="mdi:cup-water" />
+          </label>
+          <button class="btn ghost" type="button" data-action="qd-remove" data-index="${i}"
+            aria-label="Slot entfernen">\u2715</button>
+        </div>`
+      )
+      .join("");
+  }
+
+  _settingsStatusHtml() {
+    const status = this._settingsStatus;
+    if (!status) return "";
+    return `<div class="settings-status ${status.ok ? "ok" : "err"}" role="status">${escapeHtml(status.text)}</div>`;
+  }
+
+  _exportResultHtml() {
+    const result = this._exportResult;
+    if (!result) return "";
+    return `<div class="settings-status ${result.ok ? "ok" : "err"}" role="status">${escapeHtml(result.text)}</div>`;
   }
 
   /* ---- Overview (L2 start) ------------------------------------------------ */
@@ -1257,9 +2024,25 @@ class HealthOMatPanel extends HTMLElement {
         case "back":
           this._showOverview();
           break;
+        case "settings":
+          this._openSettings();
+          break;
+        case "settings-reload":
+          this._reloadSettings();
+          break;
+        case "qd-add":
+          this._addQuickSlot();
+          break;
+        case "qd-remove":
+          this._removeQuickSlot(toNumber(el.getAttribute("data-index"), -1));
+          break;
+        case "export":
+          this._runExport();
+          break;
         case "refresh":
         case "retry":
-          this._manualRefresh();
+          if (this._view === "settings") this._reloadSettings();
+          else this._manualRefresh();
           break;
         case "tab":
           this._setTab(el.getAttribute("data-tab"));
@@ -1286,6 +2069,14 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
+  _onChange(ev) {
+    const el = ev.target;
+    if (!el || !el.getAttribute) return;
+    if (el.getAttribute("data-action") === "settings-person") {
+      this._selectSettingsPerson(el.value ? String(el.value) : "");
+    }
+  }
+
   _onSubmit(ev) {
     const form = ev.target;
     if (!form || !form.getAttribute) return;
@@ -1296,6 +2087,9 @@ class HealthOMatPanel extends HTMLElement {
     } else if (kind === "bp") {
       ev.preventDefault();
       this._submitBp();
+    } else if (kind === "settings") {
+      ev.preventDefault();
+      this._submitSettings();
     }
   }
 
