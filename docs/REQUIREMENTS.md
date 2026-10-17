@@ -91,12 +91,32 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-007 — CSV-Import-Service
 - **Priorität:** P3 · **Aufwand:** M
+- **Status: Erledigt (Branch `feat/import-backup`)** — alle Akzeptanzkriterien
+  umgesetzt; siehe zusätzlich die Notiz zu Backup/Restore am Ende dieses Eintrags.
 - **Beschreibung:** `health_o_mat.import_csv` — Übernahme Getränke-/Mess-Historie
   (Export-Format, tolerant).
 - **Akzeptanzkriterien:**
-  - [ ] Nur aus `/config/health_o_mat_import/` (Datenschutzregel, kein WWW)
-  - [ ] Duplikat-Schutz (ts+ml); Ergebnis-Notification (übernommen/skipped/rejected)
-  - [ ] Rundreise-Tests Export → Import
+  - [x] Nur aus `/config/health_o_mat_import/` (Datenschutzregel, kein WWW) —
+    Pfad-Whitelist in `importer.safe_import_path`: nur relative Namen unterhalb
+    `<config_dir>/health_o_mat_import/`; absolute Pfade, `..`-Traversal,
+    Symlink-Escapes und leere Namen werden abgewiesen. Gelesen wird ausschließlich
+    aus dem privaten Import-Verzeichnis, **nie** aus `/config/www`
+    (`importer.py`, `tests/test_import_backup.py`).
+  - [x] Duplikat-Schutz (ts+ml); Ergebnis-Notification (übernommen/skipped/rejected) —
+    Getränke werden über `(ts, ml)`, Blutdruck über `(ts, sys, dia)` dedupliziert
+    (`plan_import`); der Service gibt `imported/skipped/rejected` (+ `errors`)
+    zurück und erzeugt eine `persistent_notification` mit der Zusammenfassung.
+    Toleranz: Semikolon-getrennt, UTF-8 mit/ohne BOM, `#`-Kommentare, fehlender/
+    abweichender Header (`importer.parse_csv_text`).
+  - [x] Rundreise-Tests Export → Import — `tests/test_import_backup.py`
+    (`test_plan_import_roundtrip_drinks` sowie Toleranz-, Duplikat- und
+    Pfad-Whitelist-Tests).
+- **Notiz (über REQ-HOM-007 hinaus):** Zusätzlich existiert ein
+  **`health_o_mat.backup`-Service** (JSON-Voll-Export aller Personen/Datensätze/
+  Zeiträume, versioniertes Dokument `format`/`version`) nach
+  `/config/health_o_mat_export/` (`backup.py`). **Restore ist weiterhin offen** —
+  das Backup-Dokument ist auf einen späteren Restore vorbereitet, kann aber noch
+  nicht automatisch zurückgespielt werden.
 
 ### REQ-HOM-008 — Wochenbericht-Service
 - **Priorität:** P3 · **Aufwand:** M
@@ -244,3 +264,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | Datum | Änderung |
 |---|---|
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
+| 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
