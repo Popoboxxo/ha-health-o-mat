@@ -83,3 +83,37 @@ export_csv:
               value: "drinks"
             - label: Blutdruck
               value: "blood_pressure"
+
+import_csv:
+  name: CSV-Import
+  description: >-
+    Importiert Getränke- oder Blutdruckdaten aus /config/health_o_mat_import/
+    (nur dieses Verzeichnis, niemals /config/www).
+  fields:
+    filename:
+      name: Dateiname
+      description: Dateiname innerhalb des Import-Ordners /config/health_o_mat_import/.
+      example: "health_o_mat_drinks_Max_20261014-1200.csv"
+      required: true
+    person:
+      name: Person
+      description: Ziel-Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    dataset:
+      name: Datensatz
+      description: Welche Daten importiert werden (all = automatisch erkennen).
+      example: "all"
+      selector:
+        select:
+          options:
+            - label: Alles (automatisch)
+              value: "all"
+            - label: Getränke
+              value: "drinks"
+            - label: Blutdruck
+              value: "blood_pressure"
+
+backup:
+  name: Backup
+  description: >-
+    Sichert alle Personen und Datensätze als JSON nach /config/health_o_mat_export/.
