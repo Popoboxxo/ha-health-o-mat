@@ -1,0 +1,130 @@
+name: Release Check
+
+# Release hardening: guard the release triple (commit -> tag -> GitHub release).
+# HACS derives the remote version from the tag of the latest real release and
+# compares it against manifest.version, so tag <-> manifest drift is a shipping
+# bug. This workflow fails fast when they disagree or when the pre-release flag
+# of the GitHub release does not match the tag channel.
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: Tag <-> manifest.json sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag format and manifest version
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          # release events carry the tag name in the payload; push events expose
+          # the tag through github.ref_name (github.event.release.* is empty).
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          # Authoritative only for release events; empty string for push events.
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          MANIFEST = "custom_components/health_o_mat/manifest.json"
+          # Tag: leading "v" + bare SemVer, optionally a PEP-440 pre-release suffix.
+          TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)((?:a|b|rc)\d+)?$")
+          # manifest.version: bare SemVer, never with a leading "v".
+          VERSION_RE = re.compile(r"^\d+\.\d+\.\d+((?:a|b|rc)\d+)?$")
+
+
+          def fail(msg: str) -> None:
+              print(f"::error::{msg}")
+              sys.exit(1)
+
+
+          event = (os.environ.get("RELEASE_EVENT") or "").strip()
+          tag = (os.environ.get("RELEASE_TAG") or "").strip()
+          prerelease_raw = (os.environ.get("RELEASE_IS_PRERELEASE") or "").strip().lower()
+
+          if not tag:
+              fail(
+                  "No tag name available "
+                  "(github.event.release.tag_name and github.ref_name are both empty)."
+              )
+
+          match = TAG_RE.match(tag)
+          if not match:
+              fail(
+                  f"Invalid tag '{tag}': expected 'v<MAJOR>.<MINOR>.<PATCH>' or a "
+                  "PEP-440 pre-release such as 'v1.3.0b0'. The leading 'v' belongs in "
+                  "the tag only, never in manifest.version."
+              )
+
+          tag_bare = f"{match.group(1)}{match.group(2) or ''}"
+          tag_is_prerelease = bool(match.group(2))
+
+          try:
+              with open(MANIFEST, encoding="utf-8") as handle:
+                  manifest_version = json.load(handle)["version"]
+          except (OSError, KeyError, json.JSONDecodeError) as err:
+              fail(f"Cannot read 'version' from {MANIFEST}: {err}")
+
+          if not isinstance(manifest_version, str) or not VERSION_RE.match(manifest_version):
+              fail(
+                  f"Invalid version '{manifest_version}' in {MANIFEST}: expected bare "
+                  "SemVer without a leading 'v' (for example '0.6.0' or '1.3.0b0')."
+              )
+
+          if manifest_version != tag_bare:
+              fail(
+                  f"Tag/manifest drift: tag '{tag}' implies version '{tag_bare}', but "
+                  f"{MANIFEST} declares version '{manifest_version}'. Keep the tag and "
+                  "manifest.version in sync."
+              )
+
+          # Pre-release consistency is only authoritative when a release payload
+          # exists. A bare push of a tag has no release context yet, so it is not
+          # treated as a failure (avoiding false positives).
+          if event == "release":
+              release_is_prerelease = prerelease_raw == "true"
+              if tag_is_prerelease and not release_is_prerelease:
+                  fail(
+                      f"Pre-release drift: tag '{tag}' carries the pre-release suffix "
+                      "'b'/'a'/'rc', but the GitHub release is not flagged as pre-release. "
+                      "Flag it as pre-release so HACS holds it behind the "
+                      "pre-release switch."
+                  )
+              if release_is_prerelease and not tag_is_prerelease:
+                  fail(
+                      f"Pre-release drift: the GitHub release for '{tag}' is flagged as "
+                      "pre-release, but the tag has no pre-release suffix."
+                  )
+              channel = "pre-release" if release_is_prerelease else "stable"
+          elif event == "push":
+              channel = "unknown (push event: no release context, flag not checked)"
+          else:
+              channel = "unknown"
+
+          print(f"OK: tag '{tag}' matches manifest version '{manifest_version}'.")
+          print(
+              "Tag channel: "
+              f"{'pre-release' if tag_is_prerelease else 'stable'} | release flag: {channel}"
+          )
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as summary:
+                  summary.write(
+                      "## Release check\n\n"
+                      f"- Tag: `{tag}`\n"
+                      f"- manifest.json version: `{manifest_version}`\n"
+                      f"- Channel: {channel}\n"
+                  )
+          PY
