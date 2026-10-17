@@ -882,3 +882,164 @@ def test_caffeine_today_naive_ts_with_aware_now_no_crash():
     now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
     drinks = [{"ts": "2026-08-22T09:00:00", "ml": 250, "type": "Kaffee"}]
     assert logic.caffeine_today(drinks, now)["total_mg"] == 100.0
+
+
+# --- Hydration-Pace (Konzept docs/CONCEPT-UI.md §6.3) ---
+#
+# Halbzeit-Anker: NOW = 12:00 bei Tagesgrenze 00:00 ⇒ Anteil 0.5,
+# Soll = goal * 0.5, Toleranz = 10 % des Ziels (2000 → 200 ml).
+
+_PACE_NOW = datetime(2026, 8, 22, 12, 0)
+
+
+def _pace_drink(ml: int, ts: str = "2026-08-22T09:00:00") -> dict:
+    return {"ts": ts, "ml": ml, "type": "Wasser"}
+
+
+def test_hydration_pace_ahead_and_forecast_may_exceed_goal():
+    """[PACE] Deutlich über dem linearen Soll ⇒ ahead; Forecast darf > Ziel sein."""
+    pace = logic.hydration_pace([_pace_drink(1300)], _PACE_NOW, 2000)
+    assert pace == {
+        "status": "ahead",
+        "actual_ml": 1300,
+        "expected_ml": 1000.0,
+        "delta_ml": 300.0,
+        "forecast_ml": 2600.0,
+        "percent": 65.0,
+    }
+
+
+def test_hydration_pace_on_track():
+    """[PACE] Genau auf dem linearen Soll ⇒ on_track, delta 0."""
+    pace = logic.hydration_pace([_pace_drink(1000)], _PACE_NOW, 2000)
+    assert pace["status"] == "on_track"
+    assert pace["delta_ml"] == 0.0
+    assert pace["forecast_ml"] == 2000.0
+    assert pace["percent"] == 50.0
+
+
+def test_hydration_pace_behind():
+    """[PACE] Deutlich unter dem linearen Soll ⇒ behind."""
+    pace = logic.hydration_pace([_pace_drink(600)], _PACE_NOW, 2000)
+    assert pace["status"] == "behind"
+    assert pace["delta_ml"] == -400.0
+    assert pace["forecast_ml"] == 1200.0
+    assert pace["percent"] == 30.0
+
+
+def test_hydration_pace_tolerance_boundary_is_on_track():
+    """[PACE] |delta| exakt auf der Toleranz (200 ml) ⇒ noch on_track."""
+    assert logic.hydration_pace([_pace_drink(1200)], _PACE_NOW, 2000)["status"] == "on_track"
+    assert logic.hydration_pace([_pace_drink(800)], _PACE_NOW, 2000)["status"] == "on_track"
+
+
+def test_hydration_pace_never_returns_goal_reached():
+    """[PACE] `goal_reached` vergibt die UI-Schicht — logic liefert nur 3 Werte."""
+    pace = logic.hydration_pace([_pace_drink(3000)], _PACE_NOW, 2000)
+    assert pace["status"] == "ahead"
+
+
+def test_hydration_pace_empty_drinks_is_zero_actual():
+    """[PACE] Keine Buchungen ⇒ actual 0 (bei Halbzeit ⇒ behind)."""
+    pace = logic.hydration_pace([], _PACE_NOW, 2000)
+    assert pace["actual_ml"] == 0
+    assert pace["status"] == "behind"
+    assert pace["percent"] == 0.0
+
+
+def test_hydration_pace_non_positive_goal_is_undefined():
+    """[PACE] goal <= 0 ⇒ kein Soll-Verlauf; Ist-Stand bleibt erhalten."""
+    drinks = [_pace_drink(1500)]
+    for goal in (0, -500):
+        pace = logic.hydration_pace(drinks, _PACE_NOW, goal)
+        assert pace["status"] is None
+        assert pace["actual_ml"] == 1500
+        assert pace["expected_ml"] is None
+        assert pace["delta_ml"] is None
+        assert pace["forecast_ml"] is None
+        assert pace["percent"] == 0.0
+
+
+def test_hydration_pace_invalid_goal_is_robust():
+    """[PACE] Ungültiges Ziel (None/Text) ⇒ kein Crash, wie goal <= 0 behandelt."""
+    for goal in (None, "kein-ziel"):
+        pace = logic.hydration_pace([], _PACE_NOW, goal)
+        assert pace["status"] is None
+        assert pace["percent"] == 0.0
+
+
+def test_hydration_pace_at_day_start_no_division_by_zero():
+    """[PACE] Exakt am Tagesbeginn (Anteil 0): forecast None, kein ZeroDivisionError."""
+    at_start = datetime(2026, 8, 22, 0, 0)
+    pace = logic.hydration_pace([], at_start, 2000)
+    assert pace["expected_ml"] == 0.0
+    assert pace["delta_ml"] == 0.0
+    assert pace["status"] == "on_track"
+    assert pace["forecast_ml"] is None
+    assert pace["percent"] == 0.0
+
+
+def test_hydration_pace_at_day_start_with_intake_is_ahead():
+    """[PACE] Erste Buchung direkt am Tagesbeginn ⇒ Soll 0, also ahead."""
+    at_start = datetime(2026, 8, 22, 0, 30)
+    pace = logic.hydration_pace([_pace_drink(500, "2026-08-22T00:15:00")], at_start, 2000)
+    assert pace["actual_ml"] == 500
+    assert pace["expected_ml"] == 41.7  # 2000 * 0.5 h / 24 h
+    assert pace["status"] == "ahead"
+
+
+def test_hydration_pace_shortly_before_day_end():
+    """[PACE] Anteil ~1 kurz vor Tagesende: Forecast knapp über dem Ist-Stand."""
+    now = datetime(2026, 8, 22, 23, 30)
+    pace = logic.hydration_pace([_pace_drink(1900)], now, 2000)
+    assert pace["status"] == "on_track"  # Soll 1958.3, Toleranz 200
+    assert pace["expected_ml"] == pytest.approx(1958.3, abs=0.1)
+    assert pace["forecast_ml"] == pytest.approx(1940.4, abs=0.1)
+
+
+def test_hydration_pace_respects_reset_hour_boundary():
+    """[PACE] Tagesgrenze 04:00: 03:00-Buchung zählt zum Vortag, Fenster = 8 h."""
+    drinks = [
+        _pace_drink(500, "2026-08-22T03:00:00"),  # vor 04:00 → Vortag
+        _pace_drink(300, "2026-08-22T09:00:00"),  # heute
+    ]
+    pace = logic.hydration_pace(drinks, _PACE_NOW, 2000, hour=4)
+    assert pace["actual_ml"] == 300
+    assert pace["expected_ml"] == 666.7  # 2000 * 8 h / 24 h
+    assert pace["status"] == "behind"
+
+
+def test_hydration_pace_respects_reset_minute_boundary():
+    """[PACE] Grenze mit Minute != 0 (06:30): Fenster = 5,5 h."""
+    drinks = [_pace_drink(500, "2026-08-22T06:00:00")]  # vor 06:30 → Vortag
+    pace = logic.hydration_pace(drinks, _PACE_NOW, 2000, hour=6, minute=30)
+    assert pace["actual_ml"] == 0
+    assert pace["expected_ml"] == pytest.approx(2000 * 5.5 / 24, abs=0.1)
+    assert pace["status"] == "behind"
+
+
+def test_hydration_pace_mixed_naive_and_aware_ts_no_crash():
+    """[TZ] Gemischte naive/aware ts + ungültiger ts ⇒ kein Crash, korrekter Ist-Stand."""
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=_TZ)
+    drinks = [
+        {"ts": "2026-08-22T09:00:00", "ml": 600, "type": "Wasser"},  # naive
+        {"ts": "2026-08-22T10:00:00+02:00", "ml": 600, "type": "Wasser"},  # aware
+        {"ts": "2026-08-21T20:00:00", "ml": 999, "type": "Wasser"},  # Vortag
+        {"ts": "kaputt", "ml": 999, "type": "Wasser"},
+    ]
+    pace = logic.hydration_pace(drinks, now, 2000)
+    assert pace["actual_ml"] == 1200
+    assert pace["status"] == "on_track"  # delta +200 == Toleranz
+    assert pace["percent"] == 60.0
+
+
+def test_hydration_pace_is_consistent_with_today_sums():
+    """[PACE] `actual_ml` ist exakt die heutige Summe (`today_sums`)."""
+    now = datetime(2026, 8, 22, 15, 0)
+    drinks = [
+        _pace_drink(250, "2026-08-22T08:00:00"),
+        _pace_drink(500, "2026-08-22T13:00:00"),
+        _pace_drink(999, "2026-08-21T20:00:00"),  # Vortag
+    ]
+    pace = logic.hydration_pace(drinks, now, 2000, hour=4)
+    assert pace["actual_ml"] == logic.today_sums(drinks, now, hour=4)["total_ml"] == 750

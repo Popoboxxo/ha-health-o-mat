@@ -129,7 +129,11 @@ Adaption der go-gauge „Matrix": responsives Grid, eine Kachel je Person.
 
 - **Hydration-Ring** = `drinks_today` / `daily_goal` (sekundär `daily_goal_progress`).
 - **Pace/Prognose** (go-gauge-Lehre): Ist-Stand vs. linearem Tagesverlauf →
-  „auf Kurs / zu langsam". Braucht eine kleine Logik-Erweiterung (siehe 6.3).
+  „auf Kurs / zu langsam". **Umgesetzt** (2026-10-15, Branch `feat/hydration-pace`):
+  `logic.hydration_pace` berechnet den linearen Soll-Stand echt (siehe 6.3). Der
+  Panel-Vertrag `today.pace` bleibt ein **String-Label**
+  (`goal_reached`/`ahead`/`on_track`/`behind`) — die Detailwerte `expected_ml`/
+  `delta_ml`/`forecast_ml` kommen **additiv** hinzu (nichts Bestehendes umbenannt).
 - **Quick-Buttons** als große Touch-Flächen (heute `button.*_<quick>`).
 - **Freitext** = `text.log_drink_free_text` (Parser bleibt).
 - **Undo** = `button.undo_last_drink`.
@@ -207,7 +211,8 @@ health_o_mat/list_persons
 
 health_o_mat/panel_data          { entry_id }
   → { person, goal_ml, reset_hour,
-      today: { ml, percent, count, breakdown, yesterday_ml, pace },
+      today: { ml, percent, count, breakdown, yesterday_ml, pace,
+               expected_ml, delta_ml, forecast_ml },
       bp:    { sys, dia, pulse, at, avg7: {sys,dia,pulse},
                category, warning, entries: [...] },
       wellbeing: { key, label, emoji, at, history: [...] },
@@ -227,6 +232,10 @@ health_o_mat/search_persons      { references }   # optional, unique_id-Suffix-M
   Services (kein Zweitweg).
 - Der `entities`-Block wird über den **`unique_id`-Suffix** aufgelöst
   (`{entry_id}_{key}`) — robust gegen Slug-/Sprachdrift (go-gauge-Lehre).
+- `today.pace` bleibt ein **String-Label** (`goal_reached` | `ahead` | `on_track` |
+  `behind`, `null` ohne positives Ziel); `expected_ml`/`delta_ml`/`forecast_ml`
+  sind **additive** Detailwerte aus `logic.hydration_pace` (stabiler Vertrag,
+  nichts Bestehendes umbenannt).
 - Optional `ws_register`/`require_admin` für Admin-Kommandos.
 
 ### 5.3 Frontend (Lit + TypeScript, gebündelt)
@@ -284,7 +293,12 @@ Card/Panel  ──(WS command)──▶  backend handler
 Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 
 ### 6.3 Kleine neue Logik (HA-frei, testbar)
-- `hydration_pace(drinks, now, goal, reset_hour)` → Ist vs. linearer Soll-Verlauf.
+- ✅ `hydration_pace(drinks, now, goal_ml, hour=0, minute=0)` → Ist vs. linearer
+  Soll-Verlauf. Liefert `status` (`ahead`/`on_track`/`behind`), `actual_ml`,
+  `expected_ml`, `delta_ml`, `forecast_ml`, `percent` (lineare Erwartung,
+  Toleranzband ±10 % des Ziels; Tagesgrenze = `daily_reset_hour`/`-minute`).
+  **Umgesetzt** 2026-10-15, Branch `feat/hydration-pace`; Tests
+  `tests/test_logic.py::test_hydration_pace_*`.
 - `who_category(sys, dia)` → Enum (REQ-HOM-001).
 - `bp_trend(readings, now)` → steigend/fallend/stabil (REQ-HOM-002).
 → in `logic.py`, Unit-Tests wie bestehend (Muster `tests/test_logic.py`).

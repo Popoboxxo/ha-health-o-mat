@@ -577,3 +577,88 @@ def caffeine_today(
             breakdown[drink_type] = mg
             total_mg += mg
     return {"total_mg": round(total_mg, 1), "breakdown": breakdown}
+
+
+# --- Hydration-Pace (Konzept docs/CONCEPT-UI.md §6.3) ---
+
+# Toleranzband um den linearen Soll-Stand, als Anteil des Tagesziels.
+# |delta_ml| <= goal * PACE_TOLERANCE_RATIO gilt als "on_track".
+PACE_TOLERANCE_RATIO = 0.1
+
+# Nominale Dauer eines Tracking-Tags in Sekunden. Die Tagesgrenze
+# (`daily_reset_hour`/`daily_reset_minute`) verschiebt nur den START des
+# Fensters, nicht seine Länge — der Anteil ist daher verstrichene Sekunden
+# geteilt durch 24 h (lineare Näherung, DST-tolerant wie `day_start`).
+PACE_DAY_SECONDS = 86400.0
+
+
+def hydration_pace(
+    drinks: Iterable[dict[str, Any]],
+    now: datetime,
+    goal_ml: Any,
+    hour: int = 0,
+    minute: int = 0,
+) -> dict[str, Any]:
+    """Trink-Pace des laufenden Tracking-Tags: Ist-Stand vs. linearer Soll-Verlauf.
+
+    HA-frei und on-read (kein Reset-Job), konsistent mit `today_sums`/
+    `day_start` — neustart- und DST-fest.
+
+    Fenster = laufender Tracking-Tag [`day_start(now, hour, minute)`, `now`).
+    `expected_ml` ist der lineare Soll-Stand "gleichmäßig über den Tag"
+    (`goal * Anteil des Tages`, Anteil auf [0, 1] geklemmt), `delta_ml` die
+    Abweichung Ist − Soll, `forecast_ml` die Hochrechnung auf das Tagesende
+    (`actual / Anteil`; darf das Ziel überschreiten).
+
+    Rückgabe (alle Werte robust, keine Exception):
+        status: "ahead" | "on_track" | "behind" | None
+            None nur, wenn kein positives Ziel gesetzt ist. `goal_reached`
+            ist bewusst NICHT Teil dieser Funktion — die UI-Schicht vergibt es
+            aus `actual_ml >= goal_ml`.
+        actual_ml: heutige Summe (`today_sums`), auch ohne Ziel berechnet.
+        expected_ml: Soll-Stand, gerundet auf 1 Nachkommastelle; None ohne Ziel.
+        delta_ml: actual − expected, 1 Nachkommastelle; None ohne Ziel.
+        forecast_ml: Hochrechnung auf Tagesende, 1 Nachkommastelle; None ohne
+            Ziel ODER exakt am Tagesbeginn (Anteil 0 → keine Division durch 0).
+        percent: actual / goal * 100, 1 Nachkommastelle; 0.0 ohne Ziel.
+
+    `goal_ml <= 0`/ungültig ⇒ kein Soll-Verlauf: status/expected/delta/forecast
+    None, percent 0.0 (der Ist-Stand bleibt trotzdem erhalten).
+    """
+    try:
+        goal = int(goal_ml)
+    except (TypeError, ValueError):
+        goal = 0
+
+    actual_ml = int(today_sums(drinks, now, hour, minute)["total_ml"])
+
+    if goal <= 0:
+        return {
+            "status": None,
+            "actual_ml": actual_ml,
+            "expected_ml": None,
+            "delta_ml": None,
+            "forecast_ml": None,
+            "percent": 0.0,
+        }
+
+    elapsed = (now - day_start(now, hour, minute)).total_seconds()
+    fraction = min(max(elapsed / PACE_DAY_SECONDS, 0.0), 1.0)
+    expected = goal * fraction
+    delta = actual_ml - expected
+    tolerance = goal * PACE_TOLERANCE_RATIO
+    if delta > tolerance:
+        status = "ahead"
+    elif delta < -tolerance:
+        status = "behind"
+    else:
+        status = "on_track"
+
+    return {
+        "status": status,
+        "actual_ml": actual_ml,
+        "expected_ml": round(expected, 1),
+        "delta_ml": round(delta, 1),
+        "forecast_ml": None if fraction <= 0.0 else round(actual_ml / fraction, 1),
+        "percent": round(actual_ml / goal * 100, 1),
+    }
