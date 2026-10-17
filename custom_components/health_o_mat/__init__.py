@@ -398,6 +398,21 @@ def _register_services(hass: HomeAssistant) -> None:
 
         await async_export_csv(hass, store, call, archive_store=shared.get("archive_store"))
 
+    async def import_csv(call: ServiceCall) -> None:
+        entry_id, _info = get_runtime_data(hass, call)
+        shared = hass.data.get(DOMAIN, {}).get("shared", {})
+        store: HealthOMatStore = shared.get("store")
+        from .importer import async_import_csv
+
+        await async_import_csv(hass, store, entry_id, call)
+
+    async def backup(call: ServiceCall) -> None:
+        shared = hass.data.get(DOMAIN, {}).get("shared", {})
+        store: HealthOMatStore = shared.get("store")
+        from .backup import async_backup
+
+        await async_backup(hass, store)
+
     hass.services.async_register(
         DOMAIN,
         "add_drink",
@@ -446,4 +461,22 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=export_csv,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "import_csv",
+        schema=vol.Schema(
+            {
+                vol.Required("filename"): str,
+                vol.Optional("person"): str,
+                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+            }
+        ),
+        service_func=import_csv,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "backup",
+        schema=vol.Schema({}),
+        service_func=backup,
     )

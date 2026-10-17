@@ -218,6 +218,28 @@
     "export_csv": {
       "name": "CSV export",
       "description": "Exports data as Excel-friendly CSV to /config/health_o_mat_export/."
+    },
+    "import_csv": {
+      "name": "CSV import",
+      "description": "Imports drinks or blood-pressure data from /config/health_o_mat_import/ (this folder only, never /config/www).",
+      "fields": {
+        "filename": {
+          "name": "File name",
+          "description": "File name inside /config/health_o_mat_import/."
+        },
+        "person": {
+          "name": "Person",
+          "description": "Target person (empty = the only configured person)."
+        },
+        "dataset": {
+          "name": "Dataset",
+          "description": "Which data to import: drinks, blood_pressure or all (auto-detect)."
+        }
+      }
+    },
+    "backup": {
+      "name": "Backup",
+      "description": "Writes a JSON backup of all persons and datasets to /config/health_o_mat_export/."
     }
   }
 }

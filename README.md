@@ -236,7 +236,60 @@ data: { person: "Caro", kind: "drinks" }   # drinks (Default) | blood_pressure
 
 action: health_o_mat.export_csv
 data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all
+
+action: health_o_mat.import_csv
+data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
+# optional: dataset: drinks | blood_pressure | all (default: all = auto-detect)
+
+action: health_o_mat.backup
 ```
+
+## Import & Backup
+
+### CSV import
+
+Re-imports a previously exported CSV (or any file in the same format) into one
+person's history:
+
+1. Copy the CSV into `/config/health_o_mat_import/` (create the folder if it
+   does not exist yet).
+2. Call the service:
+
+```yaml
+action: health_o_mat.import_csv
+data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
+```
+
+The import is deliberately tolerant: semicolon-separated, UTF-8 with or without
+BOM, `#` comment lines, and a missing or deviating header are all accepted.
+Existing entries are recognised as duplicates and skipped (drinks by timestamp +
+amount, blood pressure by timestamp + systolic + diastolic); unreadable rows are
+rejected. A notification reports the outcome as `imported / skipped / rejected`.
+
+### Backup (JSON full export)
+
+```yaml
+action: health_o_mat.backup
+```
+
+Writes a versioned JSON backup of **all persons and datasets** — every time range
+— to `/config/health_o_mat_export/`, using a timestamped filename
+(`health_o_mat_backup_<YYYYMMDD-HHMMSS>.json`). It is the basis for a future
+restore.
+
+### Data protection
+
+Both services only ever touch private directories:
+
+- `/config/health_o_mat_import/` — import source
+- `/config/health_o_mat_export/` — CSV exports and JSON backups
+
+Files are **never** written to `/config/www/`, which would be publicly reachable
+through the Home Assistant web server. Keep these folders out of any public
+share.
+
+> ℹ️ **Restore is not available yet.** The JSON backup cannot be re-imported
+> automatically; a restore feature is still open.
 
 ## Dashboard-Beispiele
 
