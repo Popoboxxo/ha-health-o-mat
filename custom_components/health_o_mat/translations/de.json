@@ -25,7 +25,10 @@
           "daily_goal_ml": "Tagesziel in ml",
           "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)",
           "retention_months": "Aufbewahrung der Historie in Monaten (0 = aus)",
-          "enable_sidebar_panel": "Sidebar-Panel anzeigen"
+          "enable_sidebar_panel": "Sidebar-Panel anzeigen",
+          "area_drink": "Trinken erfassen",
+          "area_bp": "Blutdruck erfassen",
+          "area_wellbeing": "Wohlbefinden erfassen"
         }
       },
       "quick_drinks": {

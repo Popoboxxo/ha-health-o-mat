@@ -1,12 +1,12 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-09-06 · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04)
+**Stand:** 2026-10-18 (UI-Ausbau, Branch `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
-1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…010: dokumentiert,
+1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
 2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…110: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
@@ -127,11 +127,88 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-009 — Pro-Person Feature-Toggles
 - **Priorität:** P3 · **Aufwand:** L
+- **Status: Erledigt (Branch `feat/ui-pro`)** — alle Akzeptanzkriterien mit Beleg;
+  auf `ha-test` E2E-verifiziert (Reload **und** Neustart).
 - **Beschreibung:** Trinken/Blutdruck/Wohlbefinden pro Person an/aus → Entities nur
   für aktive Bereiche.
+- **Design:** Toggles in `entry.options["areas"] = {drink, bp, wellbeing}`
+  (HA-freie Logik in `areas.py`); fehlender Schlüssel — `areas` selbst oder ein
+  einzelner Unter-Schlüssel — bedeutet **aktiv** (Alt-Entry-Migrationspfad).
+  Die Plattformen (`sensor.py`, `button.py`, `number.py`, `select.py`, `text.py`,
+  `binary_sensor.py`) erzeugen Entities nur für aktive Bereiche; eine
+  Options-Änderung löst `async_reload(entry)` aus (`__init__.py::_options_updated`).
+  Zusätzlich in der Options-Maske (Schritt „init", Felder `area_drink`/`area_bp`/
+  `area_wellbeing`) und in der Admin-Settings-Ansicht des Panels.
 - **Akzeptanzkriterien:**
-  - [ ] De-/Aktivieren ändert KEINE unique_ids (Entities laden/entladen nur)
-  - [ ] Migrationspfad: Alt-Entries = alle aktiv
+  - [x] De-/Aktivieren ändert KEINE unique_ids (Entities laden/entladen nur) —
+    E2E belegt: Registry-Einträge byte-identisch, Reaktivierung = identische
+    `entity_id`, Store unverändert (`tests/test_areas.py`,
+    `tests/test_areas_wiring.py`).
+  - [x] Migrationspfad: Alt-Entries = alle aktiv — `areas.active_areas` behandelt
+    fehlende/ungültige Angaben als „alle aktiv" (`tests/test_areas.py`); E2E mit
+    frischem Entry ohne `areas`-Schlüssel bestätigt.
+  - [x] Regression-Schutz: Ein Bereichs-Toggle (Reload) setzt den Lebenszähler
+    **nicht** zurück (`tests/test_areas_wiring.py::test_apply_options_does_not_touch_lifetime`).
+
+### REQ-HOM-011 — Card-Ausbau (kompakt, L1)
+- **Priorität:** P3 · **Aufwand:** S–M
+- **Status: Erledigt (Branch `feat/ui-pro`)** — kompakte Lese-Zusätze + Editor-Komfort
+  (D9).
+- **Beschreibung:** Die mitgelieferte Lovelace-Karte (`health-o-mat-card`) um
+  kompakte Lese-Mehrwerte ergänzen, ohne sie zum Panel-Ersatz zu machen; **kein**
+  Admin/Settings in der Karte.
+- **Akzeptanzkriterien:**
+  - [x] Hydration-Pace-Badge, Serie (`goal_streak`), Koffein (`caffeine_today`)
+    und freundliches WHO-Kategorie-Label (`logic.bp_category`-Schlüssel) angezeigt
+  - [x] Editor-Komfort: Personenauswahl via `list_persons` (statt manueller
+    `entry_id`-Eingabe), weiterhin Abwärtskompatibilität
+  - [x] Bereiche mit Toggle aus werden in der Karte ausgeblendet (REQ-HOM-009)
+
+### REQ-HOM-012 — Person-Ansicht + Deep-Link
+- **Priorität:** P3 · **Aufwand:** M
+- **Status: Erledigt (Branch `feat/ui-pro`)** — Deep-Link-Mechanik E2E auf
+  Registrierungs-/Auslieferungsebene geprüft; Browser-Smoke (pushState/popstate)
+  steht aus (durch JS-Analyse-Test `tests/test_panel_js.py` abgedeckt).
+- **Beschreibung:** Adressierbare, vollwertige Person-Seite im Panel mit stabilem
+  Deep-Link.
+- **Akzeptanzkriterien:**
+  - [x] URL-Query `?person=<kennung>` adressiert die Person-Seite
+    (`history.pushState` + `popstate`); Tabs (Trinken/BD/Wohlbefinden) bleiben,
+    Bereiche mit Toggle aus werden ausgeblendet
+  - [x] Kennung = **stabiler Slug** `entry.data["person"]` (nie Anzeigename);
+    `list_persons`/`panel_data` liefern `person_slug` + `areas` additiv
+  - [ ] Browser-Smoke (Playwright) auf `ha-test` — offen, optional (Phase 5)
+
+### REQ-HOM-013 — Admin-/Instanzverwaltung (L3)
+- **Priorität:** P3 · **Aufwand:** M–L
+- **Status: Erledigt (Branch `feat/ui-pro`)** — E2E: gated Löschen entfernt die
+  freischaltende Person und meldet das Panel ohne Neustart ab.
+- **Beschreibung:** Verwaltung an einem Ort (admin-gated): Rename/Anzeigename,
+  bestehende Per-Person-Settings, Backup-Trigger, Person anlegen, Person löschen.
+- **Akzeptanzkriterien:**
+  - [x] Rename/Anzeigename + alle bestehenden Settings im Admin-Formular (bereits)
+  - [x] **Backup-Trigger** aus dem Panel (`health_o_mat/backup` → ruft genau den
+    `health_o_mat.backup`-Service auf, kein Zweitweg)
+  - [x] **Person anlegen** via Flow-Verweis/-Start
+    (`health_o_mat/start_person_flow` → `config_entries.async_init`), kein
+    eigenes WS-CRUD
+  - [x] **Person löschen** nur admin-gated + **Doppelbestätigung** (Bestätigung
+    muss exakt dem Personen-Slug entsprechen) + Hinweis auf offenen Restore
+    (`health_o_mat/delete_person`)
+  - [x] Domain-weite Richtigstellung: das Panel wird abgemeldet, wenn die letzte
+    freischaltende Person entfernt wurde (vorher erst nach HA-Neustart)
+
+### REQ-HOM-014 — Frontend-Struktur (NFA)
+- **Priorität:** P3 · **Aufwand:** S
+- **Status: Erledigt (Branch `feat/ui-pro`)**
+- **Beschreibung:** Wartbare Frontend-Struktur ohne Bundler-Pflicht.
+- **Akzeptanzkriterien:**
+  - [x] Panel in native ES-Module gegliedert (Entry + `-base`/`-views`/`-admin`),
+    kein npm/esbuild
+  - [x] Cache-Busting `?v=<manifest.version>` für Card und Panel-Module;
+    JS-Analyse-Test (`tests/test_panel_js.py`) erzwingt die Kopplung an
+    `manifest.version`; Bestands-Card-Ressource wird beim Setup auf die
+    versionierte URL nachgezogen
 
 ### REQ-HOM-010 — Mess-Notiz-Eingabe
 - **Priorität:** P3 · **Aufwand:** S
@@ -265,3 +342,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 |---|---|
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
 | 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
+| 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |

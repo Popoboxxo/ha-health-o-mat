@@ -6,6 +6,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from . import areas
 from .const import DEFAULT_QUICK_DRINKS, DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
 
@@ -13,19 +14,27 @@ from .entity import HealthOMatEntity, signal_refresh
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    entities: list = [
-        CustomDrinkButton(coord, entry, store),
-        UndoDrinkButton(coord, entry, store),
-        SaveReadingButton(coord, entry, store),
-    ]
-    # Quick-Drinks aus entry.options (editierbar, Fund F1); Fallback auf Defaults
-    quick_drinks = entry.options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
-    for i in range(len(quick_drinks)):
-        entities.append(QuickDrinkButton(coord, entry, store, i))
-    from .const import WELLBEING_STATES
+    active = areas.active_areas(entry.options)
 
-    for status in WELLBEING_STATES:
-        entities.append(WellbeingButton(coord, entry, store, status))
+    entities: list = []
+    if active[areas.AREA_DRINK]:
+        entities.extend(
+            [
+                CustomDrinkButton(coord, entry, store),
+                UndoDrinkButton(coord, entry, store),
+            ]
+        )
+        # Quick-Drinks aus entry.options (editierbar, Fund F1); Fallback auf Defaults
+        quick_drinks = entry.options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
+        for i in range(len(quick_drinks)):
+            entities.append(QuickDrinkButton(coord, entry, store, i))
+    if active[areas.AREA_BP]:
+        entities.append(SaveReadingButton(coord, entry, store))
+    if active[areas.AREA_WELLBEING]:
+        from .const import WELLBEING_STATES
+
+        for status in WELLBEING_STATES:
+            entities.append(WellbeingButton(coord, entry, store, status))
     async_add_entities(entities)
 
 

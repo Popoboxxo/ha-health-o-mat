@@ -69,3 +69,55 @@ def test_async_set_value_falls_back_to_default_lexicon_without_options():
     args = store.add_drink.call_args[0]
     assert args[2] == 300
     assert args[3] == "Kaffee"
+
+
+# --- REQ-HOM-009: pro-Person Bereichs-Toggles filtern das Text-Setup ---
+
+_ENTRY_ID = "test-entry-1"
+_FREETEXT_ID = "test-entry-1_text_freetext"
+
+
+def _text_setup(options: dict) -> set[str]:
+    added: list = []
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = options
+    coord = MagicMock()
+    store = MagicMock()
+    hass.data = {
+        "health_o_mat": {
+            _ENTRY_ID: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    _run(text_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents)))
+    return {e._attr_unique_id for e in added}
+
+
+def test_text_setup_old_entry_without_options_has_drink_area():
+    """[REQ-HOM-009] Alt-Entry ohne areas-Option = Getränke-Bereich aktiv."""
+    assert _text_setup({}) == {_FREETEXT_ID}
+
+
+def test_text_setup_drink_disabled_creates_no_entity():
+    """[REQ-HOM-009] drink AUS → kein Freitext-Entity."""
+    assert _text_setup({"areas": {"drink": False}}) == set()
+
+
+def test_text_setup_only_drink_when_bp_and_wellbeing_disabled():
+    """[REQ-HOM-009] bp + wellbeing AUS ändert nichts (Text ist Drink-only)."""
+    assert _text_setup({"areas": {"bp": False, "wellbeing": False}}) == {_FREETEXT_ID}
+
+
+def test_text_unique_ids_stable_across_area_toggle():
+    """[REQ-HOM-009] De-/Reaktivieren erzeugt dieselbe unique_id."""
+    on_ids = _text_setup({})
+    off_ids = _text_setup({"areas": {"drink": False}})
+    on_again_ids = _text_setup({"areas": {"drink": True}})
+
+    assert on_ids == {_FREETEXT_ID}
+    assert off_ids == set()
+    assert on_again_ids == on_ids

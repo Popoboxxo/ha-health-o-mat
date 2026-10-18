@@ -37,6 +37,7 @@ def _load(name: str):
 
 
 panel = _load("panel")
+frontend = sys.modules[f"{_PKG}.frontend"]
 
 DOMAIN = "health_o_mat"
 
@@ -102,8 +103,10 @@ def test_panel_urls_are_consistent():
     """[§5.1] Modul-URL zeigt auf dieselbe www-Auslieferung wie die Card."""
     assert panel.PANEL_URL_PATH == "health-o-mat"
     assert panel.WEBCOMPONENT_NAME == "health-o-mat-panel"
-    assert panel.PANEL_MODULE_URL == f"{panel.URL_BASE}/health-o-mat-panel.js"
-    assert panel.PANEL_MODULE_URL == "/health_o_mat/health-o-mat-panel.js"
+    assert panel.PANEL_MODULE_URL == frontend.versioned_url("health-o-mat-panel.js")
+    assert panel.PANEL_MODULE_URL == (
+        f"/health_o_mat/health-o-mat-panel.js?v={frontend.integration_version()}"
+    )
 
 
 # --- Registrierung ----------------------------------------------------------
@@ -122,7 +125,9 @@ def test_setup_registers_panel_with_expected_params(monkeypatch):
     assert call["webcomponent_name"] == "health-o-mat-panel"
     assert call["sidebar_title"] == "Health-O-Mat"
     assert call["sidebar_icon"] == "mdi:heart-pulse"
-    assert call["module_url"] == "/health_o_mat/health-o-mat-panel.js"
+    assert call["module_url"] == (
+        f"/health_o_mat/health-o-mat-panel.js?v={frontend.integration_version()}"
+    )
     assert call["require_admin"] is False
     assert call["config"] == {}
 

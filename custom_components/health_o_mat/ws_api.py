@@ -24,6 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from . import logic, parser
+from .areas import AREAS, OPTION_AREAS, active_areas
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
@@ -70,6 +71,12 @@ ENTITY_SUFFIXES: dict[str, str] = {
     "wellbeing": "sensor_wellbeing_since",
     "drinks_history": "sensor_drinks_history",
     "bp_history": "sensor_bp_history",
+    # Rein additiv (keine bestehenden Schlüssel umbenannt/entfernt): kompakte
+    # Karten-Zusatzwerte. Die Sensoren existieren bereits (REQ-HOM-002/003/004).
+    "drinks_trend": "sensor_drinks_trend",
+    "bp_trend": "sensor_bp_trend",
+    "goal_streak": "sensor_goal_streak",
+    "caffeine_today": "sensor_caffeine_today",
 }
 
 # Payload-Obergrenzen (N-1: keine unbegrenzten Attribute/Payloads).
@@ -90,13 +97,23 @@ COMMAND_SET_UI_SETTINGS = "health_o_mat/set_ui_settings"
 COMMAND_GET_SETTINGS = "health_o_mat/get_settings"
 COMMAND_SET_SETTINGS = "health_o_mat/set_settings"
 COMMAND_EXPORT_CSV = "health_o_mat/export_csv"
+COMMAND_START_PERSON_FLOW = "health_o_mat/start_person_flow"
+COMMAND_DELETE_PERSON = "health_o_mat/delete_person"
+COMMAND_BACKUP = "health_o_mat/backup"
 
 # Admin-only (Konzept §8.4, Entscheidung 4): Settings lesen/schreiben und
 # Export sind Verwaltungsvorgänge. Die Alltags-Schreibkommandos
 # (book_drink/undo_last/save_measurement/set_wellbeing) bleiben für ALLE
 # angemeldeten User offen — bewusst KEIN Admin-Gate dort.
 ADMIN_ONLY_COMMANDS: frozenset[str] = frozenset(
-    {COMMAND_GET_SETTINGS, COMMAND_SET_SETTINGS, COMMAND_EXPORT_CSV}
+    {
+        COMMAND_GET_SETTINGS,
+        COMMAND_SET_SETTINGS,
+        COMMAND_EXPORT_CSV,
+        COMMAND_START_PERSON_FLOW,
+        COMMAND_DELETE_PERSON,
+        COMMAND_BACKUP,
+    }
 )
 
 # Untergrenze für eine Getränke-Buchung (Obergrenze ist MAX_AMOUNT_ML aus const).
@@ -128,6 +145,7 @@ else:  # pragma: no cover - nur ohne WS-Komponente
 # Eigener Fehlercode: der bestehende `export_csv`-Service meldet fachliche
 # Probleme als `ServiceValidationError` (z. B. „Keine Daten zum Exportieren").
 ERR_EXPORT_FAILED = "export_failed"
+ERR_BACKUP_FAILED = "backup_failed"
 
 
 # --- Admin-/Settings-Kommandos (L3, Konzept §4.5/§8.4) ---------------------
@@ -148,6 +166,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     "dia_threshold",
     "retention_months",
     OPTION_ENABLE_SIDEBAR_PANEL,
+    OPTION_AREAS,
 )
 
 # Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
@@ -203,6 +222,9 @@ SETTINGS_SCHEMA = vol.Schema(
             vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)
         ),
         vol.Optional(OPTION_ENABLE_SIDEBAR_PANEL): vol.Boolean(),
+        vol.Optional(OPTION_AREAS): vol.Schema(
+            {vol.Optional(area): vol.Boolean() for area in AREAS}
+        ),
     }
 )
 
@@ -296,7 +318,12 @@ def user_id_of(connection: Any) -> str | None:
 
 
 def list_persons(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Alle konfigurierten Personen für die Mehr-Personen-Übersicht."""
+    """Alle konfigurierten Personen für die Mehr-Personen-Übersicht.
+
+    `person_slug` ist der STABILE Deep-Link-Anker (`entry.data["person"]`) und
+    `areas` die aktivierten Feature-Flächen — beides additiv zum bestehenden
+    Vertrag (entry_id/display_name/device_id).
+    """
     try:
         entries = hass.config_entries.async_entries(DOMAIN)
     except Exception:  # noqa: BLE001 - Config-Entries-API defensiv
@@ -307,6 +334,8 @@ def list_persons(hass: HomeAssistant) -> list[dict[str, Any]]:
             "entry_id": entry.entry_id,
             "display_name": effective_person(entry),
             "device_id": _device_id(hass, entry.entry_id),
+            "person_slug": entry.data.get("person", ""),
+            "areas": active_areas(getattr(entry, "options", None)),
         }
         for entry in entries
     ]
@@ -342,6 +371,8 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
     return {
         "entry_id": entry_id,
         "person": effective_person(entry),
+        "person_slug": entry.data.get("person", ""),
+        "areas": active_areas(options),
         # Stabiler Service-Anker für Karten-Schreibzugriffe: `get_runtime_data`
         # matcht Service-Calls gegen `entry.data["person"]`, NICHT gegen den
         # Anzeigenamen (`person` kann per `options.person_display` abweichen).
@@ -649,6 +680,13 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
             websocket_export_csv,
             {vol.Optional("entry_id"): str, vol.Optional("dataset"): _any_value},
         ),
+        (COMMAND_START_PERSON_FLOW, websocket_start_person_flow, {}),
+        (
+            COMMAND_DELETE_PERSON,
+            websocket_delete_person,
+            {vol.Required("entry_id"): str, vol.Required("confirm"): str},
+        ),
+        (COMMAND_BACKUP, websocket_backup, {}),
     )
     for command, handler, extra in commands:
         wrapped = websocket_api.async_response(handler)
@@ -986,6 +1024,7 @@ def build_settings(entry: Any) -> dict[str, Any]:
         ),
         "retention_months": _as_int(options.get("retention_months"), DEFAULT_RETENTION_MONTHS),
         OPTION_ENABLE_SIDEBAR_PANEL: bool(options.get(OPTION_ENABLE_SIDEBAR_PANEL, False)),
+        OPTION_AREAS: active_areas(options),
     }
 
 
@@ -1108,3 +1147,77 @@ async def websocket_export_csv(hass: HomeAssistant, connection: Any, msg: dict[s
             "dataset": dataset,
         },
     )
+
+
+async def websocket_start_person_flow(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/start_person_flow` → Config-Flow zum Anlegen einer Person (nur Admin)."""
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    async_init = getattr(getattr(hass, "config_entries", None), "async_init", None)
+    if async_init is None:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "Config-Flow-Start wird von dieser Home-Assistant-Version nicht unterstützt",
+        )
+        return
+    try:
+        flow = await async_init(DOMAIN, context={"source": "user"})
+    except Exception as err:  # noqa: BLE001 - Flow-Start darf nie den WS-Handler sprengen
+        _LOGGER.exception("Health-O-Mat: Config-Flow konnte nicht gestartet werden")
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"Config-Flow konnte nicht gestartet werden: {err}",
+        )
+        return
+    flow_id = flow.get("flow_id") if isinstance(flow, Mapping) else None
+    connection.send_result(msg["id"], {"flow_id": flow_id})
+
+
+async def websocket_delete_person(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/delete_person` → Person nach Doppelbestätigung entfernen (nur Admin).
+
+    Die Bestätigung (`confirm`) muss EXAKT dem stabilen Slug
+    `entry.data["person"]` entsprechen — so kann nie versehentlich eine andere
+    Person gelöscht werden.
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    entry_id = msg["entry_id"]
+    entry = _runtime_entry(hass, entry_id)
+    if entry is None:
+        _send_entry_error(connection, msg, entry_id)
+        return
+    slug = entry.data.get("person", "")
+    if msg["confirm"] != slug:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "Die Bestätigung stimmt nicht mit dem Personen-Schlüssel überein",
+        )
+        return
+    await hass.config_entries.async_remove(entry_id)
+    connection.send_result(msg["id"], {"ok": True, "entry_id": entry_id})
+
+
+async def websocket_backup(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/backup` → bestehenden Backup-Service auslösen (nur Admin).
+
+    Kein Zweitweg: es wird genau der `health_o_mat.backup`-Service aufgerufen.
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    try:
+        await hass.services.async_call(DOMAIN, "backup", {}, blocking=True)
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], ERR_BACKUP_FAILED, str(err))
+        return
+    connection.send_result(msg["id"], {"ok": True})

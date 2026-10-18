@@ -69,6 +69,7 @@ class FakeResources:
         self.loaded = loaded
         self.load_calls = 0
         self.created: list[dict] = []
+        self.updated: list[tuple] = []
 
     async def async_load(self) -> None:
         self.load_calls += 1
@@ -81,6 +82,13 @@ class FakeResources:
         item = {"id": "new", "type": data.get("res_type"), "url": data["url"]}
         self.items.append(item)
         return item
+
+    async def async_update_item(self, item_id: str, updates: dict) -> dict:
+        self.updated.append((item_id, dict(updates)))
+        for item in self.items:
+            if item.get("id") == item_id:
+                item.update(updates)
+        return next(item for item in self.items if item.get("id") == item_id)
 
 
 class FakeYamlResources:
@@ -118,7 +126,9 @@ def test_static_path_registered_once_with_expected_config(tmp_path, monkeypatch)
     assert config.url_path == "/health_o_mat"
     assert config.path == str(tmp_path)
     assert config.cache_headers is True
-    assert frontend.CARD_URL == "/health_o_mat/health-o-mat-card.js"
+    assert frontend.CARD_URL == (
+        f"/health_o_mat/health-o-mat-card.js?v={frontend.integration_version()}"
+    )
 
 
 def test_card_resource_registered_as_lovelace_resource(tmp_path, monkeypatch):
@@ -151,15 +161,86 @@ def test_lovelace_resource_loaded_lazily_when_not_loaded(tmp_path, monkeypatch):
 
 
 def test_existing_card_resource_is_deduped(tmp_path, monkeypatch):
-    """Bereits vorhandene Card (z. B. Query-Cache-Buster) wird nicht erneut angelegt."""
+    """Bereits vorhandene Card (plain ODER versioniert) wird nicht erneut angelegt."""
     monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
     hass = FakeHass()
-    resources = FakeResources(items=[{"url": f"{frontend.CARD_URL}?v=2"}])
+    # Unversionierte Alt-URL und eine versionierte URL mit anderem Cache-Buster
+    # müssen BEIDE als dieselbe Card erkannt werden.
+    resources = FakeResources(
+        items=[
+            {"url": frontend.CARD_BASE_URL},
+            {"url": f"{frontend.CARD_BASE_URL}?v=0"},
+        ]
+    )
     _with_lovelace(hass, resources)
 
     asyncio.run(frontend.async_setup_frontend(hass))
 
     assert resources.created == []
+
+
+def test_versioned_card_url_is_recognised_as_the_same_card(tmp_path, monkeypatch):
+    """Die eigene (versionierte) URL dedupliziert gegen die unversionierte Form."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources(items=[{"url": frontend.CARD_URL}])
+    _with_lovelace(hass, resources)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == []
+
+
+def test_existing_unversioned_resource_is_refreshed(tmp_path, monkeypatch):
+    """Bestands-Ressource ohne `?v=` wird auf die aktuelle versionierte URL gezogen."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources(
+        items=[{"id": "abc", "type": "module", "url": frontend.CARD_BASE_URL}]
+    )
+    _with_lovelace(hass, resources)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == []
+    assert resources.updated == [("abc", {"url": frontend.CARD_URL})]
+    assert resources.items[0]["url"] == frontend.CARD_URL
+
+
+def test_existing_current_resource_is_not_refreshed(tmp_path, monkeypatch):
+    """Bereits aktuelle URL → kein Update (idempotent, kein Storage-Schreibvorgang)."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources(items=[{"id": "abc", "type": "module", "url": frontend.CARD_URL}])
+    _with_lovelace(hass, resources)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == []
+    assert resources.updated == []
+
+
+def test_versioned_url_and_integration_version(tmp_path, monkeypatch):
+    """`versioned_url` hängt die Integrationsversion an und bestätigt CARD_URL."""
+    assert frontend.versioned_url("x.js") == (
+        f"/health_o_mat/x.js?v={frontend.integration_version()}"
+    )
+    assert frontend.CARD_URL == frontend.versioned_url(frontend.CARD_FILENAME)
+
+
+def test_integration_version_falls_back_when_manifest_unreadable(monkeypatch, tmp_path):
+    """Unlesbare `manifest.json` → `"0"` statt Exception (defensiv)."""
+    monkeypatch.setattr(frontend, "_VERSION", None)
+    monkeypatch.setattr(frontend, "_MANIFEST_PATH", tmp_path / "missing.json")
+
+    assert frontend.integration_version() == "0"
+
+    monkeypatch.setattr(frontend, "_VERSION", None)
+    bad = tmp_path / "manifest.json"
+    bad.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(frontend, "_MANIFEST_PATH", bad)
+
+    assert frontend.integration_version() == "0"
 
 
 def test_missing_www_dir_skips_static_path_and_recovers(tmp_path, monkeypatch):

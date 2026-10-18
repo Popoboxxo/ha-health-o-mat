@@ -17,7 +17,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from . import parser
+from . import areas, parser
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_QUICK_DRINKS,
@@ -35,6 +35,25 @@ STEP_USER_SCHEMA = vol.Schema({vol.Required("person"): str})
 def _default_quick_drinks() -> list[dict]:
     """Frische Kopie der Standard-Quick-Drinks (keine geteilten Referenzen)."""
     return [dict(qd) for qd in DEFAULT_QUICK_DRINKS]
+
+
+_AREA_FORM_FIELDS: dict[str, str] = {
+    "area_drink": areas.AREA_DRINK,
+    "area_bp": areas.AREA_BP,
+    "area_wellbeing": areas.AREA_WELLBEING,
+}
+
+
+def areas_from_user_input(user_input: dict[str, Any], current: dict[str, bool]) -> dict[str, bool]:
+    """Flache ``area_*``-Formularfelder → verschachteltes ``areas``-Dict.
+
+    Fehlt ein Feld im Input, bleibt der bisherige Wert (``current``) erhalten —
+    so kippt ein unvollständiger Submit keinen Bereich unbeabsichtigt auf aktiv.
+    """
+    return {
+        area: bool(user_input[field]) if field in user_input else current[area]
+        for field, area in _AREA_FORM_FIELDS.items()
+    }
 
 
 def quick_drinks_schema(current: list[dict]) -> vol.Schema:
@@ -117,7 +136,13 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Schritt 1: Tagesziel, Lebenszähler-Startwert, Anzeige-Name."""
         if user_input is not None:
-            self._pending.update(user_input)
+            pending = dict(user_input)
+            for field in _AREA_FORM_FIELDS:
+                pending.pop(field, None)
+            pending["areas"] = areas_from_user_input(
+                user_input, areas.active_areas(self.config_entry.options)
+            )
+            self._pending.update(pending)
             return await self.async_step_quick_drinks()
         current_goal = self.config_entry.options.get("daily_goal_ml")
         if current_goal is None:
@@ -132,6 +157,7 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
             e = store.all_entries().get(self.config_entry.entry_id, {})
             lifetime = int(e.get("total_ml_lifetime", 0))
         current_retention = self.config_entry.options.get("retention_months") or 0
+        current_areas = areas.active_areas(self.config_entry.options)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -164,6 +190,18 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                         default=bool(
                             self.config_entry.options.get(OPTION_ENABLE_SIDEBAR_PANEL, False)
                         ),
+                    ): bool,
+                    vol.Optional(
+                        "area_drink",
+                        default=current_areas[areas.AREA_DRINK],
+                    ): bool,
+                    vol.Optional(
+                        "area_bp",
+                        default=current_areas[areas.AREA_BP],
+                    ): bool,
+                    vol.Optional(
+                        "area_wellbeing",
+                        default=current_areas[areas.AREA_WELLBEING],
                     ): bool,
                 }
             ),

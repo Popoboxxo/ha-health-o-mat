@@ -599,3 +599,97 @@ def test_options_flow_persists_sidebar_panel_option():
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["enable_sidebar_panel"] is True
+
+
+# --- REQ-HOM-009: Pro-Person Bereichs-Toggles im Options-Flow ---
+
+
+def _area_options_flow(options=None):
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = options if options is not None else {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    return options_flow
+
+
+def test_init_step_area_toggles_default_all_true():
+    """[REQ-HOM-009] Ohne areas-Option: alle Toggles default True, Typ bool."""
+    schema = _init_schema_via_form(_area_options_flow({}))
+    for field in ("area_drink", "area_bp", "area_wellbeing"):
+        key = next(k for k in schema.schema if str(k) == field)
+        assert key.default() is True
+        assert schema.schema[key] is bool
+
+
+def test_init_step_area_toggles_reflect_existing_options():
+    """[REQ-HOM-009] Bestehende areas-Werte (fehlende Unter-Schlüssel = True)."""
+    schema = _init_schema_via_form(_area_options_flow({"areas": {"drink": False, "bp": True}}))
+    defaults = {str(k): k.default() for k in schema.schema if str(k).startswith("area_")}
+    assert defaults == {"area_drink": False, "area_bp": True, "area_wellbeing": True}
+
+
+def test_areas_from_user_input_keeps_current_for_missing_fields():
+    """[REQ-HOM-009] Fehlt ein Feld, bleibt der bisherige Wert (kein Kipp auf True)."""
+    current = {"drink": False, "bp": True, "wellbeing": False}
+    assert config_flow_module.areas_from_user_input({"area_drink": True}, current) == {
+        "drink": True,
+        "bp": True,
+        "wellbeing": False,
+    }
+
+
+def test_init_submit_persists_nested_areas_without_flat_keys():
+    """[REQ-HOM-009] init-Submit legt verschachteltes areas ab, keine area_*-Flachkeys."""
+    options_flow = _area_options_flow({})
+    result = _async_test(
+        options_flow.async_step_init(
+            {
+                "daily_goal_ml": 2000,
+                "set_lifetime_ml": 0,
+                "person_display": "",
+                "area_drink": False,
+                "area_bp": True,
+                "area_wellbeing": False,
+            }
+        )
+    )
+
+    assert result["step_id"] == "quick_drinks"
+    assert options_flow._pending["areas"] == {"drink": False, "bp": True, "wellbeing": False}
+    assert not any(k.startswith("area_") for k in options_flow._pending)
+
+
+def test_options_flow_persists_areas_in_create_entry():
+    """[REQ-HOM-009] Der vollständige Options-Flow schreibt areas in den Entry."""
+    options_flow = _area_options_flow({})
+    type(options_flow).config_entry.return_value.data = {"person": "Max"}
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_init(
+            {
+                "daily_goal_ml": 2000,
+                "set_lifetime_ml": 0,
+                "person_display": "",
+                "area_drink": True,
+                "area_bp": False,
+                "area_wellbeing": True,
+            }
+        )
+    )
+    quick = {}
+    for i in range(4):
+        quick[f"quick_{i}_label"] = f"Drink {i}"
+        quick[f"quick_{i}_ml"] = 200
+        quick[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["areas"] == {"drink": True, "bp": False, "wellbeing": True}
+    assert not any(k.startswith("area_") for k in data)

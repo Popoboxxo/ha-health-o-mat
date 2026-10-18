@@ -14,6 +14,7 @@ das Setup NIE ab, sondern führen höchstens zu einem Fallback
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -36,10 +37,45 @@ _LOGGER = logging.getLogger(__name__)
 # URL-Präfix, unter dem das Verzeichnis `www/` ausgeliefert wird.
 URL_BASE = "/health_o_mat"
 CARD_FILENAME = "health-o-mat-card.js"
-CARD_URL = f"{URL_BASE}/{CARD_FILENAME}"
 
 # Ausgeliefertes Verzeichnis (relativ zum Integrationspaket).
 WWW_DIR = Path(__file__).parent / "www"
+
+_MANIFEST_PATH = Path(__file__).parent / "manifest.json"
+
+_VERSION: str | None = None
+
+
+def integration_version() -> str:
+    """Version aus der eigenen `manifest.json` (defensiv, nie eine Exception).
+
+    Fällt auf `"0"` zurück, wenn die Datei fehlt, unlesbar oder ohne
+    brauchbaren `version`-Wert ist. Das Ergebnis wird modulweit gecacht.
+    """
+    global _VERSION
+    if _VERSION is None:
+        _VERSION = _read_manifest_version()
+    return _VERSION
+
+
+def _read_manifest_version() -> str:
+    """`version` aus `manifest.json` lesen; unlesbar → `"0"`."""
+    try:
+        raw = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+        version = raw.get("version") if isinstance(raw, dict) else None
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        _LOGGER.warning("Health-O-Mat: manifest.json nicht lesbar — Cache-Buster '0'")
+        return "0"
+    return str(version) if version else "0"
+
+
+def versioned_url(filename: str) -> str:
+    """Card-/Panel-URL mit Cache-Buster `?v=<Integrationsversion>`."""
+    return f"{URL_BASE}/{filename}?v={integration_version()}"
+
+
+CARD_BASE_URL = f"{URL_BASE}/{CARD_FILENAME}"
+CARD_URL = versioned_url(CARD_FILENAME)
 
 # Marker im prozessweiten Shared-Bereich (`hass.data[DOMAIN]["shared"]`).
 _STATIC_PATH_MARKER = "frontend_static_path"
@@ -142,8 +178,14 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> bool:
             await resources.async_load()
             resources.loaded = True
         items = resources.async_items() or []
-        if any(_is_card_resource(item) for item in items):
-            return True  # Dedupe: bereits vorhanden (auch durch HACS-Plugin)
+        existing = next((item for item in items if _is_card_resource(item)), None)
+        if existing is not None:
+            # Dedupe: bereits vorhanden (auch durch HACS-Plugin). Bestands-
+            # Ressourcen ohne aktuellen Cache-Buster (`?v=…`) werden auf die
+            # versionierte URL nachgezogen, sonst bliebe alter JS-Cache bei
+            # Upgrades hängen (die Dedupe matcht bewusst ohne Query-Teil).
+            await _async_refresh_card_resource_url(resources, existing)
+            return True
         await resources.async_create_item({"res_type": "module", "url": CARD_URL})
     except Exception:  # noqa: BLE001 - Lovelace/Dashboard-Storage ist optional
         _LOGGER.exception("Health-O-Mat: Lovelace-Ressource %s nicht anlegbar", CARD_URL)
@@ -151,14 +193,36 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> bool:
     return True
 
 
+async def _async_refresh_card_resource_url(resources: Any, item: Any) -> None:
+    """Bestehende Card-Ressource auf die aktuelle versionierte URL aktualisieren.
+
+    Defensiv: fehlt `async_update_item`/`id` oder schlägt das Update fehl, bleibt
+    die vorhandene Ressource unverändert (nie unload-/setup-kritisch).
+    """
+    if item.get("url") == CARD_URL:
+        return
+    update = getattr(resources, "async_update_item", None)
+    item_id = item.get("id")
+    if update is None or item_id is None:
+        return
+    try:
+        await update(item_id, {"url": CARD_URL})
+    except Exception:  # noqa: BLE001 - Ressourcen-Storage variiert je HA-Version
+        _LOGGER.debug("Health-O-Mat: Lovelace-Ressource %s nicht aktualisierbar", item_id)
+
+
 def _is_card_resource(item: Any) -> bool:
-    """True, wenn ein Lovelace-Ressourcen-Eintrag unsere Card (ohne Cache-Buster) ist."""
+    """True, wenn ein Lovelace-Ressourcen-Eintrag unsere Card (ohne Cache-Buster) ist.
+
+    Der Query-Teil (`?v=…`) wird vor dem Vergleich abgeschnitten — dadurch sind
+    die unversionierte und die versionierte URL dieselbe Card (Dedupe bleibt intakt).
+    """
     if not isinstance(item, dict):
         return False
     url = item.get("url")
     if not isinstance(url, str):
         return False
-    return url.split("?", 1)[0].rstrip("/") == CARD_URL
+    return url.split("?", 1)[0].rstrip("/") == CARD_BASE_URL
 
 
 def _add_extra_js_url(hass: HomeAssistant) -> bool:

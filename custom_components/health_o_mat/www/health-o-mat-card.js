@@ -41,6 +41,26 @@ const WELLBEING_EMOJI = {
   super: "\u{1F604}",
 };
 
+/* WHO blood-pressure category keys (logic.bp_category) -> friendly label.
+ * Unknown/legacy values fall back to the raw value (see bpCategoryLabel). */
+const BP_CATEGORY_LABELS = {
+  optimal: "Optimal",
+  normal: "Normal",
+  high_normal: "Hochnormal",
+  grade_1: "Hypertonie Grad 1",
+  grade_2: "Hypertonie Grad 2",
+  grade_3: "Hypertonie Grad 3",
+  crisis: "Krise",
+};
+
+/* Hydration pace (ws_api.pace_label) -> compact, unobtrusive indicator. */
+const PACE_BADGE = {
+  goal_reached: { arrow: "\u2713", label: "Ziel erreicht", cls: "good" },
+  ahead: { arrow: "\u2191", label: "voraus", cls: "good" },
+  on_track: { arrow: "\u2192", label: "auf Kurs", cls: "ok" },
+  behind: { arrow: "\u2193", label: "hinten", cls: "warn" },
+};
+
 const RING_RADIUS = 42;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
@@ -82,6 +102,11 @@ const CARD_CSS = `
   .stat { display: flex; justify-content: space-between; gap: 12px; font-size: .95rem; }
   .stat .k { color: var(--secondary-text-color, #727272); }
   .stat .v { font-weight: 600; }
+  .pace { display: inline-flex; align-items: center; gap: 4px; font-size: .8rem; font-weight: 600; }
+  .pace .arrow { font-size: .9em; line-height: 1; }
+  .pace.good { color: var(--success-color, #43a047); }
+  .pace.ok { color: var(--secondary-text-color, #727272); }
+  .pace.warn { color: var(--error-color, #db4437); }
   .row {
     display: flex; align-items: center; gap: 12px;
     background: var(--secondary-background-color, rgba(0,0,0,.03));
@@ -125,6 +150,7 @@ const CARD_CSS = `
     font: inherit; border-radius: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
     background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
   }
+  .editor-hint { margin-top: 4px; font-size: .75rem; color: var(--secondary-text-color, #727272); }
 `;
 
 function escapeHtml(value) {
@@ -143,6 +169,13 @@ function toNumber(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function bpCategoryLabel(value) {
+  // Friendly label for the known WHO keys; robust for unknown/legacy values.
+  const raw = value == null ? "" : String(value);
+  const key = raw.trim().toLowerCase();
+  return BP_CATEGORY_LABELS[key] || raw;
 }
 
 function activeEntryId(config, fallback) {
@@ -280,6 +313,21 @@ class HealthOMatCard extends HTMLElement {
     const raw = this._stateValue(entityId, undefined);
     if (raw === undefined) return fallback;
     return toNumber(raw, fallback);
+  }
+
+  /* ---- Feature areas ------------------------------------------------------ */
+
+  _areas() {
+    // Backwards compatible: a missing `areas` payload (old backend) or a
+    // missing individual key means "enabled" — only an explicit false hides.
+    const base = { drink: true, bp: true, wellbeing: true };
+    const raw = this._data && this._data.areas;
+    if (raw && typeof raw === "object") {
+      for (const key of Object.keys(base)) {
+        if (key in raw) base[key] = raw[key] !== false;
+      }
+    }
+    return base;
   }
 
   /* ---- Actions ------------------------------------------------------------ */
@@ -444,7 +492,22 @@ class HealthOMatCard extends HTMLElement {
   }
 
   _body() {
-    return this._hydration() + this._bloodPressure() + this._wellbeing() + this._actions();
+    const areas = this._areas();
+    const parts = [];
+    if (areas.drink) {
+      parts.push(this._hydration());
+    }
+    if (areas.bp) {
+      parts.push(this._bloodPressure());
+    }
+    if (areas.wellbeing) {
+      parts.push(this._wellbeing());
+    }
+    if (areas.drink) {
+      // Quick-drink + undo actions belong to the drinking area.
+      parts.push(this._actions());
+    }
+    return parts.length ? parts.join("") : this._message("Keine Bereiche aktiviert.", false);
   }
 
   _hydration() {
@@ -464,16 +527,25 @@ class HealthOMatCard extends HTMLElement {
     const done = percent >= 100 ? " done" : "";
     const yesterday = toNumber(data.today && data.today.yesterday_ml, NaN);
     const count = toNumber(data.today && data.today.count, NaN);
+    const streak = this._stateNumber(this._entity("goal_streak"), NaN);
+    const caffeine = this._stateNumber(this._entity("caffeine_today"), NaN);
     const shownMl = Math.round(ml);
     const goalText = goal > 0 ? `${Math.round(goal)} ml` : "\u2013";
 
     const stats = [
+      this._paceBadge(),
       `<div class="stat"><span class="k">Ziel</span><span class="v">${goalText}</span></div>`,
       Number.isFinite(count)
         ? `<div class="stat"><span class="k">Buchungen</span><span class="v">${escapeHtml(count)}</span></div>`
         : "",
       Number.isFinite(yesterday)
         ? `<div class="stat"><span class="k">Gestern</span><span class="v">${Math.round(yesterday)} ml</span></div>`
+        : "",
+      Number.isFinite(streak) && streak >= 1
+        ? `<div class="stat"><span class="k">Serie</span><span class="v">${Math.round(streak)} d</span></div>`
+        : "",
+      Number.isFinite(caffeine) && caffeine > 0
+        ? `<div class="stat"><span class="k">Koffein</span><span class="v">${Math.round(caffeine)} mg</span></div>`
         : "",
     ].join("");
 
@@ -496,6 +568,15 @@ class HealthOMatCard extends HTMLElement {
       </div>`;
   }
 
+  _paceBadge() {
+    // `today.pace` is a stable string label (or null without a goal). Only a
+    // known label renders; anything else (null/absent/unknown) is omitted.
+    const pace = this._data && this._data.today ? this._data.today.pace : null;
+    const info = pace ? PACE_BADGE[String(pace)] : null;
+    if (!info) return "";
+    return `<div class="pace ${info.cls}"><span class="arrow" aria-hidden="true">${info.arrow}</span><span>${escapeHtml(info.label)}</span></div>`;
+  }
+
   _bloodPressure() {
     const bp = (this._data && this._data.bp) || {};
     const sys = this._stateNumber(this._entity("bp_sys"), toNumber(bp.sys, NaN));
@@ -514,7 +595,7 @@ class HealthOMatCard extends HTMLElement {
 
     const subParts = [];
     if (Number.isFinite(pulse)) subParts.push(`${escapeHtml(Math.round(pulse))} bpm`);
-    if (category) subParts.push(escapeHtml(category));
+    if (category) subParts.push(escapeHtml(bpCategoryLabel(category)));
     const at = bp.at ? this._relativeTime(bp.at) : "";
     if (at) subParts.push(escapeHtml(at));
 
@@ -612,8 +693,12 @@ class HealthOMatCardEditor extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
-    this._onInput = this._onInput.bind(this);
-    this.shadowRoot.addEventListener("input", this._onInput);
+    this._hass = null;
+    this._persons = null;
+    this._loading = false;
+    this._onValueChange = this._onValueChange.bind(this);
+    this.shadowRoot.addEventListener("input", this._onValueChange);
+    this.shadowRoot.addEventListener("change", this._onValueChange);
   }
 
   setConfig(config) {
@@ -622,12 +707,34 @@ class HealthOMatCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
+    const first = !this._hass;
     this._hass = hass;
+    // Populate the person picker once (later hass updates just refresh state).
+    if (first && hass && this._persons === null) this._loadPersons();
   }
 
-  _onInput(ev) {
+  get hass() {
+    return this._hass;
+  }
+
+  async _loadPersons() {
+    if (!this._hass || this._loading) return;
+    this._loading = true;
+    try {
+      const res = await this._hass.callWS({ type: "health_o_mat/list_persons" });
+      this._persons = (res && res.persons) || [];
+    } catch (err) {
+      // Never throw into the card editor; fall back to the free entry_id value.
+      this._persons = [];
+    } finally {
+      this._loading = false;
+      this._render();
+    }
+  }
+
+  _onValueChange(ev) {
     const target = ev.target;
-    if (!target || target.tagName !== "INPUT") return;
+    if (!target || (target.tagName !== "INPUT" && target.tagName !== "SELECT")) return;
     const key = target.getAttribute("data-key");
     if (!key) return;
     const next = Object.assign({}, this._config);
@@ -638,19 +745,51 @@ class HealthOMatCardEditor extends HTMLElement {
     );
   }
 
+  _personOptions(current) {
+    const options = [];
+    const auto = current ? "" : " selected";
+    options.push(
+      `<option value=""${auto}>Automatisch (Personenauswahl in der Karte)</option>`
+    );
+    let hasCurrent = !current;
+    for (const person of this._persons || []) {
+      const value = person && person.entry_id ? String(person.entry_id) : "";
+      if (!value) continue;
+      const selected = value === current ? " selected" : "";
+      if (selected) hasCurrent = true;
+      const label = (person && (person.display_name || person.entry_id)) || value;
+      options.push(
+        `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(label)}</option>`
+      );
+    }
+    // Keep an already-configured id visible while the list loads/if it vanished.
+    if (!hasCurrent) {
+      options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}</option>`);
+    }
+    return options.join("");
+  }
+
   _render() {
+    const current = this._config.entry_id ? String(this._config.entry_id) : "";
+    let hint = "";
+    if (this._persons === null) {
+      hint = this._loading ? "Personen werden geladen\u2026" : "";
+    } else if (!this._persons.length) {
+      hint = "Keine Person eingerichtet \u2014 Karte nutzt den freien person-Anker.";
+    }
     this.shadowRoot.innerHTML = `
       <style>${CARD_CSS}</style>
       <div class="editor">
         <div>
-          <label for="entry_id">entry_id (leer = Personenauswahl in der Karte)</label>
-          <input id="entry_id" data-key="entry_id" type="text"
-            value="${escapeHtml(this._config.entry_id || "")}" placeholder="z. B. 1a2b3c4d" />
+          <label for="entry_id">Person</label>
+          <select id="entry_id" data-key="entry_id">${this._personOptions(current)}</select>
+          ${hint ? `<div class="editor-hint">${escapeHtml(hint)}</div>` : ""}
         </div>
         <div>
-          <label for="person">person (optionaler Service-Anker)</label>
+          <label for="person">person \u2014 optionaler Service-Anker</label>
           <input id="person" data-key="person" type="text"
             value="${escapeHtml(this._config.person || "")}" placeholder="z. B. Caro" />
+          <div class="editor-hint">Leer lassen, wenn die Karte \u00fcber die gew\u00e4hlte Person schreiben soll. Nur n\u00f6tig, wenn ein abweichender Anker (entry.data \u201eperson\u201c) angesprochen werden muss.</div>
         </div>
       </div>`;
   }

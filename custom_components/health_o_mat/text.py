@@ -8,7 +8,7 @@ from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from . import parser
+from . import areas, parser
 from .const import DOMAIN, DRINK_LEXICON
 from .entity import HealthOMatEntity, signal_refresh
 
@@ -16,7 +16,8 @@ from .entity import HealthOMatEntity, signal_refresh
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    async_add_entities([FreeTextDrinkEntity(coord, entry, store)])
+    if areas.active_areas(entry.options)[areas.AREA_DRINK]:
+        async_add_entities([FreeTextDrinkEntity(coord, entry, store)])
 
 
 class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):

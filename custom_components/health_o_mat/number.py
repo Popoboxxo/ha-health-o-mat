@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
 
+from . import areas
 from .const import (
     DEFAULT_CUSTOM_AMOUNT_ML,
     DOMAIN,
@@ -15,21 +16,33 @@ from .entity import HealthOMatEntity, signal_refresh
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    async_add_entities(
-        [
-            DailyGoalNumber(coord, entry),
-            CustomAmountNumber(coord, entry),
-            ThresholdNumber(coord, entry, "sys"),
-            ThresholdNumber(coord, entry, "dia"),
-            InputNumber(
-                coord, entry, store, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"
-            ),
-            InputNumber(
-                coord, entry, store, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"
-            ),
-            InputNumber(coord, entry, store, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"),
-        ]
-    )
+    active = areas.active_areas(entry.options)
+
+    entities: list = []
+    if active[areas.AREA_DRINK]:
+        entities.extend(
+            [
+                DailyGoalNumber(coord, entry),
+                CustomAmountNumber(coord, entry),
+            ]
+        )
+    if active[areas.AREA_BP]:
+        entities.extend(
+            [
+                ThresholdNumber(coord, entry, "sys"),
+                ThresholdNumber(coord, entry, "dia"),
+                InputNumber(
+                    coord, entry, store, "sys", "input_systolic", 40, 260, "mdi:arrow-up-right"
+                ),
+                InputNumber(
+                    coord, entry, store, "dia", "input_diastolic", 40, 260, "mdi:arrow-down-right"
+                ),
+                InputNumber(
+                    coord, entry, store, "pulse", "input_pulse", 20, 250, "mdi:heart-pulse"
+                ),
+            ]
+        )
+    async_add_entities(entities)
 
 
 class HealthOMatNumber(HealthOMatEntity, NumberEntity):
