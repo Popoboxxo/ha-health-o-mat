@@ -427,6 +427,83 @@ nicht mehr vorhanden); ihre Registry-Einträge und `unique_id`s bleiben bestehen
 Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
 unberührt und funktioniert unabhängig vom Panel.
 
+## E2E-Tests (Playwright)
+
+Der Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
+abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
+**Chromium** (Playwright) an. Das Panel ist ein bundler-freies Vanilla-JS-Web-
+Component ohne Python-Testfläche — ein realer Browser ist die einzige
+Möglichkeit, sein Verhalten (URL-Zustand, Historie, Tabs) wirklich zu prüfen.
+
+Abgedeckt (`tests_e2e/test_panel_deeplink_e2e.py`, REQ-HOM-012):
+
+- Panel mountet unter `/health-o-mat` (genau ein `health-o-mat-panel`)
+- `?person=<slug>` öffnet **direkt** die Person-Detailansicht samt Tabs
+- Klick auf eine Personen-Kachel setzt `?person=<slug>` per
+  `history.pushState`
+- **Browser-Zurück** stellt die Übersicht wieder her und entfernt den
+  Parameter (`popstate`)
+- Unbekannter/ungültiger Parameter → sichere Übersicht, kein Fehlerzustand
+- Ein per Feature-Toggle abgeschalteter Bereich blendet seinen Tab aus
+
+**Nicht Teil der Unit-Suite:** `pytest` im Repo-Root sammelt weiterhin nur
+`tests/` ein. Die Browser-Suite hat eine eigene Konfiguration
+(`tests_e2e/pytest.ini`) und läuft nur bei explizitem Aufruf.
+
+### Lokal ausführen
+
+Vollständiger Stack (HA-Container + Playwright-Runner-Image, wie in CI):
+
+```bash
+docker compose -f docker-compose.e2e.yml up --build \
+    --abort-on-container-exit --exit-code-from e2e
+docker compose -f docker-compose.e2e.yml down -v
+```
+
+Leichtgewichtig (HA im Container, Playwright lokal — spart das Browser-Image;
+der HA-Port ist per `E2E_HA_PORT` einstellbar, Default **8124**, damit eine
+parallel laufende HA-Instanz auf 8123 nicht kollidiert):
+
+```bash
+pip install -r requirements_e2e.txt && playwright install chromium
+docker compose -f docker-compose.e2e.yml up -d homeassistant
+HASS_BASE_URL=http://localhost:8124 pytest tests_e2e/ -v
+docker compose -f docker-compose.e2e.yml down
+```
+
+Gegen eine bereits laufende Instanz (auch das geteilte Testsystem
+`/home/hermes/ha-test`) — Zugangsdaten per Env, sonst werden die
+Standard-E2E-Zugangsdaten verwendet:
+
+```bash
+HASS_BASE_URL=http://localhost:8123 \
+HASS_USERNAME=healthbot HASS_PASSWORD=<Passwort> \
+pytest tests_e2e/ -v
+```
+
+`scripts/e2e_bootstrap.py` bereitet die Instanz **idempotent** vor: Onboarding
+(alle vier Schritte) bzw. Login auf einer bereits eingerichteten Instanz,
+Zugriffstoken und zwei eigene Test-Personen (`E2E-Deep` mit allen Bereichen,
+`E2E-Tab` mit abgeschaltetem Blutdruck-Bereich) samt Optionen — angelegt über
+den echten Config- bzw. Options-Flow, inklusive `enable_sidebar_panel` (ohne
+die Option gäbe es das Panel gar nicht). Fremde Personen/Config-Entries werden
+nur gelesen, nie verändert; fehlen die Test-Personen, werden sie angelegt,
+sonst wiederverwendet. Das CLI gibt den Zustand als JSON aus
+(`python scripts/e2e_bootstrap.py --base-url http://localhost:8124`).
+
+Hinweis: `docker/ha_config_e2e/` ist ein Host-Bind-Mount — `down -v` setzt den
+HA-Zustand darin **nicht** zurück (`.storage/`, Recorder-DB, Onboarding-Flag).
+Für einen bewusst frischen Lauf vorher löschen (siehe
+`.github/workflows/e2e.yaml`, dort passiert genau das). Das Artefakt-Verzeichnis
+`test-results/` wird von Playwright zu Beginn **jedes** pytest-Laufs geleert
+(Screenshots/Traces also nur pro Lauf frisch); es ist nicht versioniert.
+
+In CI läuft die Suite **nicht** bei jedem Push: `.github/workflows/e2e.yaml`
+startet bei `workflow_dispatch`, wöchentlich per `schedule` und bei Pull
+Requests, die `custom_components/health_o_mat/**`, `tests_e2e/**`,
+`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/**` oder
+`scripts/e2e_bootstrap.py` berühren.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).

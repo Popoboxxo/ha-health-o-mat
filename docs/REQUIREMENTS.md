@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-18 (UI-Ausbau, Branch `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-18 (UI-Ausbau, Branch `feat/ui-pro`; Browser-Smoke REQ-HOM-012, Branch `feat/e2e-playwright`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
@@ -166,9 +166,10 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-012 — Person-Ansicht + Deep-Link
 - **Priorität:** P3 · **Aufwand:** M
-- **Status: Erledigt (Branch `feat/ui-pro`)** — Deep-Link-Mechanik E2E auf
-  Registrierungs-/Auslieferungsebene geprüft; Browser-Smoke (pushState/popstate)
-  steht aus (durch JS-Analyse-Test `tests/test_panel_js.py` abgedeckt).
+- **Status: Erledigt** — Deep-Link-Mechanik E2E auf
+  Registrierungs-/Auslieferungsebene geprüft (Branch `feat/ui-pro`); echte
+  Browser-Verifikation (`tests_e2e/`, Playwright) ergänzt und grün
+  (Branch `feat/e2e-playwright`, 2026-10-18).
 - **Beschreibung:** Adressierbare, vollwertige Person-Seite im Panel mit stabilem
   Deep-Link.
 - **Akzeptanzkriterien:**
@@ -177,7 +178,19 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     Bereiche mit Toggle aus werden ausgeblendet
   - [x] Kennung = **stabiler Slug** `entry.data["person"]` (nie Anzeigename);
     `list_persons`/`panel_data` liefern `person_slug` + `areas` additiv
-  - [ ] Browser-Smoke (Playwright) auf `ha-test` — offen, optional (Phase 5)
+  - [x] Browser-Smoke (Playwright) — `tests_e2e/` (6 Tests, realer Browser gegen
+    echte HA-Instanz): Panel-Mount, Deep-Link öffnet direkt die Detailansicht,
+    Kachel-Klick = `pushState`, Browser-Zurück = `popstate` → Übersicht,
+    unbekannter Parameter → sichere Übersicht, abgeschalteter Bereich blendet
+    seinen Tab aus. **Beleg (reproduzierbar):** gegen den Docker-HA-Stack aus
+    `docker-compose.e2e.yml`
+    (`docker compose -f docker-compose.e2e.yml up -d homeassistant`)
+    `HASS_BASE_URL=http://localhost:8124 python3 -m pytest tests_e2e/ -v`
+    → 6 passed; alternativ gegen die geteilte Instanz `ha-test`
+    (`HASS_BASE_URL=http://localhost:8123`). Die Roh-Logs liegen nur flüchtig
+    unter `test-results/` (gitignored, wird von Playwright zu Beginn jedes Laufs
+    geleert) und taugen daher nicht als Beleg; dauerhafter Beleg ist das
+    CI-Artefakt `e2e-test-results` aus `.github/workflows/e2e.yaml`
 
 ### REQ-HOM-013 — Admin-/Instanzverwaltung (L3)
 - **Priorität:** P3 · **Aufwand:** M–L
@@ -343,3 +356,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
 | 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |
+| 2026-10-18 | **REQ-HOM-012 vollständig erledigt** (Branch `feat/e2e-playwright`): echter Browser-Smoke ergänzt — `tests_e2e/` (Playwright + pytest, 6 Tests) gegen eine reale HA-Instanz plus `scripts/e2e_bootstrap.py` (idempotentes Onboarding/Config-/Options-Flow-Bootstrap), Docker-Stack (`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/`) und CI-Workflow `.github/workflows/e2e.yaml` (workflow_dispatch + wöchentlich + PR-Pfadfilter). Unit-Suite unverändert HA-frei (`pytest -q` → 552 passed), E2E nur bei explizitem Aufruf (eigene `tests_e2e/pytest.ini`) |
