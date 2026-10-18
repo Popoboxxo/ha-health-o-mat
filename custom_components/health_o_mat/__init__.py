@@ -12,7 +12,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from . import logic
+from . import areas, logic
 from .const import (
     ARCHIVE_STORE_KEY,
     DEFAULT_DAILY_GOAL_ML,
@@ -23,7 +23,7 @@ from .const import (
 )
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
-from .panel import async_apply_panel_state, async_unregister_panel
+from .panel import async_apply_panel_state
 from .store import HealthOMatStore
 from .ws_api import async_register_ws_api
 
@@ -49,6 +49,7 @@ class HealthOMatData:
         self.custom_amount_ml: int = 250
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
+        self.areas: dict[str, bool] = dict(areas.DEFAULT_AREAS)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -196,16 +197,16 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     """
     rt = entry.runtime_data
     opts = entry.options or {}
+    rt.areas = areas.active_areas(opts)
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
-    if opts.get("set_lifetime_ml") is not None:
-        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        current = store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0)
-        wanted = int(opts["set_lifetime_ml"])
-        if wanted != int(current):
-            hass.async_create_task(store.set_lifetime_start(entry.entry_id, wanted))
-            signal_refresh(hass, entry.entry_id)
+    # `set_lifetime_ml` wird bewusst NICHT hier (Setup/Reload) angewandt: der
+    # Options-Wert bleibt dauerhaft gespeichert, ein Reload (z. B. ausgelöst
+    # durch eine Bereichs-Umschaltung) würde den gewachsenen Lebenszähler sonst
+    # auf den alten Sollwert zurücksetzen. Angewandt wird er ausschließlich im
+    # expliziten Options-Änderungspfad `_options_updated`; der Erstanlage-Wert
+    # kommt aus `entry.data["lifetime_start_ml"]` (siehe async_setup_entry).
 
 
 async def _options_updated(hass, entry) -> None:
@@ -221,11 +222,16 @@ async def _options_updated(hass, entry) -> None:
     _mirror_bp_thresholds(rt, opts)
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
 
+    new_areas = areas.active_areas(opts)
+
     # Anzeige-Name geändert → Store synchron halten + Entities neu laden
     # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
     current_person = store.all_entries().get(entry.entry_id, {}).get("person")
-    if current_person != effective_person(entry):
-        await store.set_person(entry.entry_id, effective_person(entry))
+    person_changed = current_person != effective_person(entry)
+    if person_changed or new_areas != rt.areas:
+        if person_changed:
+            await store.set_person(entry.entry_id, effective_person(entry))
+        rt.areas = new_areas
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
 
@@ -251,10 +257,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
                 await async_unregister_frontend(hass)
             except Exception:  # noqa: BLE001 - Rückbau ist nie unload-kritisch
                 _LOGGER.exception("Health-O-Mat: Frontend-Rückbau fehlgeschlagen")
-            try:
-                await async_unregister_panel(hass)
-            except Exception:  # noqa: BLE001 - Rückbau ist nie unload-kritisch
-                _LOGGER.exception("Health-O-Mat: Panel-Rückbau fehlgeschlagen")
+        # Panel-Zustand domain-weit neu anwenden, den entladenen Entry
+        # ausgenommen: verliert das Entfernen/Entladen die letzte
+        # Panel-freischaltende Person, wird das Panel jetzt abgemeldet (vorher
+        # blieb es bis zum HA-Neustart stehen).
+        await _async_apply_panel_layer(hass, exclude_entry_id=entry.entry_id)
     return unload_ok
 
 
@@ -327,7 +334,9 @@ async def _async_setup_frontend_layer(hass: HomeAssistant) -> None:
         _LOGGER.exception("Health-O-Mat: Frontend-/WS-Ebene nicht registrierbar")
 
 
-async def _async_apply_panel_layer(hass: HomeAssistant) -> None:
+async def _async_apply_panel_layer(
+    hass: HomeAssistant, exclude_entry_id: str | None = None
+) -> None:
     """Wendet den Opt-in-Zustand des Sidebar-Panels an (defensiv).
 
     Das Panel ist domain-weit EIN Element: es wird registriert, sobald
@@ -335,9 +344,18 @@ async def _async_apply_panel_layer(hass: HomeAssistant) -> None:
     andernfalls entfernt. `async_apply_panel_state` ist idempotent (Marker im
     Shared-Bereich), mehrfache Aufrufe erzeugen also keine Doppel-Registrierung.
     Die UI-Ebene ist ein Zusatz und darf das Setup nie zum Scheitern bringen.
+
+    `exclude_entry_id` blendet einen Entry aus, der gerade entladen/entfernt
+    wird — beim Unload ist er noch in der Registry, soll aber für die
+    Panel-Entscheidung nicht mehr zählen.
     """
     try:
-        await async_apply_panel_state(hass, hass.config_entries.async_entries(DOMAIN))
+        entries = [
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if exclude_entry_id is None or e.entry_id != exclude_entry_id
+        ]
+        await async_apply_panel_state(hass, entries)
     except Exception:  # noqa: BLE001 - UI-Ebene ist nie setup-kritisch
         _LOGGER.exception("Health-O-Mat: Sidebar-Panel-Zustand nicht anwendbar")
 

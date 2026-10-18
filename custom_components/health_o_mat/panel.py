@@ -27,7 +27,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .frontend import URL_BASE, shared_data
+from .frontend import shared_data, versioned_url
 
 try:  # panel_custom ist HA-Kernbestandteil; Import bleibt trotzdem tolerant,
     # damit das Integrationspaket auch ohne diese Komponente importierbar ist.
@@ -46,7 +46,7 @@ _LOGGER = logging.getLogger(__name__)
 PANEL_URL_PATH = "health-o-mat"
 WEBCOMPONENT_NAME = "health-o-mat-panel"
 PANEL_JS_FILENAME = "health-o-mat-panel.js"
-PANEL_MODULE_URL = f"{URL_BASE}/{PANEL_JS_FILENAME}"
+PANEL_MODULE_URL = versioned_url(PANEL_JS_FILENAME)
 SIDEBAR_TITLE = "Health-O-Mat"
 SIDEBAR_ICON = "mdi:heart-pulse"
 

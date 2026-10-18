@@ -210,3 +210,57 @@ def test_apply_options_mirrors_bp_thresholds_on_setup():
     init._apply_options(MagicMock(), entry)
 
     assert (entry.runtime_data.sys_threshold, entry.runtime_data.dia_threshold) == (130, 85)
+
+
+# --- REQ-HOM-009: pro-Person Bereichs-Toggles filtern das Binary-Sensor-Setup ---
+
+_ENTRY_ID = "test-entry-1"
+_GOAL_REACHED_ID = "test-entry-1_binary_goal_reached"
+_BP_WARNING_ID = "test-entry-1_binary_bp_warning"
+
+
+def _binary_setup(options: dict) -> set[str]:
+    added: list = []
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = options
+    coord = MagicMock()
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={_ENTRY_ID: {}})
+    hass.data = {
+        "health_o_mat": {
+            _ENTRY_ID: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    _run(binary_sensor_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents)))
+    return {e._attr_unique_id for e in added}
+
+
+def test_binary_setup_old_entry_without_options_has_all_areas():
+    """[REQ-HOM-009] Alt-Entry ohne areas-Option = alle Bereiche aktiv."""
+    assert _binary_setup({}) == {_GOAL_REACHED_ID, _BP_WARNING_ID}
+
+
+def test_binary_setup_drink_disabled_keeps_bp():
+    """[REQ-HOM-009] drink AUS → nur BP-Warnung bleibt."""
+    assert _binary_setup({"areas": {"drink": False}}) == {_BP_WARNING_ID}
+
+
+def test_binary_setup_only_drink_when_bp_disabled():
+    """[REQ-HOM-009] bp AUS → nur Tagesziel-Binary bleibt."""
+    assert _binary_setup({"areas": {"bp": False}}) == {_GOAL_REACHED_ID}
+
+
+def test_binary_unique_ids_stable_across_area_toggle():
+    """[REQ-HOM-009] De-/Reaktivieren erzeugt dieselben unique_ids."""
+    on_ids = _binary_setup({})
+    off_ids = _binary_setup({"areas": {"drink": False}})
+    on_again_ids = _binary_setup({"areas": {"drink": True}})
+
+    assert _GOAL_REACHED_ID in on_ids
+    assert _GOAL_REACHED_ID not in off_ids
+    assert on_again_ids == on_ids

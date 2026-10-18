@@ -198,3 +198,74 @@ def test_daily_goal_number_boundary_values():
     _async_test(entity.async_set_native_value(10000))
     max_call = hass.config_entries.async_update_entry.call_args
     assert max_call[1]["options"]["daily_goal_ml"] == 10000
+
+
+# --- REQ-HOM-009: pro-Person Bereichs-Toggles filtern das Number-Setup ---
+
+_ENTRY_ID = "test-entry-1"
+_DRINK_NUMBER_KEYS = {"number_daily_goal", "number_custom_amount"}
+_BP_NUMBER_KEYS = {
+    "number_threshold_sys",
+    "number_threshold_dia",
+    "number_input_sys",
+    "number_input_dia",
+    "number_input_pulse",
+}
+
+
+def _number_setup(options: dict) -> set[str]:
+    added: list = []
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = options
+    entry.data = {"person": "Max"}
+    coord = MagicMock()
+    store = MagicMock()
+    hass.data = {
+        "health_o_mat": {
+            _ENTRY_ID: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    asyncio.new_event_loop().run_until_complete(
+        number_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents))
+    )
+    return {e._attr_unique_id for e in added}
+
+
+def _ids(keys: set[str]) -> set[str]:
+    return {f"{_ENTRY_ID}_{key}" for key in keys}
+
+
+def test_number_setup_old_entry_without_options_has_all_areas():
+    """[REQ-HOM-009] Alt-Entry ohne areas-Option = alle Bereiche aktiv."""
+    keys = _number_setup({})
+    assert keys == _ids(_DRINK_NUMBER_KEYS | _BP_NUMBER_KEYS)
+
+
+def test_number_setup_drink_disabled_keeps_bp():
+    """[REQ-HOM-009] drink AUS → keine Drink-Numbers; BP bleibt."""
+    keys = _number_setup({"areas": {"drink": False}})
+    assert keys == _ids(_BP_NUMBER_KEYS)
+    assert keys.isdisjoint(_ids(_DRINK_NUMBER_KEYS))
+
+
+def test_number_setup_only_drink_when_bp_disabled():
+    """[REQ-HOM-009] bp AUS → nur Drink-Numbers (wellbeing hat keine Numbers)."""
+    keys = _number_setup({"areas": {"bp": False}})
+    assert keys == _ids(_DRINK_NUMBER_KEYS)
+
+
+def test_number_unique_ids_stable_across_area_toggle():
+    """[REQ-HOM-009] De-/Reaktivieren erzeugt dieselben unique_ids."""
+    on_keys = _number_setup({})
+    off_keys = _number_setup({"areas": {"drink": False}})
+    on_again_keys = _number_setup({"areas": {"drink": True}})
+
+    drink_ids = _ids(_DRINK_NUMBER_KEYS)
+    assert drink_ids <= on_keys
+    assert drink_ids.isdisjoint(off_keys)
+    assert on_again_keys == on_keys

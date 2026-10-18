@@ -318,12 +318,19 @@ Die Integration liefert eine eigene Lovelace-Karte mit — eine kompakte
 Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
 
 - 💧 **Hydration-Ring** — heutige Menge vs. Tagesziel (Prozent + mL), dazu
-  Buchungen und der gestrige Wert
-- 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit WHO-Kategorie und
+  Buchungen, der gestrige Wert, ein **Pace-Badge** (auf Kurs / voraus / hinten /
+  Ziel erreicht), die **Serie** (`goal_streak` Tage) und optional **Koffein**
+  (`caffeine_today` in mg)
+- 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit **WHO-Kategorie** und
   Warnhinweis, wenn sie über den konfigurierten Schwellen liegt
 - 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt
 - ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
   Buchung zurücknehmen
+
+Über den **Karten-Editor** lässt sich die Person bequem aus einer Liste wählen
+(statt die Config-Entry-ID von Hand einzutragen). Bereiche, die per
+Feature-Toggle abgeschaltet sind (siehe unten), werden in der Karte
+ausgeblendet.
 
 Die Karte wird unter `/health_o_mat/health-o-mat-card.js` ausgeliefert und beim
 Setup automatisch als Lovelace-Ressource registriert (idempotent) — die
@@ -352,7 +359,12 @@ HA-Seitenleiste einklinkt:
 - 👥 **Mehr-Personen-Übersicht** — eine Kachel je Person (Hydration-Ring, letzte
   Blutdruckwerte, Wohlbefinden), inklusive Status
 - 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
-  Messen und Melden funktionieren direkt aus dem Panel
+  Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
+  Feature-Toggle abgeschaltet sind, werden ausgeblendet
+- 🔗 **Deep-Link pro Person** — die Person-Ansicht ist direkt verlinkbar über
+  `?person=<slug>`, z. B. `/health-o-mat?person=caro`. Als Kennung dient der
+  **stabile** Personen-Schlüssel (nie der Anzeigename), sodass ein Link eine
+  Umbenennung übersteht
 - 🔄 **Live-Aktualisierung** — Schreibvorgänge und externe Änderungen landen ohne
   Neuladen im Panel (WebSocket-Refresh statt Polling)
 - 🙋 **Per-User-Auswahl** — das Panel merkt sich je HA-Nutzer die zuletzt gewählte
@@ -380,15 +392,37 @@ eine scrollbare Maske statt drei erzwungener Options-Schritte):
 - 🩺 **Blutdruck-Warnschwellen** (sys/dia) — wirken zur Laufzeit sofort auf den
   Blutdruck-Warn-Binary-Sensor
 - 🗄️ **Aufbewahrung** (Retention in Monaten)
+- 🧩 **Feature-Toggles pro Person** — **Trinken / Blutdruck / Wohlbefinden**
+  einzeln an/aus. Ein abgeschalteter Bereich erzeugt **keine** Entities mehr
+  (sie werden beim Reload entladen); `unique_id` und Historie bleiben
+  **unverändert**, ein Wieder-Einschalten erzeugt dieselbe `entity_id` wieder.
+  Fehlt die Auswahl (Alt-Entry), sind alle Bereiche aktiv
 - 📌 **Sidebar-Panel-Schalter** (Opt-in)
-- 📄 **CSV-Export** direkt aus dem Panel anstoßen (`drinks` / `blood_pressure` /
-  `all`, geschrieben nach `/config/health_o_mat_export/`)
+- 📄 **CSV-Export** direkt aus dem Panel anstoßen
+  (`drinks` / `blood_pressure` / `all`, geschrieben nach
+  `/config/health_o_mat_export/`)
+- 💾 **Backup** direkt aus dem Panel auslösen (ruft den `health_o_mat.backup`-Service)
+- ➕ **Person anlegen** — öffnet den Standard-HA-Config-Flow (kein eigener Dialog)
+- 🗑️ **Person löschen** — nur Admin, mit **Doppelbestätigung** (die Bestätigung
+  muss dem Personen-Schlüssel entsprechen). **Achtung:** Das Löschen entfernt
+  nur die Integration samt Entities — der Store wird nicht aufgeräumt, und ein
+  **Restore des Backups ist weiterhin nicht implementiert**; vorher ein Backup
+  erstellen
 
 **Schreibrechte:** Die **Alltagseingaben bleiben für alle HA-Nutzer offen** —
 Buchen, Messen, Melden und Undo funktionieren unabhängig von Admin-Rechten. Nur
-die **Settings-Ansicht und der Export sind auf HA-Administratoren beschränkt**
-und serverseitig hart abgesichert; Nicht-Admins erhalten einen sauberen Fehler
-statt Zugriff.
+die **Settings-Ansicht, der Export, das Backup sowie Anlegen/Löschen von
+Personen sind auf HA-Administratoren beschränkt** und serverseitig hart
+abgesichert; Nicht-Admins erhalten einen sauberen Fehler statt Zugriff.
+
+### Feature-Toggles & Entities
+
+Die Pro-Person-Toggles (REQ-HOM-009) sind auch über den regulären Options-Dialog
+erreichbar (Schalter „Trinken erfassen" / „Blutdruck erfassen" / „Wohlbefinden
+erfassen") und wirken identisch. Das Abschalten **löscht** keine Daten: Es werden
+lediglich die Entities des Bereichs nicht mehr geladen. Deaktivierte Entities
+erscheinen in Home Assistant als `unavailable` (bzw. sind nach einem Neustart
+nicht mehr vorhanden); ihre Registry-Einträge und `unique_id`s bleiben bestehen.
 
 Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
 unberührt und funktioniert unabhängig vom Panel.

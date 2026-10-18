@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.util import dt as dt_util
 
-from . import logic
+from . import areas, logic
 from .const import DOMAIN, HISTORY_ATTRIBUTE_LIMIT
 from .entity import HealthOMatEntity
 
@@ -20,22 +20,33 @@ from .entity import HealthOMatEntity
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
+    active = areas.active_areas(entry.options)
 
-    entities = [
-        TodaySensor(coord, entry, store),
-        PercentSensor(coord, entry, store),
-        HistoryDrinksSensor(coord, entry, store),
-        LifetimeSensor(coord, entry, store),
-        BloodPressureHistorySensor(coord, entry, store),
-        BloodPressureCategorySensor(coord, entry, store),
-        DrinksTrendSensor(coord, entry, store),
-        BpTrendSensor(coord, entry, store),
-        GoalStreakSensor(coord, entry, store),
-        CaffeineTodaySensor(coord, entry, store),
-        WellbeingSinceSensor(coord, entry, store),
-    ]
-    for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
-        entities.append(LastReadingSensor(coord, entry, store, key, unit))
+    entities: list = []
+    if active[areas.AREA_DRINK]:
+        entities.extend(
+            [
+                TodaySensor(coord, entry, store),
+                PercentSensor(coord, entry, store),
+                HistoryDrinksSensor(coord, entry, store),
+                LifetimeSensor(coord, entry, store),
+                DrinksTrendSensor(coord, entry, store),
+                GoalStreakSensor(coord, entry, store),
+                CaffeineTodaySensor(coord, entry, store),
+            ]
+        )
+    if active[areas.AREA_BP]:
+        entities.extend(
+            [
+                BloodPressureHistorySensor(coord, entry, store),
+                BloodPressureCategorySensor(coord, entry, store),
+                BpTrendSensor(coord, entry, store),
+            ]
+        )
+        for key, unit in (("sys", "mmHg"), ("dia", "mmHg"), ("pulse", "BPM")):
+            entities.append(LastReadingSensor(coord, entry, store, key, unit))
+    if active[areas.AREA_WELLBEING]:
+        entities.append(WellbeingSinceSensor(coord, entry, store))
     async_add_entities(entities)
 
 

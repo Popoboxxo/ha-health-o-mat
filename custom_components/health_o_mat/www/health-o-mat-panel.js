@@ -1,9 +1,11 @@
 /**
- * Health-O-Mat — Sidebar Panel (L2).
+ * Health-O-Mat — Sidebar Panel (L2), entry module.
  *
- * Vanilla Web Component, no build toolchain, no external imports.
- * Self-contained ES2020, delivered bundled by the integration (see panel.py)
- * and registered via `panel_custom.async_register_panel(webcomponent_name=...)`.
+ * Vanilla Web Component, no build toolchain. Split into native ES modules
+ * (no bundler): this file is the registered entry module
+ * (`webcomponent_name`/`module_url` point here) and owns the element state,
+ * WebSocket data flow, navigation and event handling. Rendering lives in the
+ * sibling `-base` / `-views` / `-admin` modules.
  *
  * DOM API set by Home Assistant for `panel_custom` web components:
  *   set hass(hass)     — the Home Assistant object (states, callWS, connection)
@@ -15,527 +17,67 @@
  *   - `health_o_mat/subscribe` events -> reload the affected person(s)
  *   - every `hass` set  -> read LIVE values from hass.states[entity_id]
  *   - entity ids are NEVER guessed; they come from the WS `entities` block
- *     (resolved server-side via the stable `{entry_id}_{suffix}` unique_id)
  *
- * Views:
+ * Deep-link: the URL query parameter `?person=<slug>` addresses a person page.
+ * The slug is the STABLE `entry.data["person"]` — never the display name, and
+ * never any health data. Opening/leaving a person pushes a history entry;
+ * `popstate` restores the addressed view (overview <-> person). Reading also
+ * accepts an `entry_id` as a fallback. A malformed URL never breaks the panel.
+ *
+ * Views (rendered by the sibling modules):
  *   - overview: responsive grid, one tile per person (L2 start)
- *   - detail:   tabs Trinken | Blutdruck | Wohlbefinden (concept 4.2–4.4)
- *   - settings: admin-only per-person admin form (concept 4.5 + §8.4)
+ *   - detail:   tabs Trinken | Blutdruck | Wohlbefinden (concept 4.2–4.4),
+ *               filtered by the person's feature toggles
+ *   - settings: admin-only per-person admin form + person management (D7)
  *
  * Admin surface (L3): the `settings` view is reachable ONLY for
  * `hass.user.is_admin` — this UI gate is ADDITIONAL to the server gate, never a
- * substitute for it. `health_o_mat/get_settings`, `set_settings` and
- * `export_csv` are admin-gated server-side; a non-admin only ever receives a WS
- * error, which is surfaced as plain text and never breaks the panel.
+ * substitute for it. All admin commands are server-gated; a non-admin only ever
+ * receives a WS error, which is surfaced as plain text and never breaks the panel.
  *
  * Robustness: missing entities/states, per-person load errors, and WS write
  * errors are surfaced without ever breaking the panel. The settings form is
  * never re-rendered from a background `hass` update (it holds unsaved user
  * input); only explicit actions rebuild it.
+ *
+ * Import specifiers carry the integration version as a cache-buster query
+ * parameter; tests/test_panel_js.py keeps them in sync with manifest.json.
  */
+
+import {
+  PANEL_CSS,
+  WS,
+  SETTINGS_LIMITS,
+  SETTINGS_FALLBACKS,
+  REFRESH_DEBOUNCE_MS,
+  escapeHtml,
+  toNumber,
+  intOrNull,
+  errMsg,
+  wsErrorText,
+  normalizeAreas,
+  normalizeQuickDrinks,
+  normalizePersons,
+  parseDrinkText,
+  personSlug,
+  resolvePersonByParam,
+  areasForPerson,
+  enabledTabs,
+  messageHtml,
+} from "./health-o-mat-panel-base.js?v=0.7.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.7.0";
+import {
+  renderSettings,
+  settingsStatusHtml,
+  exportResultHtml,
+  exportResultText,
+} from "./health-o-mat-panel-admin.js?v=0.7.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
 
-/* Quick drinks for the "Trinken" tab. `type` is the canonical drink label
- * stored on the drink (`store.add_drink`), used for the caffeine breakdown. */
-const QUICK_DRINKS = [
-  { label: "Glas Wasser", ml: 200, emoji: "\u{1F4A7}", type: "Wasser" },
-  { label: "Flasche", ml: 500, emoji: "\u{1F376}", type: "Wasser" },
-  { label: "Kaffee", ml: 250, emoji: "\u2615", type: "Kaffee" },
-  { label: "Saft", ml: 200, emoji: "\u{1F964}", type: "Saft" },
-];
-
-/* Wellbeing taps (mirrors const.WELLBEING_STATES). */
-const WELLBEING_STATES = [
-  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F635}" },
-  { key: "bad", label: "Schlecht", emoji: "\u{1F641}" },
-  { key: "okay", label: "Okay", emoji: "\u{1F610}" },
-  { key: "good", label: "Gut", emoji: "\u{1F642}" },
-  { key: "great", label: "Super", emoji: "\u{1F604}" },
-];
-
-/* WHO blood-pressure category keys (logic.bp_category) -> label + colour. */
-const BP_CATEGORIES = {
-  optimal: { label: "Optimal", cls: "good" },
-  normal: { label: "Normal", cls: "good" },
-  high_normal: { label: "Hochnormal", cls: "ok" },
-  grade_1: { label: "Hypertonie Grad 1", cls: "warn" },
-  grade_2: { label: "Hypertonie Grad 2", cls: "warn" },
-  grade_3: { label: "Hypertonie Grad 3", cls: "bad" },
-  crisis: { label: "Krise", cls: "bad" },
-};
-
-/* Pace labels (ws_api.compute_pace). */
-const PACE_INFO = {
-  goal_reached: { text: "Tagesziel erreicht", cls: "good" },
-  ahead: { text: "Auf Kurs (voraus)", cls: "good" },
-  on_track: { text: "Auf Kurs", cls: "ok" },
-  behind: { text: "Zu langsam", cls: "warn" },
-};
-
-const WS = {
-  listPersons: "health_o_mat/list_persons",
-  panelData: "health_o_mat/panel_data",
-  subscribe: "health_o_mat/subscribe",
-  bookDrink: "health_o_mat/book_drink",
-  undoLast: "health_o_mat/undo_last",
-  saveMeasurement: "health_o_mat/save_measurement",
-  setWellbeing: "health_o_mat/set_wellbeing",
-  getUiSettings: "health_o_mat/get_ui_settings",
-  setUiSettings: "health_o_mat/set_ui_settings",
-  // Admin-only (server-gated; see "Admin surface" above).
-  getSettings: "health_o_mat/get_settings",
-  setSettings: "health_o_mat/set_settings",
-  exportCsv: "health_o_mat/export_csv",
-};
-
-/* Admin settings form. Structural limits mirror the backend schema so obvious
- * mistakes are caught before a round-trip; they are NOT a security boundary —
- * the server validates everything again. They are deliberately never STRICTER
- * than the server (ws_api.SETTINGS_SCHEMA), otherwise a value the server would
- * accept could not be saved. */
-const SETTINGS_LIMITS = {
-  goalMin: 1,
-  goalMax: 20000,
-  resetMin: 0,
-  resetMax: 23,
-  // Both BP thresholds are validated as const.MIN_BP_VALUE..MAX_BP_VALUE
-  // server-side (40..260) — one shared pair, intentionally.
-  thresholdMin: 40,
-  thresholdMax: 260,
-  retentionMin: 0,
-  retentionMax: 120,
-  quickMlMin: 1,
-  quickMlMax: 10000,
-  maxQuickDrinks: 4,
-  minQuickDrinks: 1,
-};
-
-/* Display fallbacks used ONLY when `get_settings` omits a key (the contract
- * lists every key, so this is a defensive default, not a data model). The
- * numbers mirror const.py (DEFAULT_DAILY_GOAL_ML, DEFAULT_SYS_THRESHOLD, …). */
-const SETTINGS_FALLBACKS = {
-  daily_goal_ml: 2000,
-  daily_reset_hour: 0,
-  sys_threshold: 140,
-  dia_threshold: 90,
-  retention_months: 0,
-  enable_sidebar_panel: false,
-  quick_icon: "mdi:cup-water",
-};
-
-/* Export datasets (mirrors the `export_csv` service schema). */
-const EXPORT_DATASETS = [
-  { value: "all", label: "Alles" },
-  { value: "drinks", label: "Getränke" },
-  { value: "blood_pressure", label: "Blutdruck" },
-];
-
-const RING_RADIUS = 42;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-const REFRESH_DEBOUNCE_MS = 150;
-
-const PANEL_CSS = `
-  :host {
-    display: block; min-height: 100vh;
-    background: var(--primary-background-color, #fafafa);
-    color: var(--primary-text-color, #212121);
-    -webkit-tap-highlight-color: transparent;
-  }
-  * { box-sizing: border-box; }
-  .page { display: flex; flex-direction: column; min-height: 100vh; }
-
-  .topbar {
-    position: sticky; top: 0; z-index: 5;
-    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-    background: var(--app-header-background-color, var(--primary-color, #03a9f4));
-    color: var(--app-header-text-color, var(--text-primary-color, #fff));
-    box-shadow: 0 1px 4px rgba(0,0,0,.2);
-  }
-  .topbar .title { flex: 1; display: flex; align-items: center; gap: 8px;
-    font-size: 1.05rem; font-weight: 600; min-width: 0; }
-  .topbar .title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .icon-btn {
-    font: inherit; cursor: pointer; border: none; border-radius: 10px;
-    background: rgba(255,255,255,.16); color: inherit;
-    min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 1.2rem;
-    display: inline-flex; align-items: center; justify-content: center;
-  }
-  .icon-btn:active { transform: scale(.95); }
-  .icon-btn[disabled] { opacity: .5; cursor: default; }
-
-  .content { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 12px; }
-  .footer {
-    padding: 10px 12px 18px; text-align: center;
-    font-size: .72rem; color: var(--secondary-text-color, #727272);
-  }
-
-  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-  @media (min-width: 600px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (min-width: 1000px) {
-    .grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-  }
-
-  .tile {
-    text-align: left; font: inherit; cursor: pointer;
-    display: flex; flex-direction: column; gap: 10px; padding: 14px;
-    border-radius: 16px;
-    background: var(--card-background-color, var(--ha-card-background, #fff));
-    color: var(--primary-text-color, #212121);
-    border: 1px solid var(--divider-color, rgba(0,0,0,.08));
-    box-shadow: var(--ha-card-box-shadow, 0 1px 3px rgba(0,0,0,.08));
-    transition: box-shadow .12s ease, transform .12s ease;
-  }
-  .tile:hover { box-shadow: 0 3px 12px rgba(0,0,0,.16); }
-  .tile:active { transform: scale(.99); }
-  .tile:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
-  .tile.loading { cursor: default; opacity: .85; }
-  .tile-head { display: flex; align-items: center; gap: 8px; }
-  .tile-name { flex: 1; font-size: 1.05rem; font-weight: 600; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tile-main { display: flex; align-items: center; gap: 14px; }
-  .tile-stats { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .tile-ml { font-size: 1.15rem; font-weight: 700; }
-  .tile-sub { font-size: .8rem; color: var(--secondary-text-color, #727272); }
-  .tile-row { display: flex; align-items: center; gap: 8px; font-size: .92rem;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tile-row .em { font-size: 1.1rem; flex: none; }
-  .tile-row .muted { color: var(--secondary-text-color, #727272); }
-
-  .dot { width: 10px; height: 10px; border-radius: 50%;
-    background: var(--primary-color, #03a9f4); flex: none; }
-
-  .ring { position: relative; width: 132px; height: 132px; flex: none; }
-  .ring.compact { width: 72px; height: 72px; }
-  .ring svg { width: 100%; height: 100%; display: block; }
-  .ring-track { fill: none; stroke: var(--divider-color, rgba(0,0,0,.12)); stroke-width: 8; }
-  .ring-fill {
-    fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 8; stroke-linecap: round;
-    transition: stroke-dashoffset .45s ease;
-  }
-  .ring-fill.done { stroke: var(--success-color, #43a047); }
-  .ring-label {
-    position: absolute; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; text-align: center; line-height: 1.12;
-  }
-  .ring-pct { font-weight: 700; font-size: 1.5rem; }
-  .ring.compact .ring-pct { font-size: .95rem; }
-  .ring-sub { font-size: .72rem; color: var(--secondary-text-color, #727272); margin-top: 2px; }
-
-  .card {
-    background: var(--card-background-color, var(--ha-card-background, #fff));
-    border: 1px solid var(--divider-color, rgba(0,0,0,.08));
-    border-radius: 16px; padding: 14px;
-    display: flex; flex-direction: column; gap: 12px;
-  }
-
-  .btn {
-    font: inherit; cursor: pointer; border: none; border-radius: 12px;
-    padding: 12px 14px; min-height: 48px;
-    background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
-    font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    touch-action: manipulation; transition: filter .15s ease, transform .1s ease;
-  }
-  .btn:hover { filter: brightness(1.06); }
-  .btn:active { transform: scale(.98); }
-  .btn:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
-  .btn[disabled] { opacity: .55; cursor: default; filter: none; }
-  .btn.ghost { background: transparent; color: var(--primary-color, #03a9f4);
-    border: 1px solid var(--primary-color, #03a9f4); }
-
-  .quick { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  @media (min-width: 600px) { .quick { grid-template-columns: repeat(4, 1fr); } }
-  .quick .btn { flex-direction: column; min-height: 66px; }
-  .quick .btn .ml { font-size: .75rem; font-weight: 400; opacity: .9; }
-
-  .freetext { display: flex; gap: 8px; }
-  .freetext input {
-    flex: 1; min-width: 0; min-height: 48px; padding: 10px 12px; font: inherit;
-    border-radius: 12px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
-    background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
-  }
-  .freetext .btn { flex: none; }
-
-  .tabs { display: flex; gap: 4px; background: var(--secondary-background-color, rgba(0,0,0,.04));
-    padding: 4px; border-radius: 12px; }
-  .tab { flex: 1; cursor: pointer; border: none; background: transparent; font: inherit;
-    color: var(--primary-text-color, #212121); font-weight: 600; padding: 10px 6px;
-    min-height: 44px; border-radius: 9px; }
-  .tab.active { background: var(--card-background-color, #fff);
-    box-shadow: 0 1px 2px rgba(0,0,0,.15); color: var(--primary-color, #03a9f4); }
-  .tab:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
-
-  .person-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 12px;
-    font-size: 1.15rem; font-weight: 600; }
-  .views { display: flex; flex-direction: column; gap: 12px; }
-
-  .kv { display: flex; justify-content: space-between; gap: 12px; font-size: .95rem; }
-  .kv .k { color: var(--secondary-text-color, #727272); }
-  .kv .v { font-weight: 600; text-align: right; }
-
-  .status { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem;
-    padding: 4px 10px; border-radius: 999px; font-weight: 600; }
-  .status.good { color: var(--success-color, #43a047); background: rgba(67,160,71,.14); }
-  .status.ok { color: var(--primary-color, #03a9f4); background: rgba(3,169,244,.14); }
-  .status.warn { color: var(--warning-color, #ff9800); background: rgba(255,152,0,.16); }
-  .status.bad { color: var(--error-color, #db4437); background: rgba(219,68,55,.14); }
-
-  .banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-    border-radius: 12px; font-size: .9rem;
-    background: var(--secondary-background-color, rgba(0,0,0,.04));
-    border-left: 4px solid var(--error-color, #db4437);
-    color: var(--error-color, #db4437); font-weight: 600; }
-  .banner.info { border-left-color: var(--primary-color, #03a9f4);
-    color: var(--primary-text-color, #212121); font-weight: 500; }
-
-  .msg { padding: 14px; border-radius: 12px;
-    background: var(--secondary-background-color, rgba(0,0,0,.04));
-    color: var(--secondary-text-color, #727272); }
-  .msg.error { color: var(--error-color, #db4437); }
-  .msg .btn { margin-top: 12px; }
-
-  .bd-row { display: grid; grid-template-columns: 84px 1fr auto; gap: 8px;
-    align-items: center; font-size: .88rem; }
-  .bd-track { height: 10px; border-radius: 6px; overflow: hidden;
-    background: var(--divider-color, rgba(0,0,0,.1)); }
-  .bd-fill { height: 100%; background: var(--primary-color, #03a9f4); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip { padding: 5px 10px; border-radius: 999px; font-size: .82rem;
-    background: var(--secondary-background-color, rgba(0,0,0,.05)); }
-
-  .bp-head { display: flex; flex-direction: column; gap: 4px; }
-  .bp-big { font-size: 2.5rem; font-weight: 700; line-height: 1; }
-  .bp-meta { font-size: .9rem; color: var(--secondary-text-color, #727272);
-    display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-  .bp-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-  .field { display: flex; flex-direction: column; gap: 4px; font-size: .8rem;
-    color: var(--secondary-text-color, #727272); min-width: 0; }
-  .field input, .field select, .field textarea {
-    width: 100%; min-height: 48px; padding: 8px 10px; font: inherit;
-    border-radius: 10px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
-    background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
-  }
-  .spark { display: flex; align-items: flex-end; gap: 4px; height: 72px; padding-top: 4px; }
-  .spark .bar { flex: 1; min-width: 5px; border-radius: 4px 4px 0 0;
-    background: var(--primary-color, #03a9f4); }
-
-  .wb-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-  .wb-btn {
-    font: inherit; cursor: pointer; min-height: 86px; padding: 8px 2px;
-    border-radius: 14px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
-    background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  }
-  .wb-btn:active { transform: scale(.97); }
-  .wb-btn:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
-  .wb-btn .emoji { font-size: 1.9rem; line-height: 1; }
-  .wb-btn .lbl { font-size: .72rem; color: var(--secondary-text-color, #727272); text-align: center; }
-  .wb-btn.active { border-color: var(--primary-color, #03a9f4);
-    background: var(--secondary-background-color, rgba(3,169,244,.1)); }
-  @media (max-width: 400px) { .wb-btn .lbl { display: none; } }
-
-  .wb-history { display: flex; flex-wrap: wrap; gap: 8px; }
-  .wb-hist { display: flex; flex-direction: column; align-items: center; gap: 2px;
-    font-size: .68rem; color: var(--secondary-text-color, #727272); min-width: 40px; }
-  .wb-hist .emoji { font-size: 1.3rem; line-height: 1; }
-
-  .muted { color: var(--secondary-text-color, #727272); font-size: .85rem; }
-
-  /* --- Admin/Settings (L3, concept 4.5 / §8.4) --------------------------- */
-  .settings-form { display: flex; flex-direction: column; gap: 12px; }
-  .settings-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-  @media (min-width: 600px) { .settings-grid { grid-template-columns: repeat(2, 1fr); } }
-  .hint { font-size: .75rem; color: var(--secondary-text-color, #727272); line-height: 1.35; }
-  .field code, .settings-form code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: .8rem;
-  }
-  .field textarea {
-    min-height: 190px; resize: vertical; line-height: 1.45;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: .85rem;
-  }
-  .qd-list { display: flex; flex-direction: column; gap: 10px; }
-  .qd-slot {
-    display: grid; grid-template-columns: 1fr; gap: 8px; padding: 10px;
-    border-radius: 12px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
-    background: var(--secondary-background-color, rgba(0,0,0,.02));
-  }
-  @media (min-width: 700px) {
-    .qd-slot { grid-template-columns: 2fr 1fr 2fr auto; align-items: end; }
-  }
-  .qd-slot .btn { min-height: 44px; min-width: 44px; padding: 10px 12px; }
-  .check { display: flex; align-items: center; gap: 10px; font-size: .95rem; min-height: 48px; }
-  .check input { width: 22px; height: 22px; flex: none; }
-  .export-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
-  @media (min-width: 600px) { .export-row { grid-template-columns: 1fr auto; align-items: end; } }
-  .settings-status { border-radius: 12px; padding: 10px 12px; font-size: .9rem; font-weight: 600; }
-  .settings-status.ok { color: var(--success-color, #43a047); background: rgba(67,160,71,.14); }
-  .settings-status.err { color: var(--error-color, #db4437); background: rgba(219,68,55,.14); }
-  .settings-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-  .settings-actions .btn { flex: 1 1 190px; }
-  .card-title { font-weight: 600; font-size: .95rem; }
-`;
-
-/* --- pure helpers --------------------------------------------------------- */
-
-function escapeHtml(value) {
-  return String(value == null ? "" : value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function toNumber(value, fallback) {
-  const n = typeof value === "number" ? value : parseFloat(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function errMsg(err) {
-  if (err == null) return "Unbekannter Fehler.";
-  if (typeof err === "string") return err;
-  if (err.message) return String(err.message);
-  if (err.body && err.body.message) return String(err.body.message);
-  try {
-    return JSON.stringify(err);
-  } catch (_e) {
-    return String(err);
-  }
-}
-
-/* Integer from a form field: "" / garbage -> null, "3,5" -> 4 (rounded). */
-function intOrNull(raw) {
-  if (raw == null) return null;
-  const s = String(raw).trim().replace(",", ".");
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? Math.round(n) : null;
-}
-
-/* WS error -> display text. Home Assistant rejects `callWS` with an object that
- * carries `code`/`message` and (for validated commands) `translation_placeholders`
- * — the backend puts the offending lexicon line there, so it is appended instead
- * of being swallowed by `errMsg`. */
-function wsErrorText(err) {
-  const base = errMsg(err);
-  const ph = err && err.translation_placeholders;
-  if (ph && typeof ph === "object") {
-    if (ph.detail) return `${base}: ${String(ph.detail)}`;
-    const parts = Object.keys(ph)
-      .filter((k) => ph[k] != null && ph[k] !== "")
-      .map((k) => `${k}=${ph[k]}`);
-    if (parts.length) return `${base} (${parts.join(", ")})`;
-  }
-  return base;
-}
-
-/* Normalised quick-drink list, used for both dirty-checking and payloads. */
-function normalizeQuickDrinks(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .slice(0, SETTINGS_LIMITS.maxQuickDrinks)
-    .filter((d) => d && typeof d === "object")
-    .map((d) => ({
-      key: d.key == null ? "" : String(d.key),
-      label: String(d.label == null ? "" : d.label).trim(),
-      ml: toNumber(d.ml, 0),
-      icon: String(d.icon == null ? "" : d.icon),
-    }));
-}
-
-/* Attribute-safe string (never prints "null"/"undefined" into `value=`). */
-function attrValue(value) {
-  return value === null || value === undefined ? "" : escapeHtml(String(value));
-}
-
-function datasetLabel(value) {
-  const hit = EXPORT_DATASETS.find((d) => d.value === value);
-  return hit ? hit.label : String(value == null ? "" : value);
-}
-
-function relativeTime(iso) {
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return "";
-  const diff = Date.now() - ts;
-  if (diff < 60000) return "gerade eben";
-  const min = Math.round(diff / 60000);
-  if (min < 60) return `vor ${min} min`;
-  const hours = Math.round(min / 60);
-  if (hours < 24) return `vor ${hours} h`;
-  const days = Math.round(hours / 24);
-  return `vor ${days} d`;
-}
-
-function fmtMl(value) {
-  const n = toNumber(value, 0);
-  return `${Math.round(n)} ml`;
-}
-
-function normalizePersons(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((p) => p && p.entry_id)
-    .map((p) => ({
-      entry_id: String(p.entry_id),
-      display_name: p.display_name ? String(p.display_name) : String(p.entry_id),
-      device_id: p.device_id || null,
-    }));
-}
-
-/* Free-text drink entry: "Kaffee 300ml" -> { ml: 300, type: "Kaffee" }. */
-function parseDrinkText(text) {
-  const raw = String(text == null ? "" : text).trim();
-  if (!raw) return null;
-  const match = raw.match(/(\d+(?:[.,]\d+)?)\s*(ml|milliliter|l|liter|cl)?/i);
-  if (!match) return null;
-  let amount = parseFloat(match[1].replace(",", "."));
-  const unit = (match[2] || "ml").toLowerCase();
-  if (unit === "l" || unit === "liter") amount *= 1000;
-  else if (unit === "cl") amount *= 10;
-  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000) return null;
-  const before = raw.slice(0, match.index).trim();
-  const after = raw.slice(match.index + match[0].length).trim();
-  const type = `${before} ${after}`.trim();
-  return { ml: Math.round(amount), type: type.slice(0, 60) };
-}
-
-function ringHtml(percent, opts) {
-  const options = opts || {};
-  const pct = toNumber(percent, 0);
-  const fill = clamp(pct, 0, 100);
-  const offset = RING_CIRCUMFERENCE * (1 - fill / 100);
-  const done = pct >= 100 ? " done" : "";
-  const cls = options.compact ? "ring compact" : "ring";
-  const sub = options.sub
-    ? `<span class="ring-sub">${escapeHtml(options.sub)}</span>`
-    : "";
-  return `<div class="${cls}">
-      <svg viewBox="0 0 100 100" aria-hidden="true">
-        <circle class="ring-track" cx="50" cy="50" r="${RING_RADIUS}"></circle>
-        <circle class="ring-fill${done}" cx="50" cy="50" r="${RING_RADIUS}"
-          stroke-dasharray="${RING_CIRCUMFERENCE.toFixed(2)}"
-          stroke-dashoffset="${offset.toFixed(2)}"
-          transform="rotate(-90 50 50)"></circle>
-      </svg>
-      <div class="ring-label">
-        <span class="ring-pct">${Math.round(pct)}%</span>${sub}
-      </div>
-    </div>`;
-}
-
-function categoryInfo(key) {
-  const k = String(key == null ? "" : key).toLowerCase();
-  return BP_CATEGORIES[k] || null;
-}
-
-/* --- the panel element ---------------------------------------------------- */
+/* Person-flow target when the admin adds a person (no custom CRUD flow). */
+const CONFIG_FLOW_URL = "/config/integrations/dashboard";
 
 class HealthOMatPanel extends HTMLElement {
   constructor() {
@@ -562,6 +104,12 @@ class HealthOMatPanel extends HTMLElement {
     this._exportBusy = false;
     this._exportResult = null; // { ok: boolean, text: string }
 
+    // --- person management (D7) ---
+    this._adminStatus = null; // { ok: boolean, text: string }
+    this._adminBusy = false;
+    this._deleteTarget = ""; // entry_id awaiting inline confirmation
+    this._deleteBusy = false;
+
     this._booted = false;
     this._loading = false;
     this._fatal = null;
@@ -577,9 +125,13 @@ class HealthOMatPanel extends HTMLElement {
 
     this._renderScheduled = false;
 
+    this._historyNavigating = false; // true while handling a popstate event
+    this._popStateAttached = false;
+
     this._onClick = this._onClick.bind(this);
     this._onSubmit = this._onSubmit.bind(this);
     this._onChange = this._onChange.bind(this);
+    this._onPopState = this._onPopState.bind(this);
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("submit", this._onSubmit);
     this.shadowRoot.addEventListener("change", this._onChange);
@@ -615,10 +167,15 @@ class HealthOMatPanel extends HTMLElement {
     return this._panel;
   }
 
+  connectedCallback() {
+    this._addPopStateListener();
+  }
+
   disconnectedCallback() {
     this.shadowRoot.removeEventListener("click", this._onClick);
     this.shadowRoot.removeEventListener("submit", this._onSubmit);
     this.shadowRoot.removeEventListener("change", this._onChange);
+    this._removePopStateListener();
     this._unsubscribe();
     if (this._refreshTimer) {
       clearTimeout(this._refreshTimer);
@@ -635,6 +192,86 @@ class HealthOMatPanel extends HTMLElement {
     return this._hass.callWS(message);
   }
 
+  /* ---- URL / deep-link (query parameter `person`) ------------------------- */
+
+  _addPopStateListener() {
+    if (this._popStateAttached) return;
+    if (typeof window === "undefined" || typeof window.addEventListener !== "function") return;
+    window.addEventListener("popstate", this._onPopState);
+    this._popStateAttached = true;
+  }
+
+  _removePopStateListener() {
+    if (!this._popStateAttached) return;
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("popstate", this._onPopState);
+    }
+    this._popStateAttached = false;
+  }
+
+  /* Raw `person` query value (never throws on a malformed URL). */
+  _queryPerson() {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get("person") || "";
+    } catch (_e) {
+      return "";
+    }
+  }
+
+  /* Resolved person for the current URL, or null. Slug first, then entry_id. */
+  _personFromUrl() {
+    const raw = this._queryPerson();
+    if (!raw) return null;
+    return resolvePersonByParam(this._persons || [], raw);
+  }
+
+  /* Push `?person=<slug>` (or clear it for the overview) onto the history. */
+  _pushUrl(person) {
+    if (this._historyNavigating) return;
+    if (typeof window === "undefined" || !window.history) return;
+    if (typeof window.history.pushState !== "function") return;
+    try {
+      const url = new URL(window.location.href);
+      if (person) url.searchParams.set("person", String(person));
+      else url.searchParams.delete("person");
+      const next = `${url.pathname}${url.search}${url.hash}`;
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (next === current) return;
+      window.history.pushState({ person: person || null }, "", next);
+    } catch (_e) {
+      // A bad URL must never break the panel.
+    }
+  }
+
+  _pushPersonUrl(slug) {
+    const value = slug == null ? "" : String(slug);
+    if (!value) {
+      this._pushUrl("");
+      return;
+    }
+    this._pushUrl(value);
+  }
+
+  _pushOverviewUrl() {
+    this._pushUrl("");
+  }
+
+  _onPopState() {
+    if (!this._booted || this._persons == null) return;
+    this._historyNavigating = true;
+    try {
+      const person = this._personFromUrl();
+      if (person) this._openPerson(person.entry_id, { silent: true });
+      else this._showOverview({ silent: true });
+    } catch (err) {
+      this._actionError = errMsg(err);
+      this._render();
+    } finally {
+      this._historyNavigating = false;
+    }
+  }
+
   /* ---- Bootstrap / data flow ---------------------------------------------- */
 
   async _bootstrap() {
@@ -642,6 +279,9 @@ class HealthOMatPanel extends HTMLElement {
     this._booted = true;
     this._loading = true;
     this._fatal = null;
+    // Re-register the listener (idempotent) so a re-bootstrap never duplicates it.
+    this._removePopStateListener();
+    this._addPopStateListener();
     this._render();
     try {
       let saved = "";
@@ -654,7 +294,7 @@ class HealthOMatPanel extends HTMLElement {
       const res = await this._ws({ type: WS.listPersons });
       this._persons = normalizePersons(res && res.persons);
       await this._loadAll();
-      this._chooseStartView(saved);
+      this._applyInitialView(saved);
       await this._subscribe();
     } catch (err) {
       this._fatal = errMsg(err);
@@ -662,6 +302,17 @@ class HealthOMatPanel extends HTMLElement {
       this._loading = false;
       this._render();
     }
+  }
+
+  /* A valid `?person=` deep-link wins; otherwise the previous start logic. */
+  _applyInitialView(saved) {
+    const viaUrl = this._personFromUrl();
+    if (viaUrl) {
+      this._selectedEntry = viaUrl.entry_id;
+      this._view = "detail";
+      return;
+    }
+    this._chooseStartView(saved);
   }
 
   _chooseStartView(saved) {
@@ -689,7 +340,7 @@ class HealthOMatPanel extends HTMLElement {
     if (cfg.person) {
       const wanted = String(cfg.person);
       const hit = (this._persons || []).find(
-        (p) => p.entry_id === wanted || p.display_name === wanted
+        (p) => p.entry_id === wanted || p.person_slug === wanted || p.display_name === wanted
       );
       if (hit) return hit.entry_id;
     }
@@ -772,31 +423,49 @@ class HealthOMatPanel extends HTMLElement {
 
   /* ---- Navigation --------------------------------------------------------- */
 
-  _openPerson(entryId) {
+  /* Open the person page. `silent` skips the pushState (popstate re-entry). */
+  _openPerson(entryId, opts) {
     if (!entryId) return;
+    const o = opts || {};
     this._selectedEntry = entryId;
     this._view = "detail";
     this._actionError = null;
     this._formError = null;
+    if (!o.silent) this._pushPersonUrl(this._slugFor(entryId));
     if (!this._data[entryId]) this._loadEntry(entryId).then(() => this._render());
     this._persistSelected(entryId);
     this._render();
   }
 
-  _showOverview() {
+  /* Return to the overview and clear the `person` query. */
+  _showOverview(opts) {
+    const o = opts || {};
     this._view = "overview";
     this._selectedEntry = "";
     this._actionError = null;
     this._formError = null;
+    if (!o.silent) this._pushOverviewUrl();
     this._persistSelected("");
     this._render();
   }
 
+  _slugFor(entryId) {
+    const hit = (this._persons || []).find((p) => p.entry_id === entryId);
+    return hit ? personSlug(hit) : "";
+  }
+
   _setTab(tab) {
+    const allowed = enabledTabs(this._areasOf(this._selectedEntry)).map((t) => t.key);
+    if (!allowed.length || !allowed.includes(tab)) return;
     this._tab = tab;
     this._actionError = null;
     this._formError = null;
     this._render();
+  }
+
+  _areasOf(entryId) {
+    const person = (this._persons || []).find((p) => p.entry_id === entryId) || null;
+    return areasForPerson(person, this._data[entryId]);
   }
 
   _persistSelected(entryId) {
@@ -840,8 +509,8 @@ class HealthOMatPanel extends HTMLElement {
 
   /* ---- Admin settings (L3, concept 4.5 / §8.4) ----------------------------- */
 
-  /* UI gate only — the server gates get_settings/set_settings/export_csv hard
-   * as well, so this is an affordance, never the boundary. */
+  /* UI gate only — the server gates every admin command hard as well, so this
+   * is an affordance, never the boundary. */
   _isAdmin() {
     const user = this._hass && this._hass.user;
     return !!(user && user.is_admin);
@@ -862,6 +531,8 @@ class HealthOMatPanel extends HTMLElement {
     this._formError = null;
     this._settingsStatus = null;
     this._exportResult = null;
+    this._adminStatus = null;
+    this._deleteTarget = "";
     this._settingsEntry = entryId;
     // The quick-drink draft belongs to exactly one person — always re-sync it,
     // otherwise a cached switch would re-use the previous person's slots.
@@ -879,6 +550,8 @@ class HealthOMatPanel extends HTMLElement {
     this._settingsEntry = entryId;
     this._settingsStatus = null;
     this._exportResult = null;
+    this._adminStatus = null;
+    this._deleteTarget = "";
     this._syncQuickDrafts(this._settings[entryId]);
     if (!this._settings[entryId]) {
       this._loadSettings(entryId).then(() => {
@@ -986,6 +659,14 @@ class HealthOMatPanel extends HTMLElement {
     return el.value == null ? fallback : el.value;
   }
 
+  _readAreaCheckboxes() {
+    const read = (field) => {
+      const el = this.shadowRoot.querySelector(`[data-field="${field}"]`);
+      return !!(el && el.checked);
+    };
+    return { drink: read("area-drink"), bp: read("area-bp"), wellbeing: read("area-wellbeing") };
+  }
+
   /* Validate + normalise the whole form. Returns { payload, errors }. */
   _collectSettingsPayload() {
     const errors = [];
@@ -1023,6 +704,8 @@ class HealthOMatPanel extends HTMLElement {
 
     const sidebarEl = this.shadowRoot.querySelector('[data-field="enable_sidebar_panel"]');
     const sidebar = !!(sidebarEl && sidebarEl.checked);
+
+    const areas = this._readAreaCheckboxes();
 
     this._readQuickDraftsFromDom();
     const quick = [];
@@ -1063,6 +746,7 @@ class HealthOMatPanel extends HTMLElement {
         dia_threshold: dia,
         retention_months: retention,
         enable_sidebar_panel: sidebar,
+        areas,
       },
     };
   }
@@ -1105,6 +789,11 @@ class HealthOMatPanel extends HTMLElement {
     }
     if (!!current.enable_sidebar_panel !== payload.enable_sidebar_panel) {
       out.enable_sidebar_panel = payload.enable_sidebar_panel;
+    }
+    if (
+      JSON.stringify(normalizeAreas(current.areas)) !== JSON.stringify(normalizeAreas(payload.areas))
+    ) {
+      out.areas = payload.areas;
     }
     return out;
   }
@@ -1168,7 +857,7 @@ class HealthOMatPanel extends HTMLElement {
     this._updateExportResultDom();
     try {
       const res = await this._ws({ type: WS.exportCsv, entry_id: entryId, dataset });
-      this._exportResult = { ok: true, text: this._exportResultText(res) };
+      this._exportResult = { ok: true, text: exportResultText(res) };
     } catch (err) {
       this._exportResult = { ok: false, text: wsErrorText(err) };
     } finally {
@@ -1178,35 +867,146 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  /* The export WS result shape is backend-defined; render defensively. */
-  _exportResultText(res) {
-    if (res == null) return "Export abgeschlossen.";
-    if (typeof res === "string") return res;
-    if (typeof res !== "object") return String(res);
-    if (Array.isArray(res.files) && res.files.length) {
-      return `Exportiert: ${res.files.map((f) => String(f)).join(", ")}`;
-    }
-    if (res.files && typeof res.files === "object") {
-      const names = Object.keys(res.files).map((k) => String(res.files[k]));
-      if (names.length) return `Exportiert: ${names.join(", ")}`;
-    }
-    if (res.filename) return `Exportiert: ${String(res.filename)}`;
-    if (res.path) return `Exportiert: ${String(res.path)}`;
-    if (res.message) return String(res.message);
-    if (res.ok === true) {
-      // Backend contract: { ok: true, entry_id, person, dataset }.
-      const parts = [];
-      if (res.person) parts.push(String(res.person));
-      if (res.dataset) parts.push(datasetLabel(res.dataset));
-      const what = parts.length ? ` (${parts.join(" \u00B7 ")})` : "";
-      return `Export ausgel\u00F6st${what} \u2192 /config/health_o_mat_export/`;
-    }
-    if (typeof res.count === "number") return `Export abgeschlossen (${res.count} Zeilen).`;
+  /* ---- Person management (D7) --------------------------------------------- */
+
+  async _startPersonFlow() {
+    if (!this._isAdmin() || this._adminBusy) return;
+    this._adminBusy = true;
+    this._adminStatus = { ok: true, text: "Starte Anlegen\u2026" };
+    this._render();
     try {
-      return JSON.stringify(res);
-    } catch (_e) {
-      return "Export abgeschlossen.";
+      await this._ws({ type: WS.startPersonFlow });
+      this._adminBusy = false;
+      this._adminStatus = {
+        ok: true,
+        text: "Dialog ge\u00F6ffnet \u2013 bitte die neue Person dort anlegen.",
+      };
+      this._render();
+      this._navigateToConfigFlow();
+    } catch (err) {
+      this._adminBusy = false;
+      this._adminStatus = { ok: false, text: wsErrorText(err) };
+      this._render();
     }
+  }
+
+  _navigateToConfigFlow() {
+    if (typeof window === "undefined" || !window.location) return;
+    const go = () => {
+      try {
+        window.location.href = CONFIG_FLOW_URL;
+      } catch (_e) {
+        // ignore
+      }
+    };
+    if (typeof setTimeout === "function") setTimeout(go, 400);
+    else go();
+  }
+
+  async _runBackup() {
+    if (!this._isAdmin() || this._adminBusy) return;
+    this._adminBusy = true;
+    this._adminStatus = { ok: true, text: "Backup l\u00E4uft\u2026" };
+    this._render();
+    try {
+      await this._ws({ type: WS.backup });
+      this._adminStatus = { ok: true, text: "Backup erstellt." };
+    } catch (err) {
+      this._adminStatus = { ok: false, text: wsErrorText(err) };
+    } finally {
+      this._adminBusy = false;
+      this._render();
+    }
+  }
+
+  _beginDelete(entryId) {
+    if (!this._isAdmin() || !entryId) return;
+    this._deleteTarget = entryId;
+    this._adminStatus = null;
+    this._render();
+  }
+
+  _cancelDelete() {
+    this._deleteTarget = "";
+    this._render();
+  }
+
+  async _confirmDelete(entryId) {
+    if (!this._isAdmin() || this._deleteBusy) return;
+    const person = (this._persons || []).find((p) => p.entry_id === entryId);
+    if (!person) {
+      this._deleteTarget = "";
+      this._render();
+      return;
+    }
+    const slug = personSlug(person);
+    const input = this.shadowRoot.querySelector('[data-field="delete-confirm"]');
+    const typed = input && input.value != null ? String(input.value).trim() : "";
+    // First gate: the typed slug must match exactly.
+    if (!slug || typed !== slug) {
+      this._adminStatus = {
+        ok: false,
+        text: "Die Best\u00E4tigung stimmt nicht mit dem Personen-Schl\u00FCssel \u00FCberein.",
+      };
+      this._render();
+      return;
+    }
+    // Second gate: an explicit browser confirmation with the backup caveat.
+    const confirmed = typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(
+          `\u201E${person.display_name}\u201C endg\u00FCltig l\u00F6schen? Backups k\u00F6nnen derzeit NICHT wiederhergestellt werden.`
+        )
+      : true;
+    if (!confirmed) return;
+
+    this._deleteBusy = true;
+    this._adminStatus = { ok: true, text: "L\u00F6sche\u2026" };
+    this._render();
+    try {
+      await this._ws({ type: WS.deletePerson, entry_id: entryId, confirm: slug });
+      this._deleteBusy = false;
+      this._adminStatus = { ok: true, text: "Person gel\u00F6scht." };
+      await this._reloadPersons();
+      this._afterPersonsChanged(entryId);
+    } catch (err) {
+      this._deleteBusy = false;
+      this._adminStatus = { ok: false, text: wsErrorText(err) };
+      this._render();
+    }
+  }
+
+  /* Drop caches + selections that pointed at a removed person. */
+  _afterPersonsChanged(removedEntryId) {
+    delete this._data[removedEntryId];
+    delete this._entryErrors[removedEntryId];
+    delete this._settings[removedEntryId];
+    delete this._settingsErrors[removedEntryId];
+    this._deleteTarget = "";
+
+    const persons = this._persons || [];
+    if (this._selectedEntry === removedEntryId) {
+      this._selectedEntry = "";
+      this._pushOverviewUrl();
+      this._persistSelected("");
+    }
+    if (!persons.length) {
+      this._view = "overview";
+      this._selectedEntry = "";
+      this._settingsEntry = "";
+      this._render();
+      return;
+    }
+    if (
+      this._view === "settings" &&
+      (!this._settingsEntry || !persons.some((p) => p.entry_id === this._settingsEntry))
+    ) {
+      this._settingsEntry = persons[0].entry_id;
+      this._syncQuickDrafts(this._settings[this._settingsEntry]);
+      this._loadSettings(this._settingsEntry).then(() => {
+        if (this._view === "settings") this._render();
+      });
+    }
+    this._render();
   }
 
   /* --- in-place DOM updates (never clobber the form) ----------------------- */
@@ -1227,12 +1027,12 @@ class HealthOMatPanel extends HTMLElement {
 
   _updateStatusDom() {
     const node = this.shadowRoot.querySelector("[data-settings-status]");
-    if (node) node.innerHTML = this._settingsStatusHtml();
+    if (node) node.innerHTML = settingsStatusHtml(this);
   }
 
   _updateExportResultDom() {
     const node = this.shadowRoot.querySelector("[data-export-result]");
-    if (node) node.innerHTML = this._exportResultHtml();
+    if (node) node.innerHTML = exportResultHtml(this);
   }
 
   /* ---- Write actions ------------------------------------------------------ */
@@ -1380,11 +1180,6 @@ class HealthOMatPanel extends HTMLElement {
     return false;
   }
 
-  _personName(entryId) {
-    const hit = (this._persons || []).find((p) => p.entry_id === entryId);
-    return hit ? hit.display_name : entryId;
-  }
-
   /* ---- Render scheduling -------------------------------------------------- */
 
   _scheduleRender() {
@@ -1417,7 +1212,7 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  /* ---- HTML build --------------------------------------------------------- */
+  /* ---- HTML build (shell) ------------------------------------------------- */
 
   _html() {
     const body = this._bodyHtml();
@@ -1449,13 +1244,13 @@ class HealthOMatPanel extends HTMLElement {
 
   _bodyHtml() {
     if (this._fatal) {
-      return `<div class="content">${this._message(this._fatal, true)}</div>`;
+      return `<div class="content">${messageHtml(this._fatal, true)}</div>`;
     }
     if (this._persons == null) {
-      return `<div class="content">${this._message("Lade Health-O-Mat\u2026", false)}</div>`;
+      return `<div class="content">${messageHtml("Lade Health-O-Mat\u2026", false)}</div>`;
     }
     if (!this._persons.length) {
-      return `<div class="content">${this._message("Keine Person eingerichtet.", false)}</div>`;
+      return `<div class="content">${messageHtml("Keine Person eingerichtet.", false)}</div>`;
     }
     if (this._view === "settings" && this._isAdmin()) {
       return `<div class="content">${this._settingsHtml()}</div>`;
@@ -1466,548 +1261,17 @@ class HealthOMatPanel extends HTMLElement {
     return `<div class="content">${this._overviewHtml()}</div>`;
   }
 
-  _message(text, isError) {
-    const retry = isError
-      ? `<button class="btn ghost" data-action="retry" type="button">Erneut versuchen</button>`
-      : "";
-    return `<div class="msg${isError ? " error" : ""}">${escapeHtml(text)}${retry}</div>`;
-  }
-
-  /* ---- Admin/Settings (L3, concept 4.5) ----------------------------------- */
-
-  _settingsHtml() {
-    const head = `<div class="person-head"><span class="dot"></span><span>Einstellungen</span></div>`;
-    const persons = this._persons || [];
-    if (!persons.length) {
-      return `${head}${this._message("Keine Person eingerichtet.", false)}`;
-    }
-    // Keep the selection in sync with the rendered person list.
-    let entryId = this._settingsEntry;
-    if (!entryId || !persons.some((p) => p.entry_id === entryId)) {
-      entryId = (this._selectedEntry && persons.some((p) => p.entry_id === this._selectedEntry)
-        ? this._selectedEntry
-        : persons[0].entry_id);
-      this._settingsEntry = entryId;
-    }
-
-    const selector =
-      persons.length > 1
-        ? `<div class="card">
-            <label class="field">Person
-              <select data-action="settings-person">${this._settingsPersonOptions(entryId)}</select>
-            </label>
-          </div>`
-        : "";
-
-    const settings = this._settings[entryId];
-    const loadError = this._settingsErrors[entryId];
-    if (!settings) {
-      const inner = loadError
-        ? this._message(loadError, true)
-        : this._message("Lade Einstellungen\u2026", false);
-      return `${head}${selector}${inner}`;
-    }
-    return `${head}${selector}${this._settingsFormHtml(settings, entryId, loadError)}`;
-  }
-
-  _settingsPersonOptions(entryId) {
-    return (this._persons || [])
-      .map(
-        (p) =>
-          `<option value="${escapeHtml(p.entry_id)}"${p.entry_id === entryId ? " selected" : ""}>${escapeHtml(p.display_name)}</option>`
-      )
-      .join("");
-  }
-
-  _settingsFormHtml(settings, entryId, loadError) {
-    const s = settings || {};
-    const goal =
-      s.daily_goal_ml == null ? SETTINGS_FALLBACKS.daily_goal_ml : s.daily_goal_ml;
-    const reset =
-      s.daily_reset_hour == null ? SETTINGS_FALLBACKS.daily_reset_hour : s.daily_reset_hour;
-    const sys = s.sys_threshold == null ? SETTINGS_FALLBACKS.sys_threshold : s.sys_threshold;
-    const dia = s.dia_threshold == null ? SETTINGS_FALLBACKS.dia_threshold : s.dia_threshold;
-    const retention =
-      s.retention_months == null ? SETTINGS_FALLBACKS.retention_months : s.retention_months;
-    const sidebar = s.enable_sidebar_panel === true;
-    const lexicon = s.drink_lexicon == null ? "" : String(s.drink_lexicon);
-    const display = s.person_display == null ? "" : String(s.person_display);
-
-    const banner = loadError
-      ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(loadError)}</div>`
-      : "";
-
-    return `<form class="settings-form" data-form="settings">
-        ${banner}
-        <div class="card">
-          <div class="card-title">Allgemein</div>
-          <div class="settings-grid">
-            <label class="field">Tagesziel (ml)
-              <input type="number" inputmode="numeric" data-field="daily_goal_ml"
-                min="${SETTINGS_LIMITS.goalMin}" max="${SETTINGS_LIMITS.goalMax}"
-                value="${attrValue(goal)}" />
-            </label>
-            <label class="field">Tages-Reset (Stunde, 0\u201323)
-              <input type="number" inputmode="numeric" data-field="daily_reset_hour"
-                min="${SETTINGS_LIMITS.resetMin}" max="${SETTINGS_LIMITS.resetMax}"
-                value="${attrValue(reset)}" />
-            </label>
-            <label class="field">Anzeigename
-              <input type="text" data-field="person_display" autocomplete="off"
-                value="${attrValue(display)}" />
-            </label>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Quick-Drinks (max. ${SETTINGS_LIMITS.maxQuickDrinks})</div>
-          <div class="muted">Ein leer gelassenes Label entfernt den Slot.</div>
-          <div class="qd-list">${this._quickSlotsHtml()}</div>
-          <button class="btn ghost" type="button" data-action="qd-add"
-            ${this._quickDraft.length >= SETTINGS_LIMITS.maxQuickDrinks ? "disabled" : ""}>
-            \uFF0B Slot hinzufügen
-          </button>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Getränke-Lexikon</div>
-          <div class="hint">
-            Eine Zeile pro Eintrag: <code>wort=Typ,ml</code>
-            (z.\u00A0B. <code>kaffee=Kaffee,250</code>). Zeilen mit <code>#</code> sind Kommentare.
-          </div>
-          <label class="field">Lexikon
-            <textarea data-field="drink_lexicon" rows="10" spellcheck="false"
-              autocapitalize="off" autocomplete="off">${escapeHtml(lexicon)}</textarea>
-          </label>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Blutdruck-Warnschwellen</div>
-          <div class="settings-grid">
-            <label class="field">Systolisch
-              <input type="number" inputmode="numeric" data-field="sys_threshold"
-                min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
-                value="${attrValue(sys)}" />
-            </label>
-            <label class="field">Diastolisch
-              <input type="number" inputmode="numeric" data-field="dia_threshold"
-                min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
-                value="${attrValue(dia)}" />
-            </label>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Datenhaltung</div>
-          <div class="settings-grid">
-            <label class="field">Retention (Monate, 0 = aus)
-              <input type="number" inputmode="numeric" data-field="retention_months"
-                min="${SETTINGS_LIMITS.retentionMin}" max="${SETTINGS_LIMITS.retentionMax}"
-                value="${attrValue(retention)}" />
-            </label>
-          </div>
-          <label class="check">
-            <input type="checkbox" data-field="enable_sidebar_panel"${sidebar ? " checked" : ""} />
-            <span>Sidebar-Panel anzeigen</span>
-          </label>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Export</div>
-          <div class="muted">Schreibt CSV-Dateien nach <code>/config/health_o_mat_export/</code>.</div>
-          <div class="export-row">
-            <label class="field">Datensatz
-              <select data-field="export_dataset">
-                ${EXPORT_DATASETS.map(
-                  (d) => `<option value="${escapeHtml(d.value)}">${escapeHtml(d.label)}</option>`
-                ).join("")}
-              </select>
-            </label>
-            <button class="btn" type="button" data-action="export"
-              ${this._exportBusy ? "disabled" : ""}>\u2B07 CSV-Export</button>
-          </div>
-          <div data-export-result>${this._exportResultHtml()}</div>
-        </div>
-
-        <div data-settings-status>${this._settingsStatusHtml()}</div>
-
-        <div class="settings-actions">
-          <button class="btn" type="submit" data-save-button
-            ${this._settingsBusy ? "disabled" : ""}>\u{1F4BE} Speichern</button>
-          <button class="btn ghost" type="button" data-action="settings-reload"
-            ${this._settingsBusy ? "disabled" : ""}>\u21BB Neu laden</button>
-        </div>
-      </form>`;
-  }
-
-  _quickSlotsHtml() {
-    const fallbackIcon = SETTINGS_FALLBACKS.quick_icon;
-    return this._quickDraft
-      .map(
-        (slot, i) => `<div class="qd-slot" data-slot="${i}" data-key="${escapeHtml(slot.key || "")}">
-          <label class="field">Label
-            <input type="text" data-field="qd-label" data-index="${i}" autocomplete="off"
-              value="${attrValue(slot.label)}" placeholder="z.\u00A0B. Glas Wasser" />
-          </label>
-          <label class="field">ml
-            <input type="number" inputmode="numeric" data-field="qd-ml" data-index="${i}"
-              min="${SETTINGS_LIMITS.quickMlMin}" max="${SETTINGS_LIMITS.quickMlMax}"
-              value="${attrValue(slot.ml)}" />
-          </label>
-          <label class="field">Icon
-            <input type="text" data-field="qd-icon" data-index="${i}" autocomplete="off"
-              value="${attrValue(slot.icon || fallbackIcon)}" placeholder="mdi:cup-water" />
-          </label>
-          <button class="btn ghost" type="button" data-action="qd-remove" data-index="${i}"
-            aria-label="Slot entfernen">\u2715</button>
-        </div>`
-      )
-      .join("");
-  }
-
-  _settingsStatusHtml() {
-    const status = this._settingsStatus;
-    if (!status) return "";
-    return `<div class="settings-status ${status.ok ? "ok" : "err"}" role="status">${escapeHtml(status.text)}</div>`;
-  }
-
-  _exportResultHtml() {
-    const result = this._exportResult;
-    if (!result) return "";
-    return `<div class="settings-status ${result.ok ? "ok" : "err"}" role="status">${escapeHtml(result.text)}</div>`;
-  }
-
-  /* ---- Overview (L2 start) ------------------------------------------------ */
-
+  /* Delegating render helpers (bodies live in the views/admin modules). */
   _overviewHtml() {
-    const tiles = this._persons.map((p) => this._tileHtml(p)).join("");
-    return `<div class="grid">${tiles}</div>`;
+    return renderOverview(this);
   }
-
-  _tileHtml(person) {
-    const entryId = person.entry_id;
-    const data = this._data[entryId];
-    const error = this._entryErrors[entryId];
-
-    if (!data) {
-      const note = error
-        ? `<div class="tile-row muted">${escapeHtml(error)}</div>`
-        : `<div class="tile-row muted">Lade\u2026</div>`;
-      return `<div class="tile loading">
-          <div class="tile-head"><span class="dot"></span><span class="tile-name">${escapeHtml(person.display_name)}</span></div>
-          ${note}
-        </div>`;
-    }
-
-    const goal = toNumber(data.goal_ml, 0);
-    const fallbackMl = toNumber(data.today && data.today.ml, 0);
-    const ml = this._liveNumber(data, "drinks_today", fallbackMl);
-    const fallbackPct = goal > 0 ? (ml / goal) * 100 : 0;
-    const percent = this._liveNumber(data, "percent", toNumber(data.today && data.today.percent, fallbackPct));
-    const warn = this._isWarning(data);
-
-    const bp = data.bp || {};
-    const sys = this._liveNumber(data, "bp_sys", toNumber(bp.sys, NaN));
-    const dia = this._liveNumber(data, "bp_dia", toNumber(bp.dia, NaN));
-    const pulse = this._liveNumber(data, "bp_pulse", toNumber(bp.pulse, NaN));
-    const bpText = Number.isFinite(sys) && Number.isFinite(dia)
-      ? `${Math.round(sys)}/${Math.round(dia)}${Number.isFinite(pulse) ? ` \u00B7 ${Math.round(pulse)}` : ""}`
-      : "keine Messung";
-
-    const wb = data.wellbeing || {};
-    const wbState = this._wellbeingView(data);
-    const wbAt = wb.at ? relativeTime(wb.at) : "";
-
-    const rest = goal > 0 ? Math.max(0, Math.round(goal - ml)) : null;
-    const sub = goal > 0
-      ? `Ziel ${fmtMl(goal)}${rest ? ` \u00B7 Rest ${fmtMl(rest)}` : ""}`
-      : "Kein Tagesziel gesetzt";
-
-    return `<button class="tile" data-action="open" data-entry="${escapeHtml(entryId)}" type="button">
-        <div class="tile-head">
-          <span class="dot"></span>
-          <span class="tile-name">${escapeHtml(person.display_name)}</span>
-          ${warn ? `<span class="status bad" title="Blutdruck oberhalb der Schwellen">\u26A0\uFE0F</span>` : ""}
-        </div>
-        <div class="tile-main">
-          ${ringHtml(percent, { compact: true })}
-          <div class="tile-stats">
-            <div class="tile-ml">${fmtMl(ml)}</div>
-            <div class="tile-sub">${escapeHtml(sub)}</div>
-          </div>
-        </div>
-        <div class="tile-row"><span class="em" aria-hidden="true">\u{1FA78}</span><span>${escapeHtml(bpText)}</span>${warn ? `<span class="muted">\u00B7 \u26A0\uFE0F</span>` : ""}</div>
-        <div class="tile-row"><span class="em" aria-hidden="true">${escapeHtml(wbState.emoji)}</span><span>${escapeHtml(wbState.label)}</span>${wbAt ? `<span class="muted">\u00B7 ${escapeHtml(wbAt)}</span>` : ""}</div>
-      </button>`;
-  }
-
-  /* ---- Detail ------------------------------------------------------------- */
 
   _detailHtml() {
-    const entryId = this._selectedEntry;
-    const name = this._personName(entryId);
-    const data = this._data[entryId];
-    const error = this._entryErrors[entryId];
-
-    const head = `<div class="person-head"><span class="dot"></span><span>${escapeHtml(name)}</span></div>`;
-    const tabs = `<div class="tabs" role="tablist">
-        ${this._tabButton("drink", "Trinken")}
-        ${this._tabButton("bp", "Blutdruck")}
-        ${this._tabButton("wellbeing", "Wohlbefinden")}
-      </div>`;
-
-    if (!data) {
-      const inner = error
-        ? this._message(error, true)
-        : this._message("Lade Daten\u2026", false);
-      return `${head}${tabs}${inner}`;
-    }
-
-    const alert = this._actionError
-      ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(this._actionError)}</div>`
-      : "";
-
-    let content = "";
-    if (this._tab === "bp") content = this._bpTabHtml(data, entryId);
-    else if (this._tab === "wellbeing") content = this._wellbeingTabHtml(data, entryId);
-    else content = this._drinkTabHtml(data, entryId);
-
-    return `${head}${tabs}<div class="views">${alert}${content}</div>`;
+    return renderDetail(this);
   }
 
-  _tabButton(tab, label) {
-    const active = this._tab === tab ? " active" : "";
-    return `<button class="tab${active}" data-action="tab" data-tab="${tab}" type="button" role="tab" aria-selected="${active ? "true" : "false"}">${escapeHtml(label)}</button>`;
-  }
-
-  /* ---- Tab: Trinken (4.2) ------------------------------------------------- */
-
-  _drinkTabHtml(data, entryId) {
-    const goal = toNumber(data.goal_ml, 0);
-    const fallbackMl = toNumber(data.today && data.today.ml, 0);
-    const ml = this._liveNumber(data, "drinks_today", fallbackMl);
-    const fallbackPct = goal > 0 ? (ml / goal) * 100 : 0;
-    const percent = this._liveNumber(data, "percent", toNumber(data.today && data.today.percent, fallbackPct));
-    const goalText = goal > 0 ? fmtMl(goal) : "\u2013";
-    const yesterday = toNumber(data.today && data.today.yesterday_ml, NaN);
-    const count = toNumber(data.today && data.today.count, NaN);
-    const pace = data.today && data.today.pace;
-    const paceInfo = pace ? PACE_INFO[pace] : null;
-
-    const stats = `<div class="tile-stats">
-        <div class="kv"><span class="k">Heute</span><span class="v">${fmtMl(ml)} / ${goalText} (${Math.round(percent)}%)</span></div>
-        ${Number.isFinite(yesterday) ? `<div class="kv"><span class="k">Gestern</span><span class="v">${fmtMl(yesterday)}</span></div>` : ""}
-        ${Number.isFinite(count) ? `<div class="kv"><span class="k">Buchungen</span><span class="v">${Math.round(count)}</span></div>` : ""}
-        ${paceInfo ? `<div><span class="status ${paceInfo.cls}">${escapeHtml(paceInfo.text)}</span></div>` : ""}
-      </div>`;
-
-    const quick = QUICK_DRINKS.map(
-      (d) => `<button class="btn" data-action="book" data-ml="${d.ml}" data-drink="${escapeHtml(d.type)}" type="button"${this._busy ? " disabled" : ""}>
-          <span>${escapeHtml(d.emoji)} ${escapeHtml(d.label)}</span>
-          <span class="ml">${Math.round(d.ml)} ml</span>
-        </button>`
-    ).join("");
-
-    const formError = this._formError
-      ? `<div class="msg error">${escapeHtml(this._formError)}</div>`
-      : "";
-
-    const undo = `<button class="btn ghost" data-action="undo" type="button"${this._busy ? " disabled" : ""}>\u21A9 Undo</button>`;
-
-    return `
-      <div class="card">
-        <div class="tile-main">
-          ${ringHtml(percent, { sub: `${fmtMl(ml)} / ${goalText}` })}
-          ${stats}
-        </div>
-      </div>
-      <div class="card">
-        <div class="muted">Schnell buchen</div>
-        <div class="quick">${quick}</div>
-        <form class="freetext" data-form="drink">
-          <input type="text" data-field="drink-text" placeholder="z. B. Kaffee 300 ml"
-            enterkeyhint="done" autocomplete="off" />
-          <button class="btn" type="submit"${this._busy ? " disabled" : ""}>Buchen</button>
-        </form>
-        ${formError}
-        ${undo}
-      </div>
-      ${this._breakdownHtml(data)}`;
-  }
-
-  _breakdownHtml(data) {
-    const breakdown = (data.today && data.today.breakdown) || {};
-    const rows = Object.keys(breakdown)
-      .map((key) => [key, toNumber(breakdown[key], 0)])
-      .filter((entry) => entry[1] > 0)
-      .sort((a, b) => b[1] - a[1]);
-    if (!rows.length) return "";
-    const max = rows.reduce((acc, entry) => Math.max(acc, entry[1]), 0) || 1;
-    const bars = rows
-      .map(([label, value]) => `<div class="bd-row">
-          <span class="muted">${escapeHtml(label)}</span>
-          <span class="bd-track"><span class="bd-fill" style="width:${clamp((value / max) * 100, 2, 100).toFixed(1)}%"></span></span>
-          <span>${fmtMl(value)}</span>
-        </div>`)
-      .join("");
-    return `<div class="card">
-        <div class="muted">Heute nach Getränk</div>
-        ${bars}
-      </div>`;
-  }
-
-  /* ---- Tab: Blutdruck (4.3) ----------------------------------------------- */
-
-  _bpTabHtml(data, entryId) {
-    const bp = data.bp || {};
-    const sys = this._liveNumber(data, "bp_sys", toNumber(bp.sys, NaN));
-    const dia = this._liveNumber(data, "bp_dia", toNumber(bp.dia, NaN));
-    const pulse = this._liveNumber(data, "bp_pulse", toNumber(bp.pulse, NaN));
-    const categoryKey = this._liveValue(data, "bp_category", bp.category || "");
-    const category = categoryInfo(categoryKey);
-    const warn = this._isWarning(data);
-    const hasReading = Number.isFinite(sys) && Number.isFinite(dia);
-
-    const metaParts = [];
-    if (Number.isFinite(pulse)) metaParts.push(`${Math.round(pulse)} bpm`);
-    if (bp.at) metaParts.push(relativeTime(bp.at));
-
-    const head = `<div class="bp-head">
-        <div class="bp-big">${hasReading ? `${Math.round(sys)} / ${Math.round(dia)}` : "\u2013 / \u2013"}</div>
-        <div class="bp-meta">
-          <span>systolisch / diastolisch</span>
-          ${metaParts.length ? `<span>\u00B7 ${escapeHtml(metaParts.join(" \u00B7 "))}</span>` : ""}
-          ${category ? `<span class="status ${category.cls}">${escapeHtml(category.label)}</span>` : ""}
-        </div>
-      </div>`;
-
-    const avg = bp.avg7 || {};
-    const avgParts = [];
-    if (avg.sys != null && avg.dia != null) {
-      avgParts.push(
-        `\u00D8 7 T: ${Math.round(avg.sys)}/${Math.round(avg.dia)}${avg.pulse != null ? ` \u00B7 ${Math.round(avg.pulse)}` : ""}`
-      );
-    }
-    const avgHtml = avgParts.length
-      ? `<div class="kv"><span class="k">${escapeHtml(avgParts[0])}</span></div>`
-      : "";
-
-    const warnHtml = warn
-      ? `<div class="banner" role="alert">\u26A0\uFE0F Letzte Messung oberhalb der Schwellen</div>`
-      : "";
-
-    const formError = this._formError
-      ? `<div class="msg error">${escapeHtml(this._formError)}</div>`
-      : "";
-
-    const form = `<form class="card" data-form="bp">
-        <div class="muted">Neue Messung</div>
-        <div class="bp-inputs">
-          <label class="field">Systolisch
-            <input type="number" inputmode="numeric" data-field="sys" min="40" max="300" placeholder="120" />
-          </label>
-          <label class="field">Diastolisch
-            <input type="number" inputmode="numeric" data-field="dia" min="20" max="200" placeholder="80" />
-          </label>
-          <label class="field">Puls
-            <input type="number" inputmode="numeric" data-field="pulse" min="20" max="250" placeholder="optional" />
-          </label>
-        </div>
-        <label class="field">Notiz
-          <input type="text" data-field="note" placeholder="optional" autocomplete="off" />
-        </label>
-        <button class="btn" type="submit"${this._busy ? " disabled" : ""}>\u{1F4BE} Speichern</button>
-        ${formError}
-      </form>`;
-
-    return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${this._bpTrendHtml(bp)}`;
-  }
-
-  _bpTrendHtml(bp) {
-    const entries = Array.isArray(bp.entries) ? bp.entries : [];
-    const since = Date.now() - 7 * 24 * 3600 * 1000;
-    const recent = entries
-      .filter((r) => r && Number.isFinite(toNumber(r.sys, NaN)) && Number.isFinite(toNumber(r.dia, NaN)))
-      .filter((r) => {
-        const ts = Date.parse(r.ts);
-        return !Number.isFinite(ts) || ts >= since;
-      });
-    if (recent.length < 2) return "";
-    const low = 90;
-    const high = 180;
-    const bars = recent
-      .slice(-21)
-      .map((r) => {
-        const sys = toNumber(r.sys, low);
-        const dia = toNumber(r.dia, NaN);
-        const h = clamp(((sys - low) / (high - low)) * 100, 6, 100);
-        const title = Number.isFinite(dia) ? `${Math.round(sys)}/${Math.round(dia)}` : `${Math.round(sys)}`;
-        return `<span class="bar" style="height:${h.toFixed(1)}%" title="${escapeHtml(title)}"></span>`;
-      })
-      .join("");
-    return `<div class="card">
-        <div class="muted">7-Tage-Verlauf (systolisch)</div>
-        <div class="spark">${bars}</div>
-      </div>`;
-  }
-
-  /* ---- Tab: Wohlbefinden (4.4) -------------------------------------------- */
-
-  _wellbeingView(data) {
-    const wb = (data && data.wellbeing) || {};
-    const live = this._liveValue(data, "wellbeing", undefined);
-    // entities.wellbeing is a timestamp sensor; only use its status via the
-    // payload. Emoji/label always come from the (server-localised) payload.
-    const key = String(wb.key || "").toLowerCase();
-    const known = WELLBEING_STATES.find((s) => s.key === key);
-    return {
-      key,
-      emoji: wb.emoji || (known && known.emoji) || "\u{1F642}",
-      label: wb.label || (known && known.label) || "Keine Angabe",
-      at: wb.at || (typeof live === "string" && live !== "unknown" ? live : ""),
-    };
-  }
-
-  _wellbeingTabHtml(data, entryId) {
-    const view = this._wellbeingView(data);
-    const buttons = WELLBEING_STATES.map(
-      (s) => `<button class="wb-btn${s.key === view.key ? " active" : ""}" data-action="wb" data-key="${s.key}" type="button"${this._busy ? " disabled" : ""}>
-          <span class="emoji" aria-hidden="true">${s.emoji}</span>
-          <span class="lbl">${escapeHtml(s.label)}</span>
-        </button>`
-    ).join("");
-
-    const at = view.at ? relativeTime(view.at) : "";
-    const last = `<div class="tile-row">
-        <span class="em" aria-hidden="true">${escapeHtml(view.emoji)}</span>
-        <span>Zuletzt: <strong>${escapeHtml(view.label)}</strong></span>
-        ${at ? `<span class="muted">\u00B7 ${escapeHtml(at)}</span>` : ""}
-      </div>`;
-
-    const history = Array.isArray(data.wellbeing && data.wellbeing.history)
-      ? data.wellbeing.history
-      : [];
-    const histHtml = history.length
-      ? `<div class="card">
-          <div class="muted">Verlauf</div>
-          <div class="wb-history">${history
-            .slice(-20)
-            .map((h) => {
-              const hAt = h && h.ts ? relativeTime(h.ts) : "";
-              return `<span class="wb-hist" title="${escapeHtml(h && h.label ? h.label : "")}">
-                  <span class="emoji" aria-hidden="true">${escapeHtml((h && h.emoji) || "\u{1F642}")}</span>
-                  <span>${escapeHtml(hAt)}</span>
-                </span>`;
-            })
-            .join("")}</div>
-        </div>`
-      : "";
-
-    return `<div class="card">
-        <div class="muted">Wie geht es dir?</div>
-        <div class="wb-row">${buttons}</div>
-        ${last}
-      </div>${histHtml}`;
+  _settingsHtml() {
+    return renderSettings(this);
   }
 
   /* ---- Events ------------------------------------------------------------- */
@@ -2038,6 +1302,21 @@ class HealthOMatPanel extends HTMLElement {
           break;
         case "export":
           this._runExport();
+          break;
+        case "person-add":
+          this._startPersonFlow();
+          break;
+        case "backup":
+          this._runBackup();
+          break;
+        case "delete-begin":
+          this._beginDelete(el.getAttribute("data-entry"));
+          break;
+        case "delete-cancel":
+          this._cancelDelete();
+          break;
+        case "delete-confirm":
+          this._confirmDelete(el.getAttribute("data-entry"));
           break;
         case "refresh":
         case "retry":

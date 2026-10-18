@@ -8,7 +8,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.util import dt as dt_util
 
-from . import logic
+from . import areas, logic
 from .const import DOMAIN
 from .entity import HealthOMatEntity
 
@@ -16,12 +16,14 @@ from .entity import HealthOMatEntity
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    async_add_entities(
-        [
-            GoalReachedEntity(coord, entry, store),
-            BloodPressureWarningEntity(coord, entry, store),
-        ]
-    )
+    active = areas.active_areas(entry.options)
+
+    entities: list = []
+    if active[areas.AREA_DRINK]:
+        entities.append(GoalReachedEntity(coord, entry, store))
+    if active[areas.AREA_BP]:
+        entities.append(BloodPressureWarningEntity(coord, entry, store))
+    async_add_entities(entities)
 
 
 class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):

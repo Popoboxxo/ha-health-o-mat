@@ -13,6 +13,14 @@ WS-Schreibpfad/`subscribe`) umgesetzt (Branch `feat/ui-panel`, 2026-10-15) und
 Phase 4 (L3) **teilweise** umgesetzt: Admin-/Settings-Ansicht + CSV-Export
 (Branch `feat/ui-admin`, 2026-10-15) — **Backup und CSV-Import
 (REQ-HOM-007) bleiben offen**. Datum 2026-10-14.
+**Nachtrag 2026-10-18 (Branch `feat/ui-pro`):** UI-Ausbau gemäß
+[`IDEATION-UI-PRO.md`](IDEATION-UI-PRO.md) umgesetzt — **REQ-HOM-009**
+(Pro-Person Feature-Toggles), adressierbare Person-Seite mit Deep-Link
+(`?person=<slug>`, REQ-HOM-012), Admin-/Instanzverwaltung (Rename, Backup-Trigger,
+Person anlegen via Flow-Verweis, admin-gated Löschen mit Doppelbestätigung,
+REQ-HOM-013), Card-Ausbau (Pace/Serie/Koffein/WHO-Label, Editor-Komfort,
+REQ-HOM-011) und Frontend-Struktur (native ES-Module + Cache-Buster,
+REQ-HOM-014). Details/Entscheidungen: `IDEATION-UI-PRO.md` §7a.
 
 ---
 

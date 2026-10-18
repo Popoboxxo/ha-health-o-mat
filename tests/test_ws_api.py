@@ -72,6 +72,9 @@ class FakeConfigEntries:
     def __init__(self, entries: list) -> None:
         self.entries = list(entries)
         self.updates: list[dict] = []
+        self.flows: list[dict] = []
+        self.flow_result: dict = {"flow_id": "flow-1"}
+        self.removed: list[str] = []
 
     def async_entries(self, domain: str) -> list:
         return list(self.entries)
@@ -81,6 +84,15 @@ class FakeConfigEntries:
             if entry.entry_id == entry_id:
                 return entry
         return None
+
+    async def async_init(self, domain: str, context: dict | None = None):
+        """Flow-Start-Fake: zeichnet (domain, context) auf und liefert `flow_result`."""
+        self.flows.append({"domain": domain, "context": context})
+        return dict(self.flow_result)
+
+    async def async_remove(self, entry_id: str) -> None:
+        self.removed.append(entry_id)
+        self.entries = [entry for entry in self.entries if entry.entry_id != entry_id]
 
     def async_update_entry(self, entry, **kwargs) -> bool:
         self.updates.append({"entry_id": entry.entry_id, "before": dict(entry.options), **kwargs})
@@ -313,9 +325,35 @@ def test_list_persons_returns_entries_sorted_with_device_id(monkeypatch):
     persons = ws_api.list_persons(hass)
 
     assert persons == [
-        {"entry_id": "e1", "display_name": "Caro", "device_id": "dev-e1"},
-        {"entry_id": "e2", "display_name": "Max", "device_id": "dev-e2"},
+        {
+            "entry_id": "e1",
+            "display_name": "Caro",
+            "device_id": "dev-e1",
+            "person_slug": "caro",
+            "areas": {"drink": True, "bp": True, "wellbeing": True},
+        },
+        {
+            "entry_id": "e2",
+            "display_name": "Max",
+            "device_id": "dev-e2",
+            "person_slug": "Max",
+            "areas": {"drink": True, "bp": True, "wellbeing": True},
+        },
     ]
+
+
+def test_list_persons_includes_slug_and_areas(monkeypatch):
+    """`person_slug` ist der stabile entry.data-Anker, `areas` die aktiven Flächen."""
+    entry = _entry("e1", person="caro", display="Caro (Privat)", options={"areas": {"bp": False}})
+    hass = FakeHass([entry])
+    monkeypatch.setattr(ws_api.dr, "async_get", lambda hass: object())
+    monkeypatch.setattr(ws_api.dr, "async_entries_for_config_entry", lambda registry, entry_id: [])
+
+    person = ws_api.list_persons(hass)[0]
+
+    assert person["person_slug"] == "caro"  # entry.data["person"], NICHT der Anzeigename
+    assert person["person_slug"] != person["display_name"]
+    assert person["areas"] == {"drink": True, "bp": False, "wellbeing": True}
 
 
 def test_list_persons_without_device(monkeypatch):
@@ -412,6 +450,8 @@ def test_panel_data_full_payload(monkeypatch):
     # Kopf
     assert payload["entry_id"] == "e1"
     assert payload["person"] == "Caro"
+    assert payload["person_slug"] == "Caro"
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
     assert payload["goal_ml"] == 2000
     assert payload["reset_hour"] == 4
 
@@ -543,6 +583,18 @@ def test_panel_data_person_anchor_without_display_override(monkeypatch):
     assert payload["person_anchor"] == "Caro"
 
 
+def test_panel_data_carries_slug_and_areas(monkeypatch):
+    """`person_slug` (stabil) + `areas` (deaktivierter Bereich) im Panel-Payload."""
+    entry = _entry("e1", person="caro", display="Caro", options={"areas": {"drink": False}})
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["person_slug"] == "caro"
+    assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True}
+
+
 def test_panel_data_unknown_entry_sends_error(monkeypatch):
     """Unbekannte/nicht geladene entry_id → sauberer WS-Fehler, kein Crash."""
     hass = FakeHass([_entry()])
@@ -653,6 +705,9 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_GET_SETTINGS,
     ws_api.COMMAND_SET_SETTINGS,
     ws_api.COMMAND_EXPORT_CSV,
+    ws_api.COMMAND_START_PERSON_FLOW,
+    ws_api.COMMAND_DELETE_PERSON,
+    ws_api.COMMAND_BACKUP,
 )
 
 
@@ -771,6 +826,32 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
     with pytest.raises(vol.Invalid):
         schemas[ws_api.COMMAND_EXPORT_CSV]({"id": 1, "type": ws_api.COMMAND_EXPORT_CSV, "bogus": 1})
 
+    # delete_person: entry_id + confirm sind Pflicht
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_DELETE_PERSON](
+            {"id": 1, "type": ws_api.COMMAND_DELETE_PERSON, "entry_id": "e1"}
+        )
+    assert (
+        schemas[ws_api.COMMAND_DELETE_PERSON](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_DELETE_PERSON,
+                "entry_id": "e1",
+                "confirm": "caro",
+            }
+        )["confirm"]
+        == "caro"
+    )
+
+    # start_person_flow / backup: keine Parameter
+    assert (
+        schemas[ws_api.COMMAND_START_PERSON_FLOW](
+            {"id": 1, "type": ws_api.COMMAND_START_PERSON_FLOW}
+        )["id"]
+        == 1
+    )
+    assert schemas[ws_api.COMMAND_BACKUP]({"id": 1, "type": ws_api.COMMAND_BACKUP})["id"] == 1
+
 
 def test_register_ws_api_uses_real_registration():
     """Echte Registrierung (ohne Mock): alle Kommandos + Schemas landen in hass.data."""
@@ -833,7 +914,20 @@ def test_list_persons_handler_sends_result(monkeypatch):
     )
 
     assert connection.results == [
-        (5, {"persons": [{"entry_id": "e1", "display_name": "Caro", "device_id": None}]})
+        (
+            5,
+            {
+                "persons": [
+                    {
+                        "entry_id": "e1",
+                        "display_name": "Caro",
+                        "device_id": None,
+                        "person_slug": "Caro",
+                        "areas": {"drink": True, "bp": True, "wellbeing": True},
+                    }
+                ]
+            },
+        )
     ]
 
 
@@ -1533,6 +1627,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "dia_threshold": 85,
                 "retention_months": 6,
                 "enable_sidebar_panel": True,
+                "areas": {"drink": True, "bp": True, "wellbeing": True},
             },
         )
     ]
@@ -1568,6 +1663,102 @@ def test_get_settings_uses_runtime_mirror_for_untouched_options():
     assert result["daily_goal_ml"] == 2800
     assert result["sys_threshold"] == 125
     assert result["dia_threshold"] == 75
+
+
+def test_get_settings_includes_areas_default_all_active():
+    """Ohne `areas`-Option sind alle Bereiche aktiv (fehlender Schlüssel = aktiv)."""
+    entry = _entry("e1")
+
+    assert ws_api.build_settings(entry)["areas"] == {
+        "drink": True,
+        "bp": True,
+        "wellbeing": True,
+    }
+
+
+def test_get_settings_reflects_disabled_area():
+    """Ein explizit auf False gesetzter Bereich erscheint deaktiviert."""
+    entry = _entry("e1", options={"areas": {"wellbeing": False}})
+
+    assert ws_api.build_settings(entry)["areas"] == {
+        "drink": True,
+        "bp": True,
+        "wellbeing": False,
+    }
+
+
+def test_set_settings_persists_areas():
+    """`areas` wird über den Options-Pfad persistiert und zurückgespiegelt."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                areas={"drink": False, "bp": True, "wellbeing": True},
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]["areas"]
+    assert stored == {"drink": False, "bp": True, "wellbeing": True}
+    assert connection.results[0][1]["areas"] == {
+        "drink": False,
+        "bp": True,
+        "wellbeing": True,
+    }
+
+
+def test_parse_settings_message_accepts_areas():
+    """Ein gültiges `areas`-Dict wird unverändert übernommen."""
+    updates, error = ws_api.parse_settings_message({"areas": {"drink": False}})
+
+    assert error is None
+    assert updates == {"areas": {"drink": False}}
+
+
+@pytest.mark.parametrize(
+    "areas",
+    [
+        {"bogus": True},  # unbekannter Bereich → PREVENT_EXTRA des Nested-Schemas
+        {"drink": "vielleicht"},  # falscher Wertetyp → vol.Boolean- Fehler
+        "kein-dict",
+    ],
+)
+def test_parse_settings_message_rejects_invalid_areas(areas):
+    """Ungültige `areas`-Angaben → Fehler statt stiller Übernahme."""
+    updates, error = ws_api.parse_settings_message({"areas": areas})
+
+    assert updates == {}
+    assert error is not None
+
+
+def test_set_settings_rejects_invalid_area_value():
+    """Falscher Bereichstyp → `invalid_format` mit Feldpfad, kein Schreibzugriff."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", areas={"drink": "vielleicht"}
+            ),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    assert "area" in connection.errors[0][2]
+    assert hass.config_entries.updates == []
 
 
 def test_get_settings_unknown_entry_sends_error():
@@ -1648,7 +1839,7 @@ def test_set_settings_persists_via_async_update_entry_and_fires_listener():
     assert result["daily_goal_ml"] == 3000
     assert result["daily_reset_hour"] == 4
     assert result["retention_months"] == 3
-    assert set(result) == set(SETTINGS_DEFAULTS) | {"quick_drinks", "drink_lexicon"}
+    assert set(result) == set(SETTINGS_DEFAULTS) | {"quick_drinks", "drink_lexicon", "areas"}
 
 
 def test_set_settings_persists_canonical_quick_drinks():
@@ -2062,6 +2253,188 @@ def test_export_csv_requires_admin():
     hass.services.async_call.assert_not_called()
 
 
+# --- Personen-Verwaltung: start_person_flow / delete_person / backup ---------
+
+
+def test_start_person_flow_returns_flow_id():
+    """`start_person_flow` startet den Config-Flow und gibt die flow_id zurück."""
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [(1, {"flow_id": "flow-1"})]
+    assert hass.config_entries.flows == [{"domain": ws_api.DOMAIN, "context": {"source": "user"}}]
+
+
+def test_start_person_flow_requires_admin():
+    """Nicht-Admin → `unauthorized`, kein Flow-Start."""
+    hass = _settings_hass(_entry("e1"))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    assert hass.config_entries.flows == []
+
+
+def test_start_person_flow_without_async_init_is_structured():
+    """Fehlende `async_init`-API → strukturierter Fehler statt Crash."""
+    hass = _settings_hass(_entry("e1"))
+    hass.config_entries = SimpleNamespace()
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+
+
+def test_start_person_flow_raising_async_init_is_structured():
+    """Wirft der Flow-Start, kommt ein strukturierter Fehler statt eines Crashs."""
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    async def _boom(domain, context=None):
+        raise RuntimeError("flow backend down")
+
+    hass.config_entries.async_init = _boom
+
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+
+
+def test_delete_person_removes_entry_on_matching_confirmation():
+    """Korrekte Bestätigung (== Slug) entfernt GENAU diesen Entry."""
+    entry = _entry("e1", person="caro")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_delete_person(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_DELETE_PERSON, entry_id="e1", confirm="caro"),
+        )
+    )
+
+    assert connection.errors == []
+    assert hass.config_entries.removed == ["e1"]
+    assert connection.results == [(1, {"ok": True, "entry_id": "e1"})]
+
+
+@pytest.mark.parametrize("confirm", ["falsch", "Caro", "", "caro "])
+def test_delete_person_mismatched_confirmation_is_rejected(confirm):
+    """Nicht exakt passende Bestätigung → `invalid_format`, KEIN Entfernen."""
+    entry = _entry("e1", person="caro")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_delete_person(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_DELETE_PERSON, entry_id="e1", confirm=confirm),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    assert hass.config_entries.removed == []
+
+
+def test_delete_person_requires_admin():
+    """Nicht-Admin → `unauthorized`, kein Entfernen."""
+    hass = _settings_hass(_entry("e1", person="caro"))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_delete_person(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_DELETE_PERSON, entry_id="e1", confirm="caro"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    assert hass.config_entries.removed == []
+
+
+def test_delete_person_unknown_entry_sends_error():
+    """Unbekannte entry_id → `not_found`, kein Entfernen."""
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_delete_person(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_DELETE_PERSON, entry_id="nope", confirm="x"),
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    assert hass.config_entries.removed == []
+
+
+def test_backup_triggers_existing_service():
+    """`backup` ruft den bestehenden `health_o_mat.backup`-Service genau so auf."""
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(ws_api.websocket_backup(hass, connection, _settings_msg(ws_api.COMMAND_BACKUP)))
+
+    hass.services.async_call.assert_awaited_once_with(ws_api.DOMAIN, "backup", {}, blocking=True)
+    assert connection.errors == []
+    assert connection.results == [(1, {"ok": True})]
+
+
+def test_backup_service_error_is_structured():
+    """Service-Fehler → eigener, strukturierter Fehlercode `backup_failed`."""
+    hass = _settings_hass(_entry("e1"))
+    hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("Sicherung fehlgeschlagen"))
+    connection = _admin_connection()
+
+    asyncio.run(ws_api.websocket_backup(hass, connection, _settings_msg(ws_api.COMMAND_BACKUP)))
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "backup_failed"
+    assert connection.errors[0][2] == "Sicherung fehlgeschlagen"
+
+
+def test_backup_requires_admin():
+    """Nicht-Admin → `unauthorized`, der Service wird nicht aufgerufen."""
+    hass = _settings_hass(_entry("e1"))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(ws_api.websocket_backup(hass, connection, _settings_msg(ws_api.COMMAND_BACKUP)))
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    hass.services.async_call.assert_not_called()
+
+
 # --- Admin-Gate: Alltag bleibt offen ----------------------------------------
 
 
@@ -2075,11 +2448,14 @@ def test_is_admin_connection_fail_closed():
 
 
 def test_admin_only_commands_are_marked():
-    """Nur Settings/Export sind admin-only — Alltagsschreiber sind es nicht."""
+    """Settings/Export und Personen-Verwaltung sind admin-only — Alltag nicht."""
     assert ws_api.ADMIN_ONLY_COMMANDS == {
         ws_api.COMMAND_GET_SETTINGS,
         ws_api.COMMAND_SET_SETTINGS,
         ws_api.COMMAND_EXPORT_CSV,
+        ws_api.COMMAND_START_PERSON_FLOW,
+        ws_api.COMMAND_DELETE_PERSON,
+        ws_api.COMMAND_BACKUP,
     }
     for command in (
         ws_api.COMMAND_BOOK_DRINK,

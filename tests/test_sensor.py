@@ -691,3 +691,88 @@ def test_setup_entry_registers_goal_streak_and_caffeine_sensors():
     keys = {e._attr_unique_id for e in added}
     assert "test-entry-1_sensor_goal_streak" in keys
     assert "test-entry-1_sensor_caffeine_today" in keys
+
+
+# --- REQ-HOM-009: pro-Person Bereichs-Toggles filtern das Sensor-Setup ---
+
+_DRINK_SENSOR_KEYS = {
+    "sensor_drinks_today",
+    "sensor_goal_percent",
+    "sensor_drinks_history",
+    "sensor_lifetime_total",
+    "sensor_drinks_trend",
+    "sensor_goal_streak",
+    "sensor_caffeine_today",
+}
+_BP_SENSOR_KEYS = {
+    "sensor_bp_history",
+    "sensor_bp_category",
+    "sensor_bp_trend",
+    "sensor_bp_sys",
+    "sensor_bp_dia",
+    "sensor_bp_pulse",
+}
+_WELLBEING_SENSOR_KEYS = {"sensor_wellbeing_since"}
+_ENTRY_ID = "test-entry-1"
+
+
+def _sensor_setup(options: dict) -> set[str]:
+    """async_setup_entry mit aufzeichnendem async_add_entities → unique_ids."""
+    import asyncio
+
+    added: list = []
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = options
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = 2000
+    coord = MagicMock()
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value={_ENTRY_ID: {}})
+    hass.data = {
+        "health_o_mat": {
+            _ENTRY_ID: {"coordinator": coord},
+            "shared": {"store": store},
+        }
+    }
+
+    asyncio.run(sensor_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents)))
+    return {e._attr_unique_id for e in added}
+
+
+def _ids(keys: set[str]) -> set[str]:
+    return {f"{_ENTRY_ID}_{key}" for key in keys}
+
+
+def test_sensor_setup_old_entry_without_options_has_all_areas():
+    """[REQ-HOM-009] Migrationspfad: Alt-Entry ohne areas-Option = alle aktiv."""
+    keys = _sensor_setup({})
+    assert keys == _ids(_DRINK_SENSOR_KEYS | _BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS)
+
+
+def test_sensor_setup_drink_disabled_keeps_bp_and_wellbeing():
+    """[REQ-HOM-009] drink AUS → keine Drink-Sensoren; BP + Wohlbefinden bleiben."""
+    keys = _sensor_setup({"areas": {"drink": False}})
+    assert keys == _ids(_BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS)
+    assert keys.isdisjoint(_ids(_DRINK_SENSOR_KEYS))
+
+
+def test_sensor_setup_only_drink_when_bp_and_wellbeing_disabled():
+    """[REQ-HOM-009] bp + wellbeing AUS → nur Drink-Sensoren."""
+    keys = _sensor_setup({"areas": {"bp": False, "wellbeing": False}})
+    assert keys == _ids(_DRINK_SENSOR_KEYS)
+
+
+def test_sensor_unique_ids_stable_across_area_toggle():
+    """[REQ-HOM-009] De-/Reaktivieren erzeugt dieselben unique_ids (nie geändert)."""
+    on_keys = _sensor_setup({})
+    off_keys = _sensor_setup({"areas": {"drink": False}})
+    on_again_keys = _sensor_setup({"areas": {"drink": True}})
+
+    drink_ids = _ids(_DRINK_SENSOR_KEYS)
+    assert drink_ids <= on_keys
+    assert drink_ids.isdisjoint(off_keys)
+    assert on_again_keys == on_keys
+    assert {k for k in on_again_keys if k in _ids(_DRINK_SENSOR_KEYS)} == drink_ids
