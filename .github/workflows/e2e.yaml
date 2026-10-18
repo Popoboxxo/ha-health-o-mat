@@ -1,0 +1,67 @@
+name: E2E (Playwright)
+
+# Deliberately separate from validate.yml: this spins up a real Home Assistant
+# instance plus a real browser, which is far slower and heavier than the
+# HACS/hassfest checks and the HA-free unit tests. It therefore does NOT gate
+# every push — run it on demand, weekly, or for pull requests that actually
+# touch the panel/frontend surface or the E2E stack itself.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1" # weekly, Monday 04:00 UTC
+  pull_request:
+    paths:
+      - "custom_components/health_o_mat/**"
+      - "tests_e2e/**"
+      - "docker-compose.e2e.yml"
+      - "Dockerfile.e2e"
+      # Seed config of the E2E HA instance: a broken configuration.yaml takes
+      # the whole suite down (HA boots into recovery mode, no custom
+      # integration loads), so changes to it must re-trigger this workflow.
+      - "docker/ha_config_e2e/**"
+      - "scripts/e2e_bootstrap.py"
+
+jobs:
+  e2e:
+    name: E2E (Playwright against a real HA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker/ha_config_e2e/ is a HOST BIND MOUNT, not a named volume, so
+      # `docker compose down -v` does NOT reset HA's runtime state — the
+      # gitignored .storage/, recorder DB and onboarding flag would otherwise
+      # survive on the runner and accumulate across runs. Removing them makes
+      # every run start from the seeded baseline (the bootstrap handles both
+      # cases, but a fresh instance is what the suite is specified against).
+      - name: Reset E2E HA state
+        run: |
+          rm -rf \
+            docker/ha_config_e2e/.storage \
+            docker/ha_config_e2e/*.db \
+            docker/ha_config_e2e/*.db-shm \
+            docker/ha_config_e2e/*.db-wal \
+            docker/ha_config_e2e/.HA_VERSION \
+            docker/ha_config_e2e/.ha_run.lock \
+            docker/ha_config_e2e/home-assistant.log*
+
+      - name: Run E2E suite
+        run: |
+          docker compose -f docker-compose.e2e.yml up \
+            --build --abort-on-container-exit --exit-code-from e2e
+
+      - name: Collect results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results/
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.e2e.yml down -v
+
+      - name: Dump Home Assistant log on failure
+        if: failure()
+        run: docker compose -f docker-compose.e2e.yml logs --no-color --tail 300 homeassistant

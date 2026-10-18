@@ -3,6 +3,16 @@ __pycache__/
 .venv/
 .ci-venv/
 
+# --- E2E stack (docker-compose.e2e.yml) ---
+# Playwright artifacts (screenshots, traces, videos) and pytest logs.
+test-results/
+# HA's runtime state inside the seeded E2E config dir: .storage/ (config
+# entries, registries, onboarding flag), the recorder DB, logs, deps, ...
+# Everything is created by the container, nothing here is source. Only the
+# tracked seed configuration.yaml stays.
+docker/ha_config_e2e/*
+!docker/ha_config_e2e/configuration.yaml
+
 # --- agent-meta managed (do not edit) ---
 .agents/hooks/
 .claude/
