@@ -23,7 +23,7 @@ import {
   messageHtml,
   enabledTabs,
   areasForPerson,
-} from "./health-o-mat-panel-base.js?v=0.7.0";
+} from "./health-o-mat-panel-base.js?v=0.8.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
