@@ -1,14 +1,15 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-18 (UI-Ausbau, Branch `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-19 (Recorder-Einheiten-Fix, Branch `fix/recorder-unit-migration`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
+**REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…110: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…111: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
 
@@ -226,6 +227,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | # | Risiko | Schwere | REQ | Kurzfix-Ansatz |
 |---|---|---|---|---|
 | F1 | Quick-Drinks in `entry.data` → Ändern = Integration löschen = **Datenverlust** | 🔴 | 101 | Verlagerung nach Options + Migrator |
+| F10 | Recorder-Metadaten der Volumen-Sensoren mit Legacy-Einheit „ml" → HA unterdrückt die **Langzeitstatistik** | 🔴 | 111 | Metadaten-Migration beim Setup (ml → mL) |
 | F3 | Store ohne Migrationsroutine → Schema-Wachstum gefährdet Alt-Bestände | 🟡 | 102 | minor_version + Migratoren |
 | F2 | README verspricht Tagesgrenze-Feature, das nicht existiert | 🔴 (Doku) | 110 + 005 | Sofort: README-Korrektur; vollständig: Feature 005 |
 | F7 | BP-Eingaben nur im RAM → Neustart wirft halbfüllte Messung weg | 🟢 | 104 | Inputs in Store |
@@ -318,6 +320,73 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     einstellbare Reset-Uhrzeit als fertiges Feature (kein REQ-Verweis mehr,
     analog zu den übrigen fertigen Features im selben Abschnitt).
 
+#### REQ-HOM-111 — Recorder-Statistik-Einheit „ml" → „mL" (Fix F10)
+- **Priorität:** P1 · **Aufwand:** S
+- **Status: Erledigt (Branch `fix/recorder-unit-migration`)** — E2E auf `ha-test`
+  (HA 2026.9.1) verifiziert; kein Versions-Bump in `manifest.json` (Release
+  folgt separat).
+- **Befund (Live-Test auf `ha-test`, 2026-10-17 → 2026-10-19):** Ältere
+  Installationen haben Recorder-Statistik-Metadaten mit der Legacy-Einheit „ml"
+  (`unit_class` = NULL). Die Volumen-Sensoren melden die HA-kanonische Einheit
+  „mL" (`SensorDeviceClass.VOLUME`) — Home Assistant verweigert deshalb die
+  Fortsetzung der Langzeitstatistik:
+  `The unit of ... (mL) cannot be converted to the unit of previously compiled
+  statistics (ml). Generation of long term statistics will be suppressed`.
+  Der HA-Kern heilt das nicht (er migriert nur bei `entity_id`-Änderungen).
+  Betroffen sind je Person ausschließlich die beiden Volumen-Sensoren mit
+  `state_class` (`sensor_drinks_today` = TOTAL, `sensor_lifetime_total` =
+  TOTAL_INCREASING); alle übrigen Sensoren (%, mmHg, mg, d, BPM) haben ihre
+  Einheit nie geändert, und number/text/button/select/binary_sensor erzeugen
+  per HA-Regel KEINE Recorder-Statistik.
+- **Anforderung:** Beim Setup des Config-Entries migriert die Integration die
+  Recorder-Metadaten der beiden Volumen-Sensoren je Person von „ml" auf „mL"
+  (`async_update_statistics_metadata(..., new_unit_of_measurement="mL",
+  new_unit_class="volume")`). Die Migration ist idempotent und verlustfrei
+  („ml" ≡ „mL") und **nie setup-kritisch** — Fehler werden geloggt, nicht
+  geworfen. Ergänzend melden die beiden Number-Entities
+  (`number.…_daily_goal`, `number.…_custom_drink_amount`) ebenfalls „mL"
+  (Konsistenz zu den Volumen-Sensoren); die Datenfelder (`daily_goal_ml`,
+  `ml` in JSON/CSV) bleiben unverändert. Kein Eingriff in die Health-Daten im
+  Store, keine Änderung an `unique_id`/`entity_id`.
+- **Akzeptanzkriterien:**
+  - [x] Nur die eigenen Volumen-Sensoren werden angefasst — Zuordnung über die
+    stabile `unique_id` (`{entry_id}_{key}`) aus der Entity-Registry, KEINE
+    `entity_id`-Konstruktion aus dem Person-Slug; Fremd-Domains und
+    Nicht-Volume-Einheiten (%, mmHg, mg, d, BPM) bleiben unangetastet
+    (`tests/test_statistics.py::test_migration_updates_only_own_legacy_statistics`,
+    `::test_fallback_ignores_foreign_units_even_with_legacy_suffix`).
+  - [x] Idempotent und verlustfrei — ein zweiter Lauf migriert nichts mehr
+    (`::test_migration_is_idempotent`,
+    `::test_migration_leaves_canonical_units_untouched`); historische Werte
+    bleiben gültig, es wird nichts gelöscht oder umgerechnet.
+  - [x] Recorder nicht eingerichtet → Migration wird übersprungen und beim
+    nächsten Setup (HA-Neustart/Entry-Reload) nachgeholt; bewusst KEIN
+    Start-Event-Retry (der Recorder ist Bootstrap-STAGE_0 und steht damit immer
+    bereit, bevor ein Config-Entry-Setup läuft)
+    (`::test_migration_is_noop_when_recorder_not_configured`,
+    `::test_migration_creates_no_pending_container`).
+  - [x] Nie setup-kritisch — Fehler werden geloggt, das Setup läuft weiter
+    (`::test_migration_swallows_recorder_errors`,
+    `::test_setup_entry_survives_failing_statistics_migration`).
+  - [x] Einheiten-Konsistenz: die Volumen-Sensoren melden bereits die
+    kanonische Einheit „mL" (`::test_legacy_volume_sensor_keys_match_sensor_unique_ids`),
+    die beiden Number-Entities melden jetzt ebenfalls „mL".
+  - [x] E2E-Beleg (`ha-test`, HA 2026.9.1): **vorher** 4 `statistic_id`s
+    (`sensor.health_o_mat_{max,e2e}_{drinks_today,lifetime_total}`) mit
+    Metadaten `ml` (`unit_class` NULL), 24 Recorder-Warnungen über 6 Starts und
+    seit 2026-10-17 eingefrorene Kurzzeit-/Langzeitstatistik; **nachher**
+    Metadaten `mL` + `unit_class` `volume`, 0 Warnungen nach dem Fix-Restart,
+    Kurzzeitstatistik ab 22:05 und Langzeitstatistik ab 2026-10-19 22:00 wieder
+    laufend, Kontroll-IDs unverändert, Store-Daten unverändert.
+  - [x] Unit-Test-Beleg: `pytest -q` → **580 passed**; `ruff` clean.
+  - [x] README dokumentiert die Einheit „mL" (Volumen-Sensoren + Number-Entities)
+    sowie den Migrations-Hinweis für Alt-Installationen: Ursache der Legacy-
+    Metadaten, automatische Migration beim Setup, Gültigkeit der historischen
+    Werte, Verhalten bei deaktiviertem Recorder, Sichtbarkeit der
+    Migrationszeile (Log-Level **INFO** für `custom_components.health_o_mat`) und
+    die bewusste Entscheidung, **keinen** Lösch-Service für Statistiken
+    anzubieten (HA bietet „Statistiken löschen" bereits in der UI).
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -333,6 +402,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | F7 BP-Inputs nur RAM | 🟢 | 104 | — |
 | F8 Kein Linting | 🟢 | 106 | — |
 | F9 Kein Diagnostics | 🟢 | 105 | — |
+| F10 Recorder-Metadaten „ml" ≠ Sensor-Einheit „mL" | 🔴 | 111 | — |
 
 ---
 
@@ -343,3 +413,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
 | 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |
+| 2026-10-19 | **Recorder-Einheiten-Fix** (Branch `fix/recorder-unit-migration`): **neu angelegt** REQ-HOM-111 (Fix F10, P1, Aufwand S) — **erledigt**. Die Integration migriert beim Config-Entry-Setup die Recorder-Statistik-Metadaten der beiden Volumen-Sensoren je Person von der Legacy-Einheit „ml" auf die HA-kanonische Einheit „mL" (`new_unit_of_measurement="mL"`, `new_unit_class="volume"`); bislang unterdrückte HA die Langzeitstatistik komplett („Generation of long term statistics will be suppressed"). Migration ist idempotent und verlustfrei, läuft bei deaktiviertem Recorder erst beim nächsten Setup (HA-Neustart/Entry-Reload) und ist nie setup-kritisch; die beiden Number-Entities melden nun ebenfalls „mL" (Datenfelder `daily_goal_ml` / `ml` in JSON/CSV unverändert), `unique_id`/`entity_id` und `manifest.json` unangetastet. E2E auf `ha-test` (HA 2026.9.1): vorher 4 `statistic_id`s mit `ml` (`unit_class` NULL) + 24 Recorder-Warnungen über 6 Starts + eingefrorene Statistik seit 2026-10-17, nachher `mL` + `unit_class` `volume`, 0 Warnungen, Kurzzeit-/Langzeitstatistik wieder laufend (ab 22:05 bzw. 2026-10-19 22:00), Kontroll-IDs und Store-Daten unverändert; `pytest -q` 580 passed, ruff clean. README: Einheiten-Angaben auf „mL" vereinheitlicht + Migrations-Hinweis für Alt-Installationen ergänzt |
