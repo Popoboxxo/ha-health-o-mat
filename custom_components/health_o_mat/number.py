@@ -63,7 +63,7 @@ class HealthOMatNumber(HealthOMatEntity, NumberEntity):
 
 
 class DailyGoalNumber(HealthOMatNumber):
-    """Tagesziel in ml.
+    """Tagesziel in mL.
 
     entry.options["daily_goal_ml"] ist die einzige Quelle der Wahrheit (Audit C-2):
     sowohl der Options-Flow als auch diese Entity schreiben ausschließlich dorthin.
@@ -77,7 +77,14 @@ class DailyGoalNumber(HealthOMatNumber):
     _attr_native_min_value = 500
     _attr_native_max_value = MAX_AMOUNT_ML
     _attr_native_step_value = 50
-    _attr_native_unit_of_measurement = "ml"
+    # HA-kanonische Schreibweise für Volumen: "mL" (nicht "ml") — damit die
+    # Number-Entities dieselbe Einheit melden wie die Volumen-Sensoren
+    # (SensorDeviceClass.VOLUME). Numbers haben KEINE device_class, HA
+    # validiert ihre Einheit also nicht ("ml" wäre hier nicht "ungültig") —
+    # die Schreibweise ist damit Konsistenz, keine Pflicht. Auswirkung auf die
+    # Recorder-Statistik hat sie ebenfalls nicht: Numbers laufen per HA-Regel
+    # nicht in die Statistics-Engine.
+    _attr_native_unit_of_measurement = "mL"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "number_daily_goal")
@@ -113,7 +120,10 @@ class CustomAmountNumber(HealthOMatNumber):
     _attr_native_min_value = 1
     _attr_native_max_value = MAX_AMOUNT_ML
     _attr_native_step_value = 10
-    _attr_native_unit_of_measurement = "ml"
+    # HA-kanonische Schreibweise für Volumen: "mL" (nicht "ml") — siehe
+    # DailyGoalNumber (Konsistenz zu den Volumen-Sensoren, keine
+    # Statistik-Auswirkung: Numbers laufen nicht in die Statistics-Engine).
+    _attr_native_unit_of_measurement = "mL"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator, entry, "number_custom_amount")

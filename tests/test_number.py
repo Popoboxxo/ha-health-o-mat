@@ -141,7 +141,23 @@ def test_daily_goal_number_attributes():
     assert entity._attr_native_min_value == 500
     assert entity._attr_native_max_value == 10000
     assert entity._attr_native_step_value == 50
-    assert entity._attr_native_unit_of_measurement == "ml"
+    # HA-kanonische Volumen-Schreibweise ("mL", nicht "ml") — Konsistenz zu den
+    # Volumen-Sensoren. Numbers haben keine device_class, HA validiert ihre
+    # Einheit also nicht; sie laufen zudem nicht in die Statistics-Engine.
+    assert entity._attr_native_unit_of_measurement == "mL"
+
+
+def test_custom_amount_number_uses_canonical_volume_unit():
+    """CustomAmountNumber meldet dieselbe kanonische Einheit wie DailyGoalNumber."""
+    coordinator = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.custom_amount_ml = 250
+
+    entity = number_module.CustomAmountNumber(coordinator, entry)
+
+    assert entity._attr_native_unit_of_measurement == "mL"
 
 
 def test_daily_goal_number_translation_key():

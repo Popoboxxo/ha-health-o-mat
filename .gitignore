@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 .ci-venv/
 
+# E2E-Laufzeit-State (HA-Config, Recorder-DB, Auth-Tokens) — nie committen
+docker/ha_config_e2e/
+
 # --- agent-meta managed (do not edit) ---
 .agents/hooks/
 .claude/
