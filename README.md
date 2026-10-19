@@ -19,8 +19,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 - 🩺 **Blutdruck**: Eingabefelder (sys/dia/puls) + Speichern-Button, Verlaufs-Sensoren,
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
-  Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak) und **geschätztes** Koffein
-  heute — je eine Entity für den Entscheidungswert, Details als Attribute
+  Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
+  heute und der **Wohlbefinden-Score (1–5)** — je eine Entity für den
+  Entscheidungswert, Details als Attribute
 - ↩️ **Undo-Button** für die letzte Buchung
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
@@ -67,6 +68,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
 | sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
 | sensor | `wellbeing_last_reported` | Wohlbefinden zuletzt gemeldet / Wellbeing last reported | Zeitstempel |
+| sensor | `wellbeing_score` | Wohlbefinden-Score / Wellbeing score | numerisches Wohlbefinden 1–5 (rein abgeleitet) |
 | sensor | `blood_pressure_category` | Blutdruck-Kategorie / Blood pressure category | WHO-Kategorie der letzten Messung (optimal … hypertensive Krise) |
 | sensor | `drinks_trend` | Trink-Trend / Drinks trend | ± % heute vs. Vorwochen-Ø (mL) |
 | sensor | `blood_pressure_trend` | Blutdruck-Trend / Blood pressure trend | steigend/fallend/stabil aus 7-Tage-Mitteln |
@@ -134,6 +136,38 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   je Getränketyp (`const.py`); unbekannte Typen und „Eigen" zählen als 0 mg.
   Attribut `caffeine_by_type_mg` = JSON mit mg je koffeinhaltigem Getränketyp.
   Reale Werte schwanken stark — **keine medizinische Aussage**.
+- `sensor.…_wellbeing_score` — **numerische Darstellung des Wohlbefindens auf
+  der Skala 1 … 5**: 1 = „Sehr schlecht" (schlechtester Wert) … 5 = „Super"
+  (bester Wert). Die Skala ist **reihenfolgetreu aus den fünf Wohlbefinden-
+  Zuständen abgeleitet** (Position in der Zustandsliste + 1) — kein fest
+  verdrahteter Zahlenblock; kommt ein neuer Zustand hinzu, wächst die Skala
+  automatisch mit. `state_class: measurement` (→ HA-Statistik/Graph nutzbar),
+  **ohne Einheit und ohne `device_class`** (der Score ist dimensionslos). Ohne
+  Meldung ist der Zustand `unknown` — **nie 0** (0 wäre der schlechteste Wert
+  und würde den Verlauf verfälschen). Attribute: `reported_at` (Zeitpunkt der
+  Meldung) und `scale_max` (5). Der Wert ist **rein abgeleitet** — siehe
+  „Wohlbefinden-Score: die Skala 1 … 5" unten.
+
+**Wohlbefinden-Score: die Skala 1 … 5**
+
+| Score | Wohlbefinden-Zustand |
+|---|---|
+| 1 | Sehr schlecht (schlechtester Wert) |
+| 2 | Schlecht |
+| 3 | Okay |
+| 4 | Gut |
+| 5 | Super (bester Wert) |
+
+Die Zuordnung ist **reihenfolgetreu** aus den fünf Wohlbefinden-Zuständen
+abgeleitet (Index + 1) und **wächst automatisch mit**, wenn ein neuer Zustand
+hinzukommt — Score und Attribut `scale_max` stammen aus derselben Quelle und
+können deshalb nicht auseinanderlaufen.
+
+> ℹ️ Der Score ist **rein abgeleitet**: Es gibt **keine eigene Datenhaltung**
+> (kein eigener Store, keine Migration des Datenbestands). Der Wert wird
+> jederzeit on-read aus der letzten Wohlbefinden-Meldung berechnet und ist zu
+> 100 % an die Rohdaten gekoppelt — wird die Rohmeldung geändert oder gelöscht,
+> ändert sich der Score automatisch mit.
 
 **Binary-Sensoren**
 
@@ -323,7 +357,10 @@ Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
   (`caffeine_today` in mg)
 - 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit **WHO-Kategorie** und
   Warnhinweis, wenn sie über den konfigurierten Schwellen liegt
-- 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt
+- 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt, dazu der
+  **Wohlbefinden-Score** als Badge (z. B. „4 / 5") und eine **kleine Sparkline**
+  der letzten 14 Meldungen. Die Karte bleibt damit eine einbettbare
+  Kompaktanzeige — **kein** Panel-Ersatz
 - ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
   Buchung zurücknehmen
 
@@ -361,6 +398,11 @@ HA-Seitenleiste einklinkt:
 - 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
   Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
   Feature-Toggle abgeschaltet sind, werden ausgeblendet
+- 📈 **Wohlbefinden-Score-Chart** — im Tab „Wohlbefinden" zeigt das Panel den
+  **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–5
+  auf der Y-Achse (Extremwerte 1 und 5 hervorgehoben), Zeitachse und der
+  aktuelle Wert als hervorgehobener Marker. Chart **ohne externe Bibliothek**
+  (Vanilla-SVG), Farben ausschließlich über HA-CSS-Variablen → light/dark-fähig
 - 🔗 **Deep-Link pro Person** — die Person-Ansicht ist direkt verlinkbar über
   `?person=<slug>`, z. B. `/health-o-mat?person=caro`. Als Kennung dient der
   **stabile** Personen-Schlüssel (nie der Anzeigename), sodass ein Link eine
