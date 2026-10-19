@@ -12,7 +12,7 @@ from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from .const import CAFFEINE_MG_PER_100ML
+from .const import CAFFEINE_MG_PER_100ML, WELLBEING_STATES
 
 
 def day_start(now: datetime, hour: int = 0, minute: int = 0) -> datetime:
@@ -662,3 +662,34 @@ def hydration_pace(
         "forecast_ml": None if fraction <= 0.0 else round(actual_ml / fraction, 1),
         "percent": round(actual_ml / goal * 100, 1),
     }
+
+
+# --- Wohlbefinden-Score (REQ-HOM-112) ---
+
+
+def wellbeing_score(key: Any) -> int | None:
+    """Numerischer Wohlbefinden-Score (1 = schlechtester … N = bester Wert).
+
+    Der Score ist rein abgeleitet (on-read, keine eigene Persistenz): er
+    ergibt sich reihenfolgetreu aus `WELLBEING_STATES` (aufsteigende
+    Qualität very_bad … great) — der 0-basierte Index + 1 ist der Score.
+
+    Die Skala ist bewusst NICHT hartkodiert, sondern folgt der Länge der
+    Zustandsliste: eine neue Stufe in `const.WELLBEING_STATES` schlägt
+    automatisch durch (neuer Score = Index + 1). Die Liste wird deshalb zur
+    AUFrufZEIT aus dem Modul-Global gelesen (kein Default-Argument), damit
+    Tests sie monkeypatchen können.
+
+    Unbekannter Key, fehlender Wert oder ein Nicht-String → None (HA zeigt
+    `unknown`). NIEMALS 0: 0 würde den schlechtesten Wert bedeuten und den
+    Verlauf verfälschen.
+
+    Import-Richtung: `logic` → `const`; `const` importiert NICHTS aus dem
+    Paket — daher keine Zirkularität. HA-frei (kein homeassistant-Import).
+    """
+    if not isinstance(key, str) or not key:
+        return None
+    for index, state in enumerate(WELLBEING_STATES):
+        if state.get("key") == key:
+            return index + 1
+    return None

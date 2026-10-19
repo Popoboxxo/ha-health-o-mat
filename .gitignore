@@ -38,3 +38,10 @@ CLAUDE.personal.md
 opencode.json
 sync.log
 # --- end agent-meta managed ---
+
+# --- lokale E2E-/Beleg-Verzeichnisse (nicht versionieren) ---
+# docker/: lokale HA-Testinstanz inkl. Auth-Store (Tokens) und Recorder-DB
+# (Gesundheitsdaten); artifacts/: lokale Scratch-Kopie der E2E-Belege — die
+# committete Fassung liegt unter docs/e2e-2026-10-19-wellbeing-score/.
+docker/
+artifacts/

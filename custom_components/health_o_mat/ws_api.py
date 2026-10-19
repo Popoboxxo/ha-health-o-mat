@@ -77,6 +77,8 @@ ENTITY_SUFFIXES: dict[str, str] = {
     "bp_trend": "sensor_bp_trend",
     "goal_streak": "sensor_goal_streak",
     "caffeine_today": "sensor_caffeine_today",
+    # Rein additiv (REQ-HOM-112): numerischer Wohlbefinden-Score.
+    "wellbeing_score": "sensor_wellbeing_score",
 }
 
 # Payload-Obergrenzen (N-1: keine unbegrenzten Attribute/Payloads).
@@ -448,6 +450,8 @@ def _wellbeing_block(data: dict) -> dict[str, Any]:
         "label": state.get("label"),
         "emoji": state.get("emoji"),
         "at": current.get("ts") or None,
+        # Rein additiv (REQ-HOM-112): numerischer Score zur aktuellen Meldung.
+        "score": logic.wellbeing_score(key),
         "history": _wellbeing_history(data.get("wellbeing_history")),
     }
 
@@ -469,6 +473,8 @@ def _wellbeing_history(items: Any) -> list[dict[str, Any]]:
                 "key": key,
                 "label": state.get("label"),
                 "emoji": state.get("emoji"),
+                # Rein additiv (REQ-HOM-112): Score je Verlaufseintrag.
+                "score": logic.wellbeing_score(key),
                 "ts": item.get("ts"),
             }
         )
