@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-19 (Recorder-Einheiten-Fix `fix/recorder-unit-migration` + Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score`; zuvor 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-19 (Recorder-Einheiten-Fix `fix/recorder-unit-migration` + Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Browser-Smoke REQ-HOM-012, `feat/e2e-playwright`; zuvor 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** neu aufgenommen (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -171,9 +171,10 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-012 — Person-Ansicht + Deep-Link
 - **Priorität:** P3 · **Aufwand:** M
-- **Status: Erledigt (Branch `feat/ui-pro`)** — Deep-Link-Mechanik E2E auf
-  Registrierungs-/Auslieferungsebene geprüft; Browser-Smoke (pushState/popstate)
-  steht aus (durch JS-Analyse-Test `tests/test_panel_js.py` abgedeckt).
+- **Status: Erledigt** — Deep-Link-Mechanik E2E auf
+  Registrierungs-/Auslieferungsebene geprüft (Branch `feat/ui-pro`); echte
+  Browser-Verifikation (`tests_e2e/`, Playwright) ergänzt und grün
+  (Branch `feat/e2e-playwright`, 2026-10-18).
 - **Beschreibung:** Adressierbare, vollwertige Person-Seite im Panel mit stabilem
   Deep-Link.
 - **Akzeptanzkriterien:**
@@ -182,7 +183,19 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     Bereiche mit Toggle aus werden ausgeblendet
   - [x] Kennung = **stabiler Slug** `entry.data["person"]` (nie Anzeigename);
     `list_persons`/`panel_data` liefern `person_slug` + `areas` additiv
-  - [ ] Browser-Smoke (Playwright) auf `ha-test` — offen, optional (Phase 5)
+  - [x] Browser-Smoke (Playwright) — `tests_e2e/` (6 Tests, realer Browser gegen
+    echte HA-Instanz): Panel-Mount, Deep-Link öffnet direkt die Detailansicht,
+    Kachel-Klick = `pushState`, Browser-Zurück = `popstate` → Übersicht,
+    unbekannter Parameter → sichere Übersicht, abgeschalteter Bereich blendet
+    seinen Tab aus. **Beleg (reproduzierbar):** gegen den Docker-HA-Stack aus
+    `docker-compose.e2e.yml`
+    (`docker compose -f docker-compose.e2e.yml up -d homeassistant`)
+    `HASS_BASE_URL=http://localhost:8124 python3 -m pytest tests_e2e/ -v`
+    → 6 passed; alternativ gegen die geteilte Instanz `ha-test`
+    (`HASS_BASE_URL=http://localhost:8123`). Die Roh-Logs liegen nur flüchtig
+    unter `test-results/` (gitignored, wird von Playwright zu Beginn jedes Laufs
+    geleert) und taugen daher nicht als Beleg; dauerhafter Beleg ist das
+    CI-Artefakt `e2e-test-results` aus `.github/workflows/e2e.yaml`
 
 ### REQ-HOM-013 — Admin-/Instanzverwaltung (L3)
 - **Priorität:** P3 · **Aufwand:** M–L
@@ -557,3 +570,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |
 | 2026-10-19 | **Recorder-Einheiten-Fix** (Branch `fix/recorder-unit-migration`): **neu angelegt** REQ-HOM-111 (Fix F10, P1, Aufwand S) — **erledigt**. Die Integration migriert beim Config-Entry-Setup die Recorder-Statistik-Metadaten der beiden Volumen-Sensoren je Person von der Legacy-Einheit „ml" auf die HA-kanonische Einheit „mL" (`new_unit_of_measurement="mL"`, `new_unit_class="volume"`); bislang unterdrückte HA die Langzeitstatistik komplett („Generation of long term statistics will be suppressed"). Migration ist idempotent und verlustfrei, läuft bei deaktiviertem Recorder erst beim nächsten Setup (HA-Neustart/Entry-Reload) und ist nie setup-kritisch; die beiden Number-Entities melden nun ebenfalls „mL" (Datenfelder `daily_goal_ml` / `ml` in JSON/CSV unverändert), `unique_id`/`entity_id` und `manifest.json` unangetastet. E2E auf `ha-test` (HA 2026.9.1): vorher 4 `statistic_id`s mit `ml` (`unit_class` NULL) + 24 Recorder-Warnungen über 6 Starts + eingefrorene Statistik seit 2026-10-17, nachher `mL` + `unit_class` `volume`, 0 Warnungen, Kurzzeit-/Langzeitstatistik wieder laufend (ab 22:05 bzw. 2026-10-19 22:00), Kontroll-IDs und Store-Daten unverändert; `pytest -q` 580 passed, ruff clean. README: Einheiten-Angaben auf „mL" vereinheitlicht + Migrations-Hinweis für Alt-Installationen ergänzt |
 | 2026-10-19 | **Neu angelegt: REQ-HOM-112 — Wohlbefinden-Score & Verlaufs-Chart** (Branch `feat/wellbeing-score`): numerische Darstellung des Wohlbefindens **1…5**, reihenfolgetreu aus den fünf Zuständen abgeleitet und **rein abgeleitet/on-read** (keine eigene Persistenz, keine Migration); Sensor `wellbeing_score` (`measurement`, ohne Einheit/`device_class`, `unknown` ohne Meldung, Attribute `reported_at`/`scale_max`); **additiver** `score`-Key im WS-Payload `health_o_mat/panel_data` (aktueller Wert + je `wellbeing.history`-Eintrag, bestehende Schlüssel unverändert); Score-Chart in der **Card** (Badge + kompakte Sparkline der letzten 14 Meldungen) und im **Panel** (vollständiger SVG-Chart, Y-Achse 1–5, aktueller Wert als Marker, Leerfall mit Hinweis) — beide ohne externe Bibliothek, Farben nur über HA-CSS-Variablen. **Belege:** `tests/test_logic.py::test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one`, `tests/test_sensor.py::test_req_hom_112_wellbeing_score_sensor_native_value_matches_status`, `tests/test_ws_api.py::test_req_hom_112_wellbeing_block_contains_current_score`, `tests/test_card_js.py::test_card_wellbeing_score_and_sparkline_helpers_exist`, `tests/test_panel_js.py::test_panel_base_exposes_wellbeing_chart_helpers` (weitere Fälle in den jeweiligen Dateien); `pytest -q` → **666 passed**; `ruff` clean. **E2E-Beleg:** Verifikation auf `ha-test` (HA 2026.9.1) — Report + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`. **Code-Review:** durch, keine Blocker — der 🟡-Befund (Panel löste den Score für Kopfzeile und Chart aus zwei Quellen auf) und die 🟢-Befunde (Alias-/Case-Divergenz zwischen Client und Server, undokumentierte dritte Skala-Kopie) sind behoben; der Frontend-Spiegel ist per Mirror-Pinning-Test an `const.WELLBEING_STATES` gebunden (Keys + Reihenfolge + Länge). **Marker-Semantik:** der „aktuell"-Marker hängt am aktuellen Wert (ohne Meldung wird kein Punkt hervorgehoben, die Zusammenfassung nennt „letzter Wert" statt „aktuell"); **Label/Emoji** werden **live-first** aufgelöst (Live-Entity vor veraltetem `panel_data`-Snapshot). **Offen:** der **Release** (Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag, GitHub-Release) |
+| 2026-10-18 | **REQ-HOM-012 vollständig erledigt** (Branch `feat/e2e-playwright`): echter Browser-Smoke ergänzt — `tests_e2e/` (Playwright + pytest, 6 Tests) gegen eine reale HA-Instanz plus `scripts/e2e_bootstrap.py` (idempotentes Onboarding/Config-/Options-Flow-Bootstrap), Docker-Stack (`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/`) und CI-Workflow `.github/workflows/e2e.yaml` (workflow_dispatch + wöchentlich + PR-Pfadfilter). Unit-Suite unverändert HA-frei (`pytest -q` → 552 passed), E2E nur bei explizitem Aufruf (eigene `tests_e2e/pytest.ini`) |

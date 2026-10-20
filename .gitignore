@@ -3,8 +3,18 @@ __pycache__/
 .venv/
 .ci-venv/
 
-# E2E-Laufzeit-State (HA-Config, Recorder-DB, Auth-Tokens) — nie committen
-docker/ha_config_e2e/
+# --- E2E stack (docker-compose.e2e.yml) ---
+# Playwright artifacts (screenshots, traces, videos) and pytest logs.
+test-results/
+# Runtime state of the E2E instance (container-created, not source).
+# Deliberately NOT the whole directory so new seed files stay addable.
+docker/ha_config_e2e/.storage/
+docker/ha_config_e2e/*.db
+docker/ha_config_e2e/*.db-shm
+docker/ha_config_e2e/*.db-wal
+docker/ha_config_e2e/.HA_VERSION
+docker/ha_config_e2e/.ha_run.lock
+docker/ha_config_e2e/home-assistant.log*
 
 # --- agent-meta managed (do not edit) ---
 .agents/hooks/
@@ -42,9 +52,7 @@ opencode.json
 sync.log
 # --- end agent-meta managed ---
 
-# --- lokale E2E-/Beleg-Verzeichnisse (nicht versionieren) ---
-# docker/: lokale HA-Testinstanz inkl. Auth-Store (Tokens) und Recorder-DB
-# (Gesundheitsdaten); artifacts/: lokale Scratch-Kopie der E2E-Belege — die
-# committete Fassung liegt unter docs/e2e-2026-10-19-wellbeing-score/.
-docker/
+# --- lokale Beleg-Verzeichnisse (nicht versionieren) ---
+# artifacts/: lokale Scratch-Kopie der E2E-Belege — die committete Fassung
+# liegt unter docs/e2e-2026-10-19-wellbeing-score/.
 artifacts/

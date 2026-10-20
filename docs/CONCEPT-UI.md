@@ -349,7 +349,7 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 | **2** | Feature-Sensoren 001/002/003 + `logic.py`-Erweiterung; Karte zeigt Badge/Trend/Streak | entscheidungsrelevante Metriken | — (parallel zu 1) |
 | **3** ✅ | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
 | **4** | 🟡 teilweise: Admin-/Settings-Ansicht **+ CSV-Export** (L3) umgesetzt; **Backup** und optionaler CSV-**Import** (REQ-HOM-007) **offen** | Verwaltung an einem Ort | Phase 3 |
-| **5** | Release-Härtung: `release-check.yml`, optionaler Frontend-Smoke (Playwright wie Sofabaton) — Score-/Chart-Umfang per Live-E2E auf `ha-test` verifiziert (Screenshots: `docs/e2e-2026-10-19-wellbeing-score/`), ein Playwright-Smoke in CI steht weiterhin aus | sichere Releases | — |
+| **5** | 🟡 teilweise: Release-Härtung (`release-check.yml`) ✅; **Frontend-Browser-Smoke des Panels** ✅ (`tests_e2e/`, Playwright/Chromium gegen eine echte HA-Instanz, CI via `.github/workflows/e2e.yaml`); offen: Browser-Smoke der **Karte** (L1); Score-/Chart-Umfang per Live-E2E auf `ha-test` verifiziert (Screenshots: `docs/e2e-2026-10-19-wellbeing-score/`) | sichere Releases | — |
 
 **Nachtrag (2026-10-19, Branch `feat/wellbeing-score`):** Phase 5 🟡 — neben der
 Release-Härtung: **Wohlbefinden-Score & Score-Chart** (REQ-HOM-112) umgesetzt
@@ -382,6 +382,24 @@ Score-/Chart-Umfang ist per Live-E2E auf `ha-test` mit Screenshots verifiziert
 `logic.hydration_pace` (nur Platzhalter `ws_api.compute_pace`), **eine
 Backup-Funktion (nicht gebaut)**, der optionale CSV-Import (REQ-HOM-007) und
 Phase 5 (Release-Härtung).
+
+**Stand (2026-10-18, Branch `feat/e2e-playwright`):** Phase 5 🟡 — der optionale
+Frontend-Smoke ist **umgesetzt und grün**. `tests_e2e/` fährt mit Playwright
+(Chromium) gegen eine echte Home-Assistant-Instanz (Docker-Stack
+`docker-compose.e2e.yml` + `Dockerfile.e2e`, alternativ gegen das geteilte
+`ha-test`) und prüft: Panel-Mount unter `/health-o-mat`, Deep-Link
+`?person=<slug>` öffnet direkt die Person-Detailansicht, Kachel-Klick setzt den
+Parameter per `history.pushState`, Browser-Zurück stellt die Übersicht wieder
+her (`popstate`), ein unbekannter Parameter fällt sicher auf die Übersicht
+zurück, und ein per Feature-Toggle abgeschalteter Bereich blendet seinen Tab
+aus (REQ-HOM-012). Die Vorbereitung (Onboarding bzw. Login, Test-Personen über
+den echten Config-/Options-Flow inklusive `enable_sidebar_panel`) ist
+idempotent in `scripts/e2e_bootstrap.py`; die Unit-Suite bleibt HA-frei und
+sammelt die Browser-Suite nicht mit ein. Damit ist die Aussage „die JS-Card
+**und das Panel** haben keine CI-Tests" oben **für das Panel überholt** — für
+die **Karte** (L1) existiert weiterhin kein Browser-Test. Zu den übrigen offenen
+Punkten des Stands vom 2026-10-15 siehe den aktuellen Stand in
+`docs/REQUIREMENTS.md`.
 
 ---
 
