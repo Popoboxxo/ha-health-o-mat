@@ -77,7 +77,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | button | `report_very_bad` … `report_great` | Melden: … / Report: … | Wohlbefinden |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
-| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel, Eigenmenge, Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
+| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
 
 ### Entities im Detail
 
@@ -130,7 +130,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   wenn das Ziel bereits erreicht ist). Einheit Tage (`d`). Attribut
   `best_streak` = längste Serie der gesamten Historie.
 - `sensor.…_caffeine_today` — **grobe Schätzung** der Koffeinzufuhr des
-  laufenden Tages in mg (`state_class: measurement`) anhand einer mg/100-ml-Tabelle
+  laufenden Tages in mg (`state_class: measurement`) anhand einer mg/100-mL-Tabelle
   je Getränketyp (`const.py`); unbekannte Typen und „Eigen" zählen als 0 mg.
   Attribut `caffeine_by_type_mg` = JSON mit mg je koffeinhaltigem Getränketyp.
   Reale Werte schwanken stark — **keine medizinische Aussage**.
@@ -146,7 +146,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 **Buttons**
 
-- **Quick-Drinks** — je konfiguriertem Quick-Drink ein Button (Label, ml und
+- **Quick-Drinks** — je konfiguriertem Quick-Drink ein Button (Label, mL und
   Icon kommen aus der Integration-Konfiguration; der Button-Name ist daher
   nutzerdefiniert, z. B. `button.…_glas_wasser`).
 - `button.…_book_custom_amount` — bucht die unter `number.…_custom_drink_amount`
@@ -171,13 +171,13 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 - `text.…_log_drink_free_text` — Freitexteingabe wie „Kaffee 300ml",
   „0,5 l wasser", „cola", „Ingwertee 400", „350". Der Parser zieht die Menge
-  per Regex (ml/l, auch Dezimal mit Komma/Punkt) und ordnet die restlichen
+  per Regex (ml/mL/l, auch Dezimal mit Komma/Punkt) und ordnet die restlichen
   Wörter über ein Lexikon (Default: wasser/water, kaffee/coffee, tee/tea,
   bier/beer, wein/wine, milch/milk, cola, limo, saft/juice, sekt …) einem
   Getränketyp zu; unbekannte Typen werden wörtlich übernommen. Das Lexikon ist
   über den Options-Dialog vollständig anpassbar (Schritt „Getränke-Lexikon",
   ein Wort/Zeile im Format `wort=Typ,ml`).
-  **Gespeichert wird nur das strukturierte Ergebnis** (Zeitstempel, ml, Typ,
+  **Gespeichert wird nur das strukturierte Ergebnis** (Zeitstempel, `ml`, Typ,
   Quelle `freetext`) — der Rohtext landet **nicht** in der Historie; er bleibt
   kurzlebig in den Entity-Attributen (`last_input`, `drink_type`,
   `amount_ml`) und wird beim nächsten Setzen überschrieben. Nicht erkennbare
@@ -186,13 +186,20 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 **Numbers (Laufzeit-Einstellungen)**
 
-- `number.…_daily_goal` — Tagesziel in ml (sofort wirksam, persistiert via
+- `number.…_daily_goal` — Tagesziel in mL (sofort wirksam, persistiert via
   Options-Flow).
-- `number.…_custom_drink_amount` — Menge für den „Eigenen Betrag buchen"-Button.
+- `number.…_custom_drink_amount` — Eigenmenge in mL für den
+  „Eigenen Betrag buchen"-Button.
 - `number.…_systolic_warning_threshold` / `_diastolic_warning_threshold` —
   Warnschwellen für den Blutdruck-Warn-Binary-Sensor.
 - `number.…_new_reading_systolic` / `_diastolic` / `_pulse` — Eingabefelder
   für die nächste Blutdruckmessung (mit `save_measurement`-Button übernehmen).
+
+Die beiden Mengen-Entities melden die Einheit **mL** — die HA-kanonische
+Schreibweise, konsistent zu den Volumen-Sensoren (`device_class: volume`).
+Intern bleiben die Datenfeld-Namen unverändert: `daily_goal_ml` (Tagesziel,
+persistiert in den Config-Entry-Options) und `custom_amount_ml` (Eigenmenge,
+Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
 
 ### Migration (Entity-IDs & Konfiguration)
 
@@ -221,6 +228,40 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   als die gewählte Monatszahl in einen Archiv-Store (Store-Schema v3, Migration
   automatisch); Summen und Lebenszähler bleiben unverändert, der CSV-Export
   umfasst weiterhin die volle Historie.
+- **Alt-Installationen: Recorder-Statistik-Einheit „ml" → „mL" (automatisch
+  behoben):** Ältere Stände der Integration haben die Volumen-Sensoren mit der
+  Einheit „ml" gemeldet — die Recorder-Metadaten der betroffenen Statistiken
+  tragen deshalb bis heute „ml" (ohne `unit_class`). Die Sensoren melden
+  inzwischen die HA-kanonische Einheit „mL", und Home Assistant verweigert
+  deshalb die Fortsetzung der Langzeitstatistik komplett:
+  *„The unit of … (mL) cannot be converted to the unit of previously compiled
+  statistics (ml). Generation of long term statistics will be suppressed"*.
+  Der HA-Kern heilt das nicht von allein (er migriert nur bei einer Änderung
+  der `entity_id`), deshalb zieht die Integration die Metadaten **selbst beim
+  Setup des Config-Entries** nach — betroffen sind je Person nur die beiden
+  Volumen-Sensoren `…_drinks_today` und `…_lifetime_total`.
+  - **Verlustfrei:** „ml" und „mL" sind dieselbe physikalische Größe — die
+    historischen Werte bleiben gültig, es wird nichts gelöscht und nichts
+    umgerechnet.
+  - **Idempotent:** Ein zweiter Lauf findet die kanonische Einheit vor und tut
+    nichts mehr.
+  - **Recorder nicht eingerichtet (deaktiviert):** Die Migration wird dann
+    übersprungen und beim nächsten Setup (HA-Neustart oder Reload des
+    Config-Entries) nachgeholt — ebenfalls idempotent und verlustfrei.
+  - **Log:** Die Meldung wird mit Level **INFO** geloggt
+    („Recorder-Statistik-Metadaten migriert (ml → mL)"). Home Assistant loggt
+    standardmäßig auf `WARNING` — die Zeile erscheint also nur, wenn das
+    Log-Level für `custom_components.health_o_mat` auf `info` steht, z. B. per
+    `configuration.yaml`:
+    ```yaml
+    logger:
+      logs:
+        custom_components.health_o_mat: info
+    ```
+  - **Bewusst kein Lösch-Service:** Die Integration bietet **keinen** Service
+    an, um betroffene Statistiken zu löschen oder aufzuräumen — die
+    Metadaten-Migration ist verlustfrei, und Home Assistant bietet
+    „Statistiken löschen" bereits in der UI an.
 
 ## Services
 
