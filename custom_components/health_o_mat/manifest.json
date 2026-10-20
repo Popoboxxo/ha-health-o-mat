@@ -2,7 +2,8 @@
   "domain": "health_o_mat",
   "name": "HA Health-O-Mat",
   "after_dependencies": [
-    "lovelace"
+    "lovelace",
+    "recorder"
   ],
   "codeowners": [
     "@Popoboxxo"
