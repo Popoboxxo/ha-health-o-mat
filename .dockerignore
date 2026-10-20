@@ -1,0 +1,26 @@
+# Build-context filter for the E2E runner image (Dockerfile.e2e).
+#
+# The image only needs custom_components/, scripts/e2e_bootstrap.py,
+# tests_e2e/ and requirements_e2e.txt. Everything else is either irrelevant
+# for the container or must not end up in an image layer at all (submodule
+# trees, local agent state, credentials/tokens in .env-like files).
+.agent-meta/
+.agents/
+.claude/
+.gemini/
+.opencode/
+.meta-config/
+.git/
+.github/
+docs/
+examples/
+tests/
+external/
+test-results/
+docker/ha_config_e2e/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.md
+sync.log

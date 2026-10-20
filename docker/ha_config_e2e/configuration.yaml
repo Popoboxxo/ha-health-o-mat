@@ -1,0 +1,22 @@
+# Health-O-Mat — E2E seed configuration (docker-compose.e2e.yml).
+#
+# Deliberately minimal and self-contained: this file is tracked in git and
+# bind-mounted into a throwaway HA instance, so it must NOT reference any file
+# that only exists when HA generates a config from scratch (automations.yaml,
+# scenes.yaml, themes/, ...). A missing !include aborts config parsing and
+# boots HA into recovery mode, where no custom integration loads.
+#
+# `default_config` pulls in the whole frontend stack the sidebar panel needs:
+# frontend -> lovelace -> onboarding, plus http/auth/websocket_api (the panel
+# talks to `health_o_mat/*` websocket commands).
+default_config:
+
+# No `panel_custom:` section on purpose.
+#
+# `custom_components/health_o_mat/manifest.json` declares panel_custom as a
+# dependency, so HA sets the component up when the integration is loaded —
+# exactly like on a real installation. Declaring it here as well is not just
+# redundant, it is a trap: HA validates every YAML-declared panel entry
+# strictly, and an "empty" section (`panel_custom:` or `panel_custom: []`)
+# fails with "required key 'name' not provided", which makes the whole
+# dependency chain — including health_o_mat — fail to set up.

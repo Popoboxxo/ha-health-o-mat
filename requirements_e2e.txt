@@ -1,0 +1,19 @@
+# E2E test dependencies — separate from tests/requirements.txt (fast, HA-free
+# unit tests) so the unit-test setup never needs a browser runtime.
+#
+# Used by Dockerfile.e2e (Playwright runner image) and by local runs:
+#   pip install -r requirements_e2e.txt && playwright install chromium
+
+# Browser driver + pytest integration (fixtures `page`, `context`, ...).
+playwright>=1.47
+pytest-playwright>=0.5
+
+# scripts/e2e_bootstrap.py: HA onboarding / config-entry / options-flow REST
+# calls.
+requests>=2.32
+
+# scripts/e2e_bootstrap.py: reading the person list (stable slug) and clearing
+# the per-user UI selection need HA's WebSocket API — `health_o_mat/list_persons`
+# and `health_o_mat/set_ui_settings` are websocket-only commands
+# (custom_components/health_o_mat/ws_api.py), there is no REST equivalent.
+websockets>=13.0

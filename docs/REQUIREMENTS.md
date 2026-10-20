@@ -1,16 +1,21 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-18 (UI-Ausbau, Branch `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-19 (Recorder-Einheiten-Fix `fix/recorder-unit-migration` + Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Browser-Smoke REQ-HOM-012, `feat/e2e-playwright`; zuvor 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
+**REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
+**REQ-HOM-112** neu aufgenommen (Feature, Wohlbefinden-Score & Score-Chart) ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…110: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…112: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
+   Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
+   Requirement; am Ende von Kapitel 2 (nach REQ-HOM-111) abgelegt
+   (Branch `feat/wellbeing-score`).
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -166,9 +171,10 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-012 — Person-Ansicht + Deep-Link
 - **Priorität:** P3 · **Aufwand:** M
-- **Status: Erledigt (Branch `feat/ui-pro`)** — Deep-Link-Mechanik E2E auf
-  Registrierungs-/Auslieferungsebene geprüft; Browser-Smoke (pushState/popstate)
-  steht aus (durch JS-Analyse-Test `tests/test_panel_js.py` abgedeckt).
+- **Status: Erledigt** — Deep-Link-Mechanik E2E auf
+  Registrierungs-/Auslieferungsebene geprüft (Branch `feat/ui-pro`); echte
+  Browser-Verifikation (`tests_e2e/`, Playwright) ergänzt und grün
+  (Branch `feat/e2e-playwright`, 2026-10-18).
 - **Beschreibung:** Adressierbare, vollwertige Person-Seite im Panel mit stabilem
   Deep-Link.
 - **Akzeptanzkriterien:**
@@ -177,7 +183,19 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     Bereiche mit Toggle aus werden ausgeblendet
   - [x] Kennung = **stabiler Slug** `entry.data["person"]` (nie Anzeigename);
     `list_persons`/`panel_data` liefern `person_slug` + `areas` additiv
-  - [ ] Browser-Smoke (Playwright) auf `ha-test` — offen, optional (Phase 5)
+  - [x] Browser-Smoke (Playwright) — `tests_e2e/` (6 Tests, realer Browser gegen
+    echte HA-Instanz): Panel-Mount, Deep-Link öffnet direkt die Detailansicht,
+    Kachel-Klick = `pushState`, Browser-Zurück = `popstate` → Übersicht,
+    unbekannter Parameter → sichere Übersicht, abgeschalteter Bereich blendet
+    seinen Tab aus. **Beleg (reproduzierbar):** gegen den Docker-HA-Stack aus
+    `docker-compose.e2e.yml`
+    (`docker compose -f docker-compose.e2e.yml up -d homeassistant`)
+    `HASS_BASE_URL=http://localhost:8124 python3 -m pytest tests_e2e/ -v`
+    → 6 passed; alternativ gegen die geteilte Instanz `ha-test`
+    (`HASS_BASE_URL=http://localhost:8123`). Die Roh-Logs liegen nur flüchtig
+    unter `test-results/` (gitignored, wird von Playwright zu Beginn jedes Laufs
+    geleert) und taugen daher nicht als Beleg; dauerhafter Beleg ist das
+    CI-Artefakt `e2e-test-results` aus `.github/workflows/e2e.yaml`
 
 ### REQ-HOM-013 — Admin-/Instanzverwaltung (L3)
 - **Priorität:** P3 · **Aufwand:** M–L
@@ -226,6 +244,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | # | Risiko | Schwere | REQ | Kurzfix-Ansatz |
 |---|---|---|---|---|
 | F1 | Quick-Drinks in `entry.data` → Ändern = Integration löschen = **Datenverlust** | 🔴 | 101 | Verlagerung nach Options + Migrator |
+| F10 | Recorder-Metadaten der Volumen-Sensoren mit Legacy-Einheit „ml" → HA unterdrückt die **Langzeitstatistik** | 🔴 | 111 | Metadaten-Migration beim Setup (ml → mL) |
 | F3 | Store ohne Migrationsroutine → Schema-Wachstum gefährdet Alt-Bestände | 🟡 | 102 | minor_version + Migratoren |
 | F2 | README verspricht Tagesgrenze-Feature, das nicht existiert | 🔴 (Doku) | 110 + 005 | Sofort: README-Korrektur; vollständig: Feature 005 |
 | F7 | BP-Eingaben nur im RAM → Neustart wirft halbfüllte Messung weg | 🟢 | 104 | Inputs in Store |
@@ -318,6 +337,211 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     einstellbare Reset-Uhrzeit als fertiges Feature (kein REQ-Verweis mehr,
     analog zu den übrigen fertigen Features im selben Abschnitt).
 
+#### REQ-HOM-111 — Recorder-Statistik-Einheit „ml" → „mL" (Fix F10)
+- **Priorität:** P1 · **Aufwand:** S
+- **Status: Erledigt (Branch `fix/recorder-unit-migration`)** — E2E auf `ha-test`
+  (HA 2026.9.1) verifiziert; kein Versions-Bump in `manifest.json` (Release
+  folgt separat).
+- **Befund (Live-Test auf `ha-test`, 2026-10-17 → 2026-10-19):** Ältere
+  Installationen haben Recorder-Statistik-Metadaten mit der Legacy-Einheit „ml"
+  (`unit_class` = NULL). Die Volumen-Sensoren melden die HA-kanonische Einheit
+  „mL" (`SensorDeviceClass.VOLUME`) — Home Assistant verweigert deshalb die
+  Fortsetzung der Langzeitstatistik:
+  `The unit of ... (mL) cannot be converted to the unit of previously compiled
+  statistics (ml). Generation of long term statistics will be suppressed`.
+  Der HA-Kern heilt das nicht (er migriert nur bei `entity_id`-Änderungen).
+  Betroffen sind je Person ausschließlich die beiden Volumen-Sensoren mit
+  `state_class` (`sensor_drinks_today` = TOTAL, `sensor_lifetime_total` =
+  TOTAL_INCREASING); alle übrigen Sensoren (%, mmHg, mg, d, BPM) haben ihre
+  Einheit nie geändert, und number/text/button/select/binary_sensor erzeugen
+  per HA-Regel KEINE Recorder-Statistik.
+- **Anforderung:** Beim Setup des Config-Entries migriert die Integration die
+  Recorder-Metadaten der beiden Volumen-Sensoren je Person von „ml" auf „mL"
+  (`async_update_statistics_metadata(..., new_unit_of_measurement="mL",
+  new_unit_class="volume")`). Die Migration ist idempotent und verlustfrei
+  („ml" ≡ „mL") und **nie setup-kritisch** — Fehler werden geloggt, nicht
+  geworfen. Ergänzend melden die beiden Number-Entities
+  (`number.…_daily_goal`, `number.…_custom_drink_amount`) ebenfalls „mL"
+  (Konsistenz zu den Volumen-Sensoren); die Datenfelder (`daily_goal_ml`,
+  `ml` in JSON/CSV) bleiben unverändert. Kein Eingriff in die Health-Daten im
+  Store, keine Änderung an `unique_id`/`entity_id`.
+- **Akzeptanzkriterien:**
+  - [x] Nur die eigenen Volumen-Sensoren werden angefasst — Zuordnung über die
+    stabile `unique_id` (`{entry_id}_{key}`) aus der Entity-Registry, KEINE
+    `entity_id`-Konstruktion aus dem Person-Slug; Fremd-Domains und
+    Nicht-Volume-Einheiten (%, mmHg, mg, d, BPM) bleiben unangetastet
+    (`tests/test_statistics.py::test_migration_updates_only_own_legacy_statistics`,
+    `::test_fallback_ignores_foreign_units_even_with_legacy_suffix`).
+  - [x] Idempotent und verlustfrei — ein zweiter Lauf migriert nichts mehr
+    (`::test_migration_is_idempotent`,
+    `::test_migration_leaves_canonical_units_untouched`); historische Werte
+    bleiben gültig, es wird nichts gelöscht oder umgerechnet.
+  - [x] Recorder nicht eingerichtet → Migration wird übersprungen und beim
+    nächsten Setup (HA-Neustart/Entry-Reload) nachgeholt; bewusst KEIN
+    Start-Event-Retry (der Recorder ist Bootstrap-STAGE_0 und steht damit immer
+    bereit, bevor ein Config-Entry-Setup läuft)
+    (`::test_migration_is_noop_when_recorder_not_configured`,
+    `::test_migration_creates_no_pending_container`).
+  - [x] Nie setup-kritisch — Fehler werden geloggt, das Setup läuft weiter
+    (`::test_migration_swallows_recorder_errors`,
+    `::test_setup_entry_survives_failing_statistics_migration`).
+  - [x] Einheiten-Konsistenz: die Volumen-Sensoren melden bereits die
+    kanonische Einheit „mL" (`::test_legacy_volume_sensor_keys_match_sensor_unique_ids`),
+    die beiden Number-Entities melden jetzt ebenfalls „mL".
+  - [x] E2E-Beleg (`ha-test`, HA 2026.9.1): **vorher** 4 `statistic_id`s
+    (`sensor.health_o_mat_{max,e2e}_{drinks_today,lifetime_total}`) mit
+    Metadaten `ml` (`unit_class` NULL), 24 Recorder-Warnungen über 6 Starts und
+    seit 2026-10-17 eingefrorene Kurzzeit-/Langzeitstatistik; **nachher**
+    Metadaten `mL` + `unit_class` `volume`, 0 Warnungen nach dem Fix-Restart,
+    Kurzzeitstatistik ab 22:05 und Langzeitstatistik ab 2026-10-19 22:00 wieder
+    laufend, Kontroll-IDs unverändert, Store-Daten unverändert.
+  - [x] Unit-Test-Beleg: `pytest -q` → **580 passed**; `ruff` clean.
+  - [x] README dokumentiert die Einheit „mL" (Volumen-Sensoren + Number-Entities)
+    sowie den Migrations-Hinweis für Alt-Installationen: Ursache der Legacy-
+    Metadaten, automatische Migration beim Setup, Gültigkeit der historischen
+    Werte, Verhalten bei deaktiviertem Recorder, Sichtbarkeit der
+    Migrationszeile (Log-Level **INFO** für `custom_components.health_o_mat`) und
+    die bewusste Entscheidung, **keinen** Lösch-Service für Statistiken
+    anzubieten (HA bietet „Statistiken löschen" bereits in der UI).
+
+#### REQ-HOM-112 — Wohlbefinden-Score & Verlaufs-Chart
+- **Priorität:** P2 · **Aufwand:** M
+- **Status: Implementiert und verifiziert (Branch `feat/wellbeing-score`)** —
+  Backend (Logik, Sensor, WebSocket-Payload) und Frontend (Card, Panel) sind
+  umgesetzt; die **dedizierte Testabdeckung ist fertig** (Logik, Sensor,
+  WS-Payload, Card, Panel — siehe Akzeptanzkriterien) und die Verifikation auf
+  `ha-test` ist erfolgt (E2E-Beleg: `docs/e2e-2026-10-19-wellbeing-score/`).
+  **Offen:** allein der **Release** (Versions-Bump `manifest.version` + `?v=`-
+  Cache-Buster zusammen, Tag, GitHub-Release).
+- **Anforderung:** Das Wohlbefinden bekommt eine **korrespondierende numerische
+  Darstellung 1 … 5** (1 = „Sehr schlecht" = schlechtester Wert … 5 = „Super" =
+  bester Wert). Die Skala ist **reihenfolgetreu aus den fünf Wohlbefinden-
+  Zuständen abgeleitet** (Index + 1) und **wächst automatisch mit**, wenn ein
+  neuer Zustand hinzukommt. Der Score ist **rein abgeleitet und on-read**: keine
+  eigene Persistenz, kein eigener Store, keine Migration des Datenbestands —
+  100 % an die Rohdaten gekoppelt. Sensor `wellbeing_score` (`state_class:
+  measurement`, **ohne** Einheit, **ohne** `device_class`; ohne Meldung `unknown`,
+  nie 0). Der WebSocket-Payload `health_o_mat/panel_data` wird **additiv** um
+  `score` erweitert (aktueller Score im `wellbeing`-Block, Score je Eintrag in
+  `wellbeing.history`; bestehende Schlüssel unverändert). Score-Chart in der
+  **Card** (kompakt: Badge + Sparkline der letzten 14 Meldungen) und im
+  **Panel** (vollständiger SVG-Chart des Verlaufs) — beide **ohne externe
+  Bibliothek**, Farben ausschließlich über HA-CSS-Variablen.
+- **Akzeptanzkriterien:**
+  - [x] Score-Ableitung **reihenfolgetreu** und HA-frei — `logic.wellbeing_score`
+    (Index + 1 über `const.WELLBEING_STATES`, zur Aufrufzeit gelesen, damit die
+    Liste wachsen kann); unbekannter/fehlender Key → `None` (Sensor: `unknown`),
+    **nie 0**. **Beleg:** `tests/test_logic.py::test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one`
+    (jeder Zustand ⇒ Index + 1) und
+    `::test_req_hom_112_wellbeing_score_scale_follows_wellbeing_states`
+    (Skala wächst automatisch mit der Zustandsliste); die Randfälle
+    (unbekannter Key, fehlender Wert, leerer String, Nicht-String) und die
+    Zusage „nie 0" sind ebenfalls in `tests/test_logic.py` abgedeckt
+    (`::test_req_hom_112_wellbeing_score_never_returns_zero`).
+  - [x] Sensor `wellbeing_score` gehört zum Bereich **Wohlbefinden** — er wird
+    nur erzeugt, wenn der Wohlbefinden-Toggle aktiv ist (analog
+    `wellbeing_last_reported`); `state_class: measurement`, keine Einheit, kein
+    `device_class`; ohne Meldung `unknown`; Attribute `reported_at` (Zeitpunkt
+    der Meldung) und `scale_max` (5) — `sensor.py` (`WellbeingScoreSensor`).
+    **Beleg:** `tests/test_sensor.py::test_req_hom_112_wellbeing_score_sensor_registered_with_stable_unique_id`
+    (stabile `unique_id` `{entry_id}_sensor_wellbeing_score`),
+    `::test_req_hom_112_wellbeing_score_sensor_native_value_matches_status`
+    (Wert = Score des aktuellen Status) und
+    `::test_req_hom_112_wellbeing_score_sensor_follows_area_toggle`
+    (Wohlbefinden aus → keine Score-Entity, `unique_id` bleibt unverändert);
+    `state_class`, fehlende Einheit/`device_class`, `translation_key`/`icon`,
+    `reported_at` und `scale_max` sind ebendort abgedeckt.
+  - [x] **Rein abgeleitet:** keine eigene Datenhaltung, keine Store-Erweiterung,
+    keine Migration des Datenbestands — der Wert wird on-read aus der letzten
+    Rohmeldung berechnet; Ändern/Löschen der Rohmeldung ändert den Score
+    automatisch.
+  - [x] WS-Payload **additiv** — `score` im `wellbeing`-Block und je Eintrag in
+    `wellbeing.history`; bestehende Schlüssel unverändert (rückwärtskompatibel).
+    **Beleg:** `tests/test_ws_api.py::test_req_hom_112_wellbeing_block_contains_current_score`
+    (aktueller Score im `wellbeing`-Block),
+    `::test_req_hom_112_wellbeing_history_entries_contain_score` (Score je
+    Verlaufseintrag) und
+    `::test_req_hom_112_entity_suffixes_extension_is_additive` (Alt-Schlüssel
+    unverändert); Leerfall `tests/test_ws_api.py::test_panel_data_without_store_or_readings`.
+  - [x] **Card:** Score-Badge (z. B. „4 / 5") + **kleine Sparkline** der letzten
+    14 Meldungen; die Card bleibt einbettbare Kompaktanzeige (kein
+    Panel-Ersatz). **Beleg:** `tests/test_card_js.py::test_card_wellbeing_score_and_sparkline_helpers_exist`
+    (Score-/Sparkline-Helfer vorhanden) und
+    `::test_card_wellbeing_trend_uses_last_14_reports` (Trend = letzte 14
+    Meldungen); Badge/Skalenmaximum, Zugänglichkeit und Leerfall sind in
+    `tests/test_card_js.py` abgedeckt.
+  - [x] **Panel:** vollständiger SVG-Score-Chart (Zeit auf X, Score 1…5 auf Y,
+    Y-Achse mit den Extremwerten 1 und 5, Zeitachse, hervorgehobener Marker für
+    den aktuellen Wert, Tooltip je Punkt mit Zeitpunkt + Label + Score,
+    `aria-label`); **Leerfall** = verständlicher Hinweis statt leerem Chart.
+    **Beleg:** `tests/test_panel_js.py::test_panel_base_exposes_wellbeing_chart_helpers`
+    (geteilte Chart-Logik im Basis-Modul) und
+    `::test_panel_base_wellbeing_chart_marks_current_value_and_axis_extremes`
+    (aktueller Wert und Achsen-Extremwerte hervorgehoben); Zeitachse,
+    Skalenkonstanten, Leerfall, Theme-Variablen und die Einbindung in den
+    Wohlbefinden-Tab sind ebendort abgedeckt.
+  - [x] Beide Charts **ohne externe Bibliothek** (Vanilla-SVG), Farben
+    ausschließlich über HA-CSS-Variablen (`--primary-color`,
+    `--card-background-color`, `--divider-color`, `--secondary-text-color`) →
+    light/dark-fähig und mobiltauglich (SVG skaliert, keine feste Pixelbreite).
+    **Beleg:** `tests/test_card_js.py::test_card_wellbeing_chart_needs_no_external_library`
+    und `tests/test_panel_js.py::test_panel_base_wellbeing_chart_uses_ha_theme_variables`.
+  - [x] **Score-Auflösung: der Server ist die Wahrheit** — ist das Feld `score`
+    im Objekt vorhanden (auch bei `null`), gilt der **Serverwert** (`null` ⇒
+    **kein** Score, keine clientseitige Ersatzableitung); nur bei einem
+    **älteren** Server, der das Feld noch nicht kennt, wird der Score
+    clientseitig aus dem **kanonischen** Key abgeleitet — exakter Match,
+    **case-sensitiv**, wie `logic.wellbeing_score` (Index + 1). Card und Panel
+    lösen **identisch** auf (keine zweite Wahrheit, keine Alias-/Case-Divergenz
+    zwischen Client und Server). **Beleg:**
+    `tests/test_panel_js.py::test_req_hom_112_panel_base_wellbeing_score_follows_server_truth_rule`,
+    `::test_req_hom_112_card_wellbeing_score_follows_server_truth_rule`,
+    `::test_req_hom_112_card_and_panel_resolve_the_same_wellbeing_score` und
+    `::test_req_hom_112_panel_chart_derives_score_from_key_for_legacy_payloads`.
+  - [x] **Panel-Kopfzeile und Chart nutzen denselben aufgelösten Score**
+    (live-first: Live-Entity, sonst Server-Feld, sonst kanonischer Key) — sie
+    können sich deshalb **nicht widersprechen**. **Beleg:**
+    `tests/test_panel_js.py::test_req_hom_112_panel_wellbeing_tab_shows_live_score_in_header_and_chart`
+    und `::test_req_hom_112_panel_views_passes_current_wellbeing_block_to_chart`.
+  - [x] **Der „aktuell"-Marker hängt am aktuellen Wert** — hervorgehoben wird
+    ausschließlich der Punkt mit dem **aktuellen** Score (`point-current`); ein
+    abgelooster letzter Historienpunkt wird **nicht** markiert. Gibt es keinen
+    aktuellen Wert (keine Meldung), wird **kein** Punkt hervorgehoben und die
+    Zusammenfassung nennt „letzter Wert" statt „aktuell" — Kopfzeile und Chart
+    können sich nicht widersprechen. **Beleg:**
+    `tests/test_panel_js.py::test_req_hom_112_panel_chart_marks_exactly_one_current_point`
+    (genau ein Marker auf dem aktuellen Wert, der abgeloeste Punkt bleibt
+    unmarkiert),
+    `::test_req_hom_112_panel_chart_without_current_score_marks_nothing`,
+    `::test_req_hom_112_card_without_current_score_has_no_badge_and_no_current_point`
+    und
+    `::test_req_hom_112_card_with_current_score_shows_badge_and_one_current_point`.
+  - [x] **Historie-Semantik (Store) bleibt unverändert** — ein Historieneintrag
+    `{ts, status}` bedeutet „bis zu diesem Zeitpunkt galt `status`"; der
+    **aktuelle** Wert steht ausschließlich in `wellbeing`. Das Frontend hängt
+    den aktuellen Wert deshalb selbst als **letzten** Serienpunkt an (Marker =
+    aktueller Wert); am Store wird **nichts** geändert (kein Schema-Umbau, keine
+    Migration). **Beleg:**
+    `tests/test_store.py::test_req_hom_112_wellbeing_history_records_replaced_status_with_change_timestamp`,
+    `tests/test_card_js.py::test_req_hom_112_card_wellbeing_series_appends_current_value`
+    und `tests/test_panel_js.py::test_req_hom_112_panel_base_exports_wellbeing_series_with_current_point`.
+  - [x] **Frontend-Spiegel der Zustandsliste an `const.WELLBEING_STATES`
+    gepinnt** — Keys, **Reihenfolge** und **Länge** der JS-Spiegel (Panel:
+    `WELLBEING_STATES`, Karte: `WELLBEING_SCALE`) müssen der Server-Skala
+    entsprechen; eine neue serverseitige Stufe schlägt damit automatisch
+    durch und der Frontend-Spiegel kann nicht still veralten. **Beleg:**
+    `tests/test_logic.py::test_req_hom_112_frontend_wellbeing_mirrors_match_server_scale`
+    und `::test_req_hom_112_frontend_wellbeing_mirror_check_detects_deviation`.
+  - [x] **E2E-Verifikation auf `ha-test` (HA 2026.9.1)** — Kriterium erfüllt:
+    Entity `wellbeing_score` existiert und liefert die Werte **1–5**; ohne
+    Meldung `unknown` (kein Meldungs-/Fehlertext); `state_class: measurement`
+    **ohne** Einheit und **ohne** `device_class`; die Recorder-Statistik läuft
+    **ohne** Einheiten-Warnung; der WS-Payload `panel_data` enthält den
+    **additiven** `score`-Key (aktueller Wert + je Verlaufseintrag); der
+    Score-Chart rendert im **Panel** **und** in der **Card**. **Beleg:** Report
+    + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`.
+  - [x] Unit-Test-Beleg: `pytest -q` → **666 passed**; `ruff` clean.
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -333,6 +557,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | F7 BP-Inputs nur RAM | 🟢 | 104 | — |
 | F8 Kein Linting | 🟢 | 106 | — |
 | F9 Kein Diagnostics | 🟢 | 105 | — |
+| F10 Recorder-Metadaten „ml" ≠ Sensor-Einheit „mL" | 🔴 | 111 | — |
 
 ---
 
@@ -343,3 +568,6 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
 | 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |
+| 2026-10-19 | **Recorder-Einheiten-Fix** (Branch `fix/recorder-unit-migration`): **neu angelegt** REQ-HOM-111 (Fix F10, P1, Aufwand S) — **erledigt**. Die Integration migriert beim Config-Entry-Setup die Recorder-Statistik-Metadaten der beiden Volumen-Sensoren je Person von der Legacy-Einheit „ml" auf die HA-kanonische Einheit „mL" (`new_unit_of_measurement="mL"`, `new_unit_class="volume"`); bislang unterdrückte HA die Langzeitstatistik komplett („Generation of long term statistics will be suppressed"). Migration ist idempotent und verlustfrei, läuft bei deaktiviertem Recorder erst beim nächsten Setup (HA-Neustart/Entry-Reload) und ist nie setup-kritisch; die beiden Number-Entities melden nun ebenfalls „mL" (Datenfelder `daily_goal_ml` / `ml` in JSON/CSV unverändert), `unique_id`/`entity_id` und `manifest.json` unangetastet. E2E auf `ha-test` (HA 2026.9.1): vorher 4 `statistic_id`s mit `ml` (`unit_class` NULL) + 24 Recorder-Warnungen über 6 Starts + eingefrorene Statistik seit 2026-10-17, nachher `mL` + `unit_class` `volume`, 0 Warnungen, Kurzzeit-/Langzeitstatistik wieder laufend (ab 22:05 bzw. 2026-10-19 22:00), Kontroll-IDs und Store-Daten unverändert; `pytest -q` 580 passed, ruff clean. README: Einheiten-Angaben auf „mL" vereinheitlicht + Migrations-Hinweis für Alt-Installationen ergänzt |
+| 2026-10-19 | **Neu angelegt: REQ-HOM-112 — Wohlbefinden-Score & Verlaufs-Chart** (Branch `feat/wellbeing-score`): numerische Darstellung des Wohlbefindens **1…5**, reihenfolgetreu aus den fünf Zuständen abgeleitet und **rein abgeleitet/on-read** (keine eigene Persistenz, keine Migration); Sensor `wellbeing_score` (`measurement`, ohne Einheit/`device_class`, `unknown` ohne Meldung, Attribute `reported_at`/`scale_max`); **additiver** `score`-Key im WS-Payload `health_o_mat/panel_data` (aktueller Wert + je `wellbeing.history`-Eintrag, bestehende Schlüssel unverändert); Score-Chart in der **Card** (Badge + kompakte Sparkline der letzten 14 Meldungen) und im **Panel** (vollständiger SVG-Chart, Y-Achse 1–5, aktueller Wert als Marker, Leerfall mit Hinweis) — beide ohne externe Bibliothek, Farben nur über HA-CSS-Variablen. **Belege:** `tests/test_logic.py::test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one`, `tests/test_sensor.py::test_req_hom_112_wellbeing_score_sensor_native_value_matches_status`, `tests/test_ws_api.py::test_req_hom_112_wellbeing_block_contains_current_score`, `tests/test_card_js.py::test_card_wellbeing_score_and_sparkline_helpers_exist`, `tests/test_panel_js.py::test_panel_base_exposes_wellbeing_chart_helpers` (weitere Fälle in den jeweiligen Dateien); `pytest -q` → **666 passed**; `ruff` clean. **E2E-Beleg:** Verifikation auf `ha-test` (HA 2026.9.1) — Report + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`. **Code-Review:** durch, keine Blocker — der 🟡-Befund (Panel löste den Score für Kopfzeile und Chart aus zwei Quellen auf) und die 🟢-Befunde (Alias-/Case-Divergenz zwischen Client und Server, undokumentierte dritte Skala-Kopie) sind behoben; der Frontend-Spiegel ist per Mirror-Pinning-Test an `const.WELLBEING_STATES` gebunden (Keys + Reihenfolge + Länge). **Marker-Semantik:** der „aktuell"-Marker hängt am aktuellen Wert (ohne Meldung wird kein Punkt hervorgehoben, die Zusammenfassung nennt „letzter Wert" statt „aktuell"); **Label/Emoji** werden **live-first** aufgelöst (Live-Entity vor veraltetem `panel_data`-Snapshot). **Offen:** der **Release** (Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag, GitHub-Release) |
+| 2026-10-18 | **REQ-HOM-012 vollständig erledigt** (Branch `feat/e2e-playwright`): echter Browser-Smoke ergänzt — `tests_e2e/` (Playwright + pytest, 6 Tests) gegen eine reale HA-Instanz plus `scripts/e2e_bootstrap.py` (idempotentes Onboarding/Config-/Options-Flow-Bootstrap), Docker-Stack (`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/`) und CI-Workflow `.github/workflows/e2e.yaml` (workflow_dispatch + wöchentlich + PR-Pfadfilter). Unit-Suite unverändert HA-frei (`pytest -q` → 552 passed), E2E nur bei explizitem Aufruf (eigene `tests_e2e/pytest.ini`) |

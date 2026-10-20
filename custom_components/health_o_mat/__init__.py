@@ -24,6 +24,7 @@ from .const import (
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .panel import async_apply_panel_state
+from .statistics import async_migrate_legacy_volume_statistics
 from .store import HealthOMatStore
 from .ws_api import async_register_ws_api
 
@@ -37,6 +38,11 @@ PLATFORMS = [
     Platform.NUMBER,
     Platform.SELECT,
 ]
+
+# Keys in hass.data[DOMAIN], die KEINE Config-Entry-Runtime-Daten sind und
+# daher bei Entry-Iterationen (Services, Unload) übersprungen werden müssen:
+# "shared" (Store) und "signal" (Legacy).
+_NON_ENTRY_KEYS = ("shared", "signal")
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
 
@@ -115,6 +121,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Recorder-Statistik-Metadaten der Volumen-Sensoren von "ml" auf "mL"
+    # nachziehen (P1: sonst bricht HA die Langzeitstatistik ab). Läuft NACH dem
+    # Plattform-Setup, weil die Entity-IDs erst dann in der Registry stehen.
+    # Ist der Recorder dann noch nicht bereit, wird die Migration beim
+    # nächsten Setup (HA-Neustart/Entry-Reload) nachgeholt — idempotent und
+    # verlustfrei. Nie setup-kritisch: Fehler werden im Modul geloggt, nicht
+    # geworfen.
+    await _async_migrate_recorder_statistics(hass, entry)
+
     _register_services(hass)
     await _async_setup_frontend_layer(hass)
     _apply_options(hass, entry)
@@ -124,6 +139,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     return True
+
+
+async def _async_migrate_recorder_statistics(
+    hass: HomeAssistant, entry: HealthOMatConfigEntry
+) -> None:
+    """Recorder-Statistik-Metadaten migrieren — nie setup-kritisch.
+
+    Der Einstieg in statistics.py wirft bereits nicht; die zusätzliche
+    Absicherung hier hält das Setup zusätzlich sicher (z. B. wenn die
+    Recorder-API in einer fremden HA-Version fehlt). Die doppelte Barriere ist
+    BEWUSST: das Vertrag "Setup scheitert NIE" soll an zwei unabhängigen
+    Stellen abgesichert sein (Modul + Aufrufer) — ein Fehler in einer der
+    beiden Schichten darf das Setup der Integration nicht kippen. Die
+    Migration ist idempotent und verlustfrei.
+    """
+    try:
+        await async_migrate_legacy_volume_statistics(hass, entry)
+    except Exception:  # noqa: BLE001 - die Migration ist nie setup-kritisch
+        _LOGGER.exception("Health-O-Mat: Recorder-Statistik-Migration nicht ausführbar")
 
 
 def _retention_months(entry) -> int:
@@ -271,7 +305,7 @@ def _has_runtime_entries(hass: HomeAssistant) -> bool:
     if not isinstance(registry, dict):
         return False
     for key, value in registry.items():
-        if key in ("shared", "signal"):
+        if key in _NON_ENTRY_KEYS:
             continue
         if isinstance(value, dict) and "coordinator" in value:
             return True
@@ -297,7 +331,7 @@ def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
 
     matches = []
     for key, value in hass.data.get(DOMAIN, {}).items():
-        if key in ("shared", "signal"):
+        if key in _NON_ENTRY_KEYS:
             continue
         if not isinstance(value, dict) or "coordinator" not in value:
             continue

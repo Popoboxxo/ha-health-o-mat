@@ -12,6 +12,7 @@
 import {
   QUICK_DRINKS,
   WELLBEING_STATES,
+  WELLBEING_SCORE_MAX,
   PACE_INFO,
   escapeHtml,
   toNumber,
@@ -23,7 +24,9 @@ import {
   messageHtml,
   enabledTabs,
   areasForPerson,
-} from "./health-o-mat-panel-base.js?v=0.8.0";
+  wellbeingScore,
+  wellbeingChartHtml,
+} from "./health-o-mat-panel-base.js?v=0.9.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -332,18 +335,56 @@ function bpTrend(bp) {
 
 /* ---- Tab: Wohlbefinden (4.4) --------------------------------------------- */
 
+/* Attribut der Live-Entity — defensiv: der Panel-Prototyp liefert die
+ * Live-Werte ueber `_liveValue`/`_liveNumber`; ein Attributzugriff ist nur
+ * moeglich, wenn `_entityOf`/`_state` vorhanden sind (z. B. im Test-Stub
+ * nicht). Liefert die Live-Entity das Attribut nicht, bleibt der
+ * WS-Snapshot die Quelle. */
+function liveAttribute(panel, data, key, attribute) {
+  if (!panel || typeof panel._entityOf !== "function" || typeof panel._state !== "function") {
+    return "";
+  }
+  const entityId = panel._entityOf(data, key);
+  if (!entityId) return "";
+  const state = panel._state(entityId);
+  const attributes = state && state.attributes;
+  if (!attributes) return "";
+  const value = attributes[attribute];
+  return value == null ? "" : String(value);
+}
+
 export function wellbeingView(panel, data) {
   const wb = (data && data.wellbeing) || {};
   const live = panel._liveValue(data, "wellbeing", undefined);
-  // entities.wellbeing is a timestamp sensor; only use its status via the
-  // payload. Emoji/label always come from the (server-localised) payload.
+  // entities.wellbeing is a timestamp sensor; its state is the timestamp of
+  // the last report — NOT a wellbeing key. The key always comes from the
+  // (server-localised) payload.
   const key = String(wb.key || "").toLowerCase();
   const known = WELLBEING_STATES.find((s) => s.key === key);
+  // Score (1…N): Live-Entity, sonst Server-Feld, sonst aus dem Key
+  // abgeleitet (älterer Payload ohne `score`).
+  const liveScore =
+    typeof panel._liveNumber === "function"
+      ? panel._liveNumber(data, "wellbeing_score", NaN)
+      : NaN;
+  const score =
+    Number.isFinite(liveScore) && liveScore >= 1 && liveScore <= WELLBEING_SCORE_MAX
+      ? Math.round(liveScore)
+      : wellbeingScore(wb);
+  /* Label/Emoji LIVE-FIRST: liefert die Live-Entity (`entities.wellbeing`)
+   * die Attribute `label`/`emoji`, sind diese aktueller als der
+   * (moeglicherweise veralteten) WS-Snapshot — sonst wuerde die Kopfzeile
+   * einen veralteten Text neben dem aktuellen Score zeigen. Liefert die
+   * Live-Entity keine Attribute, bleibt der Snapshot die Quelle. */
+  const liveLabel = liveAttribute(panel, data, "wellbeing", "label");
+  const liveEmoji = liveAttribute(panel, data, "wellbeing", "emoji");
   return {
     key,
-    emoji: wb.emoji || (known && known.emoji) || "\u{1F642}",
-    label: wb.label || (known && known.label) || "Keine Angabe",
+    emoji: liveEmoji || wb.emoji || (known && known.emoji) || "\u{1F642}",
+    label: liveLabel || wb.label || (known && known.label) || "Keine Angabe",
     at: wb.at || (typeof live === "string" && live !== "unknown" ? live : ""),
+    // Numerischer Score (1…N); null ohne Meldung (REQ-HOM-112).
+    score,
   };
 }
 
@@ -357,9 +398,11 @@ function wellbeingTab(panel, data, entryId) {
   ).join("");
 
   const at = view.at ? relativeTime(view.at) : "";
+  const scoreText =
+    view.score != null ? ` \u00B7 ${view.score} / ${WELLBEING_SCORE_MAX}` : "";
   const last = `<div class="tile-row">
       <span class="em" aria-hidden="true">${escapeHtml(view.emoji)}</span>
-      <span>Zuletzt: <strong>${escapeHtml(view.label)}</strong></span>
+      <span>Zuletzt: <strong>${escapeHtml(view.label)}</strong>${scoreText}</span>
       ${at ? `<span class="muted">\u00B7 ${escapeHtml(at)}</span>` : ""}
     </div>`;
 
@@ -382,9 +425,25 @@ function wellbeingTab(panel, data, entryId) {
       </div>`
     : "";
 
+  /* Score-Chart (REQ-HOM-112): Linienchart des Verlaufs, Y-Achse 1…N,
+   * aktueller Wert hervorgehoben. Leerer Verlauf -> Hinweis statt Chart.
+   * `current` = aktueller Wohlbefinden-Block: die Historie endet mit dem
+   * abgelösten Status, der aktuelle Wert steht nur im Block selbst — ohne ihn
+   * würde der Chart den alten Wert als "aktuell" markieren.
+   *
+   * EINE Quelle fuer den Score UND das Label: der Chart bekommt den bereits
+   * aufgeloesten `view` (Live-Entity, sonst Server-Feld) und NICHT die
+   * `panel_data`-Momentaufnahme — sonst zeigten Kopfzeile und Chart bei
+   * einem Report von ausserhalb des Panels (Select-Entity, Automation,
+   * Dashboard) verschiedene Werte (Snapshot "2" vs. Live "4"). */
+  const chartHtml = wellbeingChartHtml(history, {
+    current: { ...data.wellbeing, label: view.label, emoji: view.emoji, score: view.score },
+    title: "Score-Verlauf",
+  });
+
   return `<div class="card">
       <div class="muted">Wie geht es dir?</div>
       <div class="wb-row">${buttons}</div>
       ${last}
-    </div>${histHtml}`;
+    </div>${chartHtml}${histHtml}`;
 }

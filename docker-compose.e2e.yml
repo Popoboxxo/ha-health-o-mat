@@ -1,0 +1,76 @@
+# =============================================================================
+# Health-O-Mat — E2E stack (docker-compose.e2e.yml)
+#
+# A real Home Assistant instance plus a Playwright runner that drives it
+# through an actual browser. Unlike `pytest` (fast, isolated, HA-free unit
+# tests in tests/), this exercises the real thing: onboarding, config flow,
+# options flow, panel registration and the `?person=<slug>` deep link
+# (REQ-HOM-012).
+#
+# Usage (CI / local, full stack — needs a browser image, see Dockerfile.e2e):
+#   docker compose -f docker-compose.e2e.yml up --build \
+#       --abort-on-container-exit --exit-code-from e2e
+#   docker compose -f docker-compose.e2e.yml down -v
+#
+# Usage (lightweight local run — HA in Docker, Playwright from the host):
+#   docker compose -f docker-compose.e2e.yml up -d homeassistant
+#   HASS_BASE_URL=http://localhost:8124 pytest tests_e2e/ -v
+#   docker compose -f docker-compose.e2e.yml down
+#
+# IMPORTANT: docker/ha_config_e2e/ is a HOST BIND MOUNT, not a named volume,
+# so `down -v` does NOT reset HA's runtime state (`.storage/`, the recorder
+# DB, the onboarding flag, entity registry). Tests that assume a fresh
+# instance (scripts/e2e_bootstrap.py's onboarding path) need:
+#   rm -rf docker/ha_config_e2e/.storage docker/ha_config_e2e/*.db \
+#          docker/ha_config_e2e/.HA_VERSION docker/ha_config_e2e/.ha_run.lock
+# The bootstrap itself is idempotent: on an already-onboarded instance it logs
+# in with the configured user instead of creating one, so repeated runs on a
+# reused config dir are fine.
+# =============================================================================
+
+name: health-o-mat-e2e
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    volumes:
+      # Minimal seed config (default_config + panel_custom) plus HA's own
+      # runtime state, which survives `down` — see the warning above.
+      - ./docker/ha_config_e2e:/config
+      # The integration under test, read-only: the container must never write
+      # back into the working tree.
+      - ./custom_components/health_o_mat:/config/custom_components/health_o_mat:ro
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      # Host port is configurable because a shared/parallel HA instance may
+      # already own 8123. Inside the compose network the `e2e` service always
+      # talks to http://homeassistant:8123.
+      - "${E2E_HA_PORT:-8124}:8123"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python3"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8123')"
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+
+  e2e:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+    depends_on:
+      homeassistant:
+        condition: service_healthy
+    environment:
+      - HASS_BASE_URL=http://homeassistant:8123
+      # Credentials for scripts/e2e_bootstrap.py. On a fresh E2E instance the
+      # bootstrap creates this admin user during onboarding; on a reused one it
+      # logs in with it.
+      - HASS_USERNAME=${HASS_USERNAME:-e2e}
+      - HASS_PASSWORD=${HASS_PASSWORD:-e2e-bootstrap-password-not-a-secret}
+    volumes:
+      - ./test-results:/workspace/test-results

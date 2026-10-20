@@ -90,6 +90,9 @@
       "wellbeing_since": {
         "name": "Wohlbefinden zuletzt gemeldet"
       },
+      "wellbeing_score": {
+        "name": "Wohlbefinden-Score"
+      },
       "blood_pressure_category": {
         "name": "Blutdruck-Kategorie",
         "state": {

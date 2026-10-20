@@ -90,6 +90,9 @@
       "wellbeing_since": {
         "name": "Wellbeing last reported"
       },
+      "wellbeing_score": {
+        "name": "Wellbeing score"
+      },
       "blood_pressure_category": {
         "name": "Blood pressure category",
         "state": {

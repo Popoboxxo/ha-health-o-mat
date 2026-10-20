@@ -343,6 +343,20 @@ export const PANEL_CSS = `
     font-size: .68rem; color: var(--secondary-text-color, #727272); min-width: 40px; }
   .wb-hist .emoji { font-size: 1.3rem; line-height: 1; }
 
+  /* --- Wohlbefinden-Score-Chart (REQ-HOM-112) ---------------------------- */
+  .wb-chart { width: 100%; }
+  .wb-chart svg { width: 100%; height: auto; display: block; }
+  .wb-chart .grid-line { stroke: var(--divider-color, rgba(0,0,0,.12)); stroke-width: 1; }
+  .wb-chart .axis-text { fill: var(--secondary-text-color, #727272); font-size: 11px; }
+  .wb-chart .axis-extreme { fill: var(--primary-text-color, #212121); font-weight: 700; }
+  .wb-chart .area { fill: var(--primary-color, #03a9f4); opacity: .12; }
+  .wb-chart .line { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 2.5;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .wb-chart .point { fill: var(--card-background-color, #fff);
+    stroke: var(--primary-color, #03a9f4); stroke-width: 2; }
+  .wb-chart .point-current { fill: var(--primary-color, #03a9f4);
+    stroke: var(--card-background-color, #fff); stroke-width: 2.5; }
+
   .muted { color: var(--secondary-text-color, #727272); font-size: .85rem; }
 
   /* --- Admin/Settings (L3, concept 4.5 / §8.4) --------------------------- */
@@ -595,6 +609,283 @@ export function ringHtml(percent, opts) {
 export function categoryInfo(key) {
   const k = String(key == null ? "" : key).toLowerCase();
   return BP_CATEGORIES[k] || null;
+}
+
+/* --- Wohlbefinden-Score-Chart (REQ-HOM-112) -------------------------------- */
+
+/* Score-Skala: 1 = schlechtester … N = bester Wert. Die Länge folgt der
+ * Zustandsliste (heute 5 Stufen) — eine neue Stufe schlägt automatisch
+ * durch (spiegelt logic.wellbeing_score / const.WELLBEING_STATES). */
+export const WELLBEING_SCORE_MIN = 1;
+export const WELLBEING_SCORE_MAX = WELLBEING_STATES.length;
+
+/* Chart-Geometrie in ViewBox-Einheiten; das SVG skaliert über `width:100%`
+ * (mobil, ohne horizontale Scrollbars, ohne feste Pixelbreiten). */
+const CHART_W = 320;
+const CHART_H = 180;
+const CHART_PAD = { top: 14, right: 14, bottom: 26, left: 26 };
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+/* "19.10." — kompakte Achsenbeschriftung (mobil lesbar). */
+export function formatChartDate(ts) {
+  if (ts == null || !Number.isFinite(ts)) return "";
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+}
+
+/* "19.10.2026, 14:30 Uhr" — Zeitpunkt für die Tooltips. */
+export function formatChartDateTime(ts) {
+  if (ts == null || !Number.isFinite(ts)) return "";
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return "";
+  const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+  return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())} Uhr`;
+}
+
+/* Score eines Eintrags — DER SERVER IST DIE WAHRHEIT (REQ-HOM-112).
+ *
+ * 1. Ist das Feld `score` im Objekt vorhanden (auch bei `null`), gilt der
+ *    Server-Wert: `score` verwenden; ist er `null` oder nicht numerisch,
+ *    gibt es KEINEN Score (null). Eine clientseitige Ersatzableitung waere
+ *    eine zweite Wahrheit — der Server liefert bewusst `null`, wenn der
+ *    Zustand nicht auf der kanonischen Skala liegt.
+ * 2. FEHLT das Feld `score` komplett (aelterer Server, der das Feld noch
+ *    nicht kennt), wird der Score clientseitig aus dem kanonischen Key
+ *    abgeleitet — EXAKT (case-sensitiv), wie `logic.wellbeing_score`:
+ *    Index + 1 in aufsteigender Qualitaet. Unbekannter Key -> null.
+ * 3. Der Score muss im Bereich 1..N liegen; alles andere -> null.
+ */
+export function wellbeingScore(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if ("score" in raw) {
+    const direct = toNumber(raw.score, NaN);
+    if (!Number.isFinite(direct)) return null;
+    const rounded = Math.round(direct);
+    if (rounded >= WELLBEING_SCORE_MIN && rounded <= WELLBEING_SCORE_MAX) return rounded;
+    return null;
+  }
+  const key = typeof raw.key === "string" ? raw.key : "";
+  const index = WELLBEING_STATES.findIndex((state) => state.key === key);
+  return index >= 0 ? index + 1 : null;
+}
+
+/* Verlauf -> verwertbare Punkte. Einträge ohne verwertbaren Score (kein
+ * `score` und kein bekannter `key`) werden übersprungen; kein Array ->
+ * leere Liste (nie ein Absturz, keine NaN-Koordinaten). */
+export function wellbeingScorePoints(history) {
+  if (!Array.isArray(history)) return [];
+  const points = [];
+  history.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const score = wellbeingScore(entry);
+    if (score == null) return;
+    const rawTs = entry.ts == null ? "" : String(entry.ts);
+    const parsed = rawTs ? Date.parse(rawTs) : NaN;
+    points.push({
+      score,
+      label: String(entry.label == null ? "" : entry.label),
+      emoji: String(entry.emoji == null ? "" : entry.emoji),
+      ts: Number.isFinite(parsed) ? parsed : null,
+    });
+  });
+  return points;
+}
+
+/* Serie des Score-Verlaufs: Historienpunkte + der AKTUELLE Wert als letzter
+ * Punkt.
+ *
+ * Historie-Semantik (store.set_wellbeing): ein Historieneintrag `{ts, status}`
+ * bedeutet "bis zu diesem Zeitpunkt galt `status`" — der aktuelle Zustand steht
+ * ausschließlich in `wellbeing` (`status`/`ts`, im WS-Payload `key`/`at`).
+ * Der letzte Historienpunkt ist damit der ABGELÖSTE Wert; ohne den aktuellen
+ * Punkt würde der Chart den alten Wert als "aktuell" markieren (Kopfzeile und
+ * Chart widersprächen sich sichtbar).
+ *
+ * `current` = {key, label, emoji, score, at}. Der Score folgt der Regel von
+ * `wellbeingScore`: vorhandenes `current.score` ist die Wahrheit (der Server
+ * liefert `null`, wenn es keinen Score gibt — dann gibt es auch keinen
+ * aktuellen Punkt); nur wenn das Feld FEHLT, wird er aus `current.key`
+ * abgeleitet (ältere Payloads ohne `score`). Ohne verwertbaren Score bleibt
+ * die Serie = Historie.
+ *
+ * MARKER (der aktuelle Punkt wird EXPLICIT markiert): nur der angehängte
+ * aktuelle Punkt trägt `isCurrent: true`; die Historienpunkte tragen das
+ * Feld NICHT. Der Chart hebt deshalb genau den Punkt hervor, der den
+ * aktuellen Wert darstellt. Ohne aktuellen Wert wird KEIN Punkt
+ * hervorgehoben — der letzte Punkt der Serie ist dann ein ABGELÖSTER
+ * Historienwert (der Chart behauptet in dem Fall "letzter Wert", nicht
+ * "aktuell"; die Kopfzeile zeigt dann ebenfalls keinen Score).
+ */
+export function wellbeingSeries(history, current) {
+  const points = wellbeingScorePoints(history);
+  const score = wellbeingScore(current);
+  if (score == null) return points;
+  const rawTs = current && current.at != null ? String(current.at) : "";
+  const parsed = rawTs ? Date.parse(rawTs) : NaN;
+  const ts = Number.isFinite(parsed) ? parsed : null;
+  const last = points.length ? points[points.length - 1] : null;
+  /* Duplikat vermeiden: gleicher Zeitstempel UND gleicher Score -> der
+   * aktuelle Wert ist im Verlauf bereits abgebildet (kein doppelter Punkt).
+   * Dieser Punkt IST dann der aktuelle Wert -> er wird (und nur er) als
+   * `isCurrent` markiert. */
+  if (last && last.ts === ts && last.score === score) {
+    last.isCurrent = true;
+    return points;
+  }
+  points.push({
+    score,
+    label: String(current.label == null ? "" : current.label),
+    emoji: String(current.emoji == null ? "" : current.emoji),
+    ts,
+    /* NUR der angehaengte aktuelle Punkt traegt den Marker — die
+     * Historienpunkte sind abgeloeste Werte. */
+    isCurrent: true,
+  });
+  return points;
+}
+
+/* X-Positionen (0..1): zeitbasiert, wenn ALLE Punkte einen Zeitstempel
+ * tragen; sonst indexbasiert (gleichmäßig verteilt). */
+function chartPositions(points) {
+  const count = points.length;
+  if (!count) return [];
+  if (count === 1) return [0.5];
+  const stamps = points.map((point) => point.ts);
+  if (stamps.every((value) => value != null)) {
+    let min = stamps[0];
+    let max = stamps[0];
+    stamps.forEach((value) => {
+      if (value < min) min = value;
+      if (value > max) max = value;
+    });
+    const span = max - min;
+    return stamps.map((value) => (span > 0 ? (value - min) / span : 0.5));
+  }
+  return points.map((_, index) => index / (count - 1));
+}
+
+/* SVG-Linienchart des Score-Verlaufs (Zeit auf X, Score auf Y).
+ *
+ * Invariante: der aktuelle Wert ist der Punkt mit `isCurrent === true` (siehe
+ * `wellbeingSeries` — dort wird er angehängt und markiert). NUR dieser Punkt
+ * trägt `point-current` (und den groesseren Radius); die aria-label nennt
+ * seinen Score als "aktuell". Gibt es keinen aktuellen Wert, wird KEIN Punkt
+ * hervorgehoben und die aria-label nennt den letzten Serienpunkt als
+ * "letzter Wert" — der letzte Punkt ist dann ein abgeloester Historienwert
+ * und darf nicht als "aktuell" behauptet werden (die Kopfzeile zeigt in
+ * dem Fall ebenfalls keinen Score). */
+export function wellbeingChartSvg(points) {
+  const list = Array.isArray(points) ? points : [];
+  if (!list.length) return "";
+  const plotW = CHART_W - CHART_PAD.left - CHART_PAD.right;
+  const plotH = CHART_H - CHART_PAD.top - CHART_PAD.bottom;
+  const span = Math.max(1, WELLBEING_SCORE_MAX - WELLBEING_SCORE_MIN);
+  const positions = chartPositions(list);
+  const coords = list.map((point, index) => ({
+    x: CHART_PAD.left + positions[index] * plotW,
+    y: CHART_PAD.top + ((WELLBEING_SCORE_MAX - point.score) / span) * plotH,
+  }));
+
+  /* Gridlines + Y-Beschriftung je Stufe; die Extremwerte 1 und 5 sind
+   * hervorgehoben (die Skala 1…5 muss sichtbar transportiert werden). */
+  const grid = [];
+  for (let score = WELLBEING_SCORE_MIN; score <= WELLBEING_SCORE_MAX; score += 1) {
+    const y = CHART_PAD.top + ((WELLBEING_SCORE_MAX - score) / span) * plotH;
+    const extreme = score === WELLBEING_SCORE_MIN || score === WELLBEING_SCORE_MAX;
+    grid.push(
+      `<line class="grid-line" x1="${CHART_PAD.left}" y1="${y.toFixed(1)}" x2="${(CHART_W - CHART_PAD.right).toFixed(1)}" y2="${y.toFixed(1)}"></line>`,
+      `<text class="axis-text${extreme ? " axis-extreme" : ""}" x="${CHART_PAD.left - 6}" y="${(y + 4).toFixed(1)}" text-anchor="end">${score}</text>`
+    );
+  }
+
+  /* Kurve + optionale Fläche. */
+  const linePath = coords
+    .map((coord, index) => `${index === 0 ? "M" : "L"}${coord.x.toFixed(1)} ${coord.y.toFixed(1)}`)
+    .join(" ");
+  const baseY = CHART_PAD.top + plotH;
+  const areaPath =
+    coords.length >= 2
+      ? `M${coords[0].x.toFixed(1)} ${baseY.toFixed(1)} ` +
+        coords.map((coord) => `L${coord.x.toFixed(1)} ${coord.y.toFixed(1)}`).join(" ") +
+        ` L${coords[coords.length - 1].x.toFixed(1)} ${baseY.toFixed(1)} Z`
+      : "";
+
+  /* Datenpunkte mit Tooltip (Zeitpunkt + Label + Score); nur der explizit
+   * markierte aktuelle Wert (`isCurrent`) ist hervorgehoben — der letzte
+   * Punkt der Serie ist ohne aktuellen Wert ein abgeloester Historienwert. */
+  const dots = list.map((point, index) => {
+    const coord = coords[index];
+    const current = point.isCurrent === true;
+    const when = point.ts != null ? formatChartDateTime(point.ts) : "ohne Zeitangabe";
+    const label = point.label || "Wohlbefinden";
+    const title = `${when} \u2013 ${label} (${point.score} / ${WELLBEING_SCORE_MAX})`;
+    const cls = current ? "point point-current" : "point";
+    const radius = current ? 5 : 3.2;
+    return `<circle class="${cls}" cx="${coord.x.toFixed(1)}" cy="${coord.y.toFixed(1)}" r="${radius}"><title>${escapeHtml(title)}</title></circle>`;
+  });
+
+  /* X-Achse: erstes und letztes Datum (mobil lesbar). */
+  const firstDate = formatChartDate(list[0].ts);
+  const lastDate = formatChartDate(list[list.length - 1].ts);
+  const xLabels = [];
+  if (firstDate) {
+    xLabels.push(
+      `<text class="axis-text" x="${CHART_PAD.left}" y="${CHART_H - 8}" text-anchor="start">${escapeHtml(firstDate)}</text>`
+    );
+  }
+  if (lastDate && lastDate !== firstDate) {
+    xLabels.push(
+      `<text class="axis-text" x="${CHART_W - CHART_PAD.right}" y="${CHART_H - 8}" text-anchor="end">${escapeHtml(lastDate)}</text>`
+    );
+  }
+
+  const last = list[list.length - 1];
+  /* Der aktuelle Punkt ist explizit markiert (`isCurrent`). Ohne ihn ist der
+   * letzte Punkt ein abgeloester Historienwert — die Aussage lautet dann
+   * "letzter Wert" statt "aktuell" (sonst widersprueche der Chart der
+   * Kopfzeile, die in dem Fall keinen Score zeigt). */
+  const currentPoint = list.find((point) => point && point.isCurrent === true) || null;
+  const summary = currentPoint
+    ? `Wohlbefinden-Score-Verlauf: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
+      `aktuell ${currentPoint.score} von ${WELLBEING_SCORE_MAX}${currentPoint.label ? ` (${currentPoint.label})` : ""}`
+    : `Wohlbefinden-Score-Verlauf: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
+      `letzter Wert ${last.score} von ${WELLBEING_SCORE_MAX}${last.label ? ` (${last.label})` : ""}`;
+
+  return `<svg viewBox="0 0 ${CHART_W} ${CHART_H}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid.join("")}${areaPath ? `<path class="area" d="${areaPath}"></path>` : ""}${coords.length >= 2 ? `<path class="line" d="${linePath}"></path>` : ""}${dots.join("")}${xLabels.join("")}</svg>`;
+}
+
+/* Chart-Card für den Tab "Wohlbefinden".
+ *
+ * `opts.current` = aktueller Wohlbefinden-Block ({key, label, emoji, score,
+ * at}); er wird als letzter Punkt an die Serie gehängt (siehe
+ * `wellbeingSeries`), damit `point-current` und die aria-label den AKTUELLEN
+ * Wert nennen und nicht den zuletzt abgelösten Historienpunkt. Ohne
+ * `opts.current` (bzw. ohne verwertbaren Score) bleibt die Serie = Historie:
+ * dann wird kein Punkt hervorgehoben und die aria-label nennt den letzten
+ * Wert ("letzter Wert"), passend zur Kopfzeile ohne Score.
+ *
+ * Ohne verwertbare Punkte wird ein verständlicher Hinweis statt eines leeren
+ * Charts gezeigt. */
+export function wellbeingChartHtml(history, opts) {
+  const options = opts || {};
+  const title = options.title ? String(options.title) : "Score-Verlauf";
+  const head = `<div class="card-title">${escapeHtml(title)}</div>`;
+  const points = wellbeingSeries(history, options.current);
+  if (!points.length) {
+    const empty = options.emptyText
+      ? String(options.emptyText)
+      : "Noch keine Wohlbefinden-Meldung \u2013 der Verlauf erscheint nach der ersten Meldung.";
+    return `<div class="card">${head}${messageHtml(empty, false)}</div>`;
+  }
+  const worst = WELLBEING_STATES[0] ? WELLBEING_STATES[0].label : "schlecht";
+  const bestState = WELLBEING_STATES[WELLBEING_STATES.length - 1];
+  const best = bestState ? bestState.label : "gut";
+  const hint = `${WELLBEING_SCORE_MIN} = ${worst} \u00B7 ${WELLBEING_SCORE_MAX} = ${best}`;
+  return `<div class="card">${head}<div class="wb-chart">${wellbeingChartSvg(points)}</div><div class="hint">${escapeHtml(hint)}</div></div>`;
 }
 
 /* Empty-state message block, shared by every view. */

@@ -64,14 +64,14 @@ import {
   areasForPerson,
   enabledTabs,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.8.0";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.8.0";
+} from "./health-o-mat-panel-base.js?v=0.9.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.9.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
-} from "./health-o-mat-panel-admin.js?v=0.8.0";
+} from "./health-o-mat-panel-admin.js?v=0.9.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";

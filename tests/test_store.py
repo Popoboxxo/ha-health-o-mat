@@ -451,6 +451,70 @@ def test_set_wellbeing_calls_async_save(mock_store_fixture):
 
 
 # ============================================================================
+# REQ-HOM-112: Historie-Semantik festgeschrieben
+# ============================================================================
+def test_req_hom_112_wellbeing_history_records_replaced_status_with_change_timestamp(
+    mock_store_fixture,
+):
+    """[REQ-HOM-112] Die Wohlbefinden-Historie ist ein Wechsel-Protokoll.
+
+    Ein Historieneintrag `{ts, status}` bedeutet "bis zu diesem Zeitpunkt galt
+    dieser Status" — er traegt den ABGELOESTEN Status, aber den Zeitstempel
+    des Wechsels. Der AKTUELLE Zustand steht ausschliesslich in `wellbeing`.
+
+    Diese Semantik ist die Grundlage des Chart-Fixes: wer die Serie nur aus
+    der Historie baut, markiert den abgeloesten Wert als "aktuell".
+    """
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry_id = "person-1"
+    first_ts = "2026-10-19T08:00:00+02:00"
+    second_ts = "2026-10-19T18:00:00+02:00"
+
+    _async_test(store.set_wellbeing(entry_id, "bad", first_ts))
+    _async_test(store.set_wellbeing(entry_id, "good", second_ts))
+
+    entry = store.entry(entry_id)
+    history = entry["wellbeing_history"]
+
+    # Genau ein Wechsel-Eintrag …
+    assert len(history) == 1
+    # … mit dem ABGELOESTEN Status …
+    assert history[0]["status"] == "bad"
+    # … und dem Zeitstempel des Wechsels (nicht dem Zeitstempel des Status).
+    assert history[0]["ts"] == second_ts
+    assert set(history[0]) == {"ts", "status"}
+
+    # Der aktuelle Zustand steht ausschliesslich in `wellbeing`.
+    assert entry["wellbeing"]["status"] == "good"
+    assert entry["wellbeing"]["ts"] == second_ts
+
+    # Der aktuelle Status taucht NICHT in der Historie auf.
+    assert all(item["status"] != "good" for item in history)
+
+
+def test_req_hom_112_wellbeing_history_stays_empty_for_the_first_report(mock_store_fixture):
+    """[REQ-HOM-112] Die erste Meldung erzeugt noch keinen Historieneintrag.
+
+    Ohne Vorgabe gibt es nichts zu protokollieren — der erste Wert ist der
+    aktuelle Wert, kein abgeloester.
+    """
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry_id = "person-1"
+    ts_iso = "2026-10-19T08:00:00+02:00"
+
+    _async_test(store.set_wellbeing(entry_id, "bad", ts_iso))
+
+    entry = store.entry(entry_id)
+    assert entry["wellbeing_history"] == []
+    assert entry["wellbeing"]["status"] == "bad"
+    assert entry["wellbeing"]["ts"] == ts_iso
+
+
+# ============================================================================
 # Test 5: entry() isolation between different entry_ids
 # ============================================================================
 def test_entry_isolation_separate_drinks(mock_store_fixture):

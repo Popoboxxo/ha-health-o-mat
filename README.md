@@ -19,8 +19,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 - 🩺 **Blutdruck**: Eingabefelder (sys/dia/puls) + Speichern-Button, Verlaufs-Sensoren,
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
-  Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak) und **geschätztes** Koffein
-  heute — je eine Entity für den Entscheidungswert, Details als Attribute
+  Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
+  heute und der **Wohlbefinden-Score (1–5)** — je eine Entity für den
+  Entscheidungswert, Details als Attribute
 - ↩️ **Undo-Button** für die letzte Buchung
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
@@ -67,6 +68,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
 | sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
 | sensor | `wellbeing_last_reported` | Wohlbefinden zuletzt gemeldet / Wellbeing last reported | Zeitstempel |
+| sensor | `wellbeing_score` | Wohlbefinden-Score / Wellbeing score | numerisches Wohlbefinden 1–5 (rein abgeleitet) |
 | sensor | `blood_pressure_category` | Blutdruck-Kategorie / Blood pressure category | WHO-Kategorie der letzten Messung (optimal … hypertensive Krise) |
 | sensor | `drinks_trend` | Trink-Trend / Drinks trend | ± % heute vs. Vorwochen-Ø (mL) |
 | sensor | `blood_pressure_trend` | Blutdruck-Trend / Blood pressure trend | steigend/fallend/stabil aus 7-Tage-Mitteln |
@@ -77,7 +79,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | button | `report_very_bad` … `report_great` | Melden: … / Report: … | Wohlbefinden |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
-| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel, Eigenmenge, Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
+| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
 
 ### Entities im Detail
 
@@ -130,10 +132,42 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   wenn das Ziel bereits erreicht ist). Einheit Tage (`d`). Attribut
   `best_streak` = längste Serie der gesamten Historie.
 - `sensor.…_caffeine_today` — **grobe Schätzung** der Koffeinzufuhr des
-  laufenden Tages in mg (`state_class: measurement`) anhand einer mg/100-ml-Tabelle
+  laufenden Tages in mg (`state_class: measurement`) anhand einer mg/100-mL-Tabelle
   je Getränketyp (`const.py`); unbekannte Typen und „Eigen" zählen als 0 mg.
   Attribut `caffeine_by_type_mg` = JSON mit mg je koffeinhaltigem Getränketyp.
   Reale Werte schwanken stark — **keine medizinische Aussage**.
+- `sensor.…_wellbeing_score` — **numerische Darstellung des Wohlbefindens auf
+  der Skala 1 … 5**: 1 = „Sehr schlecht" (schlechtester Wert) … 5 = „Super"
+  (bester Wert). Die Skala ist **reihenfolgetreu aus den fünf Wohlbefinden-
+  Zuständen abgeleitet** (Position in der Zustandsliste + 1) — kein fest
+  verdrahteter Zahlenblock; kommt ein neuer Zustand hinzu, wächst die Skala
+  automatisch mit. `state_class: measurement` (→ HA-Statistik/Graph nutzbar),
+  **ohne Einheit und ohne `device_class`** (der Score ist dimensionslos). Ohne
+  Meldung ist der Zustand `unknown` — **nie 0** (0 wäre der schlechteste Wert
+  und würde den Verlauf verfälschen). Attribute: `reported_at` (Zeitpunkt der
+  Meldung) und `scale_max` (5). Der Wert ist **rein abgeleitet** — siehe
+  „Wohlbefinden-Score: die Skala 1 … 5" unten.
+
+**Wohlbefinden-Score: die Skala 1 … 5**
+
+| Score | Wohlbefinden-Zustand |
+|---|---|
+| 1 | Sehr schlecht (schlechtester Wert) |
+| 2 | Schlecht |
+| 3 | Okay |
+| 4 | Gut |
+| 5 | Super (bester Wert) |
+
+Die Zuordnung ist **reihenfolgetreu** aus den fünf Wohlbefinden-Zuständen
+abgeleitet (Index + 1) und **wächst automatisch mit**, wenn ein neuer Zustand
+hinzukommt — Score und Attribut `scale_max` stammen aus derselben Quelle und
+können deshalb nicht auseinanderlaufen.
+
+> ℹ️ Der Score ist **rein abgeleitet**: Es gibt **keine eigene Datenhaltung**
+> (kein eigener Store, keine Migration des Datenbestands). Der Wert wird
+> jederzeit on-read aus der letzten Wohlbefinden-Meldung berechnet und ist zu
+> 100 % an die Rohdaten gekoppelt — wird die Rohmeldung geändert oder gelöscht,
+> ändert sich der Score automatisch mit.
 
 **Binary-Sensoren**
 
@@ -146,7 +180,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 **Buttons**
 
-- **Quick-Drinks** — je konfiguriertem Quick-Drink ein Button (Label, ml und
+- **Quick-Drinks** — je konfiguriertem Quick-Drink ein Button (Label, mL und
   Icon kommen aus der Integration-Konfiguration; der Button-Name ist daher
   nutzerdefiniert, z. B. `button.…_glas_wasser`).
 - `button.…_book_custom_amount` — bucht die unter `number.…_custom_drink_amount`
@@ -171,13 +205,13 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 - `text.…_log_drink_free_text` — Freitexteingabe wie „Kaffee 300ml",
   „0,5 l wasser", „cola", „Ingwertee 400", „350". Der Parser zieht die Menge
-  per Regex (ml/l, auch Dezimal mit Komma/Punkt) und ordnet die restlichen
+  per Regex (ml/mL/l, auch Dezimal mit Komma/Punkt) und ordnet die restlichen
   Wörter über ein Lexikon (Default: wasser/water, kaffee/coffee, tee/tea,
   bier/beer, wein/wine, milch/milk, cola, limo, saft/juice, sekt …) einem
   Getränketyp zu; unbekannte Typen werden wörtlich übernommen. Das Lexikon ist
   über den Options-Dialog vollständig anpassbar (Schritt „Getränke-Lexikon",
   ein Wort/Zeile im Format `wort=Typ,ml`).
-  **Gespeichert wird nur das strukturierte Ergebnis** (Zeitstempel, ml, Typ,
+  **Gespeichert wird nur das strukturierte Ergebnis** (Zeitstempel, `ml`, Typ,
   Quelle `freetext`) — der Rohtext landet **nicht** in der Historie; er bleibt
   kurzlebig in den Entity-Attributen (`last_input`, `drink_type`,
   `amount_ml`) und wird beim nächsten Setzen überschrieben. Nicht erkennbare
@@ -186,13 +220,20 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 
 **Numbers (Laufzeit-Einstellungen)**
 
-- `number.…_daily_goal` — Tagesziel in ml (sofort wirksam, persistiert via
+- `number.…_daily_goal` — Tagesziel in mL (sofort wirksam, persistiert via
   Options-Flow).
-- `number.…_custom_drink_amount` — Menge für den „Eigenen Betrag buchen"-Button.
+- `number.…_custom_drink_amount` — Eigenmenge in mL für den
+  „Eigenen Betrag buchen"-Button.
 - `number.…_systolic_warning_threshold` / `_diastolic_warning_threshold` —
   Warnschwellen für den Blutdruck-Warn-Binary-Sensor.
 - `number.…_new_reading_systolic` / `_diastolic` / `_pulse` — Eingabefelder
   für die nächste Blutdruckmessung (mit `save_measurement`-Button übernehmen).
+
+Die beiden Mengen-Entities melden die Einheit **mL** — die HA-kanonische
+Schreibweise, konsistent zu den Volumen-Sensoren (`device_class: volume`).
+Intern bleiben die Datenfeld-Namen unverändert: `daily_goal_ml` (Tagesziel,
+persistiert in den Config-Entry-Options) und `custom_amount_ml` (Eigenmenge,
+Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
 
 ### Migration (Entity-IDs & Konfiguration)
 
@@ -221,6 +262,40 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   als die gewählte Monatszahl in einen Archiv-Store (Store-Schema v3, Migration
   automatisch); Summen und Lebenszähler bleiben unverändert, der CSV-Export
   umfasst weiterhin die volle Historie.
+- **Alt-Installationen: Recorder-Statistik-Einheit „ml" → „mL" (automatisch
+  behoben):** Ältere Stände der Integration haben die Volumen-Sensoren mit der
+  Einheit „ml" gemeldet — die Recorder-Metadaten der betroffenen Statistiken
+  tragen deshalb bis heute „ml" (ohne `unit_class`). Die Sensoren melden
+  inzwischen die HA-kanonische Einheit „mL", und Home Assistant verweigert
+  deshalb die Fortsetzung der Langzeitstatistik komplett:
+  *„The unit of … (mL) cannot be converted to the unit of previously compiled
+  statistics (ml). Generation of long term statistics will be suppressed"*.
+  Der HA-Kern heilt das nicht von allein (er migriert nur bei einer Änderung
+  der `entity_id`), deshalb zieht die Integration die Metadaten **selbst beim
+  Setup des Config-Entries** nach — betroffen sind je Person nur die beiden
+  Volumen-Sensoren `…_drinks_today` und `…_lifetime_total`.
+  - **Verlustfrei:** „ml" und „mL" sind dieselbe physikalische Größe — die
+    historischen Werte bleiben gültig, es wird nichts gelöscht und nichts
+    umgerechnet.
+  - **Idempotent:** Ein zweiter Lauf findet die kanonische Einheit vor und tut
+    nichts mehr.
+  - **Recorder nicht eingerichtet (deaktiviert):** Die Migration wird dann
+    übersprungen und beim nächsten Setup (HA-Neustart oder Reload des
+    Config-Entries) nachgeholt — ebenfalls idempotent und verlustfrei.
+  - **Log:** Die Meldung wird mit Level **INFO** geloggt
+    („Recorder-Statistik-Metadaten migriert (ml → mL)"). Home Assistant loggt
+    standardmäßig auf `WARNING` — die Zeile erscheint also nur, wenn das
+    Log-Level für `custom_components.health_o_mat` auf `info` steht, z. B. per
+    `configuration.yaml`:
+    ```yaml
+    logger:
+      logs:
+        custom_components.health_o_mat: info
+    ```
+  - **Bewusst kein Lösch-Service:** Die Integration bietet **keinen** Service
+    an, um betroffene Statistiken zu löschen oder aufzuräumen — die
+    Metadaten-Migration ist verlustfrei, und Home Assistant bietet
+    „Statistiken löschen" bereits in der UI an.
 
 ## Services
 
@@ -323,7 +398,10 @@ Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
   (`caffeine_today` in mg)
 - 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit **WHO-Kategorie** und
   Warnhinweis, wenn sie über den konfigurierten Schwellen liegt
-- 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt
+- 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt, dazu der
+  **Wohlbefinden-Score** als Badge (z. B. „4 / 5") und eine **kleine Sparkline**
+  der letzten 14 Meldungen. Die Karte bleibt damit eine einbettbare
+  Kompaktanzeige — **kein** Panel-Ersatz
 - ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
   Buchung zurücknehmen
 
@@ -361,6 +439,11 @@ HA-Seitenleiste einklinkt:
 - 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
   Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
   Feature-Toggle abgeschaltet sind, werden ausgeblendet
+- 📈 **Wohlbefinden-Score-Chart** — im Tab „Wohlbefinden" zeigt das Panel den
+  **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–5
+  auf der Y-Achse (Extremwerte 1 und 5 hervorgehoben), Zeitachse und der
+  aktuelle Wert als hervorgehobener Marker. Chart **ohne externe Bibliothek**
+  (Vanilla-SVG), Farben ausschließlich über HA-CSS-Variablen → light/dark-fähig
 - 🔗 **Deep-Link pro Person** — die Person-Ansicht ist direkt verlinkbar über
   `?person=<slug>`, z. B. `/health-o-mat?person=caro`. Als Kennung dient der
   **stabile** Personen-Schlüssel (nie der Anzeigename), sodass ein Link eine
@@ -426,6 +509,83 @@ nicht mehr vorhanden); ihre Registry-Einträge und `unique_id`s bleiben bestehen
 
 Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
 unberührt und funktioniert unabhängig vom Panel.
+
+## E2E-Tests (Playwright)
+
+Der Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
+abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
+**Chromium** (Playwright) an. Das Panel ist ein bundler-freies Vanilla-JS-Web-
+Component ohne Python-Testfläche — ein realer Browser ist die einzige
+Möglichkeit, sein Verhalten (URL-Zustand, Historie, Tabs) wirklich zu prüfen.
+
+Abgedeckt (`tests_e2e/test_panel_deeplink_e2e.py`, REQ-HOM-012):
+
+- Panel mountet unter `/health-o-mat` (genau ein `health-o-mat-panel`)
+- `?person=<slug>` öffnet **direkt** die Person-Detailansicht samt Tabs
+- Klick auf eine Personen-Kachel setzt `?person=<slug>` per
+  `history.pushState`
+- **Browser-Zurück** stellt die Übersicht wieder her und entfernt den
+  Parameter (`popstate`)
+- Unbekannter/ungültiger Parameter → sichere Übersicht, kein Fehlerzustand
+- Ein per Feature-Toggle abgeschalteter Bereich blendet seinen Tab aus
+
+**Nicht Teil der Unit-Suite:** `pytest` im Repo-Root sammelt weiterhin nur
+`tests/` ein. Die Browser-Suite hat eine eigene Konfiguration
+(`tests_e2e/pytest.ini`) und läuft nur bei explizitem Aufruf.
+
+### Lokal ausführen
+
+Vollständiger Stack (HA-Container + Playwright-Runner-Image, wie in CI):
+
+```bash
+docker compose -f docker-compose.e2e.yml up --build \
+    --abort-on-container-exit --exit-code-from e2e
+docker compose -f docker-compose.e2e.yml down -v
+```
+
+Leichtgewichtig (HA im Container, Playwright lokal — spart das Browser-Image;
+der HA-Port ist per `E2E_HA_PORT` einstellbar, Default **8124**, damit eine
+parallel laufende HA-Instanz auf 8123 nicht kollidiert):
+
+```bash
+pip install -r requirements_e2e.txt && playwright install chromium
+docker compose -f docker-compose.e2e.yml up -d homeassistant
+HASS_BASE_URL=http://localhost:8124 pytest tests_e2e/ -v
+docker compose -f docker-compose.e2e.yml down
+```
+
+Gegen eine bereits laufende Instanz (auch das geteilte Testsystem
+`/home/hermes/ha-test`) — Zugangsdaten per Env, sonst werden die
+Standard-E2E-Zugangsdaten verwendet:
+
+```bash
+HASS_BASE_URL=http://localhost:8123 \
+HASS_USERNAME=healthbot HASS_PASSWORD=<Passwort> \
+pytest tests_e2e/ -v
+```
+
+`scripts/e2e_bootstrap.py` bereitet die Instanz **idempotent** vor: Onboarding
+(alle vier Schritte) bzw. Login auf einer bereits eingerichteten Instanz,
+Zugriffstoken und zwei eigene Test-Personen (`E2E-Deep` mit allen Bereichen,
+`E2E-Tab` mit abgeschaltetem Blutdruck-Bereich) samt Optionen — angelegt über
+den echten Config- bzw. Options-Flow, inklusive `enable_sidebar_panel` (ohne
+die Option gäbe es das Panel gar nicht). Fremde Personen/Config-Entries werden
+nur gelesen, nie verändert; fehlen die Test-Personen, werden sie angelegt,
+sonst wiederverwendet. Das CLI gibt den Zustand als JSON aus
+(`python scripts/e2e_bootstrap.py --base-url http://localhost:8124`).
+
+Hinweis: `docker/ha_config_e2e/` ist ein Host-Bind-Mount — `down -v` setzt den
+HA-Zustand darin **nicht** zurück (`.storage/`, Recorder-DB, Onboarding-Flag).
+Für einen bewusst frischen Lauf vorher löschen (siehe
+`.github/workflows/e2e.yaml`, dort passiert genau das). Das Artefakt-Verzeichnis
+`test-results/` wird von Playwright zu Beginn **jedes** pytest-Laufs geleert
+(Screenshots/Traces also nur pro Lauf frisch); es ist nicht versioniert.
+
+In CI läuft die Suite **nicht** bei jedem Push: `.github/workflows/e2e.yaml`
+startet bei `workflow_dispatch`, wöchentlich per `schedule` und bei Pull
+Requests, die `custom_components/health_o_mat/**`, `tests_e2e/**`,
+`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/**` oder
+`scripts/e2e_bootstrap.py` berühren.
 
 ## Lizenz
 
