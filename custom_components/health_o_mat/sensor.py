@@ -47,6 +47,7 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
             entities.append(LastReadingSensor(coord, entry, store, key, unit))
     if active[areas.AREA_WELLBEING]:
         entities.append(WellbeingSinceSensor(coord, entry, store))
+        entities.append(WellbeingScoreSensor(coord, entry, store))
     async_add_entities(entities)
 
 
@@ -440,3 +441,41 @@ class WellbeingSinceSensor(HealthOMatSensor):
         # ältere naive Bestandsdaten fängt as_local() ab (nimmt lokale
         # HA-Zeitzone an statt sie undefiniert zu belassen).
         return dt_util.as_local(datetime.fromisoformat(ts))
+
+
+class WellbeingScoreSensor(HealthOMatSensor):
+    """Numerischer Wohlbefinden-Score 1 … N (REQ-HOM-112).
+
+    Der Score ist rein abgeleitet (on-read, keine eigene Persistenz): er
+    ergibt sich aus der Reihenfolge der Wohlbefinden-Zustände (Index + 1,
+    siehe `logic.wellbeing_score`). Damit lässt sich der Verlauf als Graph
+    darstellen; ohne Meldung ist der State `unknown` (NIE 0 — 0 würde den
+    schlechtesten Wert bedeuten und den Verlauf verfälschen).
+
+    Bewusst OHNE device_class und OHNE Einheit: der Score ist dimensionslos.
+    `state_class=MEASUREMENT` genügt für die HA-Statistik (Tages-/Langzeit-
+    Graph), eine Einheit wäre hier irreführend.
+    """
+
+    _attr_translation_key = "wellbeing_score"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:emoticon-outline"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, store, "sensor_wellbeing_score")
+
+    @property
+    def native_value(self) -> int | None:
+        wb = self._data.get("wellbeing") or {}
+        return logic.wellbeing_score(wb.get("status"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        wb = self._data.get("wellbeing") or {}
+        return {
+            "reported_at": wb.get("ts") or None,
+            # Skala aus derselben Quelle wie der Score (logic.WELLBEING_STATES)
+            # — so können Score und scale_max nicht auseinanderlaufen. Die
+            # Skala kann wachsen (neue Stufe in const.WELLBEING_STATES).
+            "scale_max": len(logic.WELLBEING_STATES),
+        }

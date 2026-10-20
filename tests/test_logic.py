@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import re
 import sys
 import types
 from datetime import UTC, datetime, timedelta, timezone
@@ -1043,3 +1044,211 @@ def test_hydration_pace_is_consistent_with_today_sums():
     ]
     pace = logic.hydration_pace(drinks, now, 2000, hour=4)
     assert pace["actual_ml"] == logic.today_sums(drinks, now, hour=4)["total_ml"] == 750
+
+
+# --- REQ-HOM-112: Wohlbefinden-Score (rein abgeleitet, HA-frei) -------------
+
+# Erwartete Skala der aktuellen Zustände: Index + 1 (1 = schlechtester).
+_EXPECTED_WELLBEING_SCORES = {
+    "very_bad": 1,
+    "bad": 2,
+    "okay": 3,
+    "good": 4,
+    "great": 5,
+}
+
+# Synthetische Zustandsliste mit EINER zusätzlichen Stufe (Skala 1…6).
+_SYNTHETIC_WELLBEING_STATES = [
+    {"key": "very_bad", "label": "Sehr schlecht"},
+    {"key": "bad", "label": "Schlecht"},
+    {"key": "okay", "label": "Okay"},
+    {"key": "good", "label": "Gut"},
+    {"key": "great", "label": "Super"},
+    {"key": "excellent", "label": "Ausgezeichnet"},
+]
+
+
+def test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one():
+    """[REQ-HOM-112] Jeder Zustand aus WELLBEING_STATES ⇒ Index + 1."""
+    scores = {state["key"]: logic.wellbeing_score(state["key"]) for state in logic.WELLBEING_STATES}
+
+    assert scores == _EXPECTED_WELLBEING_SCORES
+    # Die Reihenfolge der Zustandsliste ist die aufsteigende Qualität —
+    # der Score folgt ihr (Index + 1), er ist nicht hartkodiert.
+    assert [state["key"] for state in logic.WELLBEING_STATES] == list(_EXPECTED_WELLBEING_SCORES)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [("very_bad", 1), ("bad", 2), ("okay", 3), ("good", 4), ("great", 5)],
+)
+def test_req_hom_112_wellbeing_score_explicit_scale_values(key, expected):
+    """[REQ-HOM-112] Feste Skala: very_bad=1 … great=5."""
+    assert logic.wellbeing_score(key) == expected
+
+
+@pytest.mark.parametrize("key", ["super_good", "bogus", "excellent", "VERY_BAD", "Good"])
+def test_req_hom_112_wellbeing_score_unknown_key_returns_none(key):
+    """[REQ-HOM-112] Unbekannter Key ⇒ None (nie 0, nie geraten)."""
+    assert logic.wellbeing_score(key) is None
+
+
+def test_req_hom_112_wellbeing_score_missing_key_returns_none():
+    """[REQ-HOM-112] Fehlender Wert (None) ⇒ None (HA-State `unknown`)."""
+    assert logic.wellbeing_score(None) is None
+
+
+def test_req_hom_112_wellbeing_score_empty_string_returns_none():
+    """[REQ-HOM-112] Leerer String ⇒ None (kein Treffer auf einer leeren Stufe)."""
+    assert logic.wellbeing_score("") is None
+
+
+@pytest.mark.parametrize("value", [3, 3.5, [], {}, (), True])
+def test_req_hom_112_wellbeing_score_non_string_input_returns_none(value):
+    """[REQ-HOM-112] Nicht-String-Eingaben ⇒ None (defensiv, kein Absturz)."""
+    assert logic.wellbeing_score(value) is None
+
+
+def test_req_hom_112_wellbeing_score_scale_follows_wellbeing_states(monkeypatch):
+    """[REQ-HOM-112] Skala folgt `WELLBEING_STATES` — keine Hartcodierung.
+
+    Kern-Beweis: wird die Zustandsliste um eine sechste Stufe erweitert, so
+    bekommt diese den Score 6, während die bisherigen Stufen 1…5 unverändert
+    bleiben. Eine hartcodierte Skala (z. B. `if key == "good": return 4`)
+    würde hier scheitern.
+    """
+    monkeypatch.setattr(logic, "WELLBEING_STATES", _SYNTHETIC_WELLBEING_STATES)
+
+    # (a) Die neue Stufe bekommt den Score 6 …
+    assert logic.wellbeing_score("excellent") == 6
+    # (b) … die bisherigen Stufen bleiben unverändert 1…5.
+    assert logic.wellbeing_score("very_bad") == 1
+    assert logic.wellbeing_score("bad") == 2
+    assert logic.wellbeing_score("okay") == 3
+    assert logic.wellbeing_score("good") == 4
+    assert logic.wellbeing_score("great") == 5
+    # Höchstwert = Anzahl der Zustände.
+    assert max(logic.wellbeing_score(state["key"]) for state in logic.WELLBEING_STATES) == len(
+        logic.WELLBEING_STATES
+    )
+
+
+def test_req_hom_112_wellbeing_score_never_returns_zero():
+    """[REQ-HOM-112] Nie 0: der schlechteste bekannte Key liefert 1.
+
+    0 würde als schlechtester Wert den Verlauf verfälschen — deshalb muss
+    der Score für bekannte Stufen immer >= 1 sein.
+    """
+    scores = [logic.wellbeing_score(state["key"]) for state in logic.WELLBEING_STATES]
+
+    assert scores == [1, 2, 3, 4, 5]
+    assert min(scores) == 1
+    assert 0 not in scores
+    assert logic.wellbeing_score("very_bad") == 1
+    assert logic.wellbeing_score("very_bad") != 0
+
+
+# --- REQ-HOM-112: Frontend-Spiegel der Wohlbefinden-Skala --------------------
+#
+# Serverseitig waechst die Skala automatisch mit: `logic.wellbeing_score`
+# liest `const.WELLBEING_STATES` zur AUFrufZEIT (Index + 1). Die Frontends
+# haben dagegen EIGENE Spiegel dieser Zustandsliste:
+#
+#   * Panel: `WELLBEING_STATES` in `health-o-mat-panel-base.js`
+#   * Karte: `WELLBEING_SCALE`  in `health-o-mat-card.js`
+#
+# Ein still veralteter Spiegel liefert stille Falschwerte: Score-Maximum,
+# Y-Achse, Emoji-/Label-Zuordnung und die clientseitige Ableitung aus dem
+# Key. Deshalb werden die Spiegel hier an die Server-Skala gepinnt — ohne
+# JS-Runner, nur Quelltext-Analyse der Array-Literale.
+
+_WWW_DIR = os.path.join(_COMPONENT_DIR, "www")
+_PANEL_BASE_JS = os.path.join(_WWW_DIR, "health-o-mat-panel-base.js")
+_CARD_JS = os.path.join(_WWW_DIR, "health-o-mat-card.js")
+
+
+def _js_array_keys(path: str, name: str) -> list[str]:
+    """Die `key`-Werte des JS-Array-Literals `name` — in Deklarationsreihenfolge.
+
+    Ermittelt wird der Array-Inhalt per Klammerzaehlung (robust gegen
+    Formatierung) und daraus die `key`-Eigenschaften per Regex gelesen.
+    """
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*\[", text)
+    assert match is not None, f"{name} fehlt in {os.path.basename(path)}"
+
+    depth = 1
+    index = match.end()
+    while index < len(text) and depth:
+        if text[index] == "[":
+            depth += 1
+        elif text[index] == "]":
+            depth -= 1
+        index += 1
+    assert depth == 0, f"das Array-Literal {name} in {os.path.basename(path)} ist nicht geschlossen"
+
+    block = text[match.end() : index - 1]
+    return re.findall(r'\bkey\s*:\s*"([^"]+)"', block)
+
+
+def _server_scale_keys() -> list[str]:
+    """Die kanonische Server-Skala (Reihenfolge = aufsteigende Qualitaet)."""
+    return [state["key"] for state in const.WELLBEING_STATES]
+
+
+def _assert_mirror_matches(mirror_keys: list[str], expected: list[str], label: str) -> None:
+    """Prueft einen Frontend-Spiegel gegen die Server-Skala (Keys + Reihenfolge)."""
+    assert len(mirror_keys) == len(expected), (
+        f"{label}: der Spiegel hat {len(mirror_keys)} Stufen, die Server-Skala {len(expected)} "
+        "— das Score-Maximum der Frontends waere falsch"
+    )
+    assert mirror_keys == expected, (
+        f"{label}: der Spiegel weicht von der Server-Skala ab — "
+        f"Spiegel {mirror_keys} != Server {expected}"
+    )
+
+
+def test_req_hom_112_frontend_wellbeing_mirrors_match_server_scale():
+    """[REQ-HOM-112] Beide Frontend-Spiegel == `const.WELLBEING_STATES`.
+
+    Geprueft werden Schluesselliste UND Reihenfolge (die Reihenfolge definiert
+    den Score: Index + 1) sowie die Laenge (Score-Maximum der Frontends ==
+    Laenge der Server-Skala). Eine zusaetzliche oder fehlende Stufe im Spiegel
+    waere ein stiller Fehler — der Score waere dann an der falschen Stelle.
+    """
+    expected = _server_scale_keys()
+
+    _assert_mirror_matches(
+        _js_array_keys(_PANEL_BASE_JS, "WELLBEING_STATES"), expected, "Panel (WELLBEING_STATES)"
+    )
+    _assert_mirror_matches(
+        _js_array_keys(_CARD_JS, "WELLBEING_SCALE"), expected, "Karte (WELLBEING_SCALE)"
+    )
+
+
+def test_req_hom_112_frontend_wellbeing_mirror_check_detects_deviation():
+    """[REQ-HOM-112] Gegenbeweis: der Spiegel-Check weist Abweichungen nach.
+
+    Ohne diesen Gegenbeweis waere der Pinning-Test ein "always green"-Test:
+    ein Spiegel mit zusaetzlicher Stufe, fehlender Stufe, vertauschter
+    Reihenfolge oder ersetztem Key muesste den Check fehlschlagen lassen.
+    """
+    expected = _server_scale_keys()
+
+    # Kontrollfall: der unveränderte Spiegel besteht den Check.
+    _assert_mirror_matches(list(expected), expected, "Karte")
+
+    # (a) eine zusaetzliche Stufe (Skala waechst, der Spiegel nicht)
+    with pytest.raises(AssertionError):
+        _assert_mirror_matches([*expected, "excellent"], expected, "Karte")
+    # (b) eine fehlende Stufe
+    with pytest.raises(AssertionError):
+        _assert_mirror_matches(expected[:-1], expected, "Karte")
+    # (c) vertauschte Reihenfolge (aendert die Score-Zuordnung)
+    with pytest.raises(AssertionError):
+        _assert_mirror_matches(list(reversed(expected)), expected, "Karte")
+    # (d) gleich lange Liste mit einem anderen Key
+    with pytest.raises(AssertionError):
+        _assert_mirror_matches([*expected[:-1], "excellent"], expected, "Karte")

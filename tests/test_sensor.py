@@ -12,6 +12,7 @@ import types
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 
 _COMPONENT_DIR = os.path.abspath(
@@ -712,7 +713,7 @@ _BP_SENSOR_KEYS = {
     "sensor_bp_dia",
     "sensor_bp_pulse",
 }
-_WELLBEING_SENSOR_KEYS = {"sensor_wellbeing_since"}
+_WELLBEING_SENSOR_KEYS = {"sensor_wellbeing_since", "sensor_wellbeing_score"}
 _ENTRY_ID = "test-entry-1"
 
 
@@ -776,3 +777,152 @@ def test_sensor_unique_ids_stable_across_area_toggle():
     assert drink_ids.isdisjoint(off_keys)
     assert on_again_keys == on_keys
     assert {k for k in on_again_keys if k in _ids(_DRINK_SENSOR_KEYS)} == drink_ids
+
+
+# --- REQ-HOM-112: Wohlbefinden-Score-Sensor --------------------------------
+
+# Score-Skala: 1 = schlechtester … N = bester Wert (Index + 1).
+_EXPECTED_WELLBEING_SCORES = {
+    "very_bad": 1,
+    "bad": 2,
+    "okay": 3,
+    "good": 4,
+    "great": 5,
+}
+
+
+def _wellbeing_score_sensor(person_data: dict):
+    """WellbeingScoreSensor mit gemocktem Coordinator/Entry/Store."""
+    return _make_store_sensor(sensor_module.WellbeingScoreSensor, person_data)
+
+
+def test_req_hom_112_wellbeing_score_sensor_registered_with_stable_unique_id():
+    """[REQ-HOM-112] Setup registriert den Score-Sensor als {entry_id}_sensor_wellbeing_score."""
+    keys = _sensor_setup({})
+
+    assert f"{_ENTRY_ID}_sensor_wellbeing_score" in keys
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("very_bad", 1), ("bad", 2), ("okay", 3), ("good", 4), ("great", 5)],
+)
+def test_req_hom_112_wellbeing_score_sensor_native_value_matches_status(status, expected):
+    """[REQ-HOM-112] native_value = Score des aktuellen Status (Index + 1)."""
+    sensor = _wellbeing_score_sensor({"wellbeing": {"status": status, "ts": "2026-10-15T10:00:00"}})
+
+    assert sensor.native_value == expected
+
+
+@pytest.mark.parametrize(
+    "person_data",
+    [{}, {"wellbeing": {}}, {"wellbeing": {"status": None, "ts": None}}],
+)
+def test_req_hom_112_wellbeing_score_sensor_without_message_is_none(person_data):
+    """[REQ-HOM-112] Ohne Meldung ist der State `unknown` (None) — NIE 0.
+
+    0 wäre der schlechteste Wert und würde den Verlauf verfälschen.
+    """
+    sensor = _wellbeing_score_sensor(person_data)
+
+    assert sensor.native_value is None
+    assert sensor.native_value != 0
+
+
+def test_req_hom_112_wellbeing_score_sensor_state_class_is_measurement():
+    """[REQ-HOM-112] state_class = MEASUREMENT (HA-Statistik/Graph)."""
+    sensor = _wellbeing_score_sensor({})
+
+    assert sensor._attr_state_class == SensorStateClass.MEASUREMENT
+
+
+def test_req_hom_112_wellbeing_score_sensor_has_no_unit_of_measurement():
+    """[REQ-HOM-112] Score ist dimensionslos — KEINE Einheit (ml/mL-Warnbug).
+
+    Eine (ungültige) Einheit würde in HA eine Warnung erzeugen und die
+    Statistik verfälschen — der Score darf deshalb keine tragen.
+    """
+    sensor = _wellbeing_score_sensor({})
+
+    assert getattr(sensor, "_attr_native_unit_of_measurement", None) is None
+    assert getattr(sensor, "native_unit_of_measurement", None) is None
+
+
+def test_req_hom_112_wellbeing_score_sensor_has_no_device_class():
+    """[REQ-HOM-112] KEINE device_class — der Score ist kein Messwert mit Einheit."""
+    sensor = _wellbeing_score_sensor({})
+
+    assert getattr(sensor, "_attr_device_class", None) is None
+    assert getattr(sensor, "device_class", None) is None
+
+
+def test_req_hom_112_wellbeing_score_sensor_translation_key_and_icon():
+    """[REQ-HOM-112] translation_key + Icon statt hartkodiertem Entity-Namen."""
+    sensor = _wellbeing_score_sensor({})
+
+    assert sensor._attr_translation_key == "wellbeing_score"
+    assert sensor._attr_icon == "mdi:emoticon-outline"
+
+
+def test_req_hom_112_wellbeing_score_sensor_extra_state_attributes():
+    """[REQ-HOM-112] Attribute: reported_at (Zeitpunkt) + scale_max (Skalenende)."""
+    sensor = _wellbeing_score_sensor({"wellbeing": {"status": "good", "ts": "2026-10-15T10:00:00"}})
+
+    attrs = sensor.extra_state_attributes
+
+    assert attrs["reported_at"] == "2026-10-15T10:00:00"
+    assert attrs["scale_max"] == len(sensor_module.logic.WELLBEING_STATES)
+    assert attrs["scale_max"] == 5
+
+
+def test_req_hom_112_wellbeing_score_sensor_reported_at_is_none_without_message():
+    """[REQ-HOM-112] Ohne Meldung ist `reported_at` None (kein 1970er-Platzhalter)."""
+    sensor = _wellbeing_score_sensor({})
+
+    assert sensor.extra_state_attributes["reported_at"] is None
+
+
+def test_req_hom_112_wellbeing_score_sensor_scale_max_follows_state_list(monkeypatch):
+    """[REQ-HOM-112] scale_max folgt der Zustandsliste (keine hartcodierte 5).
+
+    `sensor.py` liest `logic.WELLBEING_STATES` — dieselbe Quelle wie der
+    Score. Wird die Liste um eine sechste Stufe erweitert, wächst scale_max
+    auf 6; Score und Skala können so nicht auseinanderlaufen.
+    """
+    synthetic = [
+        {"key": "very_bad", "label": "Sehr schlecht"},
+        {"key": "bad", "label": "Schlecht"},
+        {"key": "okay", "label": "Okay"},
+        {"key": "good", "label": "Gut"},
+        {"key": "great", "label": "Super"},
+        {"key": "excellent", "label": "Ausgezeichnet"},
+    ]
+    # `sensor.py` bindet `logic` beim Import; gepatcht wird deshalb das
+    # Modulobjekt, das der Sensor tatsächlich benutzt.
+    monkeypatch.setattr(sensor_module.logic, "WELLBEING_STATES", synthetic)
+
+    sensor = _wellbeing_score_sensor(
+        {"wellbeing": {"status": "excellent", "ts": "2026-10-15T10:00:00"}}
+    )
+
+    assert sensor.extra_state_attributes["scale_max"] == 6
+    assert sensor.native_value == 6
+
+
+def test_req_hom_112_wellbeing_score_sensor_follows_area_toggle():
+    """[REQ-HOM-112/009] Score-Sensor nur im Bereich `wellbeing` — Toggle wirkt.
+
+    Aus ⇒ keine Entity; Ein ⇒ Entity mit stabiler unique_id (die unique_id
+    wird über De-/Reaktivierung nie verändert).
+    """
+    score_id = f"{_ENTRY_ID}_sensor_wellbeing_score"
+
+    off_keys = _sensor_setup({"areas": {"wellbeing": False}})
+    on_keys = _sensor_setup({"areas": {"wellbeing": True}})
+    on_again_keys = _sensor_setup({"areas": {"wellbeing": True}})
+
+    assert score_id not in off_keys
+    assert score_id in on_keys
+    assert score_id in on_again_keys
+    # Die unique_id bleibt identisch (kein Neu-Anlegen durch die Änderung).
+    assert {k for k in on_again_keys if k == score_id} == {score_id}

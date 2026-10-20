@@ -21,6 +21,10 @@ Person anlegen via Flow-Verweis, admin-gated Löschen mit Doppelbestätigung,
 REQ-HOM-013), Card-Ausbau (Pace/Serie/Koffein/WHO-Label, Editor-Komfort,
 REQ-HOM-011) und Frontend-Struktur (native ES-Module + Cache-Buster,
 REQ-HOM-014). Details/Entscheidungen: `IDEATION-UI-PRO.md` §7a.
+**Nachtrag 2026-10-19 (Branch `feat/wellbeing-score`):** **Wohlbefinden-Score &
+Score-Chart** (REQ-HOM-112) — numerische Skala 1…5 (rein abgeleitet, on-read)
+plus Verlaufs-Chart in der Card (kompakt) und im Panel (vollständig). Details:
+`docs/REQUIREMENTS.md` REQ-HOM-112.
 
 ---
 
@@ -177,13 +181,35 @@ Adaption der go-gauge „Matrix": responsives Grid, eine Kachel je Person.
 │  Wie geht es dir?                                           │
 │   😵   🙁   😐   🙂   😄      ← große Tap-Flächen            │
 ├────────────────────────────────────────────────────────────┤
-│  Zuletzt: 🙂 Gut · vor 2 h                                  │
+│  Zuletzt: 🙂 Gut · 4 / 5 · vor 2 h                          │
 │  30-Tage-Timeline: ▓░░▓▓█▒ …  (Verteilung + Verlauf)         │
+├────────────────────────────────────────────────────────────┤
+│  Score-Verlauf                                              │
+│  5 ┤ · · · · · · ·                                         │
+│  4 ┤ · · · · · · ●                                         │
+│  3 ┤ · · ╱ ╲ · · ·                                         │
+│  2 ┤ · ╱ · · · · ·                                         │
+│  1 ┤ · · · · · · ·                                         │
+│    └──────────────                                          │
+│      14.10.             19.10.                              │
+│  1 = Sehr schlecht · 5 = Super                              │
 └────────────────────────────────────────────────────────────┘
 ```
 
 - Buttons = `button.*_report_*`, Zustand aus `select.*_wellbeing`.
 - Timeline/Häufigkeit als einfache Auswertung (HA-History bleibt Quelle).
+- **Score-Chart** (REQ-HOM-112) — der Verlauf als **SVG-Linienchart**: Zeit auf
+  der X-Achse, Score 1…5 auf der Y-Achse (Extremwerte **1** und **5**
+  hervorgehoben), Zeitachse (erstes/letztes Datum), der aktuelle Wert als
+  hervorgehobener Marker, Tooltip je Punkt (Zeitpunkt + Label + Score) und
+  `aria-label`. **Leerfall:** ohne Meldung/Verlauf erscheint ein verständlicher
+  Hinweis statt eines leeren Charts.
+- **Score = rein abgeleitet** — die Skala 1…5 ist reihenfolgetreu aus den fünf
+  Wohlbefinden-Zuständen abgeleitet (Index + 1, wächst automatisch mit einem
+  neuen Zustand); der Wert wird on-read aus den Rohmeldungen berechnet — keine
+  eigene Persistenz, keine Migration.
+- Chart **ohne externe Bibliothek** (Vanilla-SVG), Farben ausschließlich über
+  HA-CSS-Variablen → light/dark-fähig und mobiltauglich.
 
 ### 4.5 Admin/Settings (L3)
 
@@ -223,7 +249,8 @@ health_o_mat/panel_data          { entry_id }
                expected_ml, delta_ml, forecast_ml },
       bp:    { sys, dia, pulse, at, avg7: {sys,dia,pulse},
                category, warning, entries: [...] },
-      wellbeing: { key, label, emoji, at, history: [...] },
+      wellbeing: { key, label, emoji, score, at,
+                   history: [{ key, label, emoji, score, ts }, …] },
       entities: { drinks_today: "sensor.…", percent: "sensor.…", … } }
 
 health_o_mat/subscribe           { entry_id }
@@ -322,7 +349,16 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 | **2** | Feature-Sensoren 001/002/003 + `logic.py`-Erweiterung; Karte zeigt Badge/Trend/Streak | entscheidungsrelevante Metriken | — (parallel zu 1) |
 | **3** ✅ | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
 | **4** | 🟡 teilweise: Admin-/Settings-Ansicht **+ CSV-Export** (L3) umgesetzt; **Backup** und optionaler CSV-**Import** (REQ-HOM-007) **offen** | Verwaltung an einem Ort | Phase 3 |
-| **5** | Release-Härtung: `release-check.yml`, optionaler Frontend-Smoke (Playwright wie Sofabaton) | sichere Releases | — |
+| **5** | Release-Härtung: `release-check.yml`, optionaler Frontend-Smoke (Playwright wie Sofabaton) — Score-/Chart-Umfang per Live-E2E auf `ha-test` verifiziert (Screenshots: `docs/e2e-2026-10-19-wellbeing-score/`), ein Playwright-Smoke in CI steht weiterhin aus | sichere Releases | — |
+
+**Nachtrag (2026-10-19, Branch `feat/wellbeing-score`):** Phase 5 🟡 — neben der
+Release-Härtung: **Wohlbefinden-Score & Score-Chart** (REQ-HOM-112) umgesetzt
+(Skala 1…5, rein abgeleitet; Chart in Card und Panel) **und verifiziert** —
+dedizierte Unit-/JS-Tests sind vorhanden (`pytest -q` grün, `ruff` clean), die
+Browser-/E2E-Verifikation auf `ha-test` ist mit Screenshots erfolgt (Beleg:
+`docs/e2e-2026-10-19-wellbeing-score/`). **Offen:** nur noch der **Release**
+(Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag,
+GitHub-Release).
 
 **Empfehlung:** Phase 0 strikt zuerst. Die UI auf unbounded Attributen und falschen
 `state_class` aufzusetzen erzeugt sichtbare Fehler, die man später teuer nachzieht.
@@ -337,8 +373,12 @@ WS-Schreibpfad `book_drink`/`undo_last`/`save_measurement`/`set_wellbeing` +
 im Panel: admin-gated `get_settings`/`set_settings`/`export_csv`; pro Person
 Tagesziel, Reset-Uhrzeit, Anzeigename, Quick-Drinks, Getränke-Lexikon,
 BP-Schwellen, Retention, Sidebar-Toggle; CSV-Export über den bestehenden
-`export_csv`-Service) umgesetzt. Die JS-Card **und das Panel** haben keine
-CI-Tests; ein Live-E2E auf `ha-test` steht aus. Weiterhin offen:
+`export_csv`-Service) umgesetzt. Zu diesem Stand hatten die JS-Card **und das
+Panel** keine CI-Tests und ein Live-E2E auf `ha-test` stand aus; **inzwischen**
+sind dedizierte Unit-/JS-Tests vorhanden (`tests/test_card_js.py`,
+`tests/test_panel_js.py`; `pytest -q` grün, `ruff` clean) und der
+Score-/Chart-Umfang ist per Live-E2E auf `ha-test` mit Screenshots verifiziert
+(Beleg: `docs/e2e-2026-10-19-wellbeing-score/`). Weiterhin offen:
 `logic.hydration_pace` (nur Platzhalter `ws_api.compute_pace`), **eine
 Backup-Funktion (nicht gebaut)**, der optionale CSV-Import (REQ-HOM-007) und
 Phase 5 (Release-Härtung).

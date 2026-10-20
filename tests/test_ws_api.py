@@ -480,7 +480,13 @@ def test_panel_data_full_payload(monkeypatch):
     assert wellbeing["emoji"] == "🙂"
     assert wellbeing["at"] == "2026-10-15T10:00:00"
     assert wellbeing["history"] == [
-        {"key": "okay", "label": "Okay", "emoji": "😐", "ts": "2026-10-14T10:00:00"}
+        {
+            "key": "okay",
+            "label": "Okay",
+            "emoji": "😐",
+            "score": 3,
+            "ts": "2026-10-14T10:00:00",
+        }
     ]
 
     # Entity-Bindung (unique_id-Suffix, nicht geraten)
@@ -2532,3 +2538,130 @@ def test_format_lexicon_text_tolerates_broken_stored_value():
     assert ws_api.format_lexicon_text(None).startswith("wasser=Wasser,250")
     assert ws_api.format_lexicon_text({"kaputt": "kein-paar"}).startswith("wasser=Wasser,250")
     assert ws_api.format_lexicon_text({"wasser": ["Wasser", 250]}) == "wasser=Wasser,250"
+
+
+# --- REQ-HOM-112: Wohlbefinden-Score im Payload ----------------------------
+
+# Score-Skala: 1 = schlechtester … N = bester Wert (Index + 1).
+_EXPECTED_WELLBEING_SCORES = {
+    "very_bad": 1,
+    "bad": 2,
+    "okay": 3,
+    "good": 4,
+    "great": 5,
+}
+
+# ENTITY_SUFFIXES vor REQ-HOM-112 — die Erweiterung muss rein ADDITIV sein
+# (kein Schlüssel entfernt, kein Suffix umbenannt: das würde Entity-IDs und
+# damit Automatisierungen/Dashboards zerstören).
+_ENTITY_SUFFIXES_BEFORE_WELLBEING_SCORE = {
+    "drinks_today": "sensor_drinks_today",
+    "percent": "sensor_goal_percent",
+    "lifetime": "sensor_lifetime_total",
+    "bp_sys": "sensor_bp_sys",
+    "bp_dia": "sensor_bp_dia",
+    "bp_pulse": "sensor_bp_pulse",
+    "bp_category": "sensor_bp_category",
+    "wellbeing": "sensor_wellbeing_since",
+    "drinks_history": "sensor_drinks_history",
+    "bp_history": "sensor_bp_history",
+    "drinks_trend": "sensor_drinks_trend",
+    "bp_trend": "sensor_bp_trend",
+    "goal_streak": "sensor_goal_streak",
+    "caffeine_today": "sensor_caffeine_today",
+}
+
+
+@pytest.mark.parametrize(("key", "expected"), sorted(_EXPECTED_WELLBEING_SCORES.items()))
+def test_req_hom_112_wellbeing_block_contains_current_score(key, expected):
+    """[REQ-HOM-112] Der Wohlbefinden-Block trägt den Score der letzten Meldung."""
+    block = ws_api._wellbeing_block({"wellbeing": {"status": key, "ts": "2026-10-15T10:00:00"}})
+
+    assert block["score"] == expected
+    assert block["key"] == key
+
+
+def test_req_hom_112_wellbeing_block_score_is_none_without_message():
+    """[REQ-HOM-112] Ohne Meldung ist der Score None (nicht 0)."""
+    assert ws_api._wellbeing_block({})["score"] is None
+    assert ws_api._wellbeing_block({"wellbeing": {}})["score"] is None
+    assert ws_api._wellbeing_block({"wellbeing": {"status": None}})["score"] is None
+
+
+def test_req_hom_112_wellbeing_block_score_is_none_for_unknown_status():
+    """[REQ-HOM-112] Unbekannter Status ⇒ Score None (defensiv, kein 0)."""
+    block = ws_api._wellbeing_block({"wellbeing": {"status": "super_good"}})
+
+    assert block["score"] is None
+    assert block["score"] != 0
+
+
+def test_req_hom_112_wellbeing_history_entries_contain_score():
+    """[REQ-HOM-112] Jeder Verlaufseintrag trägt seinen Score."""
+    history = ws_api._wellbeing_history(
+        [
+            {"status": "very_bad", "ts": "2026-10-13T10:00:00"},
+            {"status": "okay", "ts": "2026-10-14T10:00:00"},
+            {"status": "great", "ts": "2026-10-15T10:00:00"},
+        ]
+    )
+
+    assert [entry["score"] for entry in history] == [1, 3, 5]
+    assert [entry["key"] for entry in history] == ["very_bad", "okay", "great"]
+
+
+def test_req_hom_112_wellbeing_history_unknown_key_has_none_score():
+    """[REQ-HOM-112] Verlaufseintrag mit unbekanntem Key ⇒ Score None (defensiv)."""
+    history = ws_api._wellbeing_history([{"status": "super_good", "ts": "2026-10-15T10:00:00"}])
+
+    assert len(history) == 1
+    assert history[0]["score"] is None
+    assert history[0]["score"] != 0
+
+
+def test_req_hom_112_panel_data_wellbeing_block_contains_score(monkeypatch):
+    """[REQ-HOM-112] `panel_data` liefert den Score im Wohlbefinden-Block."""
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 4})
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["wellbeing"]["key"] == "good"
+    assert payload["wellbeing"]["score"] == 4
+    assert payload["wellbeing"]["history"][0]["score"] == 3
+
+
+def test_req_hom_112_panel_data_wellbeing_score_is_none_without_message(monkeypatch):
+    """[REQ-HOM-112] `panel_data` ohne Meldung ⇒ Score None (nicht 0)."""
+    store_data = _sample_store_data()
+    store_data["e1"].pop("wellbeing")
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 4})
+    hass = _panel_hass(store_data, entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["wellbeing"]["key"] is None
+    assert payload["wellbeing"]["score"] is None
+    assert payload["wellbeing"]["score"] != 0
+
+
+def test_req_hom_112_entity_suffixes_contains_wellbeing_score():
+    """[REQ-HOM-112] `ENTITY_SUFFIXES` kennt den Score-Sensor (Suffix = unique_id)."""
+    assert ws_api.ENTITY_SUFFIXES["wellbeing_score"] == "sensor_wellbeing_score"
+
+
+def test_req_hom_112_entity_suffixes_extension_is_additive():
+    """[REQ-HOM-112] Die Erweiterung ist rein additiv — alle Alt-Schlüssel bleiben.
+
+    Ein umbenannter/entfernter Schlüssel würde die unique_id (und damit die
+    Entity-ID) der Bestands-User ändern — daher explizit abgesichert.
+    """
+    for logical, suffix in _ENTITY_SUFFIXES_BEFORE_WELLBEING_SCORE.items():
+        assert logical in ws_api.ENTITY_SUFFIXES, f"Alt-Schlüssel '{logical}' fehlt"
+        assert ws_api.ENTITY_SUFFIXES[logical] == suffix, (
+            f"Suffix von '{logical}' wurde geändert — unique_id/Entity-ID wäre gebrochen"
+        )
+
+    assert set(ws_api.ENTITY_SUFFIXES) == set(_ENTITY_SUFFIXES_BEFORE_WELLBEING_SCORE) | {
+        "wellbeing_score"
+    }

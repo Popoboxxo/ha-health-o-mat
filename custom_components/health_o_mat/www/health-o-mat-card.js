@@ -41,6 +41,21 @@ const WELLBEING_EMOJI = {
   super: "\u{1F604}",
 };
 
+/* Wohlbefinden-Skala (Mirror von const.WELLBEING_STATES): aufsteigende
+ * Qualitaet, Index + 1 = Score (1 = schlechtester … 5 = bester).
+ * Die Karte ist eine eigenstaendige Datei ohne Imports — der Mirror wird
+ * deshalb hier gepflegt (Panel: WELLBEING_STATES in panel-base). */
+const WELLBEING_SCALE = [
+  { key: "very_bad", label: "Sehr schlecht" },
+  { key: "bad", label: "Schlecht" },
+  { key: "okay", label: "Okay" },
+  { key: "good", label: "Gut" },
+  { key: "great", label: "Super" },
+];
+
+/* Anzahl der Meldungen im kompakten Trend der Karte. */
+const WELLBEING_TREND_POINTS = 14;
+
 /* WHO blood-pressure category keys (logic.bp_category) -> friendly label.
  * Unknown/legacy values fall back to the raw value (see bpCategoryLabel). */
 const BP_CATEGORY_LABELS = {
@@ -116,6 +131,16 @@ const CARD_CSS = `
   .row .emoji { font-size: 1.6rem; line-height: 1; }
   .row .label { flex: 1; min-width: 0; }
   .row .sub { font-size: .8rem; color: var(--secondary-text-color, #727272); }
+  .row .score { margin-left: auto; font-weight: 700; font-size: .95rem;
+    color: var(--primary-color, #03a9f4); white-space: nowrap; }
+  .wb-trend { width: 100%; }
+  .wb-trend svg { width: 100%; height: auto; display: block; }
+  .wb-trend .line { fill: none; stroke: var(--primary-color, #03a9f4); stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .wb-trend .point { fill: var(--card-background-color, #fff);
+    stroke: var(--primary-color, #03a9f4); stroke-width: 1.6; }
+  .wb-trend .point-current { fill: var(--primary-color, #03a9f4);
+    stroke: var(--card-background-color, #fff); stroke-width: 1.8; }
   .warn {
     color: var(--error-color, #db4437); font-weight: 600; font-size: .9rem;
     display: flex; align-items: center; gap: 6px;
@@ -176,6 +201,159 @@ function bpCategoryLabel(value) {
   const raw = value == null ? "" : String(value);
   const key = raw.trim().toLowerCase();
   return BP_CATEGORY_LABELS[key] || raw;
+}
+
+/* Score eines Wohlbefinden-Eintrags — DER SERVER IST DIE WAHRHEIT
+ * (REQ-HOM-112). Identische Regel wie im Panel (`wellbeingScore` in
+ * health-o-mat-panel-base.js):
+ * 1. Ist das Feld `score` vorhanden (auch bei `null`), gilt der Server-Wert;
+ *    `null`/nicht-numerisch -> KEIN Score (null). Keine clientseitige
+ *    Ersatzableitung — der Server liefert bewusst `null`, wenn der Zustand
+ *    nicht auf der kanonischen Skala liegt.
+ * 2. FEHLT das Feld `score` komplett (aelterer Server), wird der Score
+ *    clientseitig aus dem kanonischen Key abgeleitet — EXAKT
+ *    (case-sensitiv), wie `logic.wellbeing_score` (Index + 1, aufsteigende
+ *    Qualitaet). Unbekannter Key -> null.
+ * 3. Der Score muss im Bereich 1..N liegen; alles andere -> null (nie 0 —
+ *    0 waere der schlechteste Wert). */
+function wellbeingScore(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if ("score" in raw) {
+    const direct = toNumber(raw.score, NaN);
+    if (!Number.isFinite(direct)) return null;
+    const rounded = Math.round(direct);
+    if (rounded >= 1 && rounded <= WELLBEING_SCALE.length) return rounded;
+    return null;
+  }
+  const key = typeof raw.key === "string" ? raw.key : "";
+  const index = WELLBEING_SCALE.findIndex((state) => state.key === key);
+  return index >= 0 ? index + 1 : null;
+}
+
+/* Verlauf -> verwertbare Punkte. Eintraege ohne verwertbaren Score (kein
+ * `score` und kein bekannter `key`) werden uebersprungen; kein Array ->
+ * leere Liste (kein Absturz, keine NaN-Koordinaten). */
+function wellbeingScorePoints(history) {
+  if (!Array.isArray(history)) return [];
+  const points = [];
+  history.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const score = wellbeingScore(entry);
+    if (score == null) return;
+    const rawTs = entry.ts == null ? "" : String(entry.ts);
+    const parsed = rawTs ? Date.parse(rawTs) : NaN;
+    points.push({
+      score,
+      label: String(entry.label == null ? "" : entry.label),
+      ts: Number.isFinite(parsed) ? parsed : null,
+    });
+  });
+  return points;
+}
+
+/* Serie des Trends: Historienpunkte + der AKTUELLE Wert als letzter Punkt.
+ *
+ * Historie-Semantik (store.set_wellbeing): ein Historieneintrag `{ts, status}`
+ * bedeutet "bis zu diesem Zeitpunkt galt `status`" — der aktuelle Zustand steht
+ * ausschliesslich in `wellbeing` (`status`/`ts`, im WS-Payload `key`/`at`).
+ * Der letzte Historienpunkt ist damit der ABGELOESTE Wert; ohne den aktuellen
+ * Punkt wuerde die Sparkline am falschen Wert enden (Widerspruch zum Badge).
+ *
+ * `current` = {score, key, label, at}. Der Score folgt der Regel von
+ * `wellbeingScore`: das vorhandene `current.score` ist die Wahrheit (in der
+ * Karte der bereits aufgeloeste Score — identisch zum Badge; `null` bedeutet
+ * "kein Score" und damit auch kein aktueller Punkt); nur wenn das Feld FEHLT,
+ * wird er aus `current.key` abgeleitet (aeltere Payloads ohne `score`).
+ * Ohne verwertbaren Score bleibt die Serie = Historie.
+ *
+ * MARKER: nur der angehaengte aktuelle Punkt traegt `isCurrent: true`; die
+ * Historienpunkte tragen das Feld NICHT. Die Sparkline hebt deshalb genau den
+ * Punkt hervor, der den aktuellen Wert darstellt — ohne aktuellen Wert
+ * (Badge ohne Score) wird KEIN Punkt hervorgehoben und die Sparkline
+ * behauptet keinen aktuellen Wert. */
+function wellbeingSeries(history, current) {
+  const points = wellbeingScorePoints(history);
+  const score = wellbeingScore(current);
+  if (score == null) return points;
+  const rawTs = current && current.at != null ? String(current.at) : "";
+  const parsed = rawTs ? Date.parse(rawTs) : NaN;
+  const ts = Number.isFinite(parsed) ? parsed : null;
+  const last = points.length ? points[points.length - 1] : null;
+  // Duplikat vermeiden: gleicher Zeitstempel UND gleicher Score -> der
+  // aktuelle Wert ist im Verlauf bereits abgebildet. Dieser Punkt IST dann
+  // der aktuelle Wert -> er wird (und nur er) als `isCurrent` markiert.
+  if (last && last.ts === ts && last.score === score) {
+    last.isCurrent = true;
+    return points;
+  }
+  points.push({
+    score,
+    label: String(current.label == null ? "" : current.label),
+    ts,
+    // NUR der angehaengte aktuelle Punkt traegt den Marker — die
+    // Historienpunkte sind abgeloeste Werte.
+    isCurrent: true,
+  });
+  return points;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+/* "19.10.2026, 14:30 Uhr" — Zeitpunkt fuer die Tooltips. */
+function formatChartDateTime(ts) {
+  if (ts == null || !Number.isFinite(ts)) return "";
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return "";
+  const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+  return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())} Uhr`;
+}
+
+/* Kompakte Sparkline der letzten Meldungen (Score 1..N auf Y, Reihenfolge
+ * auf X). Reines Lese-Display: kein Zoom, keine Scrollbars, kein Tooltip-JS
+ * (die <title>-Elemente liefern die Details je Punkt).
+ *
+ * Hervorhebung: nur der explizit markierte aktuelle Wert (`isCurrent`) wird
+ * betont. Ohne aktuellen Wert (Badge ohne Score) wird KEIN Punkt betont und
+ * die aria-label nennt nur den "letzten Wert" — die Sparkline behauptet dann
+ * keinen aktuellen Wert. */
+function wellbeingTrendSvg(points) {
+  const list = Array.isArray(points) ? points : [];
+  if (!list.length) return "";
+  const width = 320;
+  const height = 40;
+  const padY = 5;
+  const max = WELLBEING_SCALE.length;
+  const span = Math.max(1, max - 1);
+  const step = list.length > 1 ? width / (list.length - 1) : 0;
+  const coords = list.map((point, index) => ({
+    x: list.length > 1 ? index * step : width / 2,
+    y: padY + ((max - point.score) / span) * (height - 2 * padY),
+  }));
+  const path = coords
+    .map((coord, index) => `${index === 0 ? "M" : "L"}${coord.x.toFixed(1)} ${coord.y.toFixed(1)}`)
+    .join(" ");
+  const dots = list.map((point, index) => {
+    const coord = coords[index];
+    const current = point.isCurrent === true;
+    const when = point.ts != null ? formatChartDateTime(point.ts) : "ohne Zeitangabe";
+    const label = point.label || "Wohlbefinden";
+    const title = `${when} \u2013 ${label} (${point.score} / ${max})`;
+    const cls = current ? "point point-current" : "point";
+    const radius = current ? 3.4 : 2.4;
+    return `<circle class="${cls}" cx="${coord.x.toFixed(1)}" cy="${coord.y.toFixed(1)}" r="${radius}"><title>${escapeHtml(title)}</title></circle>`;
+  });
+  const last = list[list.length - 1];
+  // Der aktuelle Punkt ist explizit markiert; ohne ihn ist der letzte Punkt
+  // ein abgeloester Historienwert ("letzter Wert", kein "aktuell").
+  const currentPoint = list.find((point) => point && point.isCurrent === true) || null;
+  const summary = currentPoint
+    ? `Wohlbefinden-Trend: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
+      `aktuell ${currentPoint.score} von ${max}${currentPoint.label ? ` (${currentPoint.label})` : ""}`
+    : `Wohlbefinden-Trend: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
+      `letzter Wert ${last.score} von ${max}${last.label ? ` (${last.label})` : ""}`;
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${coords.length >= 2 ? `<path class="line" d="${path}"></path>` : ""}${dots.join("")}</svg>`;
 }
 
 function activeEntryId(config, fallback) {
@@ -631,25 +809,82 @@ class HealthOMatCard extends HTMLElement {
     const entWb = this._entity("wellbeing");
     const stateRaw = this._stateValue(entWb, undefined);
     const key = String(stateRaw != null ? stateRaw : wb.key || "").toLowerCase();
+    /* Anzeige-Key: der Live-State der Entity `wellbeing` ist der Zeitstempel
+     * der letzten Meldung — KEIN Wohlbefinden-Key. Als Key taugt er nur,
+     * wenn er selbst einer ist; sonst bleibt der (serverseitig lokalisierte)
+     * Snapshot die Quelle. */
+    const displayKey = WELLBEING_SCALE.some((state) => state.key === key)
+      ? key
+      : String(wb.key || "").toLowerCase();
+    /* Label/Emoji LIVE-FIRST: liefert die Live-Entity (`entities.wellbeing`)
+     * die Attribute `label`/`emoji`, sind diese aktueller als der
+     * (moeglicherweise veralteten) WS-Snapshot. Liefert die Live-Entity
+     * keine Attribute, bleibt der Snapshot die Quelle — die Anzeige wird
+     * dadurch nicht schlechter. */
     const emoji =
       this._stateAttribute(entWb, "emoji") ||
-      WELLBEING_EMOJI[key] ||
       wb.emoji ||
+      WELLBEING_EMOJI[key] ||
       "\u{1F642}";
     const label =
       this._stateAttribute(entWb, "label") ||
       wb.label ||
-      (key ? key.charAt(0).toUpperCase() + key.slice(1) : "Keine Angabe");
+      (displayKey ? displayKey.charAt(0).toUpperCase() + displayKey.slice(1) : "Keine Angabe");
     const at = (wb.at && this._relativeTime(wb.at)) || "";
+
+    // Score (1..N): Live-Entity, sonst Server-Feld (der Server ist die
+    // Wahrheit: `score: null` bedeutet "kein Score"); nur wenn das Feld
+    // fehlt, wird aus dem kanonischen Key abgeleitet (aelterer Payload).
+    const liveScore = this._stateNumber(this._entity("wellbeing_score"), NaN);
+    const score =
+      Number.isFinite(liveScore) &&
+      liveScore >= 1 &&
+      liveScore <= WELLBEING_SCALE.length
+        ? Math.round(liveScore)
+        : wellbeingScore(wb);
+    /* Aktueller Wert als letzter Punkt der Sparkline — mit DEMSELBEN Score wie
+     * das Badge (der aufgeloeste `score`), damit Badge und Sparkline nie
+     * widersprechen. */
+    const current = {
+      score: score,
+      key: wb.key,
+      label: label,
+      at: wb.at,
+    };
+    const points = wellbeingSeries(wb.history, current).slice(-WELLBEING_TREND_POINTS);
+
+    // Leerfall: keine Meldung und keine Historie -> verstaendlicher Hinweis
+    // statt eines leeren Charts.
+    if (score == null && !points.length) {
+      return `
+      <div class="row">
+        <span class="emoji" aria-hidden="true">\u{1F642}</span>
+        <div class="label">
+          <div class="big">Keine Angabe</div>
+          <div class="sub">Noch keine Wohlbefinden-Meldung</div>
+        </div>
+      </div>`;
+    }
+
+    const scoreBadge =
+      score != null
+        ? `<span class="score">${score} / ${WELLBEING_SCALE.length}</span>`
+        : "";
+    const trend = points.length
+      ? `<div class="wb-trend">${wellbeingTrendSvg(points)}</div>`
+      : "";
+    const sub = at ? `Zuletzt ${escapeHtml(at)}` : "Wohlbefinden";
 
     return `
       <div class="row">
         <span class="emoji" aria-hidden="true">${escapeHtml(emoji)}</span>
         <div class="label">
           <div class="big">${escapeHtml(label)}</div>
-          <div class="sub">${at ? `Zuletzt ${escapeHtml(at)}` : "Wohlbefinden"}</div>
+          <div class="sub">${sub}</div>
         </div>
-      </div>`;
+        ${scoreBadge}
+      </div>
+      ${trend}`;
   }
 
   _stateAttribute(entityId, attr) {
