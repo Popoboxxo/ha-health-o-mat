@@ -31,8 +31,7 @@ Anzeige- und Eingabe-Blöcken, Getränkeauswahl und manuellen Mengen einstellbar
 Default-Semantik: die **Anzeige-Blöcke bleiben unverändert**, die **neuen
 Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe) sind
 **per Default aktiv** — bestehende Karten erhalten sie beim Update (bewusste neue
-Funktion; der Release-Eintrag v0.10.0 inkl. „✨ New features"-Nennung folgt
-separat, die Funktion ist in diesem Branch implementiert).
+Funktion; **veröffentlicht in v0.10.0**).
 Zusätzlich: Wohlbefindens-Verlaufsliste unter dem
 unveränderten Score-Chart im Panel. Details: §4.6,
 `docs/PLAN-CARD-CONFIG.md`.
@@ -276,8 +275,8 @@ allow_custom_amount: true        # freies Zahlenfeld
 - Defaults: die **Anzeige-Blöcke bleiben unverändert** (an); die **neuen
   Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe)
   sind **an** — bestehende Karten erhalten sie beim Update. Das ist eine
-  **bewusste Abweichung** von „Verhalten unverändert" und wird im Release
-  v0.10.0 unter „✨ New features" geführt. Unbekannte Werte fallen auf den
+  **bewusste Abweichung** von „Verhalten unverändert" und wurde in **v0.10.0**
+  unter „✨ New features" veröffentlicht. Unbekannte Werte fallen auf den
   Default zurück.
 - `show_*=false` blendet den Block samt zugehöriger Eingaben aus.
 - Ein **explizit** gesetztes `show_blood_pressure_input: true` gewinnt gegen
@@ -462,9 +461,8 @@ Release-Härtung: **Wohlbefinden-Score & Score-Chart** (REQ-HOM-112) umgesetzt
 (Skala 1…5, rein abgeleitet; Chart in Card und Panel) **und verifiziert** —
 dedizierte Unit-/JS-Tests sind vorhanden (`pytest -q` grün, `ruff` clean), die
 Browser-/E2E-Verifikation auf `ha-test` ist mit Screenshots erfolgt (Beleg:
-`docs/e2e-2026-10-19-wellbeing-score/`). **Offen:** nur noch der **Release**
-(Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag,
-GitHub-Release).
+`docs/e2e-2026-10-19-wellbeing-score/`). **Release:** v0.9.0 (Score/Chart,
+Recorder-Fix, E2E) und v0.10.0 (konfigurierbare Karte) sind veröffentlicht.
 
 **Empfehlung:** Phase 0 strikt zuerst. Die UI auf unbounded Attributen und falschen
 `state_class` aufzusetzen erzeugt sichtbare Fehler, die man später teuer nachzieht.
