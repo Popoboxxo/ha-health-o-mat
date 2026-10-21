@@ -279,10 +279,10 @@ def _reload_card(page, dashboard: CardDashboard, display_name: str):
 # --- (a) show_* combinations ------------------------------------------------
 
 
-def test_req_hom_011_card_all_blocks_off_shows_the_hint(
+def test_req_hom_113_card_all_blocks_off_shows_the_hint(
     card_dashboard, logged_in_page, panel_person
 ):
-    """[REQ-HOM-011] All nine switches off → hint instead of blocks."""
+    """[REQ-HOM-113] All nine switches off → hint instead of blocks."""
     card_dashboard.save_card(panel_person["entry_id"], **ALL_OFF)
     card = _open_card(logged_in_page, card_dashboard, panel_person["display_name"])
 
@@ -297,10 +297,10 @@ def test_req_hom_011_card_all_blocks_off_shows_the_hint(
     assert card.locator("[data-action='undo']").count() == 0, "undo must be hidden"
 
 
-def test_req_hom_011_card_bp_display_off_hides_display_and_input(
+def test_req_hom_113_card_bp_display_off_hides_display_and_input(
     card_dashboard, logged_in_page, panel_person
 ):
-    """[REQ-HOM-011] `show_blood_pressure: false` hides display AND (implicit) input.
+    """[REQ-HOM-113] `show_blood_pressure: false` hides display AND (implicit) input.
 
     `show_blood_pressure_input` is deliberately NOT passed: the point of this
     test is the IMPLICIT follow rule (input follows the display flag when the
@@ -319,10 +319,10 @@ def test_req_hom_011_card_bp_display_off_hides_display_and_input(
     assert card.locator(BP_INPUT_SYS).count() == 0, "BP input must follow the display flag"
 
 
-def test_req_hom_011_card_explicit_bp_input_overrides_hidden_display(
+def test_req_hom_113_card_explicit_bp_input_overrides_hidden_display(
     card_dashboard, logged_in_page, panel_person
 ):
-    """[REQ-HOM-011] Explicit `show_blood_pressure_input: true` wins over a hidden display."""
+    """[REQ-HOM-113] Explicit `show_blood_pressure_input: true` wins over a hidden display."""
     card_dashboard.save_card(
         panel_person["entry_id"], show_blood_pressure=False, show_blood_pressure_input=True
     )
@@ -334,10 +334,10 @@ def test_req_hom_011_card_explicit_bp_input_overrides_hidden_display(
     )
 
 
-def test_req_hom_011_card_hydration_off_hides_the_ring(
+def test_req_hom_113_card_hydration_off_hides_the_ring(
     card_dashboard, logged_in_page, panel_person
 ):
-    """[REQ-HOM-011] `show_hydration: false` hides the ring, other blocks survive."""
+    """[REQ-HOM-113] `show_hydration: false` hides the ring, other blocks survive."""
     card_dashboard.save_card(panel_person["entry_id"], show_hydration=False)
     card = _open_card(logged_in_page, card_dashboard, panel_person["display_name"])
 
@@ -348,8 +348,8 @@ def test_req_hom_011_card_hydration_off_hides_the_ring(
     assert card.locator(RING).count() == 0, "hydration ring must be hidden"
 
 
-def test_req_hom_011_card_config_resave_is_applied(card_dashboard, logged_in_page, panel_person):
-    """[REQ-HOM-011] Re-saving the dashboard config changes what the card renders.
+def test_req_hom_113_card_config_resave_is_applied(card_dashboard, logged_in_page, panel_person):
+    """[REQ-HOM-113] Re-saving the dashboard config changes what the card renders.
 
     This is the switch-config path in one test: the very same dashboard first
     renders the all-off hint, then (after `lovelace/config/save` + reload) the
@@ -374,10 +374,10 @@ def test_req_hom_011_card_config_resave_is_applied(card_dashboard, logged_in_pag
 # --- (b) blood-pressure input writes ---------------------------------------
 
 
-def test_req_hom_011_card_bp_input_writes_a_measurement(
+def test_req_hom_113_card_bp_input_writes_a_measurement(
     card_dashboard, logged_in_page, hass_base_url, hass_bearer_token, panel_person
 ):
-    """[REQ-HOM-011] Filling sys/dia/pulse/note writes a real measurement.
+    """[REQ-HOM-113] Filling sys/dia/pulse/note writes a real measurement.
 
     Note: the card is the only UI that writes a measurement through this form;
     the snapshot written by `health_o_mat.add_blood_pressure` is verified through
@@ -450,10 +450,10 @@ def test_req_hom_011_card_bp_input_writes_a_measurement(
 # --- (c) wellbeing input writes + UI update --------------------------------
 
 
-def test_req_hom_011_card_wellbeing_input_writes_and_updates_the_ui(
+def test_req_hom_113_card_wellbeing_input_writes_and_updates_the_ui(
     card_dashboard, logged_in_page, hass_base_url, hass_bearer_token, panel_person
 ):
-    """[REQ-HOM-011] Clicking a wellbeing button writes it and updates the card.
+    """[REQ-HOM-113] Clicking a wellbeing button writes it and updates the card.
 
     The person's status is seeded to `bad` server-side first, so "becomes good"
     is an observable change in both payload and UI (not a state that happens to
