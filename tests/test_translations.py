@@ -104,3 +104,13 @@ def test_req_hom_107_parity_helper_detects_divergence() -> None:
 
     # Leeres Objekt gegen fehlenden Schlüssel (nicht nur Blatt-Pfade).
     assert "a.b" in _first_divergence({"a": {}}, {"a": {"b": {}}})
+
+
+def test_set_wellbeing_service_documented_in_all_translations() -> None:
+    """Der Service `set_wellbeing` ist in Master + beiden Sprachen vollständig."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        block = data["services"]["set_wellbeing"]
+        assert block["name"], f"{path}: name fehlt"
+        assert block["description"], f"{path}: description fehlt"
+        assert set(block["fields"]) == {"person", "status"}, f"{path}: Felder weichen ab"

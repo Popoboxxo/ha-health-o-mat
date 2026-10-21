@@ -25,6 +25,17 @@ REQ-HOM-014). Details/Entscheidungen: `IDEATION-UI-PRO.md` §7a.
 Score-Chart** (REQ-HOM-112) — numerische Skala 1…5 (rein abgeleitet, on-read)
 plus Verlaufs-Chart in der Card (kompakt) und im Panel (vollständig). Details:
 `docs/REQUIREMENTS.md` REQ-HOM-112.
+**Nachtrag 2026-10-21 (Branch `feat/configurable-card`):** **Konfigurierbare
+Karte** (REQ-HOM-113) — die L1-Karte ist per Karten-Editor bzw. YAML in
+Anzeige- und Eingabe-Blöcken, Getränkeauswahl und manuellen Mengen einstellbar.
+Default-Semantik: die **Anzeige-Blöcke bleiben unverändert**, die **neuen
+Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe) sind
+**per Default aktiv** — bestehende Karten erhalten sie beim Update (bewusste neue
+Funktion; der Release-Eintrag v0.10.0 inkl. „✨ New features"-Nennung folgt
+separat, die Funktion ist in diesem Branch implementiert).
+Zusätzlich: Wohlbefindens-Verlaufsliste unter dem
+unveränderten Score-Chart im Panel. Details: §4.6,
+`docs/PLAN-CARD-CONFIG.md`.
 
 ---
 
@@ -218,6 +229,100 @@ BP-Schwellen, Retention, **Export** (CSV-Service-Trigger), ggf. Import
 (REQ-HOM-007). = heutiger Options-Flow, aber als eine scrollbare Maske statt
 3 erzwungener Schritte (vergleiche Review N-13).
 
+### 4.6 Konfigurierbare Karte (L1, REQ-HOM-113)
+
+**Ziel:** Die mitgelieferte Karte (`custom:health-o-mat-card`) wird über den
+Karten-Editor bzw. YAML an das jeweilige Dashboard anpassbar — ohne
+Zweitkonfiguration im Backend. Die **Anzeige-Blöcke** bleiben per Default
+unverändert; die **neuen Eingabe-Blöcke** sind per Default **aktiv** (siehe
+Semantik unten). Fünf Ziele:
+
+1. **Getränkeauswahl** — welche Quick-Drinks als Buttons erscheinen (Referenz
+   auf die in der Integration konfigurierten Getränke, keine kartenlokale
+   Zweitliste).
+2. **Manuelle Mengen** — welche ml-Presets es gibt und ob ein freies Zahlenfeld
+   angeboten wird.
+3. **Blutdruck-Eingabe** (Systolisch/Diastolisch/Puls + optionale Notiz)
+   ein-/ausschaltbar.
+4. **Wohlbefinden-Eingabe** (fünf Zustände) ein-/ausschaltbar.
+5. **Anzeige-Blöcke** (Personenwahl, Hydration, letzter Blutdruck, letztes
+   Wohlbefinden, Undo) einzeln ein-/ausschaltbar.
+
+**Schema** (flach, alle Schlüssel optional; die gezeigten booleschen Werte
+entsprechen den Defaults):
+
+```yaml
+type: custom:health-o-mat-card
+entry_id: <optional>
+person: <optional>
+show_person: true
+show_hydration: true
+show_blood_pressure: true
+show_wellbeing: true
+show_drinks: true
+show_manual_amounts: true
+show_blood_pressure_input: true
+show_wellbeing_input: true
+show_undo: true
+drinks: ["slot_0", "kaffee"]     # Keys aus panel_data.quick_drinks; leer/fehlt = alle
+manual_amounts: [200, 500]       # ml-Presets; leer/fehlt = Default
+allow_custom_amount: true        # freies Zahlenfeld
+# Legacy-Override (gewinnt gegenüber `drinks`):
+# quick_drinks: [{label: "Kaffee", ml: 250, emoji: "☕"}]
+```
+
+**Semantik** (defensiv, nie Render-Crash):
+
+- Defaults: die **Anzeige-Blöcke bleiben unverändert** (an); die **neuen
+  Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe)
+  sind **an** — bestehende Karten erhalten sie beim Update. Das ist eine
+  **bewusste Abweichung** von „Verhalten unverändert" und wird im Release
+  v0.10.0 unter „✨ New features" geführt. Unbekannte Werte fallen auf den
+  Default zurück.
+- `show_*=false` blendet den Block samt zugehöriger Eingaben aus.
+- Ein **explizit** gesetztes `show_blood_pressure_input: true` gewinnt gegen
+  `show_blood_pressure: false`; ohne expliziten Wert folgt die Eingabe der Anzeige.
+- `show_person: false` ohne `entry_id` → erste Person, ohne Dropdown.
+- `drinks` referenziert die **Keys** der Integrations-Quick-Drinks
+  (`panel_data.quick_drinks`, additiv im WS-Payload). Unbekannte Keys werden
+  ignoriert; eine leere Schnittmenge (oder keine Auswahl) bedeutet „alle" —
+  kein leerer Zustand.
+- `manual_amounts` = positive Ganzzahlen 1…10000; leere Liste/fehlend →
+  `[200, 500]`.
+- Sind alle Blöcke aus, erscheint ein lesbarer Hinweis („Keine Blöcke
+  aktiviert — Karten-Konfiguration prüfen.").
+- Die Integrations-Feature-Toggles bleiben ein **AND**: ein abgeschalteter
+  Bereich bleibt aus, auch wenn die Karte den Block anzeigen will.
+
+**Editor** (`HealthOMatCardEditor`): lädt Personen und — für die gewählte
+Person — die Quick-Drinks (lesend über `panel_data`). Er gruppiert alle neun
+`show_*`-Schalter als **„Anzeige"** (4: Person, Hydration, letzter Blutdruck,
+letztes Wohlbefinden) und **„Eingabe & Aktionen"** (5: Getränke, manuelle
+Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe, Undo) — das ist die Abweichung
+vom ursprünglichen Plan („6/5"). Dazu kommen Getränke-Mehrfachauswahl („Alle
+Getränke" als Default-Zustand) und die Mengenliste mit Hinzufügen/Entfernen plus
+Schalter „Freies Zahlenfeld erlauben". Jede Änderung feuert `config-changed`;
+fehlende Personendaten/Getränkelisten lassen den Editor bedienbar (Hinweis,
+Auswahl „alle").
+
+**Legacy-`quick_drinks`:** Das frühere kartenlokale Getränke-Override bleibt als
+Escape-Hatch erhalten und gewinnt immer — vor der Integrationsliste und vor dem
+`drinks`-Filter. Ohne Backend-Daten fällt die Karte auf die eingebauten
+Standard-Getränke zurück.
+
+**Panel-Verlaufsliste:** Unter dem unveränderten Score-Chart (REQ-HOM-112)
+listet der Wohlbefinden-Tab zusätzlich die letzten 20 Meldungen als kompakte
+Liste — pro Eintrag **Zeitpunkt (relativ), Emoji, Label und Score** („3 / 5").
+Reine Anzeige aus `wellbeing.history`, alle Texte escaped. Der aktuelle
+Live-Wert erscheint weiterhin in der Kopfzeile und im Chart-Marker, nicht in der
+Verlaufsliste. Keine neuen Panel-Konfigurationsschalter.
+
+**Tests:** Quelltext-Analyse der Karte/des Editors (`tests/test_card_js.py`),
+der Panel-Verlaufsliste (`tests/test_panel_js.py`) und ein Browser-E2E
+(`tests_e2e/test_card_config_e2e.py`, 7 Tests: alle Blöcke aus, BD-Anzeige aus,
+explizite BD-Eingabe, Hydration aus, Konfigurations-Neuspeichern, BD-Eingabe
+schreibt, Wohlbefinden-Eingabe schreibt und aktualisiert die UI).
+
 ---
 
 ## 5. Technische Architektur
@@ -251,6 +356,7 @@ health_o_mat/panel_data          { entry_id }
                category, warning, entries: [...] },
       wellbeing: { key, label, emoji, score, at,
                    history: [{ key, label, emoji, score, ts }, …] },
+      quick_drinks: [{ key, label, ml, icon }, …],   # additiv (REQ-HOM-113)
       entities: { drinks_today: "sensor.…", percent: "sensor.…", … } }
 
 health_o_mat/subscribe           { entry_id }
@@ -349,7 +455,7 @@ Die UI **konsumiert** diese; sie implementiert sie nicht selbst.
 | **2** | Feature-Sensoren 001/002/003 + `logic.py`-Erweiterung; Karte zeigt Badge/Trend/Streak | entscheidungsrelevante Metriken | — (parallel zu 1) |
 | **3** ✅ | `panel.py` + `ws_api.py` + `ui_store.py` (L2/L3): Sidebar-Panel, Mehr-Personen, Tabs, Per-User-Settings, WS-Schreibpfad + `subscribe` | „die App" | Phase 1; WS-Schreibpfad braucht saubere Refresh-Events |
 | **4** | 🟡 teilweise: Admin-/Settings-Ansicht **+ CSV-Export** (L3) umgesetzt; **Backup** und optionaler CSV-**Import** (REQ-HOM-007) **offen** | Verwaltung an einem Ort | Phase 3 |
-| **5** | 🟡 teilweise: Release-Härtung (`release-check.yml`) ✅; **Frontend-Browser-Smoke des Panels** ✅ (`tests_e2e/`, Playwright/Chromium gegen eine echte HA-Instanz, CI via `.github/workflows/e2e.yaml`); offen: Browser-Smoke der **Karte** (L1); Score-/Chart-Umfang per Live-E2E auf `ha-test` verifiziert (Screenshots: `docs/e2e-2026-10-19-wellbeing-score/`) | sichere Releases | — |
+| **5** | 🟡 teilweise: Release-Härtung (`release-check.yml`) ✅; **Frontend-Browser-Smoke des Panels** ✅ (`tests_e2e/`, Playwright/Chromium gegen eine echte HA-Instanz, CI via `.github/workflows/e2e.yaml`); Karten-Konfiguration per Browser-E2E abgedeckt (`tests_e2e/test_card_config_e2e.py`, 7 Tests, REQ-HOM-113); Score-/Chart-Umfang per Live-E2E auf `ha-test` verifiziert (Screenshots: `docs/e2e-2026-10-19-wellbeing-score/`) | sichere Releases | — |
 
 **Nachtrag (2026-10-19, Branch `feat/wellbeing-score`):** Phase 5 🟡 — neben der
 Release-Härtung: **Wohlbefinden-Score & Score-Chart** (REQ-HOM-112) umgesetzt

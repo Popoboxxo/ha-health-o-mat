@@ -44,6 +44,21 @@ add_blood_pressure:
       description: Freitext-Notiz zur Messung (optional).
       example: "morgens"
 
+set_wellbeing:
+  name: Wohlbefinden melden
+  description: Meldet das aktuelle Wohlbefinden einer Person.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    status:
+      name: Zustand
+      description: >-
+        Wohlbefinden-Schlüssel — einer von very_bad, bad, okay, good, great.
+      example: "good"
+      required: true
+
 remove_last_entry:
   name: Letzte Buchung löschen
   description: Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).

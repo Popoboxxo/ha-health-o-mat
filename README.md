@@ -306,6 +306,9 @@ data: { person: "Caro", amount_ml: 250, drink_type: "Kaffee" }
 action: health_o_mat.add_blood_pressure
 data: { person: "Caro", systolic: 124, diastolic: 82, pulse: 64 }
 
+action: health_o_mat.set_wellbeing
+data: { person: "Caro", status: "good" }   # very_bad | bad | okay | good | great
+
 action: health_o_mat.remove_last_entry
 data: { person: "Caro", kind: "drinks" }   # drinks (Default) | blood_pressure
 
@@ -318,6 +321,11 @@ data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
 
 action: health_o_mat.backup
 ```
+
+`set_wellbeing` (Wohlbefinden melden) ist im Abschnitt
+[Wohlbefinden melden (Service)](#wohlbefinden-melden-service) ausführlich
+beschrieben — die Karten-Buttons und der Service nutzen denselben
+Store-/Refresh-Pfad wie das Panel.
 
 ## Import & Backup
 
@@ -405,10 +413,93 @@ Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
 - ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
   Buchung zurücknehmen
 
-Über den **Karten-Editor** lässt sich die Person bequem aus einer Liste wählen
-(statt die Config-Entry-ID von Hand einzutragen). Bereiche, die per
-Feature-Toggle abgeschaltet sind (siehe unten), werden in der Karte
-ausgeblendet.
+Über den **Karten-Editor** lassen sich die Person (statt die Config-Entry-ID von
+Hand einzutragen) und alle Anzeige-/Eingabe-Blöcke einstellen. Bereiche, die per
+Integrations-Feature-Toggle abgeschaltet sind (siehe unten), bleiben auch in der
+Karte ausgeblendet.
+
+### Karten-Konfiguration
+
+Alle Schlüssel sind **optional**. Die Defaults ändern bestehende Karten
+**teilweise**: die **Anzeige-Blöcke** bleiben unverändert, die **neuen
+Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe) sind
+standardmäßig **aktiv** — bestehende Karten erhalten sie beim Update. Das ist
+eine bewusste neue Funktion; der Release-Eintrag (v0.10.0, inkl.
+„✨ New features"-Nennung) folgt separat, die Funktion ist in diesem Branch
+implementiert. Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
+
+| Schlüssel | Typ | Default | Bedeutung |
+|---|---|---|---|
+| `entry_id` | string | – | Person fest binden (Config-Entry-ID). Ohne Angabe wählt die Karte die erste Person bzw. zeigt eine Auswahl. |
+| `person` | string | – | Optionaler Service-Anker für Schreibaufrufe (Name aus dem Config-Entry). |
+| `show_person` | bool | `true` | Personen-Dropdown im Kopf. `false` ohne `entry_id` → erste Person, keine Auswahl. |
+| `show_hydration` | bool | `true` | Hydration-Ring, Tageswerte, Pace, Serie, Koffein. |
+| `show_blood_pressure` | bool | `true` | Letzte Blutdruckmessung inkl. WHO-Kategorie und Warnung. |
+| `show_wellbeing` | bool | `true` | Letztes Wohlbefinden, Score und Sparkline. |
+| `show_drinks` | bool | `true` | Quick-Drink-Buttons. |
+| `show_manual_amounts` | bool | `true` | Preset-Buttons für ml-Mengen (und ggf. freies Feld). |
+| `show_blood_pressure_input` | bool | `true` (folgt `show_blood_pressure`) | Eingabe Systolisch/Diastolisch/Puls inkl. Notiz. |
+| `show_wellbeing_input` | bool | `true` | Die fünf Wohlbefinden-Buttons. |
+| `show_undo` | bool | `true` | Undo der letzten Getränkebuchung. |
+| `drinks` | list[str] | alle | Keys der Quick-Drinks aus der Integration (`panel_data.quick_drinks`); unbekannte Keys werden ignoriert, leer/fehlend = alle. |
+| `manual_amounts` | list[int] | `[200, 500]` | ml-Presets (1…10000); leer/fehlend = Default. |
+| `allow_custom_amount` | bool | `true` | Zusätzliches freies Zahlenfeld mit Buchen-Button. |
+| `quick_drinks` | list[object] | – | Legacy-Override (`[{label, ml, emoji}]`); gewinnt gegenüber `drinks` und der Integrationsliste. |
+
+**Semantik:** `show_*=false` blendet den Block samt zugehöriger Eingaben aus.
+Ein **explizit** gesetztes `show_blood_pressure_input: true` hat Vorrang vor
+`show_blood_pressure: false` (die Eingabe bleibt sichtbar). Sind alle Blöcke aus,
+zeigt die Karte einen lesbaren Hinweis statt einer leeren Fläche.
+
+**Beispiele**
+
+Minimal (alle Defaults):
+
+```yaml
+type: custom:health-o-mat-card
+entry_id: <config-entry-id>
+```
+
+Nur Anzeige, ohne Eingaben und Aktionen:
+
+```yaml
+type: custom:health-o-mat-card
+entry_id: <config-entry-id>
+show_person: false
+show_drinks: false
+show_manual_amounts: false
+show_blood_pressure_input: false
+show_wellbeing_input: false
+show_undo: false
+```
+
+Mit Eingaben, Getränkeauswahl und eigenen Mengen:
+
+```yaml
+type: custom:health-o-mat-card
+entry_id: <config-entry-id>
+person: Caro
+drinks: ["slot_0", "kaffee"]
+manual_amounts: [200, 330, 500]
+allow_custom_amount: true
+show_blood_pressure_input: true
+show_wellbeing_input: true
+```
+
+### Wohlbefinden melden (Service)
+
+Die Wohlbefinden-Buttons der Karte schreiben über den öffentlichen Service:
+
+```yaml
+action: health_o_mat.set_wellbeing
+data:
+  person: "Caro"   # optional — ohne Angabe die einzige konfigurierte Person
+  status: "good"   # Pflicht: very_bad | bad | okay | good | great
+```
+
+Ein unbekannter `status` wird mit `ServiceValidationError` abgelehnt. Die
+bestehenden `button.*_report_*`-Entities bleiben unverändert und nutzen
+denselben Store-/Refresh-Pfad.
 
 Die Karte wird unter `/health_o_mat/health-o-mat-card.js` ausgeliefert und beim
 Setup automatisch als Lovelace-Ressource registriert (idempotent) — die

@@ -207,6 +207,20 @@
       "name": "Blutdruckmessung speichern",
       "description": "Speichert systolischen/diastolischen Wert und optional Puls."
     },
+    "set_wellbeing": {
+      "name": "Wohlbefinden melden",
+      "description": "Meldet das aktuelle Wohlbefinden einer Person.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Name der Person (leer = einzige konfigurierte Person)."
+        },
+        "status": {
+          "name": "Zustand",
+          "description": "Wohlbefinden-Schlüssel: einer von very_bad, bad, okay, good, great."
+        }
+      }
+    },
     "remove_last_entry": {
       "name": "Letzte Buchung löschen",
       "description": "Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).",

@@ -207,6 +207,20 @@
       "name": "Save blood pressure reading",
       "description": "Stores systolic/diastolic values and optional pulse."
     },
+    "set_wellbeing": {
+      "name": "Report wellbeing",
+      "description": "Reports the current wellbeing of a person.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Person name (empty = the only configured person)."
+        },
+        "status": {
+          "name": "Status",
+          "description": "Wellbeing key: one of very_bad, bad, okay, good, great."
+        }
+      }
+    },
     "remove_last_entry": {
       "name": "Remove last entry",
       "description": "Removes the last drink or blood-pressure entry (undo).",
