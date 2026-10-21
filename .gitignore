@@ -9,6 +9,9 @@ test-results/
 # Runtime state of the E2E instance (container-created, not source).
 # Deliberately NOT the whole directory so new seed files stay addable.
 docker/ha_config_e2e/.storage/
+docker/ha_config_e2e/.cloud/
+docker/ha_config_e2e/blueprints/
+docker/ha_config_e2e/tts/
 docker/ha_config_e2e/*.db
 docker/ha_config_e2e/*.db-shm
 docker/ha_config_e2e/*.db-wal
