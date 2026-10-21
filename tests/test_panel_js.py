@@ -1395,3 +1395,116 @@ def test_req_hom_112_card_falls_back_to_snapshot_label_and_emoji(tmp_path):
         f"ohne Live-Attribute wird der Snapshot-Text nicht angezeigt: {html!r}"
     )
     assert _LIVE_LABEL not in html, f"ohne Live-Attribute darf kein Live-Text erscheinen: {html!r}"
+
+
+# --- Wohlbefinden-Verlauf unter dem Chart (Plan §6 / Decision E6) -----------
+
+
+def _wellbeing_history_css(text: str) -> str:
+    """CSS-Regeln der Verlaufsliste (`.wb-history` / `.wb-hist…`)."""
+    return "\n".join(re.findall(r"\.wb-hi(?:story|st)[^{]*\{[^}]*\}", text))
+
+
+def test_panel_wellbeing_history_lists_time_emoji_label_and_score():
+    """[REQ-HOM-112] Die Verlaufsliste unter dem Chart zeigt alle vier Felder.
+
+    Die Liste bleibt reine Anzeige: kein rohes JSON, alle Texte escaped.
+    """
+    views = _panel_views_source()
+    body = _js_function_block(views, "wellbeingTab")
+
+    # Letzte 20 Eintraege aus `wellbeing.history`, als Liste unter dem Chart.
+    assert "slice(-20)" in body
+    # Neueste Meldung oben; der Chart bleibt unveraendert chronologisch.
+    assert re.search(r"slice\(-20\)\s*\.reverse\(\)", body), (
+        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
+    )
+    assert 'class="wb-history"' in body
+    assert 'class="wb-hist-label"' in body
+    assert 'class="wb-hist-score"' in body
+    # Zeitpunkt (relativ), Emoji, Label und Score pro Eintrag …
+    assert "relativeTime(entry.ts)" in body
+    assert "wellbeingScore(entry)" in body
+    assert "${WELLBEING_SCORE_MAX}" in body
+    assert "entry.emoji" in body and "entry.label" in body
+    # … alle Texte escaped, kein JSON-Dump.
+    for value in ("entryLabel", "entryEmoji", "entryAt"):
+        assert f"escapeHtml({value}" in body, f"{value} wird nicht escaped"
+    assert "JSON.stringify" not in body, "die Historie wird als rohes JSON gerendert"
+
+    # Reihenfolge: Chart zuerst, Liste darunter.
+    assert "${chartHtml}${histHtml}" in views, "die Verlaufsliste steht nicht unter dem Score-Chart"
+
+
+def test_panel_wellbeing_history_css_is_mobile_readable():
+    """Die Verlaufsliste hat eigenes CSS (Zeile, Label, Zeit, Score)."""
+    css = _wellbeing_history_css(_panel_base_source())
+
+    assert css, "CSS fuer die Verlaufsliste fehlt im Basis-Modul"
+    for selector in (".wb-hist-label", ".wb-hist-time", ".wb-hist-score"):
+        assert selector in css, f"{selector} fehlt im CSS der Verlaufsliste"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
+    """[REQ-HOM-112] Gerenderte Verlaufsliste: Emoji, Label, Zeit und Score.
+
+    Enthaelt zusaetzlich einen HOSTILE Eintrag (`<img …>`/`<b>` in Label und
+    Emoji): er muss escaped im Output landen, nicht als Markup.
+    """
+    views_copy = _prepare_views_copy(tmp_path)
+    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data["wellbeing"]["history"].append(
+        {
+            "ts": "2026-10-19T09:30:00+02:00",
+            "key": "great",
+            "label": "<img src=x onerror=alert(1)>",
+            "emoji": "<b>",
+            "score": 5,
+        }
+    )
+    spec = {
+        "entry_id": "entry-1",
+        "display_name": "Alex",
+        "live_wellbeing": "unknown",
+        "live_score": 4,
+        "data": data,
+    }
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_VIEWS_RUNNER,
+            [str(views_copy), json.dumps(spec)],
+            "runner_panel_history",
+        )
+    )
+    html = out["html"]
+
+    match = re.search(r'<ul class="wb-history">(.*?)</ul>', html, re.S)
+    assert match is not None, "die Verlaufsliste fehlt im gerenderten Tab"
+    history_html = match.group(1)
+
+    # Der Historieneintrag traegt Label, Emoji, relativen Zeitpunkt und Score.
+    assert "Sehr schlecht" in history_html
+    assert "\U0001f635" in history_html
+    assert "1 / 5" in history_html
+    assert re.search(r"vor \d+ |gerade eben", history_html), (
+        f"der Zeitpunkt der Verlaufsliste fehlt: {history_html}"
+    )
+    # Der aktuelle Live-Wert (4) gehoert NICHT in die Verlaufsliste.
+    assert "4 / 5" not in history_html
+    # Kein rohes JSON.
+    assert '{"' not in history_html
+
+    # Hostile Felder sind escaped — kein Markup aus Nutzerdaten.
+    assert "&lt;img src=x onerror=alert(1)&gt;" in history_html, (
+        f"das hostile Label ist nicht escaped: {history_html}"
+    )
+    assert "&lt;b&gt;" in history_html, f"das hostile Emoji ist nicht escaped: {history_html}"
+    assert "<img src=x" not in history_html
+    assert "<b>" not in history_html
+    # Neueste Meldung oben: der 09:30-Eintrag steht vor dem 08:00-Eintrag.
+    assert history_html.index("&lt;img src=x") < history_html.index("Sehr schlecht"), (
+        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
+    )

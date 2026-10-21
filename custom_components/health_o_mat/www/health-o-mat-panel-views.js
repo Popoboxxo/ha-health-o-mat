@@ -406,22 +406,38 @@ function wellbeingTab(panel, data, entryId) {
       ${at ? `<span class="muted">\u00B7 ${escapeHtml(at)}</span>` : ""}
     </div>`;
 
+  /* Verlaufsliste UNTER dem Chart: pro Eintrag Zeitpunkt (relativ), Emoji,
+   * Label und Score ("3 / 5"). Reine Anzeige aus `wellbeing.history` (letzte
+   * 20) — kein rohes JSON, alle Texte escaped. Neueste Meldung OBEN
+   * (`slice(-20).reverse()`), der Chart bleibt unveraendert chronologisch.
+   * Unbekannte Keys/Felder fallen defensiv auf die kanonische Skala bzw.
+   * einen neutralen Text zurueck. */
   const history = Array.isArray(data.wellbeing && data.wellbeing.history)
     ? data.wellbeing.history
     : [];
-  const histHtml = history.length
+  const histItems = history
+    .slice(-20)
+    .reverse()
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return "";
+      const entryKey = String(entry.key || "").toLowerCase();
+      const knownState = WELLBEING_STATES.find((state) => state.key === entryKey);
+      const entryAt = entry.ts ? relativeTime(entry.ts) : "";
+      const entryLabel = entry.label || (knownState && knownState.label) || "Keine Angabe";
+      const entryEmoji = entry.emoji || (knownState && knownState.emoji) || "\u{1F642}";
+      const entryScore = wellbeingScore(entry);
+      return `<li class="wb-hist">
+          <span class="emoji" aria-hidden="true">${escapeHtml(entryEmoji)}</span>
+          <span class="wb-hist-label">${escapeHtml(entryLabel)}</span>
+          <span class="wb-hist-time">${escapeHtml(entryAt || "ohne Zeitangabe")}</span>
+          ${entryScore != null ? `<span class="wb-hist-score">${entryScore} / ${WELLBEING_SCORE_MAX}</span>` : ""}
+        </li>`;
+    })
+    .join("");
+  const histHtml = histItems
     ? `<div class="card">
         <div class="muted">Verlauf</div>
-        <div class="wb-history">${history
-          .slice(-20)
-          .map((h) => {
-            const hAt = h && h.ts ? relativeTime(h.ts) : "";
-            return `<span class="wb-hist" title="${escapeHtml(h && h.label ? h.label : "")}">
-                <span class="emoji" aria-hidden="true">${escapeHtml((h && h.emoji) || "\u{1F642}")}</span>
-                <span>${escapeHtml(hAt)}</span>
-              </span>`;
-          })
-          .join("")}</div>
+        <ul class="wb-history">${histItems}</ul>
       </div>`
     : "";
 

@@ -338,10 +338,18 @@ export const PANEL_CSS = `
     background: var(--secondary-background-color, rgba(3,169,244,.1)); }
   @media (max-width: 400px) { .wb-btn .lbl { display: none; } }
 
-  .wb-history { display: flex; flex-wrap: wrap; gap: 8px; }
-  .wb-hist { display: flex; flex-direction: column; align-items: center; gap: 2px;
-    font-size: .68rem; color: var(--secondary-text-color, #727272); min-width: 40px; }
-  .wb-hist .emoji { font-size: 1.3rem; line-height: 1; }
+  .wb-history { display: flex; flex-direction: column; gap: 4px;
+    list-style: none; margin: 0; padding: 0; }
+  .wb-hist { display: flex; align-items: center; gap: 8px; min-width: 0;
+    font-size: .82rem; color: var(--primary-text-color, #212121);
+    padding: 4px 0; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
+  .wb-hist:last-child { border-bottom: none; }
+  .wb-hist .emoji { font-size: 1.2rem; line-height: 1; flex: none; }
+  .wb-hist-label { flex: 1 1 auto; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .wb-hist-time { flex: none; font-size: .72rem; color: var(--secondary-text-color, #727272); }
+  .wb-hist-score { flex: none; font-weight: 600; font-size: .78rem;
+    color: var(--primary-color, #03a9f4); white-space: nowrap; }
 
   /* --- Wohlbefinden-Score-Chart (REQ-HOM-112) ---------------------------- */
   .wb-chart { width: 100%; }
