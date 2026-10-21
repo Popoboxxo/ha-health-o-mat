@@ -5,12 +5,37 @@
  * Self-contained ES2020, delivered bundled by the integration (see frontend.py)
  * and auto-registered as a Lovelace resource.
  *
- * Config:
+ * Config (all keys optional). Every switch defaults to ON — precisely:
+ *   - the pre-existing display blocks keep their previous defaults (ON), so an
+ *     existing dashboard renders unchanged;
+ *   - the input blocks added with this schema are a NEW feature and ON by
+ *     default (deliberate, per the approved schema "Eingaben an"). An existing
+ *     config that does not mention them therefore gains the input blocks.
+ *
  *   type: custom:health-o-mat-card
  *   entry_id: <config entry id>   # optional; omitted => person picker via list_persons
  *   person: <service anchor name> # optional; service-call hint for add_drink/undo
- *   quick_drinks:                 # optional; overrides the built-in presets
+ *   # Display blocks
+ *   show_person: true             # person dropdown in the header
+ *   show_hydration: true          # ring + daily values + pace/streak/caffeine
+ *   show_blood_pressure: true     # last reading (+ category/warning)
+ *   show_wellbeing: true          # last wellbeing + score + trend
+ *   # Input blocks
+ *   show_drinks: true             # quick-drink buttons
+ *   show_manual_amounts: true     # preset ml buttons (+ optional free field)
+ *   show_blood_pressure_input: true
+ *   show_wellbeing_input: true
+ *   show_undo: true
+ *   # Drink selection (keys of the integration's quick drinks) / amounts
+ *   drinks: ["glas_wasser", "kaffee"]  # absent/empty/unknown => all
+ *   manual_amounts: [200, 500]
+ *   allow_custom_amount: true
+ *   # Legacy escape hatch (wins over `drinks` and the integration list):
+ *   quick_drinks:
  *     - { label: "Glas", ml: 200, emoji: "💧" }
+ *
+ * `show_blood_pressure_input: true` set EXPLICITLY wins over
+ * `show_blood_pressure: false`; otherwise the input follows the display flag.
  *
  * Data flow (no polling, no own timer):
  *   - first `hass` set  -> load health_o_mat/panel_data (resolve entity ids)
@@ -22,12 +47,27 @@ const CARD_TAG = "health-o-mat-card";
 const EDITOR_TAG = "health-o-mat-card-editor";
 const CARD_VERSION = "0.1.0";
 
+/* Eingebaute Fallback-Getraenke (nur wenn weder `quick_drinks` noch
+ * `panel_data.quick_drinks` vorliegen). Die `key`s entsprechen den
+ * Server-Defaults (const.DEFAULT_QUICK_DRINKS), damit die `drinks`-Auswahl der
+ * Karte auch ohne Backend-Daten funktioniert. */
 const DEFAULT_QUICK_DRINKS = [
-  { label: "Glas Wasser", ml: 200, emoji: "\u{1F4A7}" },
-  { label: "Flasche", ml: 500, emoji: "\u{1F376}" },
-  { label: "Kaffee", ml: 250, emoji: "\u2615" },
-  { label: "Saft", ml: 200, emoji: "\u{1F964}" },
+  { key: "glas_wasser", label: "Glas Wasser", ml: 200, emoji: "\u{1F4A7}" },
+  { key: "flasche_wasser", label: "Flasche", ml: 500, emoji: "\u{1F376}" },
+  { key: "kaffee", label: "Kaffee", ml: 250, emoji: "\u2615" },
+  { key: "saft", label: "Saft", ml: 200, emoji: "\u{1F964}" },
 ];
+
+/* Material-Design-Icons der Integrations-Quick-Drinks -> Karten-Emoji.
+ * Unbekannte Icons fallen auf den neutralen Tropfen zurueck (die Karte zeigt
+ * Emoji, die Integrationsliste liefert mdi-Namen). */
+const DRINK_ICON_EMOJI = {
+  "mdi:glass-water": "\u{1F4A7}",
+  "mdi:bottle-water": "\u{1F376}",
+  "mdi:coffee": "\u2615",
+  "mdi:fruit-citrus": "\u{1F964}",
+};
+const DEFAULT_DRINK_EMOJI = "\u{1F4A7}";
 
 const WELLBEING_EMOJI = {
   awful: "\u{1F635}",
@@ -46,12 +86,42 @@ const WELLBEING_EMOJI = {
  * Die Karte ist eine eigenstaendige Datei ohne Imports — der Mirror wird
  * deshalb hier gepflegt (Panel: WELLBEING_STATES in panel-base). */
 const WELLBEING_SCALE = [
-  { key: "very_bad", label: "Sehr schlecht" },
-  { key: "bad", label: "Schlecht" },
-  { key: "okay", label: "Okay" },
-  { key: "good", label: "Gut" },
-  { key: "great", label: "Super" },
+  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F635}" },
+  { key: "bad", label: "Schlecht", emoji: "\u{1F641}" },
+  { key: "okay", label: "Okay", emoji: "\u{1F610}" },
+  { key: "good", label: "Gut", emoji: "\u{1F642}" },
+  { key: "great", label: "Super", emoji: "\u{1F604}" },
 ];
+
+/* ---- Karten-Konfiguration (docs/PLAN-CARD-CONFIG.md) ---------------------
+ * Alle Schalter sind optional; `true` ist der Default. Das gilt bewusst AUCH
+ * fuer die Eingabe-Schalter: sie sind eine neue Funktion (Schema: "Eingaben
+ * an"), kein Rueckwaertsversprechen — siehe Dateikopf.
+ * Die Liste ist die EINZIGE Quelle fuer die Schalter-Namen — sie wird vom
+ * Normalisierer und vom Karten-Editor verwendet. */
+const CARD_SHOW_KEYS = [
+  "show_person",
+  "show_hydration",
+  "show_blood_pressure",
+  "show_wellbeing",
+  "show_drinks",
+  "show_manual_amounts",
+  "show_blood_pressure_input",
+  "show_wellbeing_input",
+  "show_undo",
+];
+
+const DEFAULT_MANUAL_AMOUNTS = [200, 500];
+const MIN_AMOUNT_ML = 1;
+const MAX_AMOUNT_ML = 10000;
+
+/* Bereichsgrenzen der Blutdruck-Eingabe (Spiegel der Backend-Validierung). */
+const BP_SYS_MIN = 40;
+const BP_SYS_MAX = 260;
+const BP_DIA_MIN = 40;
+const BP_DIA_MAX = 260;
+const PULSE_MIN = 20;
+const PULSE_MAX = 250;
 
 /* Anzahl der Meldungen im kompakten Trend der Karte. */
 const WELLBEING_TREND_POINTS = 14;
@@ -167,7 +237,55 @@ const CARD_CSS = `
     color: var(--secondary-text-color, #727272);
   }
   .msg.error { color: var(--error-color, #db4437); }
+  .banner {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 10px; font-size: .9rem; font-weight: 600;
+    background: var(--secondary-background-color, rgba(0,0,0,.04));
+    border-left: 4px solid var(--error-color, #db4437);
+    color: var(--error-color, #db4437);
+  }
   .msg button { margin-top: 10px; flex: none; min-height: 40px; }
+  .block { display: flex; flex-direction: column; gap: 10px; }
+  .form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .form .field { flex: 1 1 84px; min-width: 72px; }
+  .form > button { flex: 0 0 auto; min-width: 104px; min-height: 48px; flex-direction: row; }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: .8rem;
+    color: var(--secondary-text-color, #727272); min-width: 0; }
+  .field input, .field textarea, .custom-amount input, details.note textarea, input[type="number"] {
+    width: 100%; box-sizing: border-box; min-height: 48px; padding: 8px 10px;
+    font: inherit; font-size: 1rem; border-radius: 10px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2));
+    background: var(--card-background-color, #fff);
+    color: var(--primary-text-color, #212121);
+  }
+  .custom-amount { display: flex; gap: 8px; align-items: stretch; }
+  .custom-amount input { flex: 1 1 auto; }
+  .custom-amount button { flex: 0 0 auto; min-width: 96px; min-height: 48px; }
+  .form-error {
+    color: var(--error-color, #db4437); font-size: .85rem;
+    display: flex; align-items: center; gap: 6px;
+  }
+  details.note { border-top: 1px solid var(--divider-color, rgba(0,0,0,.1)); padding-top: 8px; }
+  details.note summary {
+    cursor: pointer; min-height: 40px; display: flex; align-items: center;
+    font-size: .85rem; color: var(--secondary-text-color, #727272);
+  }
+  details.note textarea { margin-top: 6px; resize: vertical; font-family: inherit; }
+  .wb-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .wb-actions button {
+    flex: none; min-height: 64px; padding: 6px 2px;
+    background: var(--secondary-background-color, rgba(0,0,0,.05));
+    color: var(--primary-text-color, #212121);
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+  }
+  .wb-actions button .emoji { font-size: 1.4rem; line-height: 1; }
+  .wb-actions button .ml { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .wb-actions button.active {
+    outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 1px;
+    background: var(--primary-color, #03a9f4);
+    color: var(--text-primary-color, #fff);
+  }
+  @media (max-width: 380px) { .wb-actions button .ml { display: none; } }
   .editor { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
   .editor label { font-size: .85rem; color: var(--secondary-text-color, #727272); }
   .editor input {
@@ -176,6 +294,22 @@ const CARD_CSS = `
     background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
   }
   .editor-hint { margin-top: 4px; font-size: .75rem; color: var(--secondary-text-color, #727272); }
+  .editor-group { display: flex; flex-direction: column; gap: 6px; }
+  .editor-group-title { font-size: .85rem; font-weight: 600; }
+  .editor-check {
+    display: flex; align-items: center; gap: 8px; min-height: 40px;
+    font-size: .9rem; color: var(--primary-text-color, #212121); cursor: pointer;
+  }
+  .editor-check input { width: 20px; height: 20px; min-height: 0; margin: 0; }
+  .editor-check .ml { font-size: .78rem; color: var(--secondary-text-color, #727272); }
+  .editor-row { display: flex; align-items: center; gap: 8px; }
+  .editor-row input[type="number"] { flex: 1 1 auto; min-height: 40px; }
+  .editor-row button {
+    flex: 0 0 auto; min-width: 44px; min-height: 40px; padding: 4px 10px;
+    flex-direction: row; font-size: .9rem;
+  }
+  .editor-row button.ghost { background: transparent; }
+  .editor-list { display: flex; flex-direction: column; gap: 6px; }
 `;
 
 function escapeHtml(value) {
@@ -194,6 +328,110 @@ function toNumber(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+/* Defensive Boolean-Aufloesung: akzeptiert echte Booleans und die ueblichen
+ * String-Schreibweisen ("on"/"off" aus YAML-Checkboxen). Alles Unbekannte
+ * faellt auf `fallback` zurueck — nie ein Render-Crash. */
+function toBool(value, fallback) {
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    if (text === "true" || text === "on" || text === "yes" || text === "1") return true;
+    if (text === "false" || text === "off" || text === "no" || text === "0") return false;
+  }
+  return fallback;
+}
+
+/* `drinks`: Liste von Integrations-Quick-Drink-Keys. Nur nicht-leere Strings
+ * zaehlen; Duplikate fallen weg. Kein Array -> leere Auswahl (= alle). */
+function normalizeDrinkKeys(value) {
+  if (!Array.isArray(value)) return [];
+  const keys = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const key = item.trim();
+    if (key && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/* `manual_amounts`: positive Ganzzahlen in ml, geklemmt auf 1…10000.
+ * Nicht-numerische/≤0-Werte fallen weg; eine leere Liste (oder kein Array)
+ * bedeutet den Default [200, 500]. */
+function normalizeAmountList(value) {
+  if (!Array.isArray(value)) return DEFAULT_MANUAL_AMOUNTS.slice();
+  const amounts = [];
+  for (const item of value) {
+    const number = toNumber(item, NaN);
+    if (!Number.isFinite(number) || number <= 0) continue;
+    const ml = Math.round(clamp(number, MIN_AMOUNT_ML, MAX_AMOUNT_ML));
+    if (!amounts.includes(ml)) amounts.push(ml);
+  }
+  return amounts.length ? amounts : DEFAULT_MANUAL_AMOUNTS.slice();
+}
+
+/* Legacy-Override `quick_drinks: [{label, ml, emoji}]` — defensiv bereinigt. */
+function normalizeLegacyQuickDrinks(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((drink) => ({
+      label: drink && drink.label ? String(drink.label) : "Getränk",
+      ml: toNumber(drink && drink.ml, 0),
+      emoji: drink && drink.emoji ? String(drink.emoji) : DEFAULT_DRINK_EMOJI,
+    }))
+    .filter((drink) => drink.ml > 0);
+}
+
+/* Normalisiert die rohe Lovelace-Konfiguration. WICHTIG: die Information,
+ * welche Schalter EXPLIZIT gesetzt wurden, bleibt in `explicit` erhalten —
+ * nur so kann `show_blood_pressure_input: true` den Anzeige-Schalter
+ * `show_blood_pressure: false` uebersteuern. */
+function normalizeCardConfig(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const explicit = new Set(Object.keys(source));
+  const flags = {};
+  for (const key of CARD_SHOW_KEYS) {
+    flags[key] = toBool(source[key], true);
+  }
+  // Die BD-Eingabe folgt dem Anzeige-Schalter, AUSSER sie ist explizit gesetzt.
+  if (!explicit.has("show_blood_pressure_input")) {
+    flags.show_blood_pressure_input = flags.show_blood_pressure;
+  }
+  return {
+    entryId: source.entry_id ? String(source.entry_id) : "",
+    person: source.person ? String(source.person) : "",
+    flags,
+    explicit,
+    drinks: normalizeDrinkKeys(source.drinks),
+    manualAmounts: normalizeAmountList(source.manual_amounts),
+    allowCustomAmount: toBool(source.allow_custom_amount, true),
+    quickDrinks: normalizeLegacyQuickDrinks(source.quick_drinks),
+  };
+}
+
+/* Serverseitige Quick-Drink -> Karten-Darstellung. Die Integration liefert
+ * `{key,label,ml,icon}` (mdi-Icon); die Karte zeigt Emoji.
+ * Der Schluessel ist defensiv: das Backend liefert fuer Eintraege ohne Key
+ * einen LEEREN String (nicht `null`/fehlend) — ein leerer Key faellt deshalb
+ * ebenfalls auf den stabilen Slot-Namen zurueck (`slot_<index>`). */
+function normalizeServerQuickDrinks(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((drink, index) => {
+      const icon = drink && drink.icon ? String(drink.icon) : "";
+      const rawKey = drink && drink.key != null ? String(drink.key).trim() : "";
+      return {
+        key: rawKey || `slot_${index}`,
+        label: drink && drink.label ? String(drink.label) : "Getränk",
+        ml: toNumber(drink && drink.ml, 0),
+        emoji:
+          (drink && drink.emoji ? String(drink.emoji) : "") ||
+          DRINK_ICON_EMOJI[icon] ||
+          DEFAULT_DRINK_EMOJI,
+      };
+    })
+    .filter((drink) => drink.ml > 0);
 }
 
 function bpCategoryLabel(value) {
@@ -366,6 +604,8 @@ class HealthOMatCard extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = null;
+    this._cfg = null;
+    this._cfgSource = null;
     this._hass = null;
     this._data = null;
     this._persons = null;
@@ -373,11 +613,27 @@ class HealthOMatCard extends HTMLElement {
     this._error = null;
     this._loading = false;
     this._busyMl = null;
+    this._busyBp = false;
+    this._busyWb = false;
+    this._amountError = "";
+    this._bpError = "";
+    this._wbError = "";
+    /* Fehler einer AKTION (buchen/undo) — eigener Kanal, damit er auch
+     * sichtbar bleibt, wenn Daten bereits geladen sind (`_error` ist fuer
+     * Ladefehler reserviert). */
+    this._actionError = "";
+    /* Getippte, noch nicht gesendete BD-Werte. Ein Re-Render (z. B. durch
+     * eine Schnellbuchung oder eine Validierungsmeldung) darf sie nicht
+     * loeschen — `_bloodPressureInput` setzt sie wieder ein. */
+    this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+    /* Getippte eigene Menge: ueberlebt einen fehlgeschlagenen Submit
+     * (Validierung oder Service-Fehler) und wird nach Erfolg geleert. */
+    this._amountDraft = "";
     this._renderScheduled = false;
+    this._listenersAttached = false;
     this._onCardClick = this._onCardClick.bind(this);
+    this._onCardInput = this._onCardInput.bind(this);
     this._onSelectChange = this._onSelectChange.bind(this);
-    this.shadowRoot.addEventListener("click", this._onCardClick);
-    this.shadowRoot.addEventListener("change", this._onSelectChange);
   }
 
   /* ---- Lovelace card API -------------------------------------------------- */
@@ -389,16 +645,37 @@ class HealthOMatCard extends HTMLElement {
   setConfig(config) {
     if (!config) throw new Error("health-o-mat-card: configuration is required");
     this._config = config;
+    // Neu normalisieren (inkl. der explizit gesetzten Schalter).
+    this._cfg = null;
+    this._cfgSource = null;
     this._data = null;
     this._persons = null;
     this._error = null;
+    this._amountError = "";
+    this._bpError = "";
+    this._wbError = "";
+    this._actionError = "";
+    this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+    this._amountDraft = "";
     this._activeEntry = activeEntryId(config, "");
     this._render();
     if (this._hass) this._loadData();
   }
 
+  /* Grobe Hoehen-Schaetzung fuer Lovelace — aus den AKTIVEN Bloecken
+   * abgeleitet statt fix. Mindestens 1 (Kopfzeile). */
   getCardSize() {
-    return 5;
+    const flags = this._flags();
+    let size = 1; // Kopfzeile
+    if (flags.show_hydration) size += 2; // Ring + Tageswerte
+    if (flags.show_blood_pressure) size += 1;
+    if (flags.show_wellbeing) size += 2; // Zeile + Sparkline
+    if (flags.show_drinks) size += 1;
+    if (flags.show_manual_amounts) size += 1;
+    if (flags.show_blood_pressure_input) size += 2; // Formular + Notiz
+    if (flags.show_wellbeing_input) size += 2; // 5 Buttons
+    if (flags.show_undo) size += 1;
+    return Math.max(1, size);
   }
 
   getConfigElement() {
@@ -421,9 +698,22 @@ class HealthOMatCard extends HTMLElement {
     return this._hass;
   }
 
+  connectedCallback() {
+    /* Lovelace haengt die Karte beim Mounten einer Ansicht ab und wieder an.
+     * Die Listener muessen daher hier (neu) registriert werden — eine
+     * Registrierung nur im Konstruktor ist nach dem ersten Detach verloren. */
+    if (this._listenersAttached) return;
+    this.shadowRoot.addEventListener("click", this._onCardClick);
+    this.shadowRoot.addEventListener("input", this._onCardInput);
+    this.shadowRoot.addEventListener("change", this._onSelectChange);
+    this._listenersAttached = true;
+  }
+
   disconnectedCallback() {
     this.shadowRoot.removeEventListener("click", this._onCardClick);
+    this.shadowRoot.removeEventListener("input", this._onCardInput);
     this.shadowRoot.removeEventListener("change", this._onSelectChange);
+    this._listenersAttached = false;
   }
 
   /* ---- Data --------------------------------------------------------------- */
@@ -458,6 +748,9 @@ class HealthOMatCard extends HTMLElement {
       });
       this._data = data || null;
       this._error = this._data ? null : "Keine Daten für diese Person.";
+      /* Ein erfolgreicher stiller Reload (nach einer Aktion) beendet den
+       * Fehlerzustand: eine alte Aktions-Meldung darf nicht stehen bleiben. */
+      if (silent && this._data) this._actionError = "";
     } catch (err) {
       this._error = (err && err.message) ? err.message : String(err);
       if (!silent) this._data = null;
@@ -493,6 +786,22 @@ class HealthOMatCard extends HTMLElement {
     return toNumber(raw, fallback);
   }
 
+  /* ---- Normalized config -------------------------------------------------- */
+
+  /* Normalisierte Konfiguration (gecacht, bis `_config` ersetzt wird). Wird
+   * `_config` von aussen direkt gesetzt (Tests), greift die Neuberechnung. */
+  _configNorm() {
+    if (!this._cfg || this._cfgSource !== this._config) {
+      this._cfg = normalizeCardConfig(this._config);
+      this._cfgSource = this._config;
+    }
+    return this._cfg;
+  }
+
+  _flags() {
+    return this._configNorm().flags;
+  }
+
   /* ---- Feature areas ------------------------------------------------------ */
 
   _areas() {
@@ -520,22 +829,29 @@ class HealthOMatCard extends HTMLElement {
     return (this._data && this._data.person) || "";
   }
 
-  async _book(ml) {
+  /* Bucht eine Menge. `drinkType` ist das LABEL des Getraenks (Bugfix:
+   * ohne `drink_type` landete jede Buchung als "Eigen"); manuelle Mengen
+   * uebergeben explizit "Eigen". */
+  async _book(ml, drinkType) {
     if (!this._hass || this._busyMl != null) return;
     const value = toNumber(ml, 0);
     if (value <= 0) return;
+    // Neuer Versuch: eine alte Aktions-Meldung verschwindet sofort.
+    this._actionError = "";
     this._busyMl = value;
     this._render();
     try {
       await Promise.resolve(
         this._hass.callService("health_o_mat", "add_drink", {
           amount_ml: value,
+          drink_type: drinkType ? String(drinkType) : "Eigen",
           person: this._servicePerson(),
         })
       );
+      this._actionError = "";
       await this._loadData(true);
     } catch (err) {
-      this._error = (err && err.message) ? err.message : String(err);
+      this._actionError = (err && err.message) ? err.message : String(err);
       this._render();
     } finally {
       this._busyMl = null;
@@ -543,8 +859,120 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
+  _readInput(role) {
+    const el = this.shadowRoot.querySelector(`[data-role="${role}"]`);
+    return el && el.value != null ? String(el.value).trim() : "";
+  }
+
+  /* Ganzzahl aus einem Eingabefeld; alles andere -> NaN (kein parseInt-Trick,
+   * damit "12.5" oder "12abc" NICHT als 12 durchgehen). */
+  _readInt(role) {
+    const raw = this._readInput(role);
+    if (!/^\d+$/.test(raw)) return NaN;
+    return Number.parseInt(raw, 10);
+  }
+
+  async _submitCustomAmount() {
+    if (!this._hass || this._busyMl != null) return;
+    this._amountError = "";
+    const raw = this._readInput("custom-amount");
+    // Getippten Wert merken: er darf bei Fehlern nicht verloren gehen.
+    this._amountDraft = raw;
+    const value = Number.parseInt(raw, 10);
+    const valid =
+      /^\d+$/.test(raw) && Number.isFinite(value) && value >= MIN_AMOUNT_ML && value <= MAX_AMOUNT_ML;
+    if (!valid) {
+      this._amountError =
+        `Bitte eine ganze Zahl zwischen ${MIN_AMOUNT_ML} und ${MAX_AMOUNT_ML} ml eingeben.`;
+      this._render();
+      return;
+    }
+    await this._book(value, "Eigen");
+    // `_book` meldet Service-Fehler im Aktions-Kanal und laesst den Entwurf
+    // stehen; nur der Erfolg raeumt Feld und Fehlermeldung.
+    if (!this._actionError) {
+      this._amountDraft = "";
+      this._amountError = "";
+      this._render();
+    }
+  }
+
+  async _saveBp() {
+    if (!this._hass || this._busyBp) return;
+    this._bpError = "";
+    const sys = this._readInt("bp-sys");
+    const dia = this._readInt("bp-dia");
+    const pulseRaw = this._readInput("bp-pulse");
+    const pulse = pulseRaw === "" ? null : this._readInt("bp-pulse");
+    const note = this._readInput("bp-note");
+
+    let error = "";
+    if (!Number.isInteger(sys) || sys < BP_SYS_MIN || sys > BP_SYS_MAX) {
+      error = `Systolisch: ganze Zahl zwischen ${BP_SYS_MIN} und ${BP_SYS_MAX}.`;
+    } else if (!Number.isInteger(dia) || dia < BP_DIA_MIN || dia > BP_DIA_MAX) {
+      error = `Diastolisch: ganze Zahl zwischen ${BP_DIA_MIN} und ${BP_DIA_MAX}.`;
+    } else if (pulseRaw !== "" && (!Number.isInteger(pulse) || pulse < PULSE_MIN || pulse > PULSE_MAX)) {
+      error = `Puls: ganze Zahl zwischen ${PULSE_MIN} und ${PULSE_MAX} — oder leer lassen.`;
+    }
+    if (error) {
+      this._bpError = error;
+      this._render();
+      return;
+    }
+
+    this._busyBp = true;
+    this._render();
+    try {
+      const payload = {
+        systolic: sys,
+        diastolic: dia,
+        person: this._servicePerson(),
+      };
+      if (pulse != null) payload.pulse = pulse;
+      if (note) payload.note = note;
+      await Promise.resolve(
+        this._hass.callService("health_o_mat", "add_blood_pressure", payload)
+      );
+      // Erfolgreich gespeichert: der Entwurf ist erledigt (der naechste
+      // Render startet mit leeren Feldern).
+      this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+      await this._loadData(true);
+    } catch (err) {
+      this._bpError = (err && err.message) ? err.message : String(err);
+      this._render();
+    } finally {
+      this._busyBp = false;
+      this._render();
+    }
+  }
+
+  async _reportWellbeing(key) {
+    if (!this._hass || this._busyWb) return;
+    const status = key == null ? "" : String(key);
+    if (!this._wellbeingScale().some((state) => state.key === status)) return;
+    this._busyWb = true;
+    this._wbError = "";
+    this._render();
+    try {
+      await Promise.resolve(
+        this._hass.callService("health_o_mat", "set_wellbeing", {
+          status: status,
+          person: this._servicePerson(),
+        })
+      );
+      await this._loadData(true);
+    } catch (err) {
+      this._wbError = (err && err.message) ? err.message : String(err);
+      this._render();
+    } finally {
+      this._busyWb = false;
+      this._render();
+    }
+  }
+
   async _undo() {
     if (!this._hass || this._busyMl != null) return;
+    this._actionError = "";
     this._busyMl = -1;
     this._render();
     try {
@@ -553,9 +981,10 @@ class HealthOMatCard extends HTMLElement {
           person: this._servicePerson(),
         })
       );
+      this._actionError = "";
       await this._loadData(true);
     } catch (err) {
-      this._error = (err && err.message) ? err.message : String(err);
+      this._actionError = (err && err.message) ? err.message : String(err);
       this._render();
     } finally {
       this._busyMl = null;
@@ -563,29 +992,95 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
+  /* Getraenke-Quellen in Vorrang-Reihenfolge:
+   * 1. Legacy-Override `quick_drinks` der Karte (gewinnt immer),
+   * 2. `panel_data.quick_drinks` der Integration, gefiltert nach `drinks`,
+   * 3. eingebaute DEFAULT_QUICK_DRINKS (keine Backend-Daten).
+   * Eine leere Schnittmenge (oder keine Auswahl) bedeutet "alle" — nie ein
+   * leerer Zustand. */
   _quickDrinks() {
-    const configured = this._config && this._config.quick_drinks;
-    if (Array.isArray(configured) && configured.length) {
-      const cleaned = configured
-        .map((d) => ({
-          label: d && d.label ? String(d.label) : "Getränk",
-          ml: toNumber(d && d.ml, 0),
-          emoji: d && d.emoji ? String(d.emoji) : "\u{1F4A7}",
-        }))
-        .filter((d) => d.ml > 0);
-      if (cleaned.length) return cleaned;
+    const cfg = this._configNorm();
+    if (cfg.quickDrinks.length) return cfg.quickDrinks;
+    const server = normalizeServerQuickDrinks(this._data && this._data.quick_drinks);
+    const list = server.length ? server : DEFAULT_QUICK_DRINKS;
+    if (!cfg.drinks.length) return list;
+    const filtered = list.filter((drink) => cfg.drinks.includes(drink.key));
+    return filtered.length ? filtered : list;
+  }
+
+  /* Wohlbefinden-Skala: serverseitig geliefert (falls vorhanden), sonst der
+   * Mirror WELLBEING_SCALE (inkl. Emoji). */
+  _wellbeingScale() {
+    const server = this._data && Array.isArray(this._data.wellbeing_scale)
+      ? this._data.wellbeing_scale
+      : [];
+    const cleaned = server
+      .map((state) => ({
+        key: state && state.key != null ? String(state.key) : "",
+        label: state && state.label ? String(state.label) : "",
+        emoji: state && state.emoji ? String(state.emoji) : "",
+      }))
+      .filter((state) => state.key);
+    if (cleaned.length) {
+      return cleaned.map((state) => ({
+        key: state.key,
+        label: state.label || state.key,
+        emoji: state.emoji || WELLBEING_EMOJI[state.key] || "\u{1F642}",
+      }));
     }
-    return DEFAULT_QUICK_DRINKS;
+    return WELLBEING_SCALE;
+  }
+
+  /* Aktuell gemeldeter Zustand (Live-Entity nur, wenn ihr Wert selbst ein
+   * Skalen-Key ist — die Entity liefert sonst den Zeitstempel). */
+  _wellbeingCurrentKey() {
+    const scale = this._wellbeingScale();
+    const live = this._stateValue(this._entity("wellbeing"), undefined);
+    const liveKey = live != null ? String(live).toLowerCase() : "";
+    if (scale.some((state) => state.key === liveKey)) return liveKey;
+    const wb = (this._data && this._data.wellbeing) || {};
+    return String(wb.key || "").toLowerCase();
   }
 
   /* ---- Events ------------------------------------------------------------- */
+
+  /* Getippte BD-Werte in den Entwurf uebernehmen — OHNE Re-Render (sonst
+   * waere das Feld nach jedem Zeichen neu aufgebaut). Der Entwurf wird beim
+   * naechsten Render wieder eingesetzt und ueberlebt damit Schnellbuchungen
+   * und Validierungsmeldungen. */
+  _onCardInput(ev) {
+    const target = ev.target;
+    if (!target || !target.getAttribute) return;
+    const role = target.getAttribute("data-role") || "";
+    const value = target.value == null ? "" : String(target.value);
+    if (role === "custom-amount") {
+      // Getippte eigene Menge ebenfalls ohne Re-Render merken.
+      this._amountDraft = value;
+      return;
+    }
+    if (!role.startsWith("bp-")) return;
+    if (!this._bpDraft) this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+    if (role === "bp-sys") this._bpDraft.sys = value;
+    else if (role === "bp-dia") this._bpDraft.dia = value;
+    else if (role === "bp-pulse") this._bpDraft.pulse = value;
+    else if (role === "bp-note") this._bpDraft.note = value;
+  }
 
   _onCardClick(ev) {
     const target = ev.target && ev.target.closest ? ev.target.closest("[data-action]") : null;
     if (!target) return;
     const action = target.getAttribute("data-action");
     if (action === "book") {
-      this._book(toNumber(target.getAttribute("data-ml"), 0));
+      this._book(
+        toNumber(target.getAttribute("data-ml"), 0),
+        target.getAttribute("data-drink-type")
+      );
+    } else if (action === "book-custom") {
+      this._submitCustomAmount();
+    } else if (action === "save-bp") {
+      this._saveBp();
+    } else if (action === "wellbeing") {
+      this._reportWellbeing(target.getAttribute("data-key"));
     } else if (action === "undo") {
       this._undo();
     } else if (action === "retry") {
@@ -598,16 +1093,33 @@ class HealthOMatCard extends HTMLElement {
     if (!target || target.tagName !== "SELECT" || target.getAttribute("data-role") !== "person") {
       return;
     }
-    this._activeEntry = target.value;
-    this._persons = null; // keep the list, only reload data
+    const nextEntry = target.value;
+    if (nextEntry !== this._activeEntry) {
+      /* Personenwechsel: ALLE personenbezogenen Entwuerfe und Fehler
+       * verwerfen. Sonst wuerde z. B. ein fuer Person A getippter
+       * BD-Entwurf unter Person B gerendert und dort gespeichert. */
+      this._bpDraft = null;
+      this._amountDraft = "";
+      this._bpError = "";
+      this._amountError = "";
+      this._wbError = "";
+      this._actionError = "";
+      this._activeEntry = nextEntry;
+    }
+    // Personenliste NICHT verwerfen: sie ist noch gueltig, das Dropdown bleibt
+    // gefuellt und es braucht keinen zweiten `list_persons`-Roundtrip.
     this._loadData();
   }
 
   _scheduleRender() {
     if (this._renderScheduled) return;
-    // Do not clobber an open person dropdown.
+    /* Nicht in eine offene Bedienung hineinrendern: ein offenes
+     * Personen-Dropdown oder ein fokussiertes Eingabefeld (getippte, noch
+     * nicht gesendete Werte) wuerde sonst durch ein `hass`-Update geleert. */
     const active = this.shadowRoot.activeElement;
-    if (active && active.tagName === "SELECT") return;
+    if (active && (active.tagName === "SELECT" || active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      return;
+    }
     this._renderScheduled = true;
     const run = () => {
       this._renderScheduled = false;
@@ -635,12 +1147,21 @@ class HealthOMatCard extends HTMLElement {
 
   _html() {
     const style = `<style>${CARD_CSS}</style>`;
+    /* Aktionsfehler (buchen/undo) sind ein eigener Kanal: sie muessen auch
+     * sichtbar sein, wenn bereits Daten geladen sind — `_error` ist nur fuer
+     * Ladefehler (dann steht statt des Bodys die Fehlermeldung). */
+    const banner = this._data ? this._actionBanner() : "";
     const body = this._data
       ? this._body()
       : this._error
         ? this._message(this._error, true)
         : this._message("Lade Health-O-Mat\u2026", false);
-    return `${style}<ha-card><div class="hom">${this._head()}${body}</div></ha-card>`;
+    return `${style}<ha-card><div class="hom">${this._head()}${banner}${body}</div></ha-card>`;
+  }
+
+  _actionBanner() {
+    if (!this._actionError) return "";
+    return `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(this._actionError)}</div>`;
   }
 
   _message(text, isError) {
@@ -652,8 +1173,14 @@ class HealthOMatCard extends HTMLElement {
 
   _head() {
     const name = (this._data && this._data.person) || "Health-O-Mat";
+    const flags = this._flags();
     let selector = "";
-    if (!this._config.entry_id && this._persons && this._persons.length) {
+    if (
+      flags.show_person &&
+      !this._config.entry_id &&
+      this._persons &&
+      this._persons.length
+    ) {
       const options = this._persons
         .map((p) => {
           const sel = p.entry_id === this._activeEntry ? " selected" : "";
@@ -671,21 +1198,38 @@ class HealthOMatCard extends HTMLElement {
 
   _body() {
     const areas = this._areas();
+    const flags = this._flags();
     const parts = [];
-    if (areas.drink) {
+    // Die Integrations-Bereiche (`areas`) sind ein AND mit den Karten-Flags:
+    // ein abgeschalteter Integrationsbereich bleibt aus, auch wenn die Karte
+    // den Block anzeigen will.
+    if (areas.drink && flags.show_hydration) {
       parts.push(this._hydration());
     }
-    if (areas.bp) {
+    if (areas.bp && flags.show_blood_pressure) {
       parts.push(this._bloodPressure());
     }
-    if (areas.wellbeing) {
+    if (areas.wellbeing && flags.show_wellbeing) {
       parts.push(this._wellbeing());
     }
-    if (areas.drink) {
-      // Quick-drink + undo actions belong to the drinking area.
-      parts.push(this._actions());
+    if (areas.drink && flags.show_drinks) {
+      parts.push(this._drinkActions());
     }
-    return parts.length ? parts.join("") : this._message("Keine Bereiche aktiviert.", false);
+    if (areas.drink && flags.show_manual_amounts) {
+      parts.push(this._manualAmounts());
+    }
+    if (areas.bp && flags.show_blood_pressure_input) {
+      parts.push(this._bloodPressureInput());
+    }
+    if (areas.wellbeing && flags.show_wellbeing_input) {
+      parts.push(this._wellbeingInput());
+    }
+    if (areas.drink && flags.show_undo) {
+      parts.push(this._undoAction());
+    }
+    return parts.length
+      ? parts.join("")
+      : this._message("Keine Blöcke aktiviert — Karten-Konfiguration prüfen.", false);
   }
 
   _hydration() {
@@ -894,20 +1438,137 @@ class HealthOMatCard extends HTMLElement {
     return v == null ? "" : v;
   }
 
-  _actions() {
-    if (this._busyMl != null) {
-      return `<div class="msg">Buchen\u2026</div>`;
-    }
+  _drinkActions() {
+    const busy = this._busyMl != null;
     const buttons = this._quickDrinks()
       .map(
-        (d) => `<button data-action="book" data-ml="${d.ml}">
-            <span>${escapeHtml(d.emoji)} ${escapeHtml(d.label)}</span>
-            <span class="ml">${Math.round(d.ml)} ml</span>
+        (drink) => `<button data-action="book" data-ml="${drink.ml}"
+            data-drink-type="${escapeHtml(drink.label)}"
+            aria-label="${escapeHtml(drink.label)} mit ${Math.round(drink.ml)} Milliliter buchen"${
+              busy ? " disabled" : ""
+            }>
+            <span>${escapeHtml(drink.emoji)} ${escapeHtml(drink.label)}</span>
+            <span class="ml">${Math.round(drink.ml)} ml</span>
           </button>`
       )
       .join("");
-    const undo = `<button class="ghost" data-action="undo"><span>${"\u21A9"}</span><span class="ml">Undo</span></button>`;
-    return `<div class="actions">${buttons}${undo}</div>`;
+    const status = busy
+      ? `<div class="msg" role="status" aria-live="polite">Buchen\u2026</div>`
+      : "";
+    return `<div class="actions">${buttons}</div>${status}`;
+  }
+
+  _manualAmounts() {
+    const cfg = this._configNorm();
+    const flags = cfg.flags;
+    const busy = this._busyMl != null;
+    const presets = cfg.manualAmounts
+      .map(
+        (ml) => `<button data-action="book" data-ml="${ml}" data-drink-type="Eigen"
+            aria-label="${ml} Milliliter als eigene Menge buchen"${busy ? " disabled" : ""}>
+            <span>${ml}</span>
+            <span class="ml">ml</span>
+          </button>`
+      )
+      .join("");
+    const custom = cfg.allowCustomAmount
+      ? `<div class="custom-amount">
+          <input type="number" inputmode="numeric" min="${MIN_AMOUNT_ML}"
+            max="${MAX_AMOUNT_ML}" step="1" data-role="custom-amount"
+            aria-label="Eigene Menge in Milliliter" placeholder="Eigene ml"
+            value="${escapeHtml(this._amountDraft || "")}"${busy ? " disabled" : ""} />
+          <button data-action="book-custom" aria-label="Eigene Menge buchen"${
+            busy ? " disabled" : ""
+          }><span>Buchen</span></button>
+        </div>`
+      : "";
+    /* Eigene Live-Region nur, wenn der Getraenke-Block keine rendert (sonst
+     * gaebe es zwei identische Ansagen fuer dieselbe Buchung). */
+    const drinksStatus = this._areas().drink && flags.show_drinks;
+    const status =
+      busy && !drinksStatus
+        ? `<div class="msg" role="status" aria-live="polite">Buchen\u2026</div>`
+        : "";
+    const error = this._amountError
+      ? `<div class="form-error" role="alert">${escapeHtml(this._amountError)}</div>`
+      : "";
+    return `<div class="block"><div class="actions">${presets}</div>${custom}${status}${error}</div>`;
+  }
+
+  _bloodPressureInput() {
+    const busy = this._busyBp === true;
+    /* Entwurf wieder einsetzen: ein Re-Render (Schnellbuchung,
+     * Validierungsmeldung) darf getippte Werte und die offene Notiz nicht
+     * loeschen. */
+    const draft = this._bpDraft || { sys: "", dia: "", pulse: "", note: "" };
+    const noteOpen = draft.note ? " open" : "";
+    const error = this._bpError
+      ? `<div class="form-error" role="alert">${escapeHtml(this._bpError)}</div>`
+      : "";
+    const disabled = busy ? " disabled" : "";
+    return `<div class="block">
+      <div class="form">
+        <label class="field"><span>Systolisch</span>
+          <input type="number" inputmode="numeric" min="${BP_SYS_MIN}" max="${BP_SYS_MAX}"
+            step="1" data-role="bp-sys" aria-label="Systolischer Wert"
+            value="${escapeHtml(draft.sys)}"${disabled} />
+        </label>
+        <label class="field"><span>Diastolisch</span>
+          <input type="number" inputmode="numeric" min="${BP_DIA_MIN}" max="${BP_DIA_MAX}"
+            step="1" data-role="bp-dia" aria-label="Diastolischer Wert"
+            value="${escapeHtml(draft.dia)}"${disabled} />
+        </label>
+        <label class="field"><span>Puls (optional)</span>
+          <input type="number" inputmode="numeric" min="${PULSE_MIN}" max="${PULSE_MAX}"
+            step="1" data-role="bp-pulse" aria-label="Puls (optional)"
+            value="${escapeHtml(draft.pulse)}"${disabled} />
+        </label>
+        <button data-action="save-bp" aria-label="Blutdruckmessung speichern"${disabled}>
+          <span>${busy ? "Speichern\u2026" : "Speichern"}</span>
+        </button>
+      </div>
+      <details class="note"${noteOpen}>
+        <summary>Notiz (optional)</summary>
+        <textarea data-role="bp-note" rows="2" aria-label="Notiz zur Messung"${disabled}>${escapeHtml(draft.note)}</textarea>
+      </details>
+      ${busy ? `<div class="msg" role="status" aria-live="polite">Speichern\u2026</div>` : ""}
+      ${error}
+    </div>`;
+  }
+
+  _wellbeingInput() {
+    const scale = this._wellbeingScale();
+    const active = this._wellbeingCurrentKey();
+    const busy = this._busyWb === true;
+    const buttons = scale
+      .map(
+        (state) => `<button class="wb-btn${state.key === active ? " active" : ""}"
+            data-action="wellbeing" data-key="${escapeHtml(state.key)}"
+            aria-label="Wohlbefinden melden: ${escapeHtml(state.label)}"
+            aria-pressed="${state.key === active ? "true" : "false"}"${
+              busy ? " disabled" : ""
+            }>
+            <span class="emoji" aria-hidden="true">${escapeHtml(state.emoji)}</span>
+            <span class="ml">${escapeHtml(state.label)}</span>
+          </button>`
+      )
+      .join("");
+    const error = this._wbError
+      ? `<div class="form-error" role="alert">${escapeHtml(this._wbError)}</div>`
+      : "";
+    const status = busy
+      ? `<div class="msg" role="status" aria-live="polite">Melde\u2026</div>`
+      : "";
+    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${status}${error}</div>`;
+  }
+
+  _undoAction() {
+    const busy = this._busyMl != null;
+    return `<div class="actions">
+      <button class="ghost" data-action="undo" aria-label="Letzte Buchung rückgängig machen"${
+        busy ? " disabled" : ""
+      }><span aria-hidden="true">\u21A9</span><span class="ml">Undo</span></button>
+    </div>`;
   }
 
   _relativeTime(iso) {
@@ -931,13 +1592,26 @@ class HealthOMatCardEditor extends HTMLElement {
     this._hass = null;
     this._persons = null;
     this._loading = false;
+    this._drinkList = [];
+    this._drinksEntry = "";
+    this._drinksLoaded = false;
+    this._drinksLoading = false;
+    this._listenersAttached = false;
     this._onValueChange = this._onValueChange.bind(this);
-    this.shadowRoot.addEventListener("input", this._onValueChange);
-    this.shadowRoot.addEventListener("change", this._onValueChange);
+    this._onEditorClick = this._onEditorClick.bind(this);
   }
 
   setConfig(config) {
-    this._config = config || {};
+    const next = config || {};
+    const previous = this._config && this._config.entry_id ? String(this._config.entry_id) : "";
+    const current = next.entry_id ? String(next.entry_id) : "";
+    this._config = next;
+    if (previous !== current) {
+      this._drinksEntry = current;
+      this._drinksLoaded = false;
+      this._drinkList = [];
+      this._maybeLoadDrinks();
+    }
     this._render();
   }
 
@@ -945,11 +1619,31 @@ class HealthOMatCardEditor extends HTMLElement {
     const first = !this._hass;
     this._hass = hass;
     // Populate the person picker once (later hass updates just refresh state).
-    if (first && hass && this._persons === null) this._loadPersons();
+    if (first && hass) {
+      if (this._persons === null) this._loadPersons();
+      this._maybeLoadDrinks();
+    }
   }
 
   get hass() {
     return this._hass;
+  }
+
+  connectedCallback() {
+    /* Symmetrisch zur Karte: der Editor wird von Lovelace ebenfalls ab- und
+     * wieder angehaengt. Listener hier (neu) registrieren. */
+    if (this._listenersAttached) return;
+    this.shadowRoot.addEventListener("input", this._onValueChange);
+    this.shadowRoot.addEventListener("change", this._onValueChange);
+    this.shadowRoot.addEventListener("click", this._onEditorClick);
+    this._listenersAttached = true;
+  }
+
+  disconnectedCallback() {
+    this.shadowRoot.removeEventListener("input", this._onValueChange);
+    this.shadowRoot.removeEventListener("change", this._onValueChange);
+    this.shadowRoot.removeEventListener("click", this._onEditorClick);
+    this._listenersAttached = false;
   }
 
   async _loadPersons() {
@@ -967,17 +1661,217 @@ class HealthOMatCardEditor extends HTMLElement {
     }
   }
 
-  _onValueChange(ev) {
-    const target = ev.target;
-    if (!target || (target.tagName !== "INPUT" && target.tagName !== "SELECT")) return;
-    const key = target.getAttribute("data-key");
-    if (!key) return;
-    const next = Object.assign({}, this._config);
-    next[key] = target.value;
+  /* Laedt die konfigurierten Getraenke der gewaehlten Person (nur lesend).
+   * Fehler/keine Person -> ruhiger Hinweis, der Editor bleibt bedienbar. */
+  _maybeLoadDrinks() {
+    const entryId = this._config && this._config.entry_id ? String(this._config.entry_id) : "";
+    if (!this._hass || !entryId) return;
+    if (this._drinksLoaded && this._drinksEntry === entryId) return;
+    this._loadDrinks(entryId);
+  }
+
+  async _loadDrinks(entryId) {
+    if (!this._hass || !entryId) return;
+    /* Ein laufender Ladevorgang wird vom neuen abgeloest: die Antwort wird
+     * nur uebernommen, solange sie zur aktuell gewaehlten Person gehoert
+     * (sonst ueberschreibt ein spaeter eintreffender Alt-Request die Liste). */
+    this._drinksEntry = entryId;
+    this._drinksLoaded = false;
+    this._drinksLoading = true;
+    this._drinkList = [];
+    this._render();
+    try {
+      const res = await this._hass.callWS({
+        type: "health_o_mat/panel_data",
+        entry_id: entryId,
+      });
+      if (this._drinksEntry !== entryId) return;
+      this._drinkList = normalizeServerQuickDrinks(res && res.quick_drinks);
+    } catch (err) {
+      // Defensive: editor stays usable, "Alle" remains the default state.
+      if (this._drinksEntry !== entryId) return;
+      this._drinkList = [];
+    } finally {
+      if (this._drinksEntry === entryId) {
+        this._drinksLoading = false;
+        this._drinksLoaded = true;
+        this._render();
+      }
+    }
+  }
+
+  _setConfig(next, rerender) {
     this._config = next;
     this.dispatchEvent(
       new CustomEvent("config-changed", { detail: { config: next }, bubbles: true, composed: true })
     );
+    if (rerender) this._render();
+  }
+
+  _onValueChange(ev) {
+    const target = ev.target;
+    if (!target) return;
+    const role = target.getAttribute ? target.getAttribute("data-role") : "";
+
+    if (role === "amount") {
+      // Nur bei `change` (Blur/Enter) uebernehmen — nicht mitten im Tippen.
+      if (ev.type !== "change") return;
+      this._setAmountFromInput(target);
+      return;
+    }
+    if (role === "drink" || role === "drinks-all") {
+      if (ev.type !== "change") return;
+      this._toggleDrink(role, target);
+      return;
+    }
+    if (target.tagName !== "INPUT" && target.tagName !== "SELECT") return;
+    const key = target.getAttribute("data-key");
+    if (!key) return;
+
+    if (target.type === "checkbox") {
+      if (ev.type !== "change") return;
+      this._toggleFlag(key, target.checked === true);
+      return;
+    }
+
+    /* Freitext (`person`) und Selects nur bei `change` uebernehmen: ein
+     * `input`-Event je Tastendruck feuert `config-changed`, worauf Lovelace
+     * `setConfig()` aufruft und das Feld mitten im Tippen neu aufbaut. */
+    if (ev.type !== "change") return;
+
+    const next = Object.assign({}, this._config);
+    next[key] = target.value;
+    if (key === "entry_id") {
+      // Die Getraenke-Auswahl gehoert zur Person — bei Personenwechsel
+      // verwerfen und neu laden.
+      const previous = this._config.entry_id ? String(this._config.entry_id) : "";
+      if (previous !== String(target.value || "")) delete next.drinks;
+      this._drinksEntry = String(target.value || "");
+      this._drinksLoaded = false;
+      this._drinkList = [];
+      // Vor dem Laden uebernehmen, damit `_maybeLoadDrinks` die NEUE Person liest.
+      this._config = next;
+      this._maybeLoadDrinks();
+    }
+    this._setConfig(next, key === "entry_id");
+  }
+
+  _toggleFlag(key, checked) {
+    const next = Object.assign({}, this._config);
+    if (key === "allow_custom_amount") {
+      if (checked) delete next[key];
+      else next[key] = false;
+    } else if (checked) {
+      // `true` ist der Default — Rauschen vermeiden. Ausnahme: die BD-Eingabe
+      // muss explizit `true` bleiben, wenn die BD-Anzeige aus ist (sonst
+      // wuerde sie beim naechsten Laden wieder ausgeblendet).
+      if (
+        key === "show_blood_pressure_input" &&
+        toBool(next.show_blood_pressure, true) === false
+      ) {
+        next[key] = true;
+      } else {
+        delete next[key];
+      }
+    } else {
+      next[key] = false;
+    }
+    this._setConfig(next, true);
+  }
+
+  _toggleDrink(role, target) {
+    const allKeys = this._drinkList.map((drink) => drink.key);
+    if (!allKeys.length) return;
+    const next = Object.assign({}, this._config);
+
+    if (role === "drinks-all") {
+      if (!target.checked) {
+        // "Alle" ist der Zustand OHNE `drinks`-Key — nicht abwaehlbar.
+        this._render();
+        return;
+      }
+      delete next.drinks;
+      this._setConfig(next, true);
+      return;
+    }
+
+    const key = target.getAttribute("data-key") || "";
+    if (!key) return;
+    let selected = this._selectedDrinkKeys();
+    if (target.checked) {
+      if (!selected.includes(key)) selected.push(key);
+    } else {
+      selected = selected.filter((item) => item !== key);
+    }
+    // Nie ein leerer Zustand: letzte Auswahl zurueck auf "alle".
+    if (!selected.length) selected = allKeys;
+    const ordered = allKeys.filter((item) => selected.includes(item));
+    if (ordered.length === allKeys.length) delete next.drinks;
+    else next.drinks = ordered;
+    this._setConfig(next, true);
+  }
+
+  _setAmountFromInput(target) {
+    const index = Number.parseInt(target.getAttribute("data-index"), 10);
+    if (!Number.isInteger(index) || index < 0) return;
+    const amounts = this._editorAmounts().slice();
+    if (index >= amounts.length) return;
+    const raw = String(target.value == null ? "" : target.value).trim();
+    if (!/^\d+$/.test(raw)) {
+      this._render();
+      return;
+    }
+    amounts[index] = Math.round(clamp(Number.parseInt(raw, 10), MIN_AMOUNT_ML, MAX_AMOUNT_ML));
+    const next = Object.assign({}, this._config, { manual_amounts: amounts });
+    this._setConfig(next, true);
+  }
+
+  _onEditorClick(ev) {
+    const target = ev.target && ev.target.closest ? ev.target.closest("[data-role]") : null;
+    if (!target) return;
+    const role = target.getAttribute("data-role");
+    if (role !== "amount-add" && role !== "amount-remove") return;
+    const amounts = this._editorAmounts().slice();
+    if (role === "amount-add") {
+      const candidates = [200, 250, 300, 330, 400, 500, 750, 1000];
+      const next = candidates.find((value) => !amounts.includes(value)) || 200;
+      amounts.push(next);
+    } else {
+      const index = Number.parseInt(target.getAttribute("data-index"), 10);
+      if (!Number.isInteger(index) || index < 0 || index >= amounts.length) return;
+      amounts.splice(index, 1);
+    }
+    const nextConfig = Object.assign({}, this._config, { manual_amounts: amounts });
+    this._setConfig(nextConfig, true);
+  }
+
+  /* Effektive Mengenliste des Editors (leer -> Default 200/500). */
+  _editorAmounts() {
+    return normalizeAmountList(this._config.manual_amounts);
+  }
+
+  _effectiveFlag(key) {
+    if (Object.prototype.hasOwnProperty.call(this._config, key)) {
+      return toBool(this._config[key], true);
+    }
+    if (key === "show_blood_pressure_input") {
+      return this._effectiveFlag("show_blood_pressure");
+    }
+    return true;
+  }
+
+  _effectiveAllowCustomAmount() {
+    return Object.prototype.hasOwnProperty.call(this._config, "allow_custom_amount")
+      ? toBool(this._config.allow_custom_amount, true)
+      : true;
+  }
+
+  _selectedDrinkKeys() {
+    const allKeys = this._drinkList.map((drink) => drink.key);
+    const configured = normalizeDrinkKeys(this._config.drinks);
+    if (!configured.length) return allKeys;
+    const known = configured.filter((key) => allKeys.includes(key));
+    return known.length ? known : allKeys;
   }
 
   _personOptions(current) {
@@ -1004,6 +1898,104 @@ class HealthOMatCardEditor extends HTMLElement {
     return options.join("");
   }
 
+  _checkbox(key, label) {
+    const checked = this._effectiveFlag(key) ? " checked" : "";
+    return `<label class="editor-check">
+      <input type="checkbox" data-key="${key}"${checked} />
+      <span>${escapeHtml(label)}</span>
+    </label>`;
+  }
+
+  _displaySection() {
+    return `<div class="editor-group">
+      <div class="editor-group-title">Anzeige</div>
+      ${this._checkbox("show_person", "Personenauswahl")}
+      ${this._checkbox("show_hydration", "Trinkmenge (Ring und Tageswerte)")}
+      ${this._checkbox("show_blood_pressure", "Letzte Blutdruckmessung")}
+      ${this._checkbox("show_wellbeing", "Letztes Wohlbefinden")}
+    </div>`;
+  }
+
+  _inputSection() {
+    return `<div class="editor-group">
+      <div class="editor-group-title">Eingabe &amp; Aktionen</div>
+      ${this._checkbox("show_drinks", "Schnellbuchung Getränke")}
+      ${this._checkbox("show_manual_amounts", "Manuelle Mengen")}
+      ${this._checkbox("show_blood_pressure_input", "Blutdruck eingeben")}
+      ${this._checkbox("show_wellbeing_input", "Wohlbefinden melden")}
+      ${this._checkbox("show_undo", "Letzte Buchung rückgängig")}
+    </div>`;
+  }
+
+  _drinksSection() {
+    const entryId = this._config.entry_id ? String(this._config.entry_id) : "";
+    const head = `<div class="editor-group-title">Getränke</div>`;
+    if (!entryId) {
+      return `<div class="editor-group">${head}
+        <div class="editor-hint">Person wählen, um Getränke zu laden. Ohne eigene Auswahl erscheinen alle Getränke der Person.</div>
+      </div>`;
+    }
+    if (this._drinksLoading) {
+      return `<div class="editor-group">${head}
+        <div class="editor-hint">Getränke werden geladen\u2026</div>
+      </div>`;
+    }
+    if (!this._drinkList.length) {
+      return `<div class="editor-group">${head}
+        <div class="editor-hint">Getränke konnten nicht geladen werden — es erscheinen alle Getränke der Person.</div>
+      </div>`;
+    }
+    const selected = this._selectedDrinkKeys();
+    const allSelected = selected.length === this._drinkList.length;
+    const allBox = `<label class="editor-check">
+      <input type="checkbox" data-role="drinks-all"${allSelected ? " checked" : ""} />
+      <span>Alle Getränke</span>
+    </label>`;
+    const rows = this._drinkList
+      .map(
+        (drink) => `<label class="editor-check">
+          <input type="checkbox" data-role="drink" data-key="${escapeHtml(drink.key)}"${
+            selected.includes(drink.key) ? " checked" : ""
+          } />
+          <span>${escapeHtml(drink.label)} <span class="ml">${Math.round(drink.ml)} ml</span></span>
+        </label>`
+      )
+      .join("");
+    return `<div class="editor-group">${head}${allBox}${rows}
+      <div class="editor-hint">Ohne eigene Auswahl erscheinen alle Getränke.</div>
+    </div>`;
+  }
+
+  _amountsSection() {
+    const amounts = this._editorAmounts();
+    const rows = amounts
+      .map(
+        (ml, index) => `<div class="editor-row">
+          <input type="number" inputmode="numeric" min="${MIN_AMOUNT_ML}"
+            max="${MAX_AMOUNT_ML}" step="1" data-role="amount" data-index="${index}"
+            value="${ml}" aria-label="Menge ${index + 1} in Milliliter" />
+          <button class="ghost" type="button" data-role="amount-remove" data-index="${index}"
+            aria-label="Menge ${ml} Milliliter entfernen">\u2715</button>
+        </div>`
+      )
+      .join("");
+    return `<div class="editor-group">
+      <div class="editor-group-title">Manuelle Mengen (ml)</div>
+      <div class="editor-list">${rows}</div>
+      <div class="editor-row">
+        <button class="ghost" type="button" data-role="amount-add"
+          aria-label="Weitere Menge hinzufügen"><span>Menge hinzufügen</span></button>
+      </div>
+      <label class="editor-check">
+        <input type="checkbox" data-key="allow_custom_amount"${
+          this._effectiveAllowCustomAmount() ? " checked" : ""
+        } />
+        <span>Freies Zahlenfeld erlauben</span>
+      </label>
+      <div class="editor-hint">Ohne eigene Mengen gelten 200 und 500 ml.</div>
+    </div>`;
+  }
+
   _render() {
     const current = this._config.entry_id ? String(this._config.entry_id) : "";
     let hint = "";
@@ -1026,6 +2018,10 @@ class HealthOMatCardEditor extends HTMLElement {
             value="${escapeHtml(this._config.person || "")}" placeholder="z. B. Caro" />
           <div class="editor-hint">Leer lassen, wenn die Karte \u00fcber die gew\u00e4hlte Person schreiben soll. Nur n\u00f6tig, wenn ein abweichender Anker (entry.data \u201eperson\u201c) angesprochen werden muss.</div>
         </div>
+        ${this._displaySection()}
+        ${this._inputSection()}
+        ${this._drinksSection()}
+        ${this._amountsSection()}
       </div>`;
   }
 }
