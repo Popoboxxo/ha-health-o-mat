@@ -1,21 +1,23 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-19 (Recorder-Einheiten-Fix `fix/recorder-unit-migration` + Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Browser-Smoke REQ-HOM-012, `feat/e2e-playwright`; zuvor 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-21 (Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; zuvor 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** neu aufgenommen (Feature, Wohlbefinden-Score & Score-Chart) ·
+**REQ-HOM-113** neu aufgenommen (Feature, Konfigurierbare Health-O-Mat-Karte) ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…112: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…113: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
    Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
    Requirement; am Ende von Kapitel 2 (nach REQ-HOM-111) abgelegt
-   (Branch `feat/wellbeing-score`).
+   (Branch `feat/wellbeing-score`) — sowie **REQ-HOM-113** (Konfigurierbare
+   Karte, Branch `feat/configurable-card`) nach REQ-HOM-112.
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -542,6 +544,129 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`.
   - [x] Unit-Test-Beleg: `pytest -q` → **666 passed**; `ruff` clean.
 
+#### REQ-HOM-113 — Konfigurierbare Health-O-Mat-Karte
+- **Priorität:** P2 · **Aufwand:** M
+- **Status: Erledigt (Branch `feat/configurable-card`, 2026-10-21)** — umgesetzt
+  und getestet. **Kein Versions-Bump:** `manifest.json` und die
+  `?v=`-Cache-Buster bleiben unverändert; der Release (v0.10.0) folgt separat.
+- **Anforderung:** Die mitgelieferte Lovelace-Karte (`custom:health-o-mat-card`)
+  wird über den **Karten-Editor** bzw. YAML konfigurierbar — flaches Schema,
+  **alle Schlüssel optional**. Die Defaults sind bewusst **nicht** durchgehend
+  „Verhalten unverändert": die **Anzeige-Blöcke bleiben unverändert**, die **neuen
+  Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe)
+  sind **per Default aktiv** — bestehende Karten erhalten sie beim Update. Das
+  ist eine bewusste neue Funktion (im Release v0.10.0 unter „✨ New features"
+  gelistet; der Release-Eintrag folgt separat, die Funktion ist in diesem
+  Branch implementiert). Fünf Ziele:
+  (1) Auswahl der Quick-Drinks aus den in der Integration konfigurierten
+  Getränken (Referenz per Key, keine kartenlokale Zweitliste), (2) konfigurierbare
+  manuelle ml-Presets plus optionales freies Zahlenfeld, (3) Blutdruck-Eingabe
+  (Systolisch/Diastolisch/Puls + optionale Notiz) ein-/ausschaltbar,
+  (4) Wohlbefinden-Eingabe (fünf Zustände) ein-/ausschaltbar, (5) alle
+  Anzeige-Blöcke (Personenwahl, Hydration, letzter Blutdruck, letztes
+  Wohlbefinden, Undo) einzeln ein-/ausschaltbar. Das Wohlbefinden schreibt über
+  den neuen öffentlichen Service `health_o_mat.set_wellbeing` (`person`
+  optional, `status` Pflicht); die bestehenden `button.*_report_*`-Entities
+  bleiben unverändert. Im Panel erscheint unter dem unveränderten Score-Chart
+  zusätzlich die Verlaufsliste (Zeitpunkt + Emoji + Label + Score).
+  **Nicht-Ziel:** Panel-Konfiguration, Dashboard-Builder, neue Persistenz von
+  Gesundheitsdaten, Änderung von `unique_id`s.
+- **Akzeptanzkriterien:**
+  - [x] Schema vollständig und flach: `entry_id`, `person`, neun `show_*`-Schalter,
+    `drinks`, `manual_amounts`, `allow_custom_amount` sowie der Legacy-Override
+    `quick_drinks`; alle optional, unbekannte Werte fallen auf den Default
+    zurück (kein Render-Crash). **Default-Semantik:** Anzeige-Blöcke unverändert,
+    die drei neuen Eingabe-Blöcke (manuelle Mengen, BD-Eingabe,
+    Wohlbefinden-Eingabe) **an** — für Bestandskarten eine bewusste
+    Verhaltensänderung (neue Funktion, v0.10.0). **Beleg (Default-Mechanik):**
+    `tests/test_card_js.py::test_card_show_flag_list_covers_exactly_the_nine_schema_keys`,
+    `::test_card_config_defaults_and_backward_compatibility`.
+  - [x] `show_*=false` blendet den Block aus; jeder Block ist ein AND aus
+    Integrations-Bereich (`areas`) und Karten-Flag. **Beleg:**
+    `::test_card_body_gates_every_block_with_its_flag_and_the_area`.
+  - [x] `show_blood_pressure_input: true` **explizit** gewinnt gegen
+    `show_blood_pressure: false`; ohne expliziten Wert folgt die Eingabe der
+    Anzeige. **Beleg:**
+    `::test_card_explicit_bp_input_flag_overrides_display_flag`; E2E
+    `tests_e2e/test_card_config_e2e.py::test_req_hom_011_card_explicit_bp_input_overrides_hidden_display`.
+  - [x] `show_person: false` ohne `entry_id` → erste Person, kein Dropdown.
+    **Beleg:** `::test_card_head_respects_show_person`.
+  - [x] `drinks` filtert die Integrations-Quick-Drinks
+    (`panel_data.quick_drinks`) nach Key; unbekannte Keys werden ignoriert,
+    leer/fehlend = alle (nie ein leerer Zustand). **Beleg:**
+    `tests/test_ws_api.py::test_panel_data_quick_drinks_from_options`,
+    `::test_panel_data_quick_drinks_default_fallback`,
+    `tests/test_card_js.py::test_card_drinks_filter_by_key_and_never_empty`.
+  - [x] Legacy-Override `quick_drinks` gewinnt gegenüber `drinks` und der
+    Integrationsliste. **Beleg:**
+    `::test_card_legacy_quick_drinks_override_wins_over_drinks_filter`.
+  - [x] `manual_amounts` (Default `[200, 500]`) und `allow_custom_amount`
+    (Default `true`): Preset-Buttons + freies Feld, Ganzzahl-Validierung
+    1…10000, Fehler inline. **Beleg:**
+    `::test_card_manual_amounts_presets_custom_field_and_bounds`.
+  - [x] Blutdruck-Eingabe nutzt `health_o_mat.add_blood_pressure` inkl.
+    `note` (einklappbares Feld, Default zu) und Bereichsgrenzen
+    (Sys/Dia 40–260, Puls 20–250). **Beleg:**
+    `::test_card_bp_input_uses_service_with_note_and_bounds`.
+  - [x] Wohlbefinden-Eingabe: fünf Buttons aus der (server-gelieferten) Skala,
+    aktiver Zustand markiert (`aria-pressed`), Aufruf von
+    `health_o_mat.set_wellbeing`. **Beleg:**
+    `::test_card_wellbeing_input_service_scale_and_active_state`.
+  - [x] Neuer Service `health_o_mat.set_wellbeing` (`person` optional,
+    `status` Pflicht, gültig: `very_bad`/`bad`/`okay`/`good`/`great`);
+    ungültiger Status → `ServiceValidationError`; derselbe Store-/Refresh-Pfad
+    wie das WS-Kommando. `services.yaml` und
+    `strings.json`/`de.json`/`en.json` dokumentieren ihn. **Beleg:**
+    `tests/test_wave_a.py::test_set_wellbeing_service_registered_with_schema`,
+    `::test_set_wellbeing_service_persists_and_refreshes`,
+    `::test_set_wellbeing_service_rejects_unknown_status`,
+    `tests/test_translations.py::test_set_wellbeing_service_documented_in_all_translations`.
+  - [x] Buchung sendet den Getränketyp (`drink_type` = Label) statt immer
+    „Eigen" — Breakdown nach Getränketyp wieder korrekt; manuelle Mengen senden
+    „Eigen". **Beleg:**
+    `::test_card_drink_booking_sends_the_label_as_drink_type`.
+  - [x] Alle Blöcke aus → lesbarer Hinweis statt leerer Karte. **Beleg:**
+    `::test_card_all_blocks_off_renders_readable_hint`; E2E
+    `tests_e2e/test_card_config_e2e.py::test_req_hom_011_card_all_blocks_off_shows_the_hint`.
+  - [x] Editor gruppiert alle neun `show_*`-Schalter als „Anzeige" (4) und
+    „Eingabe & Aktionen" (5), lädt die Getränke der Person (lesend) und bietet
+    Mehrfachauswahl + Mengenliste + Schalter „freies Feld"; jede Änderung feuert
+    `config-changed`. Ohne Personendaten bleibt der Editor bedienbar
+    (Hinweis, Auswahl „alle"). **Beleg:**
+    `::test_card_editor_renders_all_nine_flags_in_two_groups`,
+    `::test_card_editor_loads_drinks_and_renders_selection_and_amounts`,
+    `::test_card_editor_dispatches_full_config_with_real_booleans`.
+  - [x] Panel: Verlaufsliste unter dem **unveränderten** Score-Chart (letzte 20
+    Meldungen) mit Zeitpunkt, Emoji, Label und Score; reine Anzeige, alle Texte
+    escaped; der aktuelle Live-Wert bleibt in Kopfzeile/Chart-Marker. **Beleg:**
+    `tests/test_panel_js.py::test_panel_wellbeing_history_lists_time_emoji_label_and_score`,
+    `::test_panel_wellbeing_history_renders_escaped_entries`.
+  - [x] Browser-E2E (Playwright): `tests_e2e/test_card_config_e2e.py` mit
+    **7 Tests** — alle Blöcke aus, BD-Anzeige aus, explizite BD-Eingabe,
+    Hydration aus, Konfigurations-Neuspeichern, BD-Eingabe schreibt,
+    Wohlbefinden-Eingabe schreibt und aktualisiert die UI. **Live-Beleg
+    (geteilte Instanz `ha-test`):** Card-E2E **7/7** grün, Panel-E2E **6/6**
+    grün (ein HA-Neustart; die deployte Card-JS wurde byte-identisch zum Repo
+    verifiziert). Der Live-Lauf deckte einen **Listener-Lifecycle-Defekt** auf
+    (Listener waren nur im Konstruktor registriert und gingen beim
+    Detach/Re-Attach der Karte verloren) — behoben durch Registrierung in
+    `connectedCallback` mit Cleanup in `disconnectedCallback`; **vor** dem
+    Release gefunden, kein ausgelieferter Bug.
+  - [x] **Datenintegrität beim Personenwechsel:** Ein echter Wechsel der Person
+    (nicht das erneute Wählen derselben) verwirft die personenbezogenen
+    Blutdruck-/Mengen-Entwürfe und die Inline-Fehler (`_bpDraft`,
+    `_amountDraft`, `_bpError`, `_amountError`, `_wbError`, `_actionError`) —
+    ein für Person A getippter Entwurf kann damit nie unter Person B gespeichert
+    werden. **Beleg:**
+    `tests/test_card_js.py::test_card_person_switch_resets_person_scoped_state`
+    (statischer Struktur-Pin: Aufräumen ausschließlich hinter der
+    Wechsel-Prüfung, damit das erneute Wählen derselben Person nichts löscht) und
+    `::test_card_person_switch_drops_person_scoped_drafts` (Node-Verhaltenstest
+    inkl. Kontrollfall „dieselbe Person erneut gewählt").
+  - [x] Unit-Test-Beleg: `pytest -q` → **733 passed**; `ruff` clean. Die **+3**
+    gegenüber dem zuvor dokumentierten Stand stammen aus dem F3-Follow-up
+    (Struktur-Pins + Node-Verhaltenstest, siehe Kriterium oben).
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -571,3 +696,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-19 | **Recorder-Einheiten-Fix** (Branch `fix/recorder-unit-migration`): **neu angelegt** REQ-HOM-111 (Fix F10, P1, Aufwand S) — **erledigt**. Die Integration migriert beim Config-Entry-Setup die Recorder-Statistik-Metadaten der beiden Volumen-Sensoren je Person von der Legacy-Einheit „ml" auf die HA-kanonische Einheit „mL" (`new_unit_of_measurement="mL"`, `new_unit_class="volume"`); bislang unterdrückte HA die Langzeitstatistik komplett („Generation of long term statistics will be suppressed"). Migration ist idempotent und verlustfrei, läuft bei deaktiviertem Recorder erst beim nächsten Setup (HA-Neustart/Entry-Reload) und ist nie setup-kritisch; die beiden Number-Entities melden nun ebenfalls „mL" (Datenfelder `daily_goal_ml` / `ml` in JSON/CSV unverändert), `unique_id`/`entity_id` und `manifest.json` unangetastet. E2E auf `ha-test` (HA 2026.9.1): vorher 4 `statistic_id`s mit `ml` (`unit_class` NULL) + 24 Recorder-Warnungen über 6 Starts + eingefrorene Statistik seit 2026-10-17, nachher `mL` + `unit_class` `volume`, 0 Warnungen, Kurzzeit-/Langzeitstatistik wieder laufend (ab 22:05 bzw. 2026-10-19 22:00), Kontroll-IDs und Store-Daten unverändert; `pytest -q` 580 passed, ruff clean. README: Einheiten-Angaben auf „mL" vereinheitlicht + Migrations-Hinweis für Alt-Installationen ergänzt |
 | 2026-10-19 | **Neu angelegt: REQ-HOM-112 — Wohlbefinden-Score & Verlaufs-Chart** (Branch `feat/wellbeing-score`): numerische Darstellung des Wohlbefindens **1…5**, reihenfolgetreu aus den fünf Zuständen abgeleitet und **rein abgeleitet/on-read** (keine eigene Persistenz, keine Migration); Sensor `wellbeing_score` (`measurement`, ohne Einheit/`device_class`, `unknown` ohne Meldung, Attribute `reported_at`/`scale_max`); **additiver** `score`-Key im WS-Payload `health_o_mat/panel_data` (aktueller Wert + je `wellbeing.history`-Eintrag, bestehende Schlüssel unverändert); Score-Chart in der **Card** (Badge + kompakte Sparkline der letzten 14 Meldungen) und im **Panel** (vollständiger SVG-Chart, Y-Achse 1–5, aktueller Wert als Marker, Leerfall mit Hinweis) — beide ohne externe Bibliothek, Farben nur über HA-CSS-Variablen. **Belege:** `tests/test_logic.py::test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one`, `tests/test_sensor.py::test_req_hom_112_wellbeing_score_sensor_native_value_matches_status`, `tests/test_ws_api.py::test_req_hom_112_wellbeing_block_contains_current_score`, `tests/test_card_js.py::test_card_wellbeing_score_and_sparkline_helpers_exist`, `tests/test_panel_js.py::test_panel_base_exposes_wellbeing_chart_helpers` (weitere Fälle in den jeweiligen Dateien); `pytest -q` → **666 passed**; `ruff` clean. **E2E-Beleg:** Verifikation auf `ha-test` (HA 2026.9.1) — Report + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`. **Code-Review:** durch, keine Blocker — der 🟡-Befund (Panel löste den Score für Kopfzeile und Chart aus zwei Quellen auf) und die 🟢-Befunde (Alias-/Case-Divergenz zwischen Client und Server, undokumentierte dritte Skala-Kopie) sind behoben; der Frontend-Spiegel ist per Mirror-Pinning-Test an `const.WELLBEING_STATES` gebunden (Keys + Reihenfolge + Länge). **Marker-Semantik:** der „aktuell"-Marker hängt am aktuellen Wert (ohne Meldung wird kein Punkt hervorgehoben, die Zusammenfassung nennt „letzter Wert" statt „aktuell"); **Label/Emoji** werden **live-first** aufgelöst (Live-Entity vor veraltetem `panel_data`-Snapshot). **Offen:** der **Release** (Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag, GitHub-Release) |
 | 2026-10-18 | **REQ-HOM-012 vollständig erledigt** (Branch `feat/e2e-playwright`): echter Browser-Smoke ergänzt — `tests_e2e/` (Playwright + pytest, 6 Tests) gegen eine reale HA-Instanz plus `scripts/e2e_bootstrap.py` (idempotentes Onboarding/Config-/Options-Flow-Bootstrap), Docker-Stack (`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/`) und CI-Workflow `.github/workflows/e2e.yaml` (workflow_dispatch + wöchentlich + PR-Pfadfilter). Unit-Suite unverändert HA-frei (`pytest -q` → 552 passed), E2E nur bei explizitem Aufruf (eigene `tests_e2e/pytest.ini`) |
+| 2026-10-21 | **Neu angelegt: REQ-HOM-113 — Konfigurierbare Health-O-Mat-Karte** (Branch `feat/configurable-card`) — **erledigt**. Flaches Schema, alle Schlüssel optional; **Default-Semantik:** die Anzeige-Blöcke bleiben unverändert, die drei neuen Eingabe-Blöcke (manuelle Mengen, BD-Eingabe, Wohlbefinden-Eingabe) sind **per Default aktiv** — bestehende Karten erhalten sie beim Update (bewusste neue Funktion, im Release v0.10.0 unter „✨ New features"; der Release-Eintrag folgt separat, die Funktion ist in diesem Branch implementiert): neun `show_*`-Schalter (4 Anzeige + 5 Eingabe/Aktionen), `drinks` (Keys aus `panel_data.quick_drinks`, unbekannte ignoriert, leer = alle), `manual_amounts` (Default `[200, 500]`), `allow_custom_amount` (Default `true`), Legacy-Override `quick_drinks` (gewinnt); `show_blood_pressure_input: true` explizit gewinnt gegen `show_blood_pressure: false`; `show_person: false` ohne `entry_id` → erste Person ohne Dropdown; alle Blöcke aus → lesbarer Hinweis. **Backend:** `panel_data.quick_drinks` additiv; neuer öffentlicher Service `health_o_mat.set_wellbeing` (`person` optional, `status` Pflicht, fünf Keys, `ServiceValidationError` bei Unfug, gleicher Store-/Refresh-Pfad) — `button.*_report_*` unverändert; Kartenbuchung sendet `drink_type` (Label) statt „Eigen". **Panel:** Verlaufsliste (Zeitpunkt + Emoji + Label + Score, letzte 20) unter dem unveränderten Score-Chart. **Editor:** gruppiert alle neun Schalter als „Anzeige" (4) und „Eingabe & Aktionen" (5) — Abweichung vom Plan („6/5"). **Belege:** `tests/test_card_js.py` (u. a. `test_card_show_flag_list_covers_exactly_the_nine_schema_keys`, `test_card_explicit_bp_input_flag_overrides_display_flag`, `test_card_drinks_filter_by_key_and_never_empty`, `test_card_editor_renders_all_nine_flags_in_two_groups`), `tests/test_wave_a.py::test_set_wellbeing_service_*`, `tests/test_panel_js.py::test_panel_wellbeing_history_lists_time_emoji_label_and_score`, E2E `tests_e2e/test_card_config_e2e.py` (**7 Tests**; Live-Lauf auf der geteilten Instanz `ha-test`: Card-E2E **7/7**, Panel-E2E **6/6** grün, ein HA-Neustart, deployte Card-JS byte-identisch verifiziert; der Lauf fand vor dem Release einen Listener-Lifecycle-Defekt — Listener waren nur im Konstruktor registriert, behoben durch `connectedCallback`-Registrierung mit `disconnectedCallback`-Cleanup); `pytest -q` → **733 passed**; `ruff` clean. **Kein Versions-Bump:** `manifest.version` und alle `?v=`-Cache-Buster bleiben unverändert — der Release v0.10.0 folgt separat. |
