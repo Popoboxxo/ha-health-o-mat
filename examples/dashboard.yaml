@@ -55,6 +55,15 @@ views:
       - type: horizontal-stack
         cards:
           - type: tile
+            entity: sensor.health_o_mat_max_goal_streak
+            name: Serie
+          - type: tile
+            entity: sensor.health_o_mat_max_caffeine_today
+            name: Koffein
+
+      - type: horizontal-stack
+        cards:
+          - type: tile
             entity: text.health_o_mat_max_log_drink_free_text
             name: "Freitext: Kaffee 300ml"
           - type: tile
@@ -140,6 +149,22 @@ views:
             entity: button.health_o_mat_max_report_good
           - type: button
             entity: button.health_o_mat_max_report_great
+
+      - type: gauge
+        entity: sensor.health_o_mat_max_wellbeing_score
+        name: Score
+        min: 1
+        max: 5
+        needle: true
+        severity:
+          red: 0
+          yellow: 3
+          green: 4
+
+      - type: history-graph
+        title: Score-Verlauf (1 = schlechtestes, 5 = bestes)
+        entity: sensor.health_o_mat_max_wellbeing_score
+        hours_to_show: 720
 
       - type: history-graph
         title: 30 Tage

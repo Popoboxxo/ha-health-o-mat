@@ -26,6 +26,12 @@ KNOWN_SUFFIXES: dict[str, set[str]] = {
         "pulse",
         "blood_pressure_history",
         "wellbeing_last_reported",
+        "wellbeing_score",
+        "goal_streak",
+        "caffeine_today",
+        "drinks_trend",
+        "bp_trend",
+        "blood_pressure_category",
     },
     "binary_sensor": {"daily_goal_reached", "blood_pressure_warning"},
     "button": {
@@ -91,6 +97,42 @@ def extract_entity_refs(node, out):
             extract_entity_refs(item, out)
 
 
+# Konfiguration der mitgelieferten Karte. Spiegel des Schemas in
+# `www/health-o-mat-card.js` / README „Karten-Konfiguration" — ein neuer
+# Schlüssel dort muss hier ergänzt werden (und umgekehrt).
+CARD_TYPE = "custom:health-o-mat-card"
+CARD_KEYS = {
+    "type",
+    "entry_id",
+    "person",
+    "show_person",
+    "show_hydration",
+    "show_blood_pressure",
+    "show_wellbeing",
+    "show_drinks",
+    "show_manual_amounts",
+    "show_blood_pressure_input",
+    "show_wellbeing_input",
+    "show_undo",
+    "drinks",
+    "manual_amounts",
+    "allow_custom_amount",
+    "quick_drinks",
+}
+
+
+def extract_card_configs(node, out):
+    """Sammle alle Konfigurationen der mitgelieferten Karte."""
+    if isinstance(node, dict):
+        if node.get("type") == CARD_TYPE:
+            out.append(node)
+        for value in node.values():
+            extract_card_configs(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            extract_card_configs(item, out)
+
+
 def test_dashboards_valid_yaml_and_known_entity_ids():
     """Alle Beispiel-Dashboards parsen und nur bekannte englische IDs referenzieren."""
     examples = sorted(
@@ -105,7 +147,13 @@ def test_dashboards_valid_yaml_and_known_entity_ids():
 
         refs: list[str] = []
         extract_entity_refs(data, refs)
-        assert refs, f"{path}: keine Entity-Referenzen gefunden"
+        card_configs: list[dict] = []
+        extract_card_configs(data, card_configs)
+        assert refs or card_configs, f"{path}: weder Entity-Referenzen noch {CARD_TYPE} gefunden"
+
+        for card in card_configs:
+            unknown = set(card) - CARD_KEYS
+            assert not unknown, f"{path}: unbekannte Karten-Keys {sorted(unknown)}"
 
         for entity_id in refs:
             problem = check_entity_id(entity_id)

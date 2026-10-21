@@ -382,12 +382,16 @@ share.
   (Standard-Karten) zum Einbauen in ein bestehendes Dashboard
 - [`examples/dashboard-mushroom.yaml`](examples/dashboard-mushroom.yaml) —
   **Mushroom-Variante** (benötigt HACS-Plugin [Mushroom](https://github.com/piitaya/lovelace-mushroom))
+- [`examples/dashboard-card.yaml`](examples/dashboard-card.yaml) — zeigt die
+  **mitgelieferte Karte** (`custom:health-o-mat-card`) in drei Konfigurationen
+  (kompakt, nur Anzeige, mit Eingaben); nutzt die Karten-Konfiguration aus dem
+  Abschnitt [Mitgelieferte Karte](#mitgelieferte-karte-custom-card)
 
 Import: Einstellungen → Dashboards → **Dashboard hinzufügen** →
 „Neues Dashboard aus YAML" (Personennamen in den Entity-IDs anpassen).
-Beide Varianten zeigen den Gesundheitszustand kontinuierlich: als Gauge/
-Bar (`daily_goal_progress`, `wellbeing`-Select im Verlaufsgraph) bzw. als
-mushroom-Select mit Emoji.
+Alle Varianten zeigen den Gesundheitszustand kontinuierlich: als Gauge/
+Bar (`daily_goal_progress`, `wellbeing`-Select im Verlaufsgraph), als
+mushroom-Select mit Emoji oder als konfigurierbare Karte.
 
 Alle Beispiel-Dashboards werden **kontinuierlich getestet**: ein
 Unit-Test (`tests/test_dashboards.py`) prüft YAML-Struktur und
@@ -420,13 +424,11 @@ Karte ausgeblendet.
 
 ### Karten-Konfiguration
 
-Alle Schlüssel sind **optional**. Die Defaults ändern bestehende Karten
-**teilweise**: die **Anzeige-Blöcke** bleiben unverändert, die **neuen
-Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe) sind
-standardmäßig **aktiv** — bestehende Karten erhalten sie beim Update. Das ist
-eine bewusste neue Funktion; der Release-Eintrag (v0.10.0, inkl.
-„✨ New features"-Nennung) folgt separat, die Funktion ist in diesem Branch
-implementiert. Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
+Alle Schlüssel sind **optional**. Die Anzeige-Blöcke bleiben per Default
+unverändert; die **Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe,
+Wohlbefinden-Eingabe) sind standardmäßig **aktiv** — bestehende Karten erhalten
+sie beim Update. Das ist eine bewusste neue Funktion (seit **v0.10.0**).
+Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
 
 | Schlüssel | Typ | Default | Bedeutung |
 |---|---|---|---|
