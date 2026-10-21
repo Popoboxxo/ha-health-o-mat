@@ -554,3 +554,129 @@ def test_export_csv_includes_archived_entries(tmp_path):
     content = files[0].read_text(encoding="utf-8-sig")
     assert "Kaffee" in content  # aus dem Archiv
     assert "Wasser" in content  # aus dem Haupt-Store
+
+
+# --- set_wellbeing-Service (PLAN-CARD-CONFIG §4.2) ---------------------------
+
+
+def test_set_wellbeing_service_registered_with_schema():
+    """Der neue Service ist registriert; `status` ist Pflicht, `person` optional."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+
+    schema, _func = hass.services.registered["set_wellbeing"]
+    assert schema({"status": "good"}) == {"status": "good"}
+    assert schema({"person": "Max", "status": "great"})["person"] == "Max"
+    with pytest.raises(vol.Invalid):
+        schema({})  # status ist Pflicht
+
+
+def test_register_services_registers_missing_service_despite_add_drink():
+    """Ein bereits vorhandenes add_drink blockiert spätere Services nicht."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+    hass.services.registered["add_drink"] = (vol.Schema({}), MagicMock())
+
+    init._register_services(hass)
+
+    assert set(hass.services.registered) == set(init._SERVICE_NAMES)
+
+
+def test_register_services_is_idempotent():
+    """Zweifacher Setup-Lauf registriert keinen Service doppelt."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+    first = set(hass.services.registered)
+    init._register_services(hass)
+
+    assert set(hass.services.registered) == first == set(init._SERVICE_NAMES)
+
+
+def test_set_wellbeing_service_persists_and_refreshes(monkeypatch):
+    """Gültiger Status → Store-Schreibzugriff + signal_refresh am Coordinator."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 15, 12, 0))
+    )
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    _run(func(_call({"status": "good"})))
+
+    assert store.entry("e1")["wellbeing"] == {"status": "good", "ts": "2026-10-15T12:00:00"}
+    hass.data[_DOMAIN]["e1"]["coordinator"].async_set_updated_data.assert_called_once()
+
+
+@pytest.mark.parametrize("status", ["bogus", "", None, 5])
+def test_set_wellbeing_service_rejects_unknown_status(status):
+    """[Card-Config] Unbekannter Status wird abgelehnt — auf beiden Ebenen.
+
+    Zwei getrennte Verteidigungslinien, beide hier belegt:
+
+    * Das registrierte voluptuous-Schema weist Nicht-Strings (`None`, `5`)
+      bereits vor dem Handler ab (`vol.Invalid`).
+    * Der Handler selbst weist unbekannte/leere STRINGS ab
+      (`ServiceValidationError`) — er wird hier direkt aufgerufen, also ohne
+      das vorgelagerte Schema.
+
+    In keinem Fall wird geschrieben.
+    """
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    schema, func = hass.services.registered["set_wellbeing"]
+
+    if not isinstance(status, str):
+        # Schema-Ebene: der Wert erreicht den Handler nie.
+        with pytest.raises(vol.Invalid):
+            schema({"status": status})
+        assert "wellbeing" not in store.entry("e1")
+        return
+
+    # Handler-Ebene (Schema bewusst umgangen).
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"status": status})))
+
+    message = str(exc.value)
+    for key in ("very_bad", "bad", "okay", "good", "great"):
+        assert key in message
+    assert "wellbeing" not in store.entry("e1")
+
+
+def test_set_wellbeing_service_resolves_person(monkeypatch):
+    """`person` wählt wie bei den übrigen Services den richtigen Entry."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 15, 12, 0))
+    )
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    _run(func(_call({"person": "caro", "status": "great"})))
+
+    assert store.entry("e2")["wellbeing"]["status"] == "great"
+    assert "wellbeing" not in store.entry("e1")
+
+
+def test_set_wellbeing_service_multiple_persons_without_selection_raises():
+    """Ohne `person` bei mehreren Entries: gleiche Fehlersemantik wie überall."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"status": "good"})))
+
+    assert "Mehrere Personen" in str(exc.value)
+    assert "wellbeing" not in store.entry("e1")

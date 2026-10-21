@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    WELLBEING_STATES,
 )
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
@@ -43,6 +44,20 @@ PLATFORMS = [
 # daher bei Entry-Iterationen (Services, Unload) übersprungen werden müssen:
 # "shared" (Store) und "signal" (Legacy).
 _NON_ENTRY_KEYS = ("shared", "signal")
+
+# Alle öffentlichen Service-Namen. Der Idempotenz-Guard in
+# `_register_services` prüft sie VOLLSTÄNDIG: ein einzelner bereits
+# vorhandener Service (z. B. `add_drink` aus einer älteren Registrierung)
+# darf die Registrierung der übrigen Services nicht verhindern.
+_SERVICE_NAMES = (
+    "add_drink",
+    "add_blood_pressure",
+    "remove_last_entry",
+    "export_csv",
+    "import_csv",
+    "backup",
+    "set_wellbeing",
+)
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
 
@@ -395,8 +410,14 @@ async def _async_apply_panel_layer(
 
 
 def _register_services(hass: HomeAssistant) -> None:
-    """Öffentliche Services (idempotent registriert)."""
-    if hass.services.has_service(DOMAIN, "add_drink"):
+    """Öffentliche Services (idempotent registriert).
+
+    Der Guard prüft ALLE Service-Namen: nur wenn wirklich jeder Service schon
+    registriert ist, wird abgebrochen. Ein einzelner vorhandener Service (etwa
+    `add_drink` nach einem Teil-Reload) blockiert so nicht die Registrierung
+    der übrigen — insbesondere des später ergänzten `set_wellbeing`.
+    """
+    if all(hass.services.has_service(DOMAIN, name) for name in _SERVICE_NAMES):
         return
 
     async def add_drink(call: ServiceCall) -> None:
@@ -427,6 +448,19 @@ def _register_services(hass: HomeAssistant) -> None:
             call.data.get("note") or "",
             "service",
         )
+        signal_refresh(hass, entry_id)
+
+    async def set_wellbeing(call: ServiceCall) -> None:
+        """Wohlbefinden melden — derselbe Store-/Refresh-Pfad wie das WS-Kommando."""
+        entry_id, _info = get_runtime_data(hass, call)
+        status = call.data.get("status")
+        allowed = [state["key"] for state in WELLBEING_STATES]
+        if status not in allowed:
+            raise ServiceValidationError(
+                f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
+            )
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        await store.set_wellbeing(entry_id, status, dt_util.now().isoformat())
         signal_refresh(hass, entry_id)
 
     async def remove_last_entry(call: ServiceCall) -> None:
@@ -491,6 +525,17 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=add_blood_pressure,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "set_wellbeing",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("status"): str,
+            }
+        ),
+        service_func=set_wellbeing,
     )
     hass.services.async_register(
         DOMAIN,

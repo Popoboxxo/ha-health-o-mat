@@ -396,6 +396,9 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
         },
         "bp": _bp_block(entry, readings, now),
         "wellbeing": _wellbeing_block(data),
+        # Additiv: die konfigurierten Quick-Drinks, damit Karte und Editor die
+        # Auswahl kennen, ohne das admin-only `get_settings` aufzurufen.
+        "quick_drinks": _quick_drinks(entry),
         "entities": entity_ids_for_entry(hass, entry_id),
     }
 

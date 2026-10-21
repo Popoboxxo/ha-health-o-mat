@@ -601,6 +601,66 @@ def test_panel_data_carries_slug_and_areas(monkeypatch):
     assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True}
 
 
+# Top-Level-Vertrag des Panel-Payloads (additiv erweitert um `quick_drinks`).
+_PANEL_TOP_LEVEL_KEYS = {
+    "entry_id",
+    "person",
+    "person_slug",
+    "areas",
+    "person_anchor",
+    "goal_ml",
+    "reset_hour",
+    "today",
+    "bp",
+    "wellbeing",
+    "quick_drinks",
+    "entities",
+}
+
+
+def test_panel_data_top_level_keys_are_additive(monkeypatch):
+    """`quick_drinks` kommt hinzu, alle bestehenden Keys bleiben unverändert."""
+    entry = _entry(options={"daily_goal_ml": 2000, "daily_reset_hour": 4})
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert set(payload) == _PANEL_TOP_LEVEL_KEYS
+
+
+def test_panel_data_quick_drinks_from_options(monkeypatch):
+    """Konfigurierte Quick-Drinks (Key/Label/ml/Icon) landen im Panel-Payload."""
+    configured = [
+        {"key": "slot_0", "label": "Kaffee", "ml": 250, "icon": "mdi:coffee"},
+        {"key": "slot_1", "label": "Wasser", "ml": 500, "icon": "mdi:glass-water"},
+    ]
+    entry = _entry(options={"quick_drinks": configured})
+    hass = _panel_hass({}, entry, [], monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["quick_drinks"] == [
+        {"key": "slot_0", "label": "Kaffee", "ml": 250, "icon": "mdi:coffee"},
+        {"key": "slot_1", "label": "Wasser", "ml": 500, "icon": "mdi:glass-water"},
+    ]
+
+
+def test_panel_data_quick_drinks_default_fallback(monkeypatch):
+    """Ohne Option: Standard-Set als frische Kopien (kein geteiltes Dict)."""
+    entry = _entry()
+    hass = _panel_hass({}, entry, [], monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["quick_drinks"] == ws_api.DEFAULT_QUICK_DRINKS
+    assert payload["quick_drinks"][0] is not ws_api.DEFAULT_QUICK_DRINKS[0]
+    assert payload["quick_drinks"][0]["key"] == "glas_wasser"
+    assert payload["quick_drinks"][0]["ml"] == 200
+
+
 def test_panel_data_unknown_entry_sends_error(monkeypatch):
     """Unbekannte/nicht geladene entry_id → sauberer WS-Fehler, kein Crash."""
     hass = FakeHass([_entry()])
