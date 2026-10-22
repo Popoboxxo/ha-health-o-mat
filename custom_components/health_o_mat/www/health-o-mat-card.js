@@ -678,7 +678,10 @@ class HealthOMatCard extends HTMLElement {
     return Math.max(1, size);
   }
 
-  getConfigElement() {
+  /* HA's Lovelace card API looks this up on the CLASS (static), not on the
+   * element instance: an instance-only `getConfigElement` makes the dashboard
+   * show "visual editor not supported" and fall back to raw YAML. */
+  static getConfigElement() {
     return document.createElement(EDITOR_TAG);
   }
 
