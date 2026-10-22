@@ -814,6 +814,24 @@ def test_card_editor_dispatches_full_config_with_real_booleans():
 # --- Listener-Lifecycle (E2E-belegter Defekt: Detach beim Mounten) ---------------
 
 
+def test_card_get_config_element_is_static():
+    """HA's Lovelace API sucht `getConfigElement` auf der Klasse (static).
+
+    Eine reine Instanzmethode laesst den Dashboard-Editor "visueller Editor
+    wird nicht unterstuetzt" melden und faellt auf YAML zurueck.
+    """
+    text = _card_source()
+    assert re.search(r"static\s+getConfigElement\s*\(\s*\)\s*\{", text), (
+        "getConfigElement muss static sein — sonst meldet HA den visuellen "
+        "Editor als nicht unterstuetzt"
+    )
+    # Keine (schweigend wieder eingefuehrte) Instanzmethode daneben.
+    assert not re.search(r"(?<!static\s)\bgetConfigElement\s*\(\s*\)\s*\{", text)
+    # Das Editor-Element muss registriert sein, sonst liefert die Methode
+    # ein unbekanntes Custom Element.
+    assert re.search(r"customElements\.define\(\s*EDITOR_TAG\s*,", text)
+
+
 def test_card_registers_dom_listeners_in_connected_callback():
     """[Listener-Lifecycle] Karte registriert Klick/Input/Change im connectedCallback.
 

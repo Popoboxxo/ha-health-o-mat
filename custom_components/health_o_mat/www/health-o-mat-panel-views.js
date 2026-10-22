@@ -26,7 +26,7 @@ import {
   areasForPerson,
   wellbeingScore,
   wellbeingChartHtml,
-} from "./health-o-mat-panel-base.js?v=0.10.1";
+} from "./health-o-mat-panel-base.js?v=0.10.2";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
