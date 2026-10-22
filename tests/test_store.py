@@ -404,12 +404,11 @@ def test_set_wellbeing_updates_history_on_second_call(mock_store_fixture):
     ts_second = "2026-09-05T11:00:00Z"
     _async_test(store.set_wellbeing(entry_id, "tired", ts_second))
 
-    # Old status should be in history (with new timestamp as per implementation)
+    # Old status should be in history WITH ITS OWN timestamp (when it was
+    # reported), not with the timestamp of the update that archived it.
     assert len(entry["wellbeing_history"]) == 1
     assert entry["wellbeing_history"][0]["status"] == "good"
-    assert (
-        entry["wellbeing_history"][0]["ts"] == ts_second
-    )  # Timestamp is from the update that archived it
+    assert entry["wellbeing_history"][0]["ts"] == "2026-09-05T10:00:00Z"
 
     # Current status should be updated
     assert entry["wellbeing"]["status"] == "tired"
@@ -453,14 +452,15 @@ def test_set_wellbeing_calls_async_save(mock_store_fixture):
 # ============================================================================
 # REQ-HOM-112: Historie-Semantik festgeschrieben
 # ============================================================================
-def test_req_hom_112_wellbeing_history_records_replaced_status_with_change_timestamp(
+def test_req_hom_112_wellbeing_history_records_replaced_status_with_report_timestamp(
     mock_store_fixture,
 ):
-    """[REQ-HOM-112] Die Wohlbefinden-Historie ist ein Wechsel-Protokoll.
+    """[REQ-HOM-112] Die Wohlbefinden-Historie führt vergangene Meldungen.
 
-    Ein Historieneintrag `{ts, status}` bedeutet "bis zu diesem Zeitpunkt galt
-    dieser Status" — er traegt den ABGELOESTEN Status, aber den Zeitstempel
-    des Wechsels. Der AKTUELLE Zustand steht ausschliesslich in `wellbeing`.
+    Ein Historieneintrag `{ts, status}` bedeutet "dieser Status wurde zu `ts`
+    gemeldet". Der ABGELOESTE Status traegt seinen EIGENEN Meldezeitpunkt, nicht
+    den Zeitpunkt des Wechsels. Der AKTUELLE Zustand steht ausschliesslich in
+    `wellbeing`.
 
     Diese Semantik ist die Grundlage des Chart-Fixes: wer die Serie nur aus
     der Historie baut, markiert den abgeloesten Wert als "aktuell".
@@ -478,12 +478,12 @@ def test_req_hom_112_wellbeing_history_records_replaced_status_with_change_times
     entry = store.entry(entry_id)
     history = entry["wellbeing_history"]
 
-    # Genau ein Wechsel-Eintrag …
+    # Genau ein Historieneintrag …
     assert len(history) == 1
     # … mit dem ABGELOESTEN Status …
     assert history[0]["status"] == "bad"
-    # … und dem Zeitstempel des Wechsels (nicht dem Zeitstempel des Status).
-    assert history[0]["ts"] == second_ts
+    # … und dessen eigenem Meldezeitpunkt (nicht dem des Wechsels).
+    assert history[0]["ts"] == first_ts
     assert set(history[0]) == {"ts", "status"}
 
     # Der aktuelle Zustand steht ausschliesslich in `wellbeing`.

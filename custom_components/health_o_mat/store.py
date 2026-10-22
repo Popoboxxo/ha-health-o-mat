@@ -226,7 +226,10 @@ class HealthOMatStore:
         wb = e.setdefault("wellbeing", {})
         history = e.setdefault("wellbeing_history", [])
         if wb.get("status"):
-            history.append({"ts": ts_iso, "status": wb["status"]})
+            # Der abgelöste Status wird mit SEINEM eigenen Zeitstempel archiviert
+            # (wann er gemeldet wurde) — nicht mit dem Zeitstempel der Meldung,
+            # die ihn ablöst. Sonst zeigt der Verlauf den Vorgänger zu neu.
+            history.append({"ts": wb.get("ts") or ts_iso, "status": wb["status"]})
             del history[:-100]
         wb["status"] = status
         wb["ts"] = ts_iso

@@ -190,11 +190,11 @@ def test_card_wellbeing_chart_needs_no_external_library():
 
 # --- REQ-HOM-112: Quelltext-Assertions zur Series-Logik der Karte -------------
 #
-# Die Historie ist ein Wechsel-Protokoll (siehe `store.set_wellbeing`): ein
-# Eintrag bedeutet "bis zu diesem Zeitpunkt galt dieser Status", der AKTUELLE
-# Zustand steht ausschliesslich im `wellbeing`-Block. Die Sparkline muss den
-# aktuellen Wert an die Serie anhaengen — sonst endet sie am abgeloesten Wert
-# und widerspricht dem Badge.
+# Die Historie führt vergangene Meldungen (siehe `store.set_wellbeing`): ein
+# Eintrag bedeutet "dieser Status wurde zu diesem Zeitpunkt gemeldet", der
+# AKTUELLE Zustand steht ausschliesslich im `wellbeing`-Block. Die Sparkline
+# muss den aktuellen Wert an die Serie anhaengen — sonst endet sie am
+# abgeloesten Wert und widerspricht dem Badge.
 
 
 def _js_function_block(text: str, name: str) -> str:

@@ -221,11 +221,12 @@ def test_panel_base_wellbeing_chart_has_time_axis():
 
 # --- REQ-HOM-112: Quelltext-Assertions zur Series-Logik ----------------------
 #
-# Die Historie ist ein Wechsel-Protokoll (siehe `store.set_wellbeing`): ein
-# Eintrag bedeutet "bis zu diesem Zeitpunkt galt dieser Status", der AKTUELLE
-# Zustand steht ausschliesslich im `wellbeing`-Block. Ohne den aktuellen Punkt
-# markiert der Chart den abgeloesten Wert als "aktuell" (Kopfzeile und Chart
-# widersprechen sich). Die folgenden Assertions sichern genau diese Verknuepfung.
+# Die Historie führt vergangene Meldungen (siehe `store.set_wellbeing`): ein
+# Eintrag bedeutet "dieser Status wurde zu diesem Zeitpunkt gemeldet", der
+# AKTUELLE Zustand steht ausschliesslich im `wellbeing`-Block. Ohne den
+# aktuellen Punkt markiert der Chart den abgeloesten Wert als "aktuell"
+# (Kopfzeile und Chart widersprechen sich). Die folgenden Assertions sichern
+# genau diese Verknuepfung.
 
 
 def _js_function_block(text: str, name: str) -> str:
