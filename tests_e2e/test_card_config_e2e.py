@@ -60,17 +60,19 @@ pytestmark = pytest.mark.e2e
 CARD_TAG = "health-o-mat-card"
 ENTRY_ID_KEY = "entry_id"
 
-# The nine display/input switches of the card schema (docs/PLAN-CARD-CONFIG.md,
+# The display/input switches of the card schema (docs/PLAN-CARD-CONFIG.md,
 # `CARD_SHOW_KEYS` in www/health-o-mat-card.js).
 SHOW_KEYS = (
     "show_person",
     "show_hydration",
     "show_blood_pressure",
+    "show_blood_pressure_history",
     "show_wellbeing",
     "show_drinks",
     "show_manual_amounts",
     "show_blood_pressure_input",
     "show_wellbeing_input",
+    "show_wellbeing_numeric",
     "show_undo",
 )
 
