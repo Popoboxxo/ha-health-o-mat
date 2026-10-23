@@ -20,12 +20,18 @@
  *   show_hydration: true          # ring + daily values + pace/streak/caffeine
  *   show_blood_pressure: true     # last reading (+ category/warning)
  *   show_wellbeing: true          # last wellbeing + score + trend
+ *   show_blood_pressure_history: true  # BP trend chart (sys/dia)
  *   # Input blocks
  *   show_drinks: true             # quick-drink buttons
  *   show_manual_amounts: true     # preset ml buttons (+ optional free field)
  *   show_blood_pressure_input: true
  *   show_wellbeing_input: true
+ *   show_wellbeing_numeric: true  # numeric 1..10 input next to the emojis
  *   show_undo: true
+ *   # Person binding
+ *   person_mode: selector|fixed   # default: fixed with entry_id, else selector
+ *   person_filter: [entry_id, person_slug]  # optional whitelist for the picker
+ *   default_person: entry_id      # preselected person in selector mode
  *   # Drink selection (keys of the integration's quick drinks) / amounts
  *   drinks: ["glas_wasser", "kaffee"]  # absent/empty/unknown => all
  *   manual_amounts: [200, 500]
@@ -70,27 +76,34 @@ const DRINK_ICON_EMOJI = {
 const DEFAULT_DRINK_EMOJI = "\u{1F4A7}";
 
 const WELLBEING_EMOJI = {
-  awful: "\u{1F635}",
-  bad: "\u{1F635}",
-  poor: "\u{1F641}",
-  low: "\u{1F641}",
-  neutral: "\u{1F610}",
-  ok: "\u{1F610}",
+  very_bad: "\u{1F62D}",
+  awful: "\u{1F616}",
+  bad: "\u{1F641}",
+  poor: "\u{1F614}",
+  okay: "\u{1F610}",
+  mixed: "\u{1F615}",
   good: "\u{1F642}",
+  very_good: "\u{1F60A}",
   great: "\u{1F604}",
-  super: "\u{1F604}",
+  excellent: "\u{1F929}",
 };
 
 /* Wohlbefinden-Skala (Mirror von const.WELLBEING_STATES): aufsteigende
- * Qualitaet, Index + 1 = Score (1 = schlechtester … 5 = bester).
+ * Qualitaet, Index + 1 = Score (1 = schlechtester … 10 = bester).
  * Die Karte ist eine eigenstaendige Datei ohne Imports — der Mirror wird
- * deshalb hier gepflegt (Panel: WELLBEING_STATES in panel-base). */
+ * deshalb hier gepflegt (Panel: WELLBEING_STATES in panel-base). Der Server
+ * liefert die Skala inkl. eigener Bilder als `wellbeing_scale`. */
 const WELLBEING_SCALE = [
-  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F635}" },
+  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F62D}" },
+  { key: "awful", label: "Elend", emoji: "\u{1F616}" },
   { key: "bad", label: "Schlecht", emoji: "\u{1F641}" },
+  { key: "poor", label: "Mäßig", emoji: "\u{1F614}" },
   { key: "okay", label: "Okay", emoji: "\u{1F610}" },
+  { key: "mixed", label: "Durchwachsen", emoji: "\u{1F615}" },
   { key: "good", label: "Gut", emoji: "\u{1F642}" },
-  { key: "great", label: "Super", emoji: "\u{1F604}" },
+  { key: "very_good", label: "Sehr gut", emoji: "\u{1F60A}" },
+  { key: "great", label: "Großartig", emoji: "\u{1F604}" },
+  { key: "excellent", label: "Ausgezeichnet", emoji: "\u{1F929}" },
 ];
 
 /* ---- Karten-Konfiguration (docs/PLAN-CARD-CONFIG.md) ---------------------
@@ -103,13 +116,17 @@ const CARD_SHOW_KEYS = [
   "show_person",
   "show_hydration",
   "show_blood_pressure",
+  "show_blood_pressure_history",
   "show_wellbeing",
   "show_drinks",
   "show_manual_amounts",
   "show_blood_pressure_input",
   "show_wellbeing_input",
+  "show_wellbeing_numeric",
   "show_undo",
 ];
+
+const PERSON_MODES = ["selector", "fixed"];
 
 const DEFAULT_MANUAL_AMOUNTS = [200, 500];
 const MIN_AMOUNT_ML = 1;
@@ -211,6 +228,20 @@ const CARD_CSS = `
     stroke: var(--primary-color, #03a9f4); stroke-width: 1.6; }
   .wb-trend .point-current { fill: var(--primary-color, #03a9f4);
     stroke: var(--card-background-color, #fff); stroke-width: 1.8; }
+  .bp-chart { width: 100%; }
+  .bp-chart .sub, .block .sub { font-size: .8rem; color: var(--secondary-text-color, #727272); }
+  .bp-chart svg { width: 100%; height: auto; display: block; }
+  .bp-chart .bp-grid { stroke: var(--divider-color, rgba(0,0,0,.12)); stroke-width: 1; }
+  .bp-chart .bp-axis { fill: var(--secondary-text-color, #727272); font-size: 9px; }
+  .bp-chart .bp-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .bp-chart .bp-sys { stroke: var(--error-color, #db4437); }
+  .bp-chart .bp-dia { stroke: var(--primary-color, #03a9f4); }
+  .bp-chart .bp-sys-dot { fill: var(--error-color, #db4437); }
+  .bp-chart .bp-dia-dot { fill: var(--primary-color, #03a9f4); }
+  .bp-legend { display: flex; gap: 14px; font-size: .8rem;
+    color: var(--secondary-text-color, #727272); }
+  .bp-legend .sys { color: var(--error-color, #db4437); font-weight: 600; }
+  .bp-legend .dia { color: var(--primary-color, #03a9f4); font-weight: 600; }
   .warn {
     color: var(--error-color, #db4437); font-weight: 600; font-size: .9rem;
     display: flex; align-items: center; gap: 6px;
@@ -271,7 +302,7 @@ const CARD_CSS = `
     font-size: .85rem; color: var(--secondary-text-color, #727272);
   }
   details.note textarea { margin-top: 6px; resize: vertical; font-family: inherit; }
-  .wb-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .wb-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px; }
   .wb-actions button {
     flex: none; min-height: 64px; padding: 6px 2px;
     background: var(--secondary-background-color, rgba(0,0,0,.05));
@@ -279,6 +310,8 @@ const CARD_CSS = `
     border: 1px solid var(--divider-color, rgba(0,0,0,.12));
   }
   .wb-actions button .emoji { font-size: 1.4rem; line-height: 1; }
+  .wb-actions button .wb-img { width: 1.6rem; height: 1.6rem; object-fit: cover; border-radius: 50%; }
+  .row .wb-img { width: 2rem; height: 2rem; object-fit: cover; border-radius: 50%; flex: none; }
   .wb-actions button .ml { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .wb-actions button.active {
     outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 1px;
@@ -387,6 +420,16 @@ function normalizeLegacyQuickDrinks(value) {
  * welche Schalter EXPLIZIT gesetzt wurden, bleibt in `explicit` erhalten —
  * nur so kann `show_blood_pressure_input: true` den Anzeige-Schalter
  * `show_blood_pressure: false` uebersteuern. */
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const text = item == null ? "" : String(item).trim();
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
+}
+
 function normalizeCardConfig(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const explicit = new Set(Object.keys(source));
@@ -398,8 +441,18 @@ function normalizeCardConfig(raw) {
   if (!explicit.has("show_blood_pressure_input")) {
     flags.show_blood_pressure_input = flags.show_blood_pressure;
   }
+  const entryId = source.entry_id ? String(source.entry_id) : "";
+  const requestedMode = source.person_mode ? String(source.person_mode).toLowerCase() : "";
+  const personMode = PERSON_MODES.includes(requestedMode)
+    ? requestedMode
+    : entryId
+      ? "fixed"
+      : "selector";
   return {
-    entryId: source.entry_id ? String(source.entry_id) : "",
+    entryId,
+    personMode,
+    personFilter: normalizeStringList(source.person_filter),
+    defaultPerson: source.default_person ? String(source.default_person) : "",
     person: source.person ? String(source.person) : "",
     flags,
     explicit,
@@ -439,6 +492,104 @@ function bpCategoryLabel(value) {
   const raw = value == null ? "" : String(value);
   const key = raw.trim().toLowerCase();
   return BP_CATEGORY_LABELS[key] || raw;
+}
+
+/* Ein Personen-Eintrag passt zu einem Filterwert, wenn entry_id, Slug oder
+ * Anzeigename übereinstimmen (case-insensitiv). Leer = kein Filter. */
+function personMatchesFilter(person, filter) {
+  if (!filter || !filter.length) return true;
+  const values = [
+    person && person.entry_id,
+    person && person.person_slug,
+    person && person.display_name,
+  ]
+    .filter((value) => value != null)
+    .map((value) => String(value).toLowerCase());
+  return filter.some((item) => values.includes(String(item).toLowerCase()));
+}
+
+function filterPersons(persons, filter) {
+  const list = Array.isArray(persons) ? persons : [];
+  if (!filter || !filter.length) return list.slice();
+  return list.filter((person) => personMatchesFilter(person, filter));
+}
+
+/* Bild/Emoji eines Wellbeing-Zustands. Eigene Bilder (PNG/JPG/WebP) haben
+ * Vorrang; fehlt ein Bild oder lädt es nicht, fällt die Karte auf das Emoji
+ * zurück (onerror entfernt das Bild und zeigt den Emoji-Text). */
+function wellbeingVisual(state, cls) {
+  const css = cls ? String(cls) : "wb-img";
+  const emoji = escapeHtml((state && state.emoji) || "\u{1F642}");
+  const image = state && state.image ? String(state.image) : "";
+  if (!image) {
+    return `<span class="emoji" aria-hidden="true">${emoji}</span>`;
+  }
+  return `<img class="${escapeHtml(css)}" src="${escapeHtml(image)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'" /><span class="emoji" aria-hidden="true" style="display:none">${emoji}</span>`;
+}
+
+/* Blutdruck-Verlauf als kompakte Doppellinie (sys/dia). Reine Lese-Anzeige
+ * aus `bp.entries` (letzte 30 Messungen). */
+function bpHistorySvg(entries) {
+  const list = (Array.isArray(entries) ? entries : [])
+    .filter((r) => r && Number.isFinite(toNumber(r.sys, NaN)) && Number.isFinite(toNumber(r.dia, NaN)))
+    .slice(-30);
+  if (list.length < 2) return "";
+  const width = 320;
+  const height = 128;
+  const pad = { top: 10, right: 12, bottom: 20, left: 30 };
+  const values = [];
+  list.forEach((r) => {
+    values.push(toNumber(r.sys, 0), toNumber(r.dia, 0));
+  });
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return "";
+  min = Math.floor((min - 10) / 10) * 10;
+  max = Math.ceil((max + 10) / 10) * 10;
+  if (max <= min) max = min + 10;
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const step = list.length > 1 ? plotW / (list.length - 1) : 0;
+  const point = (value, index) => ({
+    x: pad.left + index * step,
+    y: pad.top + ((max - value) / (max - min)) * plotH,
+  });
+  const sysCoords = list.map((r, index) => point(toNumber(r.sys, 0), index));
+  const diaCoords = list.map((r, index) => point(toNumber(r.dia, 0), index));
+  const path = (coords) =>
+    coords
+      .map((coord, index) => `${index === 0 ? "M" : "L"}${coord.x.toFixed(1)} ${coord.y.toFixed(1)}`)
+      .join(" ");
+  const grid = [min, Math.round((min + max) / 2), max]
+    .map((value) => {
+      const y = pad.top + ((max - value) / (max - min)) * plotH;
+      return `<line class="bp-grid" x1="${pad.left}" y1="${y.toFixed(1)}" x2="${width - pad.right}" y2="${y.toFixed(1)}"></line><text class="bp-axis" x="${pad.left - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${value}</text>`;
+    })
+    .join("");
+  const dots = list
+    .map((r, index) => {
+      const sys = sysCoords[index];
+      const dia = diaCoords[index];
+      const when = r.ts ? formatChartDateTime(Date.parse(r.ts)) : "ohne Zeitangabe";
+      const title = `${when} \u2013 ${Math.round(toNumber(r.sys, 0))}/${Math.round(toNumber(r.dia, 0))}`;
+      return `<circle class="bp-dot bp-sys-dot" cx="${sys.x.toFixed(1)}" cy="${sys.y.toFixed(1)}" r="2.1"><title>${escapeHtml(title)}</title></circle><circle class="bp-dot bp-dia-dot" cx="${dia.x.toFixed(1)}" cy="${dia.y.toFixed(1)}" r="2.1"><title>${escapeHtml(title)}</title></circle>`;
+    })
+    .join("");
+  const first = list[0].ts ? Date.parse(list[0].ts) : NaN;
+  const last = list[list.length - 1].ts ? Date.parse(list[list.length - 1].ts) : NaN;
+  const xLabels = [];
+  if (Number.isFinite(first)) {
+    xLabels.push(
+      `<text class="bp-axis" x="${pad.left}" y="${height - 6}" text-anchor="start">${escapeHtml(formatChartDate(first))}</text>`
+    );
+  }
+  if (Number.isFinite(last) && last !== first) {
+    xLabels.push(
+      `<text class="bp-axis" x="${width - pad.right}" y="${height - 6}" text-anchor="end">${escapeHtml(formatChartDate(last))}</text>`
+    );
+  }
+  const summary = `Blutdruck-Verlauf: ${list.length} Messungen, zuletzt ${Math.round(toNumber(list[list.length - 1].sys, 0))}/${Math.round(toNumber(list[list.length - 1].dia, 0))}`;
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg>`;
 }
 
 /* Score eines Wohlbefinden-Eintrags — DER SERVER IST DIE WAHRHEIT
@@ -539,6 +690,14 @@ function pad2(value) {
   return String(value).padStart(2, "0");
 }
 
+/* "19.10." — kompakte Achsenbeschriftung. */
+function formatChartDate(ts) {
+  if (ts == null || !Number.isFinite(ts)) return "";
+  const date = new Date(ts);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+}
+
 /* "19.10.2026, 14:30 Uhr" — Zeitpunkt fuer die Tooltips. */
 function formatChartDateTime(ts) {
   if (ts == null || !Number.isFinite(ts)) return "";
@@ -618,6 +777,7 @@ class HealthOMatCard extends HTMLElement {
     this._amountError = "";
     this._bpError = "";
     this._wbError = "";
+    this._wbScoreDraft = "";
     /* Fehler einer AKTION (buchen/undo) — eigener Kanal, damit er auch
      * sichtbar bleibt, wenn Daten bereits geladen sind (`_error` ist fuer
      * Ladefehler reserviert). */
@@ -654,6 +814,7 @@ class HealthOMatCard extends HTMLElement {
     this._amountError = "";
     this._bpError = "";
     this._wbError = "";
+    this._wbScoreDraft = "";
     this._actionError = "";
     this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     this._amountDraft = "";
@@ -669,11 +830,12 @@ class HealthOMatCard extends HTMLElement {
     let size = 1; // Kopfzeile
     if (flags.show_hydration) size += 2; // Ring + Tageswerte
     if (flags.show_blood_pressure) size += 1;
+    if (flags.show_blood_pressure_history) size += 2; // Verlaufsgraph
     if (flags.show_wellbeing) size += 2; // Zeile + Sparkline
     if (flags.show_drinks) size += 1;
     if (flags.show_manual_amounts) size += 1;
     if (flags.show_blood_pressure_input) size += 2; // Formular + Notiz
-    if (flags.show_wellbeing_input) size += 2; // 5 Buttons
+    if (flags.show_wellbeing_input) size += 3; // 10 Buttons + Zahleneingabe
     if (flags.show_undo) size += 1;
     return Math.max(1, size);
   }
@@ -729,21 +891,41 @@ class HealthOMatCard extends HTMLElement {
       this._render();
     }
     try {
-      let entryId = activeEntryId(this._config, this._activeEntry);
-      if (!this._config.entry_id) {
+      const cfg = this._configNorm();
+      let entryId = cfg.entryId || this._activeEntry || "";
+      const needsPersons = cfg.personMode === "selector" || !entryId;
+      if (needsPersons) {
         const listRes = await this._hass.callWS({ type: "health_o_mat/list_persons" });
         const persons = (listRes && listRes.persons) || [];
-        this._persons = persons;
-        if (!persons.length) {
-          this._error = "Keine Person eingerichtet.";
+        const allowed = filterPersons(persons, cfg.personFilter);
+        this._persons = allowed;
+        if (!allowed.length) {
+          this._error = cfg.personFilter.length
+            ? "Keine Person passt zum konfigurierten Personen-Filter."
+            : "Keine Person eingerichtet.";
           this._data = null;
           this._loading = false;
           this._render();
           return;
         }
-        const known = entryId && persons.some((p) => p.entry_id === entryId);
-        entryId = known ? entryId : persons[0].entry_id;
+        if (cfg.personMode === "selector") {
+          const known = entryId && allowed.some((p) => p.entry_id === entryId);
+          const preferred =
+            (cfg.defaultPerson &&
+              allowed.find(
+                (p) =>
+                  p.entry_id === cfg.defaultPerson ||
+                  p.person_slug === cfg.defaultPerson ||
+                  p.display_name === cfg.defaultPerson
+              )) ||
+            null;
+          entryId = known ? entryId : preferred ? preferred.entry_id : allowed[0].entry_id;
+        } else {
+          entryId = allowed[0].entry_id;
+        }
         this._activeEntry = entryId;
+      } else {
+        this._persons = null;
       }
       const data = await this._hass.callWS({
         type: "health_o_mat/panel_data",
@@ -973,6 +1155,36 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
+  async _reportWellbeingScore(rawScore) {
+    if (!this._hass || this._busyWb) return;
+    const value = toNumber(rawScore, NaN);
+    const max = this._wellbeingScale().length;
+    if (!Number.isInteger(value) || value < 1 || value > max) {
+      this._wbError = `Bitte eine ganze Zahl zwischen 1 und ${max} eingeben.`;
+      this._render();
+      return;
+    }
+    this._busyWb = true;
+    this._wbError = "";
+    this._render();
+    try {
+      await Promise.resolve(
+        this._hass.callService("health_o_mat", "set_wellbeing", {
+          score: value,
+          person: this._servicePerson(),
+        })
+      );
+      this._wbScoreDraft = "";
+      await this._loadData(true);
+    } catch (err) {
+      this._wbError = (err && err.message) ? err.message : String(err);
+      this._render();
+    } finally {
+      this._busyWb = false;
+      this._render();
+    }
+  }
+
   async _undo() {
     if (!this._hass || this._busyMl != null) return;
     this._actionError = "";
@@ -1022,6 +1234,7 @@ class HealthOMatCard extends HTMLElement {
         key: state && state.key != null ? String(state.key) : "",
         label: state && state.label ? String(state.label) : "",
         emoji: state && state.emoji ? String(state.emoji) : "",
+        image: state && state.image ? String(state.image) : "",
       }))
       .filter((state) => state.key);
     if (cleaned.length) {
@@ -1029,6 +1242,7 @@ class HealthOMatCard extends HTMLElement {
         key: state.key,
         label: state.label || state.key,
         emoji: state.emoji || WELLBEING_EMOJI[state.key] || "\u{1F642}",
+        image: state.image || "",
       }));
     }
     return WELLBEING_SCALE;
@@ -1061,6 +1275,10 @@ class HealthOMatCard extends HTMLElement {
       this._amountDraft = value;
       return;
     }
+    if (role === "wb-score") {
+      this._wbScoreDraft = value;
+      return;
+    }
     if (!role.startsWith("bp-")) return;
     if (!this._bpDraft) this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     if (role === "bp-sys") this._bpDraft.sys = value;
@@ -1084,6 +1302,8 @@ class HealthOMatCard extends HTMLElement {
       this._saveBp();
     } else if (action === "wellbeing") {
       this._reportWellbeing(target.getAttribute("data-key"));
+    } else if (action === "wellbeing-score") {
+      this._reportWellbeingScore(this._readInput("wb-score"));
     } else if (action === "undo") {
       this._undo();
     } else if (action === "retry") {
@@ -1106,6 +1326,7 @@ class HealthOMatCard extends HTMLElement {
       this._bpError = "";
       this._amountError = "";
       this._wbError = "";
+      this._wbScoreDraft = "";
       this._actionError = "";
       this._activeEntry = nextEntry;
     }
@@ -1177,10 +1398,11 @@ class HealthOMatCard extends HTMLElement {
   _head() {
     const name = (this._data && this._data.person) || "Health-O-Mat";
     const flags = this._flags();
+    const cfg = this._configNorm();
     let selector = "";
     if (
       flags.show_person &&
-      !this._config.entry_id &&
+      cfg.personMode === "selector" &&
       this._persons &&
       this._persons.length
     ) {
@@ -1211,6 +1433,9 @@ class HealthOMatCard extends HTMLElement {
     }
     if (areas.bp && flags.show_blood_pressure) {
       parts.push(this._bloodPressure());
+    }
+    if (areas.bp && flags.show_blood_pressure_history) {
+      parts.push(this._bloodPressureHistory());
     }
     if (areas.wellbeing && flags.show_wellbeing) {
       parts.push(this._wellbeing());
@@ -1339,6 +1564,17 @@ class HealthOMatCard extends HTMLElement {
       ${warningHtml}`;
   }
 
+  _bloodPressureHistory() {
+    const bp = (this._data && this._data.bp) || {};
+    const svg = bpHistorySvg(bp.entries);
+    if (!svg) return "";
+    return `<div class="block bp-chart">
+      <div class="sub">Blutdruck-Verlauf</div>
+      <div class="bp-legend"><span class="sys">Systolisch</span><span class="dia">Diastolisch</span></div>
+      ${svg}
+    </div>`;
+  }
+
   _bpWarning() {
     const bp = (this._data && this._data.bp) || {};
     if (bp.warning === true) return true;
@@ -1353,6 +1589,7 @@ class HealthOMatCard extends HTMLElement {
 
   _wellbeing() {
     const wb = (this._data && this._data.wellbeing) || {};
+    const scale = this._wellbeingScale();
     const entWb = this._entity("wellbeing");
     const stateRaw = this._stateValue(entWb, undefined);
     const key = String(stateRaw != null ? stateRaw : wb.key || "").toLowerCase();
@@ -1360,33 +1597,37 @@ class HealthOMatCard extends HTMLElement {
      * der letzten Meldung — KEIN Wohlbefinden-Key. Als Key taugt er nur,
      * wenn er selbst einer ist; sonst bleibt der (serverseitig lokalisierte)
      * Snapshot die Quelle. */
-    const displayKey = WELLBEING_SCALE.some((state) => state.key === key)
+    const displayKey = scale.some((state) => state.key === key)
       ? key
       : String(wb.key || "").toLowerCase();
-    /* Label/Emoji LIVE-FIRST: liefert die Live-Entity (`entities.wellbeing`)
-     * die Attribute `label`/`emoji`, sind diese aktueller als der
-     * (moeglicherweise veralteten) WS-Snapshot. Liefert die Live-Entity
-     * keine Attribute, bleibt der Snapshot die Quelle — die Anzeige wird
-     * dadurch nicht schlechter. */
+    const scaleEntry = scale.find((state) => state.key === displayKey) || {};
+    /* Label/Emoji/Bild LIVE-FIRST: liefert die Live-Entity
+     * (`entities.wellbeing`) die Attribute `label`/`emoji`/`image`, sind
+     * diese aktueller als der (moeglicherweise veraltete) WS-Snapshot. */
     const emoji =
       this._stateAttribute(entWb, "emoji") ||
       wb.emoji ||
+      scaleEntry.emoji ||
       WELLBEING_EMOJI[key] ||
       "\u{1F642}";
+    const image =
+      this._stateAttribute(entWb, "image") || wb.image || scaleEntry.image || "";
     const label =
       this._stateAttribute(entWb, "label") ||
       wb.label ||
+      scaleEntry.label ||
       (displayKey ? displayKey.charAt(0).toUpperCase() + displayKey.slice(1) : "Keine Angabe");
     const at = (wb.at && this._relativeTime(wb.at)) || "";
 
     // Score (1..N): Live-Entity, sonst Server-Feld (der Server ist die
     // Wahrheit: `score: null` bedeutet "kein Score"); nur wenn das Feld
     // fehlt, wird aus dem kanonischen Key abgeleitet (aelterer Payload).
+    const scaleMax = scale.length || WELLBEING_SCALE.length;
     const liveScore = this._stateNumber(this._entity("wellbeing_score"), NaN);
     const score =
       Number.isFinite(liveScore) &&
       liveScore >= 1 &&
-      liveScore <= WELLBEING_SCALE.length
+      liveScore <= scaleMax
         ? Math.round(liveScore)
         : wellbeingScore(wb);
     /* Aktueller Wert als letzter Punkt der Sparkline — mit DEMSELBEN Score wie
@@ -1415,7 +1656,7 @@ class HealthOMatCard extends HTMLElement {
 
     const scoreBadge =
       score != null
-        ? `<span class="score">${score} / ${WELLBEING_SCALE.length}</span>`
+        ? `<span class="score">${score} / ${scaleMax}</span>`
         : "";
     const trend = points.length
       ? `<div class="wb-trend">${wellbeingTrendSvg(points)}</div>`
@@ -1424,7 +1665,7 @@ class HealthOMatCard extends HTMLElement {
 
     return `
       <div class="row">
-        <span class="emoji" aria-hidden="true">${escapeHtml(emoji)}</span>
+        ${wellbeingVisual({ emoji, image })}
         <div class="label">
           <div class="big">${escapeHtml(label)}</div>
           <div class="sub">${sub}</div>
@@ -1543,6 +1784,7 @@ class HealthOMatCard extends HTMLElement {
     const scale = this._wellbeingScale();
     const active = this._wellbeingCurrentKey();
     const busy = this._busyWb === true;
+    const max = scale.length || WELLBEING_SCALE.length;
     const buttons = scale
       .map(
         (state) => `<button class="wb-btn${state.key === active ? " active" : ""}"
@@ -1551,18 +1793,30 @@ class HealthOMatCard extends HTMLElement {
             aria-pressed="${state.key === active ? "true" : "false"}"${
               busy ? " disabled" : ""
             }>
-            <span class="emoji" aria-hidden="true">${escapeHtml(state.emoji)}</span>
+            ${wellbeingVisual(state)}
             <span class="ml">${escapeHtml(state.label)}</span>
           </button>`
       )
       .join("");
+    const numeric = this._flags().show_wellbeing_numeric
+      ? `<div class="custom-amount">
+          <input type="number" inputmode="numeric" min="1" max="${max}" step="1"
+            data-role="wb-score" aria-label="Wohlbefinden als Zahl (1 bis ${max})"
+            placeholder="1\u2013${max}" value="${escapeHtml(this._wbScoreDraft || "")}"${
+              busy ? " disabled" : ""
+            } />
+          <button data-action="wellbeing-score" aria-label="Wohlbefinden als Zahl melden"${
+            busy ? " disabled" : ""
+          }><span>Zahl melden</span></button>
+        </div>`
+      : "";
     const error = this._wbError
       ? `<div class="form-error" role="alert">${escapeHtml(this._wbError)}</div>`
       : "";
     const status = busy
       ? `<div class="msg" role="status" aria-live="polite">Melde\u2026</div>`
       : "";
-    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${status}${error}</div>`;
+    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${numeric}${status}${error}</div>`;
   }
 
   _undoAction() {
@@ -1727,6 +1981,11 @@ class HealthOMatCardEditor extends HTMLElement {
       this._toggleDrink(role, target);
       return;
     }
+    if (role === "person-filter" || role === "person-filter-all") {
+      if (ev.type !== "change") return;
+      this._togglePersonFilter(role, target);
+      return;
+    }
     if (target.tagName !== "INPUT" && target.tagName !== "SELECT") return;
     const key = target.getAttribute("data-key");
     if (!key) return;
@@ -1744,6 +2003,17 @@ class HealthOMatCardEditor extends HTMLElement {
 
     const next = Object.assign({}, this._config);
     next[key] = target.value;
+    if (key === "person_mode") {
+      const mode = String(target.value || "");
+      if (mode === "selector") {
+        delete next.entry_id;
+      } else if (!next.entry_id && this._persons && this._persons.length) {
+        next.entry_id = this._persons[0].entry_id;
+      }
+      this._config = next;
+      this._setConfig(next, true);
+      return;
+    }
     if (key === "entry_id") {
       // Die Getraenke-Auswahl gehoert zur Person — bei Personenwechsel
       // verwerfen und neu laden.
@@ -1811,6 +2081,40 @@ class HealthOMatCardEditor extends HTMLElement {
     const ordered = allKeys.filter((item) => selected.includes(item));
     if (ordered.length === allKeys.length) delete next.drinks;
     else next.drinks = ordered;
+    this._setConfig(next, true);
+  }
+
+  _personFilterValues() {
+    return normalizeStringList(this._config.person_filter);
+  }
+
+  _togglePersonFilter(role, target) {
+    const persons = this._persons || [];
+    const allKeys = persons.map((person) => person.entry_id).filter(Boolean);
+    if (!allKeys.length) return;
+    const next = Object.assign({}, this._config);
+    if (role === "person-filter-all") {
+      if (!target.checked) {
+        this._render();
+        return;
+      }
+      delete next.person_filter;
+      this._setConfig(next, true);
+      return;
+    }
+    const key = target.getAttribute("data-key") || "";
+    if (!key) return;
+    let selected = this._personFilterValues();
+    // Ein leerer Filter bedeutet "alle"; beim ersten Abwählen starten wir
+    // deshalb mit der vollständigen Liste.
+    if (!selected.length) selected = allKeys.slice();
+    if (target.checked) {
+      if (!selected.includes(key)) selected.push(key);
+    } else {
+      selected = selected.filter((item) => item !== key);
+    }
+    if (selected.length === allKeys.length) delete next.person_filter;
+    else next.person_filter = selected;
     this._setConfig(next, true);
   }
 
@@ -1915,6 +2219,7 @@ class HealthOMatCardEditor extends HTMLElement {
       ${this._checkbox("show_person", "Personenauswahl")}
       ${this._checkbox("show_hydration", "Trinkmenge (Ring und Tageswerte)")}
       ${this._checkbox("show_blood_pressure", "Letzte Blutdruckmessung")}
+      ${this._checkbox("show_blood_pressure_history", "Blutdruck-Verlaufsgraph")}
       ${this._checkbox("show_wellbeing", "Letztes Wohlbefinden")}
     </div>`;
   }
@@ -1926,7 +2231,48 @@ class HealthOMatCardEditor extends HTMLElement {
       ${this._checkbox("show_manual_amounts", "Manuelle Mengen")}
       ${this._checkbox("show_blood_pressure_input", "Blutdruck eingeben")}
       ${this._checkbox("show_wellbeing_input", "Wohlbefinden melden")}
+      ${this._checkbox("show_wellbeing_numeric", "Wohlbefinden auch als Zahl (1–10)")}
       ${this._checkbox("show_undo", "Letzte Buchung rückgängig")}
+    </div>`;
+  }
+
+  _personSection() {
+    const current = this._config.entry_id ? String(this._config.entry_id) : "";
+    const mode = String(this._config.person_mode || (current ? "fixed" : "selector"));
+    const filter = this._personFilterValues();
+    const persons = this._persons || [];
+    const allKeys = persons.map((person) => person.entry_id).filter(Boolean);
+    const selected = filter.length ? filter : allKeys;
+    const allSelected = allKeys.length > 0 && selected.length === allKeys.length;
+    const rows = persons
+      .map((person) => {
+        const key = person && person.entry_id ? String(person.entry_id) : "";
+        if (!key) return "";
+        const checked = selected.includes(key) ? " checked" : "";
+        const label = (person && (person.display_name || person.entry_id)) || key;
+        return `<label class="editor-check">
+          <input type="checkbox" data-role="person-filter" data-key="${escapeHtml(key)}"${checked} />
+          <span>${escapeHtml(label)}</span>
+        </label>`;
+      })
+      .join("");
+    return `<div class="editor-group">
+      <div class="editor-group-title">Personen-Bindung</div>
+      <div class="editor-row">
+        <select data-key="person_mode" aria-label="Personen-Modus">
+          <option value="selector"${mode === "selector" ? " selected" : ""}>Dropdown (Personenauswahl)</option>
+          <option value="fixed"${mode === "fixed" ? " selected" : ""}>Fest an eine Person gebunden</option>
+        </select>
+      </div>
+      ${
+        persons.length
+          ? `<label class="editor-check">
+              <input type="checkbox" data-role="person-filter-all"${allSelected ? " checked" : ""} />
+              <span>Alle Personen im Dropdown</span>
+            </label>${rows}
+            <div class="editor-hint">Ohne Auswahl erscheinen alle Personen. Der Filter gilt nur für das Dropdown.</div>`
+          : `<div class="editor-hint">Personenliste wird geladen\u2026</div>`
+      }
     </div>`;
   }
 
@@ -2021,6 +2367,7 @@ class HealthOMatCardEditor extends HTMLElement {
             value="${escapeHtml(this._config.person || "")}" placeholder="z. B. Caro" />
           <div class="editor-hint">Leer lassen, wenn die Karte \u00fcber die gew\u00e4hlte Person schreiben soll. Nur n\u00f6tig, wenn ein abweichender Anker (entry.data \u201eperson\u201c) angesprochen werden muss.</div>
         </div>
+        ${this._personSection()}
         ${this._displaySection()}
         ${this._inputSection()}
         ${this._drinksSection()}

@@ -484,7 +484,8 @@ def test_panel_data_full_payload(monkeypatch):
             "key": "okay",
             "label": "Okay",
             "emoji": "😐",
-            "score": 3,
+            "image": None,
+            "score": 5,
             "ts": "2026-10-14T10:00:00",
         }
     ]
@@ -613,6 +614,7 @@ _PANEL_TOP_LEVEL_KEYS = {
     "today",
     "bp",
     "wellbeing",
+    "wellbeing_scale",
     "quick_drinks",
     "entities",
 }
@@ -841,11 +843,19 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
             }
         )
 
-    # set_wellbeing: key Pflicht
-    with pytest.raises(vol.Invalid):
+    # set_wellbeing: key ODER score (die Pflichtprüfung macht der Handler)
+    assert (
         schemas[ws_api.COMMAND_SET_WELLBEING](
-            {"id": 1, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1"}
-        )
+            {"id": 1, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": "good"}
+        )["key"]
+        == "good"
+    )
+    assert (
+        schemas[ws_api.COMMAND_SET_WELLBEING](
+            {"id": 1, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "score": 7}
+        )["score"]
+        == 7
+    )
 
     # subscribe: entry_id optional (ohne → alle Personen)
     assert schemas[ws_api.COMMAND_SUBSCRIBE]({"id": 1, "type": ws_api.COMMAND_SUBSCRIBE})["id"] == 1
@@ -1366,6 +1376,45 @@ def test_set_wellbeing_invalid_key_sends_error(monkeypatch, key):
             hass,
             connection,
             {"id": 2, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": key},
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "invalid_format"
+    store.set_wellbeing.assert_not_called()
+
+
+def test_set_wellbeing_accepts_numeric_score(monkeypatch):
+    """Numerischer Score wird auf den kanonischen Key abgebildet."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 3, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "score": 7},
+        )
+    )
+
+    assert connection.results == [(3, None)]
+    store.set_wellbeing.assert_awaited_once_with("e1", "good", NOW.isoformat())
+
+
+def test_set_wellbeing_requires_key_or_score(monkeypatch):
+    """Weder key noch score → `invalid_format`, kein Schreibzugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1"},
         )
     )
 
@@ -2605,10 +2654,15 @@ def test_format_lexicon_text_tolerates_broken_stored_value():
 # Score-Skala: 1 = schlechtester … N = bester Wert (Index + 1).
 _EXPECTED_WELLBEING_SCORES = {
     "very_bad": 1,
-    "bad": 2,
-    "okay": 3,
-    "good": 4,
-    "great": 5,
+    "awful": 2,
+    "bad": 3,
+    "poor": 4,
+    "okay": 5,
+    "mixed": 6,
+    "good": 7,
+    "very_good": 8,
+    "great": 9,
+    "excellent": 10,
 }
 
 # ENTITY_SUFFIXES vor REQ-HOM-112 — die Erweiterung muss rein ADDITIV sein
@@ -2666,7 +2720,7 @@ def test_req_hom_112_wellbeing_history_entries_contain_score():
         ]
     )
 
-    assert [entry["score"] for entry in history] == [1, 3, 5]
+    assert [entry["score"] for entry in history] == [1, 5, 9]
     assert [entry["key"] for entry in history] == ["very_bad", "okay", "great"]
 
 
@@ -2687,8 +2741,8 @@ def test_req_hom_112_panel_data_wellbeing_block_contains_score(monkeypatch):
     payload = ws_api.build_panel_data(hass, "e1", NOW)
 
     assert payload["wellbeing"]["key"] == "good"
-    assert payload["wellbeing"]["score"] == 4
-    assert payload["wellbeing"]["history"][0]["score"] == 3
+    assert payload["wellbeing"]["score"] == 7
+    assert payload["wellbeing"]["history"][0]["score"] == 5
 
 
 def test_req_hom_112_panel_data_wellbeing_score_is_none_without_message(monkeypatch):
@@ -2725,3 +2779,23 @@ def test_req_hom_112_entity_suffixes_extension_is_additive():
     assert set(ws_api.ENTITY_SUFFIXES) == set(_ENTITY_SUFFIXES_BEFORE_WELLBEING_SCORE) | {
         "wellbeing_score"
     }
+
+
+def test_panel_data_includes_wellbeing_scale_and_images(monkeypatch):
+    """panel_data liefert die Skala inkl. eigener Bilder je Key."""
+    entry = _entry(
+        options={
+            "daily_goal_ml": 2000,
+            "wellbeing_images": {"good": "stufe7.png", "bogus": "x.png"},
+        }
+    )
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert [item["score"] for item in payload["wellbeing_scale"]] == list(range(1, 11))
+    good = next(item for item in payload["wellbeing_scale"] if item["key"] == "good")
+    assert good["image"] == "/local/stufe7.png"
+    assert payload["wellbeing"]["image"] == "/local/stufe7.png"
+    assert all(item["key"] != "bogus" for item in payload["wellbeing_scale"])

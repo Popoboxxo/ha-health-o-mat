@@ -20,7 +20,7 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
   Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
-  heute und der **Wohlbefinden-Score (1–5)** — je eine Entity für den
+  heute und der **Wohlbefinden-Score (1–10)** — je eine Entity für den
   Entscheidungswert, Details als Attribute
 - ↩️ **Undo-Button** für die letzte Buchung
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
@@ -68,7 +68,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `blood_pressure_systolic` / `blood_pressure_diastolic` / `pulse` | Blutdruck systolisch / diastolisch, Puls | letzte Messung (measurement → Graph) |
 | sensor | `blood_pressure_history` | Blutdruck-Historie / Blood pressure history | letzte 30 Messungen als JSON |
 | sensor | `wellbeing_last_reported` | Wohlbefinden zuletzt gemeldet / Wellbeing last reported | Zeitstempel |
-| sensor | `wellbeing_score` | Wohlbefinden-Score / Wellbeing score | numerisches Wohlbefinden 1–5 (rein abgeleitet) |
+| sensor | `wellbeing_score` | Wohlbefinden-Score / Wellbeing score | numerisches Wohlbefinden 1–10 (rein abgeleitet) |
 | sensor | `blood_pressure_category` | Blutdruck-Kategorie / Blood pressure category | WHO-Kategorie der letzten Messung (optimal … hypertensive Krise) |
 | sensor | `drinks_trend` | Trink-Trend / Drinks trend | ± % heute vs. Vorwochen-Ø (mL) |
 | sensor | `blood_pressure_trend` | Blutdruck-Trend / Blood pressure trend | steigend/fallend/stabil aus 7-Tage-Mitteln |
@@ -137,37 +137,53 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
   Attribut `caffeine_by_type_mg` = JSON mit mg je koffeinhaltigem Getränketyp.
   Reale Werte schwanken stark — **keine medizinische Aussage**.
 - `sensor.…_wellbeing_score` — **numerische Darstellung des Wohlbefindens auf
-  der Skala 1 … 5**: 1 = „Sehr schlecht" (schlechtester Wert) … 5 = „Super"
-  (bester Wert). Die Skala ist **reihenfolgetreu aus den fünf Wohlbefinden-
-  Zuständen abgeleitet** (Position in der Zustandsliste + 1) — kein fest
-  verdrahteter Zahlenblock; kommt ein neuer Zustand hinzu, wächst die Skala
-  automatisch mit. `state_class: measurement` (→ HA-Statistik/Graph nutzbar),
-  **ohne Einheit und ohne `device_class`** (der Score ist dimensionslos). Ohne
-  Meldung ist der Zustand `unknown` — **nie 0** (0 wäre der schlechteste Wert
-  und würde den Verlauf verfälschen). Attribute: `reported_at` (Zeitpunkt der
-  Meldung) und `scale_max` (5). Der Wert ist **rein abgeleitet** — siehe
-  „Wohlbefinden-Score: die Skala 1 … 5" unten.
+  der Skala 1 … 10**: 1 = „Sehr schlecht" (schlechtester Wert) … 10 =
+  „Ausgezeichnet" (bester Wert). Die Skala ist **reihenfolgetreu aus den zehn
+  Wohlbefinden-Zuständen abgeleitet** (Position in der Zustandsliste + 1).
+  `state_class: measurement` (→ HA-Statistik/Graph nutzbar), **ohne Einheit
+  und ohne `device_class`** (der Score ist dimensionslos). Ohne Meldung ist der
+  Zustand `unknown` — **nie 0** (0 wäre der schlechteste Wert und würde den
+  Verlauf verfälschen). Attribute: `reported_at` (Zeitpunkt der Meldung) und
+  `scale_max` (10). Der Wert ist **rein abgeleitet**.
 
-**Wohlbefinden-Score: die Skala 1 … 5**
+**Wohlbefinden-Score: die Skala 1 … 10**
 
-| Score | Wohlbefinden-Zustand |
-|---|---|
-| 1 | Sehr schlecht (schlechtester Wert) |
-| 2 | Schlecht |
-| 3 | Okay |
-| 4 | Gut |
-| 5 | Super (bester Wert) |
+| Score | Key | Emoji | Zustand |
+|---|---|---|---|
+| 1 | `very_bad` | 😭 | Sehr schlecht |
+| 2 | `awful` | 😖 | Elend |
+| 3 | `bad` | 🙁 | Schlecht |
+| 4 | `poor` | 😔 | Mäßig |
+| 5 | `okay` | 😐 | Okay |
+| 6 | `mixed` | 😕 | Durchwachsen |
+| 7 | `good` | 🙂 | Gut |
+| 8 | `very_good` | 😊 | Sehr gut |
+| 9 | `great` | 😄 | Großartig |
+| 10 | `excellent` | 🤩 | Ausgezeichnet |
 
-Die Zuordnung ist **reihenfolgetreu** aus den fünf Wohlbefinden-Zuständen
-abgeleitet (Index + 1) und **wächst automatisch mit**, wenn ein neuer Zustand
-hinzukommt — Score und Attribut `scale_max` stammen aus derselben Quelle und
-können deshalb nicht auseinanderlaufen.
+Die bestehenden Keys (`very_bad`, `bad`, `okay`, `good`, `great`) bleiben
+erhalten und liegen auf den ungeraden Stufen 1/3/5/7/9 — alte Messwerte bleiben
+lesbar. Score und Attribut `scale_max` stammen aus derselben Quelle und können
+deshalb nicht auseinanderlaufen.
 
 > ℹ️ Der Score ist **rein abgeleitet**: Es gibt **keine eigene Datenhaltung**
 > (kein eigener Store, keine Migration des Datenbestands). Der Wert wird
 > jederzeit on-read aus der letzten Wohlbefinden-Meldung berechnet und ist zu
 > 100 % an die Rohdaten gekoppelt — wird die Rohmeldung geändert oder gelöscht,
 > ändert sich der Score automatisch mit.
+
+**Eigene Bilder je Wohlbefinden-Stufe (optional)**
+
+In den Integrations-Optionen (Schritt „Wohlbefinden-Bilder") kann je Key ein
+eigenes PNG/JPG/WebP hinterlegt werden. Akzeptiert werden:
+
+- eine Datei unter `/config/www/` als reiner Dateiname (`stufe1.png` → `/local/stufe1.png`),
+- ein absoluter Pfad (`/local/wellbeing/stufe1.png`),
+- eine HTTP(S)-URL,
+- ein Base64-Data-URI für PNG/JPEG/WebP.
+
+Karte und Panel zeigen das Bild automatisch statt des Emojis; ohne Bild bleibt
+das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
 
 **Binary-Sensoren**
 
@@ -194,7 +210,7 @@ können deshalb nicht auseinanderlaufen.
 
 **Select: kontinuierlicher Gesundheitszustand**
 
-- `select.…_wellbeing` — „Wohlbefinden" mit 5 Stufen (Sehr schlecht → Super).
+- `select.…_wellbeing` — „Wohlbefinden" mit 10 Stufen (Sehr schlecht → Ausgezeichnet).
   Das ist die kontinuierliche Darstellung des Gesundheitszustands: Der
   HA-Verlaufsgraph zeigt ihn als Balken-/Timeline-Darstellung, mushroom
   bietet `custom:mushroom-select-card`. Attribute: `emoji`, `reported_at`,
@@ -441,7 +457,9 @@ Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
 | `show_drinks` | bool | `true` | Quick-Drink-Buttons. |
 | `show_manual_amounts` | bool | `true` | Preset-Buttons für ml-Mengen (und ggf. freies Feld). |
 | `show_blood_pressure_input` | bool | `true` (folgt `show_blood_pressure`) | Eingabe Systolisch/Diastolisch/Puls inkl. Notiz. |
-| `show_wellbeing_input` | bool | `true` | Die fünf Wohlbefinden-Buttons. |
+| `show_wellbeing_input` | bool | `true` | Die zehn Wohlbefinden-Buttons. |
+| `show_wellbeing_numeric` | bool | `true` | Zusätzliches Zahlenfeld (1–10) neben den Smileys. |
+| `show_blood_pressure_history` | bool | `true` | Blutdruck-Verlaufsgraph (systolisch/diastolisch, letzte 30 Messungen). |
 | `show_undo` | bool | `true` | Undo der letzten Getränkebuchung. |
 | `drinks` | list[str] | alle | Keys der Quick-Drinks aus der Integration (`panel_data.quick_drinks`); unbekannte Keys werden ignoriert, leer/fehlend = alle. |
 | `manual_amounts` | list[int] | `[200, 500]` | ml-Presets (1…10000); leer/fehlend = Default. |
@@ -496,7 +514,9 @@ Die Wohlbefinden-Buttons der Karte schreiben über den öffentlichen Service:
 action: health_o_mat.set_wellbeing
 data:
   person: "Caro"   # optional — ohne Angabe die einzige konfigurierte Person
-  status: "good"   # Pflicht: very_bad | bad | okay | good | great
+  status: "good"   # very_bad | awful | bad | poor | okay | mixed | good | very_good | great | excellent
+  # ODER numerisch:
+  # score: 7
 ```
 
 Ein unbekannter `status` wird mit `ServiceValidationError` abgelehnt. Die
@@ -533,8 +553,8 @@ HA-Seitenleiste einklinkt:
   Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
   Feature-Toggle abgeschaltet sind, werden ausgeblendet
 - 📈 **Wohlbefinden-Score-Chart** — im Tab „Wohlbefinden" zeigt das Panel den
-  **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–5
-  auf der Y-Achse (Extremwerte 1 und 5 hervorgehoben), Zeitachse und der
+  **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–10
+  auf der Y-Achse (Extremwerte 1 und 10 hervorgehoben), Zeitachse und der
   aktuelle Wert als hervorgehobener Marker. Chart **ohne externe Bibliothek**
   (Vanilla-SVG), Farben ausschließlich über HA-CSS-Variablen → light/dark-fähig
 - 🔗 **Deep-Link pro Person** — die Person-Ansicht ist direkt verlinkbar über

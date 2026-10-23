@@ -49,9 +49,25 @@
           "quick_3_icon": "Voreinstellung 4 – Icon"
         }
       },
+      "wellbeing_images": {
+        "title": "Wohlbefinden-Bilder",
+        "description": "Optionales eigenes Bild je Wohlbefinden-Stufe. Bild-URL, /local/...-Pfad oder Dateiname unter /config/www/ (PNG, JPG oder WebP). Leer lassen, um das Emoji zu verwenden.",
+        "data": {
+          "wellbeing_image_very_bad": "Stufe 1 (sehr schlecht) – Bild",
+          "wellbeing_image_awful": "Stufe 2 (elend) – Bild",
+          "wellbeing_image_bad": "Stufe 3 (schlecht) – Bild",
+          "wellbeing_image_poor": "Stufe 4 (mäßig) – Bild",
+          "wellbeing_image_okay": "Stufe 5 (okay) – Bild",
+          "wellbeing_image_mixed": "Stufe 6 (durchwachsen) – Bild",
+          "wellbeing_image_good": "Stufe 7 (gut) – Bild",
+          "wellbeing_image_very_good": "Stufe 8 (sehr gut) – Bild",
+          "wellbeing_image_great": "Stufe 9 (großartig) – Bild",
+          "wellbeing_image_excellent": "Stufe 10 (ausgezeichnet) – Bild"
+        }
+      },
       "drink_lexicon": {
         "title": "Getränke-Lexikon",
-        "description": "Ein Eintrag pro Zeile: wort=Typ,ml (z. B. kaffee=Kaffee,250). Zeilen mit '#' am Anfang sind Kommentare.",
+        "description": "Ein Eintrag pro Zeile: wort=Typ,ml (z. B. kaffee=Kaffee,250). Zeilen mit '#' sind Kommentare.",
         "data": {
           "drink_lexicon": "Getränke-Lexikon"
         }
@@ -144,17 +160,32 @@
       "report_very_bad": {
         "name": "Melden: Sehr schlecht"
       },
+      "report_awful": {
+        "name": "Melden: Elend"
+      },
       "report_bad": {
         "name": "Melden: Schlecht"
+      },
+      "report_poor": {
+        "name": "Melden: Mäßig"
       },
       "report_okay": {
         "name": "Melden: Okay"
       },
+      "report_mixed": {
+        "name": "Melden: Durchwachsen"
+      },
       "report_good": {
         "name": "Melden: Gut"
       },
+      "report_very_good": {
+        "name": "Melden: Sehr gut"
+      },
       "report_great": {
-        "name": "Melden: Super"
+        "name": "Melden: Großartig"
+      },
+      "report_excellent": {
+        "name": "Melden: Ausgezeichnet"
       }
     },
     "select": {
@@ -162,10 +193,15 @@
         "name": "Wohlbefinden",
         "state": {
           "very_bad": "Sehr schlecht",
+          "awful": "Elend",
           "bad": "Schlecht",
+          "poor": "Mäßig",
           "okay": "Okay",
+          "mixed": "Durchwachsen",
           "good": "Gut",
-          "great": "Super"
+          "very_good": "Sehr gut",
+          "great": "Großartig",
+          "excellent": "Ausgezeichnet"
         }
       }
     },
@@ -209,7 +245,7 @@
     },
     "set_wellbeing": {
       "name": "Wohlbefinden melden",
-      "description": "Meldet das aktuelle Wohlbefinden einer Person.",
+      "description": "Meldet das aktuelle Wohlbefinden einer Person per Schlüssel oder Zahl (1–10).",
       "fields": {
         "person": {
           "name": "Person",
@@ -217,7 +253,11 @@
         },
         "status": {
           "name": "Zustand",
-          "description": "Wohlbefinden-Schlüssel: einer von very_bad, bad, okay, good, great."
+          "description": "Wohlbefinden-Schlüssel: very_bad, awful, bad, poor, okay, mixed, good, very_good, great oder excellent."
+        },
+        "score": {
+          "name": "Zahl",
+          "description": "Numerischer Wert von 1 (sehr schlecht) bis 10 (ausgezeichnet). Alternative zu status."
         }
       }
     },

@@ -49,6 +49,22 @@
           "quick_3_icon": "Preset 4 – Icon"
         }
       },
+      "wellbeing_images": {
+        "title": "Wellbeing images",
+        "description": "Optional own image per wellbeing level. Enter an image URL, a /local/... path or a file name below /config/www/ (PNG, JPG or WebP). Leave empty to use the emoji.",
+        "data": {
+          "wellbeing_image_very_bad": "Level 1 (very bad) – image",
+          "wellbeing_image_awful": "Level 2 (awful) – image",
+          "wellbeing_image_bad": "Level 3 (bad) – image",
+          "wellbeing_image_poor": "Level 4 (poor) – image",
+          "wellbeing_image_okay": "Level 5 (okay) – image",
+          "wellbeing_image_mixed": "Level 6 (mixed) – image",
+          "wellbeing_image_good": "Level 7 (good) – image",
+          "wellbeing_image_very_good": "Level 8 (very good) – image",
+          "wellbeing_image_great": "Level 9 (great) – image",
+          "wellbeing_image_excellent": "Level 10 (excellent) – image"
+        }
+      },
       "drink_lexicon": {
         "title": "Drink dictionary",
         "description": "One entry per line: word=Type,ml (e.g. kaffee=Coffee,250). Lines starting with '#' are comments.",
@@ -144,17 +160,32 @@
       "report_very_bad": {
         "name": "Report: Very bad"
       },
+      "report_awful": {
+        "name": "Report: Awful"
+      },
       "report_bad": {
         "name": "Report: Bad"
+      },
+      "report_poor": {
+        "name": "Report: Poor"
       },
       "report_okay": {
         "name": "Report: Okay"
       },
+      "report_mixed": {
+        "name": "Report: Mixed"
+      },
       "report_good": {
         "name": "Report: Good"
       },
+      "report_very_good": {
+        "name": "Report: Very good"
+      },
       "report_great": {
         "name": "Report: Great"
+      },
+      "report_excellent": {
+        "name": "Report: Excellent"
       }
     },
     "select": {
@@ -162,10 +193,15 @@
         "name": "Wellbeing",
         "state": {
           "very_bad": "Very bad",
+          "awful": "Awful",
           "bad": "Bad",
+          "poor": "Poor",
           "okay": "Okay",
+          "mixed": "Mixed",
           "good": "Good",
-          "great": "Great"
+          "very_good": "Very good",
+          "great": "Great",
+          "excellent": "Excellent"
         }
       }
     },
@@ -209,7 +245,7 @@
     },
     "set_wellbeing": {
       "name": "Report wellbeing",
-      "description": "Reports the current wellbeing of a person.",
+      "description": "Reports the current wellbeing of a person by key or numeric score (1–10).",
       "fields": {
         "person": {
           "name": "Person",
@@ -217,7 +253,11 @@
         },
         "status": {
           "name": "Status",
-          "description": "Wellbeing key: one of very_bad, bad, okay, good, great."
+          "description": "Wellbeing key: very_bad, awful, bad, poor, okay, mixed, good, very_good, great or excellent."
+        },
+        "score": {
+          "name": "Score",
+          "description": "Numeric wellbeing score from 1 (very bad) to 10 (excellent). Alternative to status."
         }
       }
     },

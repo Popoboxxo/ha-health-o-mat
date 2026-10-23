@@ -416,10 +416,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   **Offen:** allein der **Release** (Versions-Bump `manifest.version` + `?v=`-
   Cache-Buster zusammen, Tag, GitHub-Release).
 - **Anforderung:** Das Wohlbefinden bekommt eine **korrespondierende numerische
-  Darstellung 1 … 5** (1 = „Sehr schlecht" = schlechtester Wert … 5 = „Super" =
-  bester Wert). Die Skala ist **reihenfolgetreu aus den fünf Wohlbefinden-
-  Zuständen abgeleitet** (Index + 1) und **wächst automatisch mit**, wenn ein
-  neuer Zustand hinzukommt. Der Score ist **rein abgeleitet und on-read**: keine
+  Darstellung 1 … 10** (1 = „Sehr schlecht" = schlechtester Wert … 10 =
+  „Ausgezeichnet" = bester Wert). Die Skala ist **reihenfolgetreu aus den zehn
+  Wohlbefinden-Zuständen abgeleitet** (Index + 1) und **wächst automatisch mit**,
+  wenn ein neuer Zustand hinzukommt. Die bestehenden Keys bleiben auf den
+  ungeraden Stufen 1/3/5/7/9 erhalten. Zusätzlich kann je Key ein eigenes
+  PNG/JPG/WebP-Bild in den Options hinterlegt werden (Karte + Panel zeigen es
+  statt des Emojis). Der Score ist **rein abgeleitet und on-read**: keine
   eigene Persistenz, kein eigener Store, keine Migration des Datenbestands —
   100 % an die Rohdaten gekoppelt. Sensor `wellbeing_score` (`state_class:
   measurement`, **ohne** Einheit, **ohne** `device_class`; ohne Meldung `unknown`,
@@ -536,7 +539,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `tests/test_logic.py::test_req_hom_112_frontend_wellbeing_mirrors_match_server_scale`
     und `::test_req_hom_112_frontend_wellbeing_mirror_check_detects_deviation`.
   - [x] **E2E-Verifikation auf `ha-test` (HA 2026.9.1)** — Kriterium erfüllt:
-    Entity `wellbeing_score` existiert und liefert die Werte **1–5**; ohne
+    Entity `wellbeing_score` existiert und liefert die Werte **1–10**; ohne
     Meldung `unknown` (kein Meldungs-/Fehlertext); `state_class: measurement`
     **ohne** Einheit und **ohne** `device_class`; die Recorder-Statistik läuft
     **ohne** Einheiten-Warnung; der WS-Payload `panel_data` enthält den
@@ -563,7 +566,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Getränken (Referenz per Key, keine kartenlokale Zweitliste), (2) konfigurierbare
   manuelle ml-Presets plus optionales freies Zahlenfeld, (3) Blutdruck-Eingabe
   (Systolisch/Diastolisch/Puls + optionale Notiz) ein-/ausschaltbar,
-  (4) Wohlbefinden-Eingabe (fünf Zustände) ein-/ausschaltbar, (5) alle
+  (4) Wohlbefinden-Eingabe (zehn Zustände + Zahleneingabe) ein-/ausschaltbar, (5) alle
   Anzeige-Blöcke (Personenwahl, Hydration, letzter Blutdruck, letztes
   Wohlbefinden, Undo) einzeln ein-/ausschaltbar. Das Wohlbefinden schreibt über
   den neuen öffentlichen Service `health_o_mat.set_wellbeing` (`person`
@@ -609,7 +612,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `note` (einklappbares Feld, Default zu) und Bereichsgrenzen
     (Sys/Dia 40–260, Puls 20–250). **Beleg:**
     `::test_card_bp_input_uses_service_with_note_and_bounds`.
-  - [x] Wohlbefinden-Eingabe: fünf Buttons aus der (server-gelieferten) Skala,
+  - [x] Wohlbefinden-Eingabe: zehn Buttons aus der (server-gelieferten) Skala,
     aktiver Zustand markiert (`aria-pressed`), Aufruf von
     `health_o_mat.set_wellbeing`. **Beleg:**
     `::test_card_wellbeing_input_service_scale_and_active_state`.
@@ -699,3 +702,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-18 | **REQ-HOM-012 vollständig erledigt** (Branch `feat/e2e-playwright`): echter Browser-Smoke ergänzt — `tests_e2e/` (Playwright + pytest, 6 Tests) gegen eine reale HA-Instanz plus `scripts/e2e_bootstrap.py` (idempotentes Onboarding/Config-/Options-Flow-Bootstrap), Docker-Stack (`docker-compose.e2e.yml`, `Dockerfile.e2e`, `docker/ha_config_e2e/`) und CI-Workflow `.github/workflows/e2e.yaml` (workflow_dispatch + wöchentlich + PR-Pfadfilter). Unit-Suite unverändert HA-frei (`pytest -q` → 552 passed), E2E nur bei explizitem Aufruf (eigene `tests_e2e/pytest.ini`) |
 | 2026-10-21 | **Neu angelegt: REQ-HOM-113 — Konfigurierbare Health-O-Mat-Karte** (Branch `feat/configurable-card`) — **erledigt**. Flaches Schema, alle Schlüssel optional; **Default-Semantik:** die Anzeige-Blöcke bleiben unverändert, die drei neuen Eingabe-Blöcke (manuelle Mengen, BD-Eingabe, Wohlbefinden-Eingabe) sind **per Default aktiv** — bestehende Karten erhalten sie beim Update (bewusste neue Funktion, veröffentlicht in v0.10.0 unter „✨ New features"): neun `show_*`-Schalter (4 Anzeige + 5 Eingabe/Aktionen), `drinks` (Keys aus `panel_data.quick_drinks`, unbekannte ignoriert, leer = alle), `manual_amounts` (Default `[200, 500]`), `allow_custom_amount` (Default `true`), Legacy-Override `quick_drinks` (gewinnt); `show_blood_pressure_input: true` explizit gewinnt gegen `show_blood_pressure: false`; `show_person: false` ohne `entry_id` → erste Person ohne Dropdown; alle Blöcke aus → lesbarer Hinweis. **Backend:** `panel_data.quick_drinks` additiv; neuer öffentlicher Service `health_o_mat.set_wellbeing` (`person` optional, `status` Pflicht, fünf Keys, `ServiceValidationError` bei Unfug, gleicher Store-/Refresh-Pfad) — `button.*_report_*` unverändert; Kartenbuchung sendet `drink_type` (Label) statt „Eigen". **Panel:** Verlaufsliste (Zeitpunkt + Emoji + Label + Score, letzte 20) unter dem unveränderten Score-Chart. **Editor:** gruppiert alle neun Schalter als „Anzeige" (4) und „Eingabe & Aktionen" (5) — Abweichung vom Plan („6/5"). **Belege:** `tests/test_card_js.py` (u. a. `test_card_show_flag_list_covers_exactly_the_nine_schema_keys`, `test_card_explicit_bp_input_flag_overrides_display_flag`, `test_card_drinks_filter_by_key_and_never_empty`, `test_card_editor_renders_all_nine_flags_in_two_groups`), `tests/test_wave_a.py::test_set_wellbeing_service_*`, `tests/test_panel_js.py::test_panel_wellbeing_history_lists_time_emoji_label_and_score`, E2E `tests_e2e/test_card_config_e2e.py` (**7 Tests**; Live-Lauf auf der geteilten Instanz `ha-test`: Card-E2E **7/7**, Panel-E2E **6/6** grün, ein HA-Neustart, deployte Card-JS byte-identisch verifiziert; der Lauf fand vor dem Release einen Listener-Lifecycle-Defekt — Listener waren nur im Konstruktor registriert, behoben durch `connectedCallback`-Registrierung mit `disconnectedCallback`-Cleanup); `pytest -q` → **733 passed**; `ruff` clean. **Release:** v0.10.0 veröffentlicht (`manifest.version` + alle `?v=`-Cache-Buster gemeinsam gebumpt). |
 | 2026-10-21 | **v0.10.1 — Fix: Wohlbefinden-Verlauf stempelt den abgelösten Status mit seinem eigenen Meldezeitpunkt** (Branch `fix/wellbeing-history-timestamp`): `store.set_wellbeing` archiviert den abgelösten Status jetzt mit `wb["ts"]` (Meldezeitpunkt) statt mit dem Zeitstempel der ablösenden Meldung. Dadurch zeigt die Verlaufsliste im Panel/der Card den Vorgänger nicht mehr fälschlich als „vor 2 min", direkt nachdem ein neuer Zustand gemeldet wurde. Kein Schema-Umbau, keine Migration. Tests: `tests/test_store.py::test_req_hom_112_wellbeing_history_records_replaced_status_with_report_timestamp` (umbenannt/angepasst) sowie `STORE-017`; `pytest -q` → 733 passed; `ruff` clean. Release v0.10.1 (Patch). |
+| 2026-10-23 | **Wellbeing-Ausbau** (Branch `feat/wellbeing-10-scale-images`): Skala auf **1–10** erweitert (bestehende Keys auf 1/3/5/7/9), numerischer Service-/WS-Input (`score`) zusätzlich zum Key, konfigurierbare eigene Bilder je Key (Options-Schritt „Wohlbefinden-Bilder", PNG/JPG/WebP), Wohlbefinden-Zahleneingabe in Card und Panel, Blutdruck-Verlaufsgraph (sys/dia) in Card und Panel sowie Personen-Modus/Filter (`person_mode`, `person_filter`, `default_person`) in der Karte. `pytest -q` → 778 passed. |

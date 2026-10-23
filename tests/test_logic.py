@@ -1051,20 +1051,30 @@ def test_hydration_pace_is_consistent_with_today_sums():
 # Erwartete Skala der aktuellen Zustände: Index + 1 (1 = schlechtester).
 _EXPECTED_WELLBEING_SCORES = {
     "very_bad": 1,
-    "bad": 2,
-    "okay": 3,
-    "good": 4,
-    "great": 5,
+    "awful": 2,
+    "bad": 3,
+    "poor": 4,
+    "okay": 5,
+    "mixed": 6,
+    "good": 7,
+    "very_good": 8,
+    "great": 9,
+    "excellent": 10,
 }
 
-# Synthetische Zustandsliste mit EINER zusätzlichen Stufe (Skala 1…6).
+# Synthetische Zustandsliste mit EINER zusätzlichen Stufe (Skala 1…11).
 _SYNTHETIC_WELLBEING_STATES = [
     {"key": "very_bad", "label": "Sehr schlecht"},
+    {"key": "awful", "label": "Elend"},
     {"key": "bad", "label": "Schlecht"},
+    {"key": "poor", "label": "Mäßig"},
     {"key": "okay", "label": "Okay"},
+    {"key": "mixed", "label": "Durchwachsen"},
     {"key": "good", "label": "Gut"},
-    {"key": "great", "label": "Super"},
+    {"key": "very_good", "label": "Sehr gut"},
+    {"key": "great", "label": "Großartig"},
     {"key": "excellent", "label": "Ausgezeichnet"},
+    {"key": "superb", "label": "Hervorragend"},
 ]
 
 
@@ -1080,14 +1090,25 @@ def test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one():
 
 @pytest.mark.parametrize(
     ("key", "expected"),
-    [("very_bad", 1), ("bad", 2), ("okay", 3), ("good", 4), ("great", 5)],
+    [
+        ("very_bad", 1),
+        ("awful", 2),
+        ("bad", 3),
+        ("poor", 4),
+        ("okay", 5),
+        ("mixed", 6),
+        ("good", 7),
+        ("very_good", 8),
+        ("great", 9),
+        ("excellent", 10),
+    ],
 )
 def test_req_hom_112_wellbeing_score_explicit_scale_values(key, expected):
-    """[REQ-HOM-112] Feste Skala: very_bad=1 … great=5."""
+    """[REQ-HOM-112] Feste Skala: very_bad=1 … excellent=10."""
     assert logic.wellbeing_score(key) == expected
 
 
-@pytest.mark.parametrize("key", ["super_good", "bogus", "excellent", "VERY_BAD", "Good"])
+@pytest.mark.parametrize("key", ["super_good", "bogus", "superb", "VERY_BAD", "Good"])
 def test_req_hom_112_wellbeing_score_unknown_key_returns_none(key):
     """[REQ-HOM-112] Unbekannter Key ⇒ None (nie 0, nie geraten)."""
     assert logic.wellbeing_score(key) is None
@@ -1119,14 +1140,15 @@ def test_req_hom_112_wellbeing_score_scale_follows_wellbeing_states(monkeypatch)
     """
     monkeypatch.setattr(logic, "WELLBEING_STATES", _SYNTHETIC_WELLBEING_STATES)
 
-    # (a) Die neue Stufe bekommt den Score 6 …
-    assert logic.wellbeing_score("excellent") == 6
-    # (b) … die bisherigen Stufen bleiben unverändert 1…5.
+    # (a) Die neue Stufe bekommt den Score 11 …
+    assert logic.wellbeing_score("superb") == 11
+    # (b) … die bisherigen Stufen bleiben unverändert (alte Keys auf
+    #     ungeraden Stufen).
     assert logic.wellbeing_score("very_bad") == 1
-    assert logic.wellbeing_score("bad") == 2
-    assert logic.wellbeing_score("okay") == 3
-    assert logic.wellbeing_score("good") == 4
-    assert logic.wellbeing_score("great") == 5
+    assert logic.wellbeing_score("bad") == 3
+    assert logic.wellbeing_score("okay") == 5
+    assert logic.wellbeing_score("good") == 7
+    assert logic.wellbeing_score("great") == 9
     # Höchstwert = Anzahl der Zustände.
     assert max(logic.wellbeing_score(state["key"]) for state in logic.WELLBEING_STATES) == len(
         logic.WELLBEING_STATES
@@ -1141,7 +1163,7 @@ def test_req_hom_112_wellbeing_score_never_returns_zero():
     """
     scores = [logic.wellbeing_score(state["key"]) for state in logic.WELLBEING_STATES]
 
-    assert scores == [1, 2, 3, 4, 5]
+    assert scores == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert min(scores) == 1
     assert 0 not in scores
     assert logic.wellbeing_score("very_bad") == 1
@@ -1251,4 +1273,55 @@ def test_req_hom_112_frontend_wellbeing_mirror_check_detects_deviation():
         _assert_mirror_matches(list(reversed(expected)), expected, "Karte")
     # (d) gleich lange Liste mit einem anderen Key
     with pytest.raises(AssertionError):
-        _assert_mirror_matches([*expected[:-1], "excellent"], expected, "Karte")
+        _assert_mirror_matches([*expected[:-1], "unknown_key"], expected, "Karte")
+
+
+# --- Wellbeing-Ausbau: Numerik + eigene Bilder ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [(1, "very_bad"), (2, "awful"), (5, "okay"), (7, "good"), (9, "great"), (10, "excellent")],
+)
+def test_wellbeing_key_for_score_maps_numbers_to_keys(score, expected):
+    """Score 1..10 wird auf den kanonischen Key abgebildet."""
+    assert logic.wellbeing_key_for_score(score) == expected
+
+
+@pytest.mark.parametrize("score", [0, 11, -1, None, "x", 3.9])
+def test_wellbeing_key_for_score_rejects_invalid(score):
+    """Ungültige Scores liefern None (3.9 wird bewusst nicht geraten)."""
+    assert logic.wellbeing_key_for_score(score) is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("stufe1.png", "/local/stufe1.png"),
+        ("local/stufe1.png", "/local/stufe1.png"),
+        ("/local/wellbeing/stufe2.jpg", "/local/wellbeing/stufe2.jpg"),
+        ("https://example.org/a.webp", "https://example.org/a.webp"),
+        ("data:image/png;base64,AAAA", "data:image/png;base64,AAAA"),
+        ("", None),
+        ("stufe1.html", None),
+        ("javascript:alert(1).png", None),
+        ("/local/../secret.png", None),
+        ("https://example.org/a.exe", None),
+    ],
+)
+def test_normalize_wellbeing_image(raw, expected):
+    """Bild-Referenzen werden defensiv normalisiert (nur PNG/JPG/WebP)."""
+    assert logic.normalize_wellbeing_image(raw) == expected
+
+
+def test_wellbeing_scale_includes_images_and_scores():
+    """Die Skala trägt je Eintrag Key, Emoji, Score und optionales Bild."""
+    scale = logic.wellbeing_scale({"good": "/local/good.png", "bogus": "x.png"})
+
+    assert [entry["score"] for entry in scale] == list(range(1, 11))
+    good = next(entry for entry in scale if entry["key"] == "good")
+    assert good["image"] == "/local/good.png"
+    assert all(entry["key"] != "bogus" for entry in scale)
+    # Frische Kopien: Änderungen am Ergebnis dürfen const nicht verändern.
+    scale[0]["label"] = "x"
+    assert logic.WELLBEING_STATES[0]["label"] != "x"

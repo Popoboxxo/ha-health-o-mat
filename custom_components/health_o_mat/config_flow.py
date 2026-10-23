@@ -17,13 +17,15 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from . import areas, parser
+from . import areas, logic, parser
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_QUICK_DRINKS,
     DOMAIN,
     DRINK_LEXICON,
     MAX_RETENTION_MONTHS,
+    WELLBEING_IMAGES_OPTION,
+    WELLBEING_STATES,
 )
 from .panel import OPTION_ENABLE_SIDEBAR_PANEL
 
@@ -80,6 +82,30 @@ def quick_drinks_from_user_input(user_input: dict[str, Any]) -> list[dict]:
         }
         for i in range(4)
     ]
+
+
+def wellbeing_images_schema(current: dict[str, str] | None) -> vol.Schema:
+    """Formular für optionale eigene Bilder je Wellbeing-Key.
+
+    Die Eingabe ist eine Bild-URL oder ein Dateiname/Pfad (PNG/JPG/WebP).
+    Reine Dateinamen werden auf ``/local/<name>`` abgebildet; Pfade unter
+    ``/config/www/`` sind damit direkt erreichbar.
+    """
+    images = logic.normalize_wellbeing_images(current or {})
+    fields = {}
+    for state in WELLBEING_STATES:
+        fields[
+            vol.Optional(f"wellbeing_image_{state['key']}", default=images.get(state["key"], ""))
+        ] = str
+    return vol.Schema(fields)
+
+
+def wellbeing_images_from_user_input(user_input: dict[str, Any]) -> dict[str, str]:
+    """Formularfelder → normalisiertes ``{key: bild}`` (leere Werte entfallen)."""
+    raw: dict[str, str] = {}
+    for state in WELLBEING_STATES:
+        raw[state["key"]] = user_input.get(f"wellbeing_image_{state['key']}", "")
+    return logic.normalize_wellbeing_images(raw)
 
 
 def drink_lexicon_schema(current_text: str) -> vol.Schema:
@@ -212,11 +238,23 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
         current = self.config_entry.options.get("quick_drinks") or _default_quick_drinks()
         if user_input is not None:
             self._pending["quick_drinks"] = quick_drinks_from_user_input(user_input)
-            return await self.async_step_drink_lexicon()
+            return await self.async_step_wellbeing_images()
         return self.async_show_form(
             step_id="quick_drinks",
             data_schema=quick_drinks_schema(current),
             description_placeholders={"person": self.config_entry.data.get("person", "")},
+        )
+
+    async def async_step_wellbeing_images(self, user_input: dict[str, Any] | None = None):
+        """Schritt 3: optionale eigene Bilder je Wellbeing-Key (PNG/JPG/WebP)."""
+        if user_input is not None:
+            self._pending[WELLBEING_IMAGES_OPTION] = wellbeing_images_from_user_input(user_input)
+            return await self.async_step_drink_lexicon()
+        return self.async_show_form(
+            step_id="wellbeing_images",
+            data_schema=wellbeing_images_schema(
+                self.config_entry.options.get(WELLBEING_IMAGES_OPTION)
+            ),
         )
 
     async def async_step_drink_lexicon(self, user_input: dict[str, Any] | None = None):

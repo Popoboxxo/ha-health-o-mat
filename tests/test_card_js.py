@@ -175,7 +175,7 @@ def test_card_wellbeing_score_badge_uses_scale_maximum():
     text = _card_source()
 
     assert "wellbeing_score" in text  # Live-Entity als Quelle
-    assert re.search(r"\$\{score\}\s*/\s*\$\{WELLBEING_SCALE\.length\}", text), (
+    assert re.search(r"\$\{score\}\s*/\s*\$\{scaleMax\}", text), (
         "Das Score-Badge zeigt den Score nicht gegen das Skalenmaximum"
     )
 
@@ -263,7 +263,7 @@ def test_req_hom_112_card_badge_and_sparkline_share_resolved_score():
     )
     # … und ins Badge.
     assert re.search(
-        r'<span class="score">\$\{score\}\s*/\s*\$\{WELLBEING_SCALE\.length\}</span>',
+        r'<span class="score">\$\{score\}\s*/\s*\$\{scaleMax\}</span>',
         text,
     ), "das Score-Badge nutzt nicht den aufgeloesten Score"
 
@@ -279,11 +279,13 @@ _CARD_SHOW_KEYS = (
     "show_person",
     "show_hydration",
     "show_blood_pressure",
+    "show_blood_pressure_history",
     "show_wellbeing",
     "show_drinks",
     "show_manual_amounts",
     "show_blood_pressure_input",
     "show_wellbeing_input",
+    "show_wellbeing_numeric",
     "show_undo",
 )
 
@@ -311,14 +313,14 @@ def _js_method_block(text: str, name: str) -> str:
 
 
 def test_card_show_flag_list_covers_exactly_the_nine_schema_keys():
-    """[Card-Config] `CARD_SHOW_KEYS` enthaelt genau die neun Schema-Schalter."""
+    """[Card-Config] `CARD_SHOW_KEYS` enthaelt genau die Schema-Schalter."""
     text = _card_source()
     match = re.search(r"CARD_SHOW_KEYS\s*=\s*\[(.*?)\]", text, re.S)
     assert match is not None, "CARD_SHOW_KEYS fehlt in der Karte"
 
     keys = re.findall(r'"([a-z_]+)"', match.group(1))
     assert keys == list(_CARD_SHOW_KEYS), f"Schema-Schalter weichen ab: {keys}"
-    assert len(keys) == len(set(keys)) == 9
+    assert len(keys) == len(set(keys)) == 11
 
 
 def test_card_body_gates_every_block_with_its_flag_and_the_area():
@@ -328,6 +330,7 @@ def test_card_body_gates_every_block_with_its_flag_and_the_area():
     expected = {
         "show_hydration": "areas.drink && flags.show_hydration",
         "show_blood_pressure": "areas.bp && flags.show_blood_pressure",
+        "show_blood_pressure_history": "areas.bp && flags.show_blood_pressure_history",
         "show_wellbeing": "areas.wellbeing && flags.show_wellbeing",
         "show_drinks": "areas.drink && flags.show_drinks",
         "show_manual_amounts": "areas.drink && flags.show_manual_amounts",
@@ -441,11 +444,16 @@ def test_card_head_respects_show_person():
         "der Personenwechsel verwirft die gecachte Personenliste"
     )
     assert "this._loadData()" in change, "der Personenwechsel laedt keine Daten"
-    # Bei show_person=false bleibt die Personenauflösung (erste Person) im
-    # Datenladen — dort wird ohne entry_id die erste Person gewaehlt.
     loader = _js_method_block(_card_source(), "_loadData")
-    assert re.search(r"entryId\s*=\s*known\s*\?\s*entryId\s*:\s*persons\[0\]\.entry_id", loader), (
-        "ohne entry_id wird nicht die erste Person verwendet"
+    assert "filterPersons(persons, cfg.personFilter)" in loader, (
+        "der Personen-Filter wird beim Laden nicht angewendet"
+    )
+    fallback = (
+        r"entryId\s*=\s*known\s*\?\s*entryId\s*:\s*preferred\s*\?"
+        r"\s*preferred\.entry_id\s*:\s*allowed\[0\]\.entry_id"
+    )
+    assert re.search(fallback, loader), (
+        "ohne Auswahl wird nicht die erste erlaubte Person verwendet"
     )
 
 
@@ -689,7 +697,7 @@ def test_card_wellbeing_input_service_scale_and_active_state():
     # Server-Skala wird defensiv akzeptiert, sonst der gepinnte Mirror.
     assert "wellbeing_scale" in scale
     assert "WELLBEING_SCALE" in scale
-    # Exakt die fuenf Zustaende in kanonischer Reihenfolge, jeder mit einem
+    # Exakt die zehn Zustaende in kanonischer Reihenfolge, jeder mit einem
     # expliziten Emoji (keine Tautologie: Key ODER Emoji reicht NICHT).
     scale_block = re.search(r"WELLBEING_SCALE\s*=\s*\[(.*?)\]", text, re.S)
     assert scale_block is not None, "WELLBEING_SCALE fehlt in der Karte"
@@ -699,12 +707,17 @@ def test_card_wellbeing_input_service_scale_and_active_state():
     )
     assert [key for key, _emoji in entries] == [
         "very_bad",
+        "awful",
         "bad",
+        "poor",
         "okay",
+        "mixed",
         "good",
+        "very_good",
         "great",
+        "excellent",
     ], f"die Skala-Reihenfolge weicht ab: {entries}"
-    assert len(entries) == 5 and all(emoji for _key, emoji in entries), (
+    assert len(entries) == 10 and all(emoji for _key, emoji in entries), (
         "nicht jeder Zustand hat ein explizites Emoji"
     )
 
@@ -743,19 +756,26 @@ def test_card_editor_renders_all_nine_flags_in_two_groups():
 
     assert "Anzeige" in display
     assert "Eingabe &amp; Aktionen" in inputs
-    for key in ("show_person", "show_hydration", "show_blood_pressure", "show_wellbeing"):
+    for key in (
+        "show_person",
+        "show_hydration",
+        "show_blood_pressure",
+        "show_blood_pressure_history",
+        "show_wellbeing",
+    ):
         assert f'_checkbox("{key}"' in display, f"Anzeige-Schalter {key} fehlt im Editor"
     for key in (
         "show_drinks",
         "show_manual_amounts",
         "show_blood_pressure_input",
         "show_wellbeing_input",
+        "show_wellbeing_numeric",
         "show_undo",
     ):
         assert f'_checkbox("{key}"' in inputs, f"Eingabe-Schalter {key} fehlt im Editor"
-    # Genau neun Aufrufe (plus die Methodendefinition selbst) — keine Duplikate.
-    assert editor.count("_checkbox(") == 10
-    assert len(re.findall(r'this\._checkbox\("show_', editor)) == 9
+    # Elf Aufrufe (plus die Methodendefinition selbst) — keine Duplikate.
+    assert editor.count("_checkbox(") == 12
+    assert len(re.findall(r'this\._checkbox\("show_', editor)) == 11
 
 
 def test_card_editor_loads_drinks_and_renders_selection_and_amounts():

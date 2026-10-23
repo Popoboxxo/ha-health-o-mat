@@ -5,9 +5,11 @@
 #   2. Anzeige  — reine Anzeige, keine Eingaben/Aktionen
 #   3. Erfassen — eigene Getränkeauswahl + eigene Mengen + Eingaben
 #
-# Ohne `entry_id` zeigt die Karte automatisch eine Personenauswahl.
-# Für ein festes Dashboard im Karten-Editor eine Person wählen (setzt
-# `entry_id`) oder `entry_id: <config-entry-id>` ergänzen.
+# Personen-Bindung:
+#   - ohne `entry_id`/mit `person_mode: selector`: Dropdown
+#   - `entry_id` + `person_mode: fixed`: fest an diese Person gebunden
+#   - `person_filter`: optional Whitelist für das Dropdown
+#   - `default_person`: Vorauswahl im Dropdown
 #
 # Import: Einstellungen → Dashboards → Dashboard hinzufügen →
 #         „Neues Dashboard aus YAML".
@@ -51,4 +53,9 @@ views:
         manual_amounts: [200, 330, 500]
         allow_custom_amount: true
         show_blood_pressure_input: true
+        show_blood_pressure_history: true
         show_wellbeing_input: true
+        show_wellbeing_numeric: true
+        # Personen-Dropdown auf diese Personen begrenzen (entry_id oder Slug):
+        # person_filter: ["max"]
+        # default_person: "max"

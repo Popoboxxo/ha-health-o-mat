@@ -142,27 +142,37 @@ views:
           - type: button
             entity: button.health_o_mat_max_report_very_bad
           - type: button
+            entity: button.health_o_mat_max_report_awful
+          - type: button
             entity: button.health_o_mat_max_report_bad
+          - type: button
+            entity: button.health_o_mat_max_report_poor
           - type: button
             entity: button.health_o_mat_max_report_okay
           - type: button
+            entity: button.health_o_mat_max_report_mixed
+          - type: button
             entity: button.health_o_mat_max_report_good
           - type: button
+            entity: button.health_o_mat_max_report_very_good
+          - type: button
             entity: button.health_o_mat_max_report_great
+          - type: button
+            entity: button.health_o_mat_max_report_excellent
 
       - type: gauge
         entity: sensor.health_o_mat_max_wellbeing_score
         name: Score
         min: 1
-        max: 5
+        max: 10
         needle: true
         severity:
           red: 0
-          yellow: 3
-          green: 4
+          yellow: 5
+          green: 8
 
       - type: history-graph
-        title: Score-Verlauf (1 = schlechtestes, 5 = bestes)
+        title: Score-Verlauf (1 = schlechtestes, 10 = bestes)
         entity: sensor.health_o_mat_max_wellbeing_score
         hours_to_show: 720
 

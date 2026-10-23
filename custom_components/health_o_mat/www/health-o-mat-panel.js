@@ -64,14 +64,14 @@ import {
   areasForPerson,
   enabledTabs,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.10.2";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.10.2";
+} from "./health-o-mat-panel-base.js?v=0.11.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.11.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
-} from "./health-o-mat-panel-admin.js?v=0.10.2";
+} from "./health-o-mat-panel-admin.js?v=0.11.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
@@ -1118,13 +1118,17 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  async _setWellbeing(entryId, key) {
-    if (!entryId || !key || this._busy) return;
+  async _setWellbeing(entryId, key, score) {
+    if (!entryId || (!key && score == null) || this._busy) return;
     this._busy = true;
     this._actionError = null;
+    this._formError = null;
     this._render();
     try {
-      await this._ws({ type: WS.setWellbeing, entry_id: entryId, key: String(key) });
+      const message = { type: WS.setWellbeing, entry_id: entryId };
+      if (key) message.key = String(key);
+      else message.score = Number(score);
+      await this._ws(message);
       await this._reloadEntry(entryId);
     } catch (err) {
       this._actionError = errMsg(err);
@@ -1366,6 +1370,9 @@ class HealthOMatPanel extends HTMLElement {
     } else if (kind === "bp") {
       ev.preventDefault();
       this._submitBp();
+    } else if (kind === "wellbeing") {
+      ev.preventDefault();
+      this._submitWellbeing();
     } else if (kind === "settings") {
       ev.preventDefault();
       this._submitSettings();
@@ -1398,6 +1405,21 @@ class HealthOMatPanel extends HTMLElement {
     const noteEl = this.shadowRoot.querySelector('[data-field="note"]');
     const note = noteEl && noteEl.value ? String(noteEl.value).trim() : "";
     this._saveMeasurement(this._selectedEntry, sys, dia, pulse, note);
+  }
+
+  _submitWellbeing() {
+    const el = this.shadowRoot.querySelector('[data-field="wb-score"]');
+    const raw = el && el.value != null ? String(el.value).trim() : "";
+    const score = Number(raw);
+    const scale = this._data[this._selectedEntry] && Array.isArray(this._data[this._selectedEntry].wellbeing_scale)
+      ? this._data[this._selectedEntry].wellbeing_scale.length
+      : 10;
+    if (!/^\d+$/.test(raw) || !Number.isInteger(score) || score < 1 || score > scale) {
+      this._formError = `Bitte eine ganze Zahl zwischen 1 und ${scale} eingeben.`;
+      this._render();
+      return;
+    }
+    this._setWellbeing(this._selectedEntry, null, score);
   }
 }
 

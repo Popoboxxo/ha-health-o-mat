@@ -26,7 +26,10 @@ import {
   areasForPerson,
   wellbeingScore,
   wellbeingChartHtml,
-} from "./health-o-mat-panel-base.js?v=0.10.2";
+  wellbeingScale,
+  wellbeingVisual,
+  bpHistoryChartHtml,
+} from "./health-o-mat-panel-base.js?v=0.11.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -92,7 +95,7 @@ export function renderTile(panel, person) {
     ? `<div class="tile-row"><span class="em" aria-hidden="true">\u{1FA78}</span><span>${escapeHtml(bpText)}</span>${warn ? `<span class="muted">\u00B7 \u26A0\uFE0F</span>` : ""}</div>`
     : "";
   const wbRow = areas.wellbeing
-    ? `<div class="tile-row"><span class="em" aria-hidden="true">${escapeHtml(wbState.emoji)}</span><span>${escapeHtml(wbState.label)}</span>${wbAt ? `<span class="muted">\u00B7 ${escapeHtml(wbAt)}</span>` : ""}</div>`
+    ? `<div class="tile-row">${wellbeingVisual(wbState)}<span>${escapeHtml(wbState.label)}</span>${wbAt ? `<span class="muted">\u00B7 ${escapeHtml(wbAt)}</span>` : ""}</div>`
     : "";
 
   return `<button class="tile" data-action="open" data-entry="${escapeHtml(entryId)}" type="button">
@@ -302,35 +305,7 @@ function bpTab(panel, data, entryId) {
       ${formError}
     </form>`;
 
-  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${bpTrend(bp)}`;
-}
-
-function bpTrend(bp) {
-  const entries = Array.isArray(bp.entries) ? bp.entries : [];
-  const since = Date.now() - 7 * 24 * 3600 * 1000;
-  const recent = entries
-    .filter((r) => r && Number.isFinite(toNumber(r.sys, NaN)) && Number.isFinite(toNumber(r.dia, NaN)))
-    .filter((r) => {
-      const ts = Date.parse(r.ts);
-      return !Number.isFinite(ts) || ts >= since;
-    });
-  if (recent.length < 2) return "";
-  const low = 90;
-  const high = 180;
-  const bars = recent
-    .slice(-21)
-    .map((r) => {
-      const sys = toNumber(r.sys, low);
-      const dia = toNumber(r.dia, NaN);
-      const h = clamp(((sys - low) / (high - low)) * 100, 6, 100);
-      const title = Number.isFinite(dia) ? `${Math.round(sys)}/${Math.round(dia)}` : `${Math.round(sys)}`;
-      return `<span class="bar" style="height:${h.toFixed(1)}%" title="${escapeHtml(title)}"></span>`;
-    })
-    .join("");
-  return `<div class="card">
-      <div class="muted">7-Tage-Verlauf (systolisch)</div>
-      <div class="spark">${bars}</div>
-    </div>`;
+  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${bpHistoryChartHtml(bp.entries, { title: "Verlauf systolisch/diastolisch" })}`;
 }
 
 /* ---- Tab: Wohlbefinden (4.4) --------------------------------------------- */
@@ -360,7 +335,8 @@ export function wellbeingView(panel, data) {
   // the last report — NOT a wellbeing key. The key always comes from the
   // (server-localised) payload.
   const key = String(wb.key || "").toLowerCase();
-  const known = WELLBEING_STATES.find((s) => s.key === key);
+  const scale = wellbeingScale(data);
+  const known = scale.find((s) => s.key === key);
   // Score (1…N): Live-Entity, sonst Server-Feld, sonst aus dem Key
   // abgeleitet (älterer Payload ohne `score`).
   const liveScore =
@@ -378,9 +354,11 @@ export function wellbeingView(panel, data) {
    * Live-Entity keine Attribute, bleibt der Snapshot die Quelle. */
   const liveLabel = liveAttribute(panel, data, "wellbeing", "label");
   const liveEmoji = liveAttribute(panel, data, "wellbeing", "emoji");
+  const liveImage = liveAttribute(panel, data, "wellbeing", "image");
   return {
     key,
     emoji: liveEmoji || wb.emoji || (known && known.emoji) || "\u{1F642}",
+    image: liveImage || wb.image || (known && known.image) || "",
     label: liveLabel || wb.label || (known && known.label) || "Keine Angabe",
     at: wb.at || (typeof live === "string" && live !== "unknown" ? live : ""),
     // Numerischer Score (1…N); null ohne Meldung (REQ-HOM-112).
@@ -390,21 +368,37 @@ export function wellbeingView(panel, data) {
 
 function wellbeingTab(panel, data, entryId) {
   const view = wellbeingView(panel, data);
-  const buttons = WELLBEING_STATES.map(
+  const scale = wellbeingScale(data);
+  const scoreMax = scale.length || WELLBEING_SCORE_MAX;
+  const buttons = scale.map(
     (s) => `<button class="wb-btn${s.key === view.key ? " active" : ""}" data-action="wb" data-key="${s.key}" type="button"${panel._busy ? " disabled" : ""}>
-        <span class="emoji" aria-hidden="true">${s.emoji}</span>
+        ${wellbeingVisual(s)}
         <span class="lbl">${escapeHtml(s.label)}</span>
       </button>`
   ).join("");
 
   const at = view.at ? relativeTime(view.at) : "";
   const scoreText =
-    view.score != null ? ` \u00B7 ${view.score} / ${WELLBEING_SCORE_MAX}` : "";
+    view.score != null ? ` \u00B7 ${view.score} / ${scoreMax}` : "";
   const last = `<div class="tile-row">
-      <span class="em" aria-hidden="true">${escapeHtml(view.emoji)}</span>
+      ${wellbeingVisual(view)}
       <span>Zuletzt: <strong>${escapeHtml(view.label)}</strong>${scoreText}</span>
       ${at ? `<span class="muted">\u00B7 ${escapeHtml(at)}</span>` : ""}
     </div>`;
+
+  const scoreFormError = panel._formError
+    ? `<div class="msg error">${escapeHtml(panel._formError)}</div>`
+    : "";
+  const scoreForm = `<form class="card" data-form="wellbeing">
+      <div class="muted">Alternativ als Zahl (1\u2013${scoreMax})</div>
+      <div class="bp-inputs">
+        <label class="field">Wert
+          <input type="number" inputmode="numeric" data-field="wb-score" min="1" max="${scoreMax}" step="1" placeholder="1\u2013${scoreMax}" />
+        </label>
+        <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>\u{1F4BE} Melden</button>
+      </div>
+      ${scoreFormError}
+    </form>`;
 
   /* Verlaufsliste UNTER dem Chart: pro Eintrag Zeitpunkt (relativ), Emoji,
    * Label und Score ("3 / 5"). Reine Anzeige aus `wellbeing.history` (letzte
@@ -421,16 +415,19 @@ function wellbeingTab(panel, data, entryId) {
     .map((entry) => {
       if (!entry || typeof entry !== "object") return "";
       const entryKey = String(entry.key || "").toLowerCase();
-      const knownState = WELLBEING_STATES.find((state) => state.key === entryKey);
+      const knownState = scale.find((state) => state.key === entryKey);
       const entryAt = entry.ts ? relativeTime(entry.ts) : "";
       const entryLabel = entry.label || (knownState && knownState.label) || "Keine Angabe";
-      const entryEmoji = entry.emoji || (knownState && knownState.emoji) || "\u{1F642}";
+      const entryVisual = {
+        emoji: entry.emoji || (knownState && knownState.emoji) || "\u{1F642}",
+        image: entry.image || (knownState && knownState.image) || "",
+      };
       const entryScore = wellbeingScore(entry);
       return `<li class="wb-hist">
-          <span class="emoji" aria-hidden="true">${escapeHtml(entryEmoji)}</span>
+          ${wellbeingVisual(entryVisual)}
           <span class="wb-hist-label">${escapeHtml(entryLabel)}</span>
           <span class="wb-hist-time">${escapeHtml(entryAt || "ohne Zeitangabe")}</span>
-          ${entryScore != null ? `<span class="wb-hist-score">${entryScore} / ${WELLBEING_SCORE_MAX}</span>` : ""}
+          ${entryScore != null ? `<span class="wb-hist-score">${entryScore} / ${scoreMax}</span>` : ""}
         </li>`;
     })
     .join("");
@@ -453,7 +450,14 @@ function wellbeingTab(panel, data, entryId) {
    * einem Report von ausserhalb des Panels (Select-Entity, Automation,
    * Dashboard) verschiedene Werte (Snapshot "2" vs. Live "4"). */
   const chartHtml = wellbeingChartHtml(history, {
-    current: { ...data.wellbeing, label: view.label, emoji: view.emoji, score: view.score },
+    current: {
+      ...data.wellbeing,
+      label: view.label,
+      emoji: view.emoji,
+      image: view.image,
+      score: view.score,
+    },
+    scale,
     title: "Score-Verlauf",
   });
 
@@ -461,5 +465,5 @@ function wellbeingTab(panel, data, entryId) {
       <div class="muted">Wie geht es dir?</div>
       <div class="wb-row">${buttons}</div>
       ${last}
-    </div>${chartHtml}${histHtml}`;
+    </div>${scoreForm}${chartHtml}${histHtml}`;
 }
