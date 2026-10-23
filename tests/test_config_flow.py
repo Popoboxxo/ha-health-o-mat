@@ -145,11 +145,15 @@ def test_options_flow_full_three_step_flow_creates_entry():
         user_input[f"quick_{i}_label"] = f"Drink {i}"
         user_input[f"quick_{i}_ml"] = 250
         user_input[f"quick_{i}_icon"] = "mdi:cup-water"
-    # quick_drinks-Submit erzeugt jetzt keinen Entry mehr — es verkettet auf drink_lexicon
+    # quick_drinks-Submit verkettet auf den neuen wellbeing_images-Schritt.
     quick_drinks_result = _async_test(options_flow.async_step_quick_drinks(user_input))
     assert quick_drinks_result["type"] == "form"
-    assert quick_drinks_result["step_id"] == "drink_lexicon"
+    assert quick_drinks_result["step_id"] == "wellbeing_images"
     options_flow.async_create_entry.assert_not_called()
+
+    images_result = _async_test(options_flow.async_step_wellbeing_images({}))
+    assert images_result["type"] == "form"
+    assert images_result["step_id"] == "drink_lexicon"
 
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
@@ -312,6 +316,7 @@ def test_options_flow_preserves_other_options_on_submit():
         user_input[f"quick_{i}_ml"] = 200
         user_input[f"quick_{i}_icon"] = "mdi:cup-water"
     _async_test(options_flow.async_step_quick_drinks(user_input))
+    _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     options_flow.async_create_entry.assert_called_once()
@@ -518,6 +523,7 @@ def test_options_flow_persists_retention_months():
         quick[f"quick_{i}_ml"] = 200
         quick[f"quick_{i}_icon"] = "mdi:cup-water"
     _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
@@ -595,6 +601,7 @@ def test_options_flow_persists_sidebar_panel_option():
         quick[f"quick_{i}_ml"] = 200
         quick[f"quick_{i}_icon"] = "mdi:cup-water"
     _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
@@ -688,8 +695,37 @@ def test_options_flow_persists_areas_in_create_entry():
         quick[f"quick_{i}_ml"] = 200
         quick[f"quick_{i}_icon"] = "mdi:cup-water"
     _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["areas"] == {"drink": True, "bp": False, "wellbeing": True}
     assert not any(k.startswith("area_") for k in data)
+
+
+# --- Wellbeing-Bilder im Options-Flow ---------------------------------------
+
+
+def test_wellbeing_images_step_maps_and_normalizes():
+    """Bildfelder werden auf gültige Keys normalisiert; leere Werte entfallen."""
+    mapped = config_flow_module.wellbeing_images_from_user_input(
+        {
+            "wellbeing_image_very_bad": "stufe1.png",
+            "wellbeing_image_good": "/local/good.jpg",
+            "wellbeing_image_poor": "böse.html",
+        }
+    )
+
+    assert mapped == {
+        "very_bad": "/local/stufe1.png",
+        "good": "/local/good.jpg",
+    }
+
+
+def test_wellbeing_images_schema_has_all_ten_keys():
+    """Der Options-Schritt bietet für jede der zehn Stufen ein Bildfeld an."""
+    schema = config_flow_module.wellbeing_images_schema({})
+    defaults = schema({})
+
+    assert len(defaults) == 10
+    assert "wellbeing_image_excellent" in defaults

@@ -1,12 +1,12 @@
-"""Select: „Wie geht es dir?" mit 5 Smileys (manuell setzbar)."""
+"""Select: „Wie geht es dir?" mit 10 Smileys (manuell setzbar)."""
 
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.util import dt as dt_util
 
-from . import areas
-from .const import DOMAIN, WELLBEING_STATES
+from . import areas, logic
+from .const import DOMAIN, WELLBEING_IMAGES_OPTION, WELLBEING_STATES
 from .entity import HealthOMatEntity, signal_refresh
 
 
@@ -50,10 +50,16 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
     @property
     def extra_state_attributes(self) -> dict:
         wb = self._data.get("wellbeing") or {}
-        status = self._by_key.get(wb.get("status"), {})
+        status_key = wb.get("status")
+        status = self._by_key.get(status_key, {})
+        images = logic.normalize_wellbeing_images(self._entry.options.get(WELLBEING_IMAGES_OPTION))
         history = self._data.get("wellbeing_history", [])[-10:]
         return {
+            "label": status.get("label"),
             "emoji": status.get("emoji"),
+            "image": images.get(status_key),
+            "score": logic.wellbeing_score(status_key),
+            "scale_max": len(WELLBEING_STATES),
             "reported_at": wb.get("ts"),
             "history_json": __import__("json").dumps(history, ensure_ascii=False),
         }

@@ -37,6 +37,7 @@ from .const import (
     MAX_BP_VALUE,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
+    WELLBEING_IMAGES_OPTION,
     WELLBEING_STATES,
 )
 from .entity import effective_person, signal_refresh
@@ -395,7 +396,10 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
             "forecast_ml": pace["forecast_ml"],
         },
         "bp": _bp_block(entry, readings, now),
-        "wellbeing": _wellbeing_block(data),
+        "wellbeing": _wellbeing_block(data, entry),
+        # Additiv: die vollständige Skala inkl. eigener Bilder, damit Karte und
+        # Panel dieselbe Quelle nutzen (Label/Emoji/Bild je Key).
+        "wellbeing_scale": logic.wellbeing_scale(_wellbeing_images(entry)),
         # Additiv: die konfigurierten Quick-Drinks, damit Karte und Editor die
         # Auswahl kennen, ohne das admin-only `get_settings` aufzurufen.
         "quick_drinks": _quick_drinks(entry),
@@ -443,26 +447,36 @@ def _is_above(value: Any, threshold: int) -> bool:
         return False
 
 
-def _wellbeing_block(data: dict) -> dict[str, Any]:
-    """Wohlbefinden-Block: letzte Meldung (Key/Label/Emoji/Zeitpunkt) + Verlauf."""
+def _wellbeing_images(entry: Any) -> dict[str, str]:
+    """Normalisierte eigene Wellbeing-Bilder aus den Entry-Options."""
+    options = getattr(entry, "options", None) or {}
+    return logic.normalize_wellbeing_images(options.get(WELLBEING_IMAGES_OPTION))
+
+
+def _wellbeing_block(data: dict, entry: Any = None) -> dict[str, Any]:
+    """Wohlbefinden-Block: letzte Meldung (Key/Label/Emoji/Bild) + Verlauf."""
     current = data.get("wellbeing") or {}
     key = current.get("status") or None
     state = _wellbeing_state(key) or {}
+    images = _wellbeing_images(entry) if entry is not None else {}
     return {
         "key": key,
         "label": state.get("label"),
         "emoji": state.get("emoji"),
+        "image": images.get(key),
         "at": current.get("ts") or None,
         # Rein additiv (REQ-HOM-112): numerischer Score zur aktuellen Meldung.
         "score": logic.wellbeing_score(key),
-        "history": _wellbeing_history(data.get("wellbeing_history")),
+        "scale_max": len(WELLBEING_STATES),
+        "history": _wellbeing_history(data.get("wellbeing_history"), images),
     }
 
 
-def _wellbeing_history(items: Any) -> list[dict[str, Any]]:
-    """Letzte Meldungen des Verlaufs, angereichert mit Label/Emoji."""
+def _wellbeing_history(items: Any, images: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Letzte Meldungen des Verlaufs, angereichert mit Label/Emoji/Bild."""
     if not isinstance(items, list):
         return []
+    images = images or {}
     history: list[dict[str, Any]] = []
     for item in items[-WELLBEING_HISTORY_LIMIT:]:
         if not isinstance(item, dict):
@@ -476,6 +490,7 @@ def _wellbeing_history(items: Any) -> list[dict[str, Any]]:
                 "key": key,
                 "label": state.get("label"),
                 "emoji": state.get("emoji"),
+                "image": images.get(key),
                 # Rein additiv (REQ-HOM-112): Score je Verlaufseintrag.
                 "score": logic.wellbeing_score(key),
                 "ts": item.get("ts"),
@@ -660,7 +675,11 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
         (
             COMMAND_SET_WELLBEING,
             websocket_set_wellbeing,
-            {vol.Required("entry_id"): str, vol.Required("key"): str},
+            {
+                vol.Required("entry_id"): str,
+                vol.Optional("key"): str,
+                vol.Optional("score"): vol.Coerce(int),
+            },
         ),
         (COMMAND_SUBSCRIBE, websocket_subscribe, {vol.Optional("entry_id"): str}),
         (COMMAND_GET_UI_SETTINGS, websocket_get_ui_settings, {}),
@@ -825,13 +844,26 @@ async def websocket_save_measurement(
 async def websocket_set_wellbeing(
     hass: HomeAssistant, connection: Any, msg: dict[str, Any]
 ) -> None:
-    """`health_o_mat/set_wellbeing` → Wohlbefinden melden (Key-validiert)."""
+    """`health_o_mat/set_wellbeing` → Wohlbefinden per Key ODER Score melden."""
     entry_id = msg["entry_id"]
     store = _store(hass)
     if store is None or not _entry_ready(hass, entry_id):
         _send_entry_error(connection, msg, entry_id)
         return
     key = msg.get("key")
+    score = msg.get("score")
+    if key is None and score is None:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "Entweder 'key' oder 'score' angeben")
+        return
+    if key is None:
+        key = logic.wellbeing_key_for_score(score)
+        if key is None:
+            connection.send_error(
+                msg["id"],
+                ERR_INVALID_FORMAT,
+                f"Ungültiger Wohlbefinden-Score: {score} (erlaubt: 1 bis {len(WELLBEING_STATES)})",
+            )
+            return
     if _wellbeing_state(key) is None:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, f"Unbekannter Wohlbefinden-Key: {key}")
         return

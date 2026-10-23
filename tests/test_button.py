@@ -44,10 +44,15 @@ _DRINK_BUTTON_KEYS = {
 _BP_BUTTON_KEYS = {"button_save_reading"}
 _WELLBEING_BUTTON_KEYS = {
     "button_wellbeing_report_very_bad",
+    "button_wellbeing_report_awful",
     "button_wellbeing_report_bad",
+    "button_wellbeing_report_poor",
     "button_wellbeing_report_okay",
+    "button_wellbeing_report_mixed",
     "button_wellbeing_report_good",
+    "button_wellbeing_report_very_good",
     "button_wellbeing_report_great",
+    "button_wellbeing_report_excellent",
 }
 
 

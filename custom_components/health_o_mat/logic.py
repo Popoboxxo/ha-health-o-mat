@@ -693,3 +693,112 @@ def wellbeing_score(key: Any) -> int | None:
         if state.get("key") == key:
             return index + 1
     return None
+
+
+def wellbeing_key_for_score(score: Any) -> str | None:
+    """Wellbeing-Key zu einem numerischen Score (1 … N).
+
+    Der Score wird auf eine Ganzzahl gerundet; Werte außerhalb 1..N und
+    nicht-numerische Eingaben liefern None. Die Skala folgt derselben
+    Reihenfolge wie `wellbeing_score` (Index + 1).
+    """
+    if isinstance(score, bool):
+        return None
+    if isinstance(score, float) and not score.is_integer():
+        return None
+    try:
+        value = int(score)
+    except (TypeError, ValueError):
+        return None
+    if value < 1 or value > len(WELLBEING_STATES):
+        return None
+    return WELLBEING_STATES[value - 1].get("key")
+
+
+# Erlaubte Bildtypen für eigene Wellbeing-Bilder. Bewusst klein gehalten:
+# die URL landet als <img src> im Frontend, also nur harmlose Bildformate.
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+_IMAGE_DATA_PREFIXES = (
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/jpg;base64,",
+    "data:image/webp;base64,",
+)
+
+
+def normalize_wellbeing_image(value: Any) -> str | None:
+    """Bild-Referenz defensiv normalisieren (None = keine/ungültige Angabe).
+
+    Akzeptiert:
+    - absolute HTTP(S)-URLs,
+    - absolute Pfade wie ``/local/wellbeing/1.png``,
+    - relative Dateinamen; diese werden zu ``/local/<name>`` (HA-www).
+    - Base64-Data-URIs für PNG/JPEG/WebP.
+
+    Abgelehnt werden leere Werte, ``javascript:``/``file:``/``data:``-URIs mit
+    fremdem MIME-Typ sowie Pfade ohne erlaubte Bild-Endung.
+    """
+    if not isinstance(value, str):
+        return None
+    ref = value.strip()
+    if not ref:
+        return None
+    lowered = ref.lower()
+    if lowered.startswith("data:"):
+        return ref if lowered.startswith(_IMAGE_DATA_PREFIXES) else None
+    if lowered.startswith(("javascript:", "vbscript:", "file:")):
+        return None
+    if lowered.startswith("//"):
+        return None
+    if lowered.startswith(("http://", "https://")):
+        base = lowered.split("?", 1)[0].split("#", 1)[0]
+        return ref if base.endswith(_IMAGE_EXTENSIONS) else None
+    if ".." in ref.replace("\\", "/").split("/"):
+        return None
+    if not lowered.startswith("/"):
+        if lowered.startswith("local/"):
+            ref = f"/{ref}"
+        else:
+            ref = f"/local/{ref.lstrip('/')}"
+        lowered = ref.lower()
+    base = lowered.split("?", 1)[0].split("#", 1)[0]
+    if not base.endswith(_IMAGE_EXTENSIONS):
+        return None
+    return ref
+
+
+def normalize_wellbeing_images(value: Any) -> dict[str, str]:
+    """Options-Mapping ``{key: bild}`` auf gültige Keys + Bild-Refs reduzieren."""
+    if not isinstance(value, dict):
+        return {}
+    valid_keys = {state.get("key") for state in WELLBEING_STATES}
+    out: dict[str, str] = {}
+    for key, raw in value.items():
+        if key not in valid_keys:
+            continue
+        image = normalize_wellbeing_image(raw)
+        if image:
+            out[key] = image
+    return out
+
+
+def wellbeing_scale(images: Any = None) -> list[dict[str, Any]]:
+    """Kanonische Wellbeing-Skala inkl. optionaler eigener Bilder.
+
+    Liefert frische Dicts (keine geteilten Referenzen auf ``const``), damit
+    Aufrufer die Liste gefahrlos an das Frontend weitergeben können.
+    ``image`` ist ``None``, wenn für den Key kein (gültiges) Bild konfiguriert
+    ist — das Frontend fällt dann auf das Emoji zurück.
+    """
+    normalized = normalize_wellbeing_images(images)
+    return [
+        {
+            "key": state["key"],
+            "label": state["label"],
+            "emoji": state["emoji"],
+            "icon": state["icon"],
+            "image": normalized.get(state["key"]),
+            "score": index + 1,
+        }
+        for index, state in enumerate(WELLBEING_STATES)
+    ]

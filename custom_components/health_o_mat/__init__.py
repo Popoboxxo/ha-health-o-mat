@@ -451,11 +451,20 @@ def _register_services(hass: HomeAssistant) -> None:
         signal_refresh(hass, entry_id)
 
     async def set_wellbeing(call: ServiceCall) -> None:
-        """Wohlbefinden melden — derselbe Store-/Refresh-Pfad wie das WS-Kommando."""
+        """Wohlbefinden melden — per Status-Key ODER numerischem Score (1..N)."""
         entry_id, _info = get_runtime_data(hass, call)
         status = call.data.get("status")
+        score = call.data.get("score")
         allowed = [state["key"] for state in WELLBEING_STATES]
-        if status not in allowed:
+        if status is None and score is None:
+            raise ServiceValidationError("Entweder 'status' oder 'score' angeben")
+        if status is None:
+            status = logic.wellbeing_key_for_score(score)
+            if status is None:
+                raise ServiceValidationError(
+                    f"Ungültiger Wohlbefinden-Score '{score}' — erlaubt: 1 bis {len(allowed)}"
+                )
+        elif status not in allowed:
             raise ServiceValidationError(
                 f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
             )
@@ -532,7 +541,8 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Required("status"): str,
+                vol.Optional("status"): str,
+                vol.Optional("score"): vol.Coerce(int),
             }
         ),
         service_func=set_wellbeing,

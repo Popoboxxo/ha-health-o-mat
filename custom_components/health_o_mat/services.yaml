@@ -46,7 +46,7 @@ add_blood_pressure:
 
 set_wellbeing:
   name: Wohlbefinden melden
-  description: Meldet das aktuelle Wohlbefinden einer Person.
+  description: Meldet das aktuelle Wohlbefinden einer Person per Schlüssel oder Zahl (1–10).
   fields:
     person:
       name: Person
@@ -55,9 +55,15 @@ set_wellbeing:
     status:
       name: Zustand
       description: >-
-        Wohlbefinden-Schlüssel — einer von very_bad, bad, okay, good, great.
+        Wohlbefinden-Schlüssel — very_bad, awful, bad, poor, okay, mixed, good,
+        very_good, great oder excellent. Alternative zu `score`.
       example: "good"
-      required: true
+    score:
+      name: Zahl
+      description: >-
+        Numerischer Wert von 1 (sehr schlecht) bis 10 (ausgezeichnet).
+        Alternative zu `status`.
+      example: 7
 
 remove_last_entry:
   name: Letzte Buchung löschen

@@ -462,7 +462,7 @@ def test_req_hom_112_panel_chart_series_ends_with_current_score(tmp_path):
     assert current_points[0]["score"] == "4", (
         "der `point-current`-Marker sitzt nicht auf dem Punkt mit dem aktuellen Score"
     )
-    assert "(4 / 5)" in current_points[0]["title"], (
+    assert "(4 / 10)" in current_points[0]["title"], (
         "der Tooltip des aktuellen Punkts nennt nicht den aktuellen Score"
     )
 
@@ -474,8 +474,8 @@ def test_req_hom_112_panel_chart_series_ends_with_current_score(tmp_path):
     )
 
     label = _aria_label(svg)
-    assert "aktuell 4 von 5" in label, "die aria-label nennt nicht den aktuellen Score"
-    assert "aktuell 2 von 5" not in label, "die aria-label nennt den abgeloesten Score"
+    assert "aktuell 4 von 10" in label, "die aria-label nennt nicht den aktuellen Score"
+    assert "aktuell 2 von 10" not in label, "die aria-label nennt den abgeloesten Score"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
@@ -495,7 +495,7 @@ def test_req_hom_112_panel_chart_renders_single_current_report_without_history(t
     assert len(points) == 1, "das SVG zeigt nicht genau einen Datenpunkt"
     assert points[0]["score"] == "3"
     assert "point-current" in points[0]["cls"], "der einzige Punkt ist nicht als aktuell markiert"
-    assert "aktuell 3 von 5" in _aria_label(svg)
+    assert "aktuell 3 von 10" in _aria_label(svg)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
@@ -515,12 +515,12 @@ def test_req_hom_112_panel_chart_derives_score_from_key_for_legacy_payloads(tmp_
     rendered = _render_with_node(tmp_path, [{"history": _HISTORY_D, "current": _CURRENT_D}])[0]
 
     series = rendered["series"]
-    assert [point["score"] for point in series] == [2, 5, 4], (
+    assert [point["score"] for point in series] == [3, 9, 7], (
         "der Score wurde nicht aus dem Zustands-Key abgeleitet"
     )
 
     svg = _svg_of(rendered["html"])
-    assert "aktuell 4 von 5" in _aria_label(svg), (
+    assert "aktuell 7 von 10" in _aria_label(svg), (
         "die aria-label nennt nicht den abgeleiteten aktuellen Score"
     )
 
@@ -588,11 +588,11 @@ def test_req_hom_112_panel_chart_svg_is_valid_xml_without_invalid_numbers(tmp_pa
 _SCORE_RULE_CASES = [
     pytest.param({"score": 4, "key": "good"}, 4, id="server-score-wins"),
     pytest.param({"score": None, "key": "good"}, None, id="server-null-is-truth"),
-    pytest.param({"key": "good"}, 4, id="legacy-derivation-from-key"),
-    pytest.param({"key": "awful"}, None, id="no-key-alias-table"),
+    pytest.param({"key": "good"}, 7, id="legacy-derivation-from-key"),
+    pytest.param({"key": "bogus_stage"}, None, id="no-key-alias-table"),
     pytest.param({"key": "GOOD"}, None, id="exact-case-sensitive-match"),
     pytest.param({"score": 0, "key": "good"}, None, id="never-zero"),
-    pytest.param({"score": 6, "key": "good"}, None, id="outside-scale"),
+    pytest.param({"score": 11, "key": "good"}, None, id="outside-scale"),
     # Nicht-String-Keys: `key: null`, `key: ""` und `key: 123` sind KEIN
     # verwertbarer Key -> kein Score (die Python-Seite deckt das bereits ab;
     # die JS-Regeltabelle muss es mitfuehren, sonst driftet die Tabelle).
@@ -724,7 +724,7 @@ def test_req_hom_112_card_and_panel_resolve_the_same_wellbeing_score(tmp_path):
 
     Die Regel ist in beiden Frontends dupliziert (die Karte ist ein
     eigenstaendiges Skript ohne Imports) — eine Divergenz wuerde im Panel
-    "4 / 5" und in der Karte "2 / 5" anzeigen.
+    "4 / 10" und in der Karte "2 / 10" anzeigen.
     """
     cases = [case.values[0] for case in _SCORE_RULE_CASES]
 
@@ -745,7 +745,7 @@ def test_req_hom_112_card_and_panel_resolve_the_same_wellbeing_score(tmp_path):
 # des Panels: Select-Entity, Automation, Dashboard). Der Score kommt dann aus
 # der Live-Entity (`wellbeing_score`), der Payload traegt noch den alten Wert.
 # Kopfzeile und Chart muessen denselben Score zeigen — sonst zeigt das Panel
-# "2 / 5" in der Kopfzeile und markiert im Chart den Wert 4 als aktuell (oder
+# "2 / 10" in der Kopfzeile und markiert im Chart den Wert 4 als aktuell (oder
 # umgekehrt).
 
 # Node-Runner: rendert den Wohlbefinden-Tab ueber die oeffentliche
@@ -851,15 +851,15 @@ def test_req_hom_112_panel_wellbeing_tab_shows_live_score_in_header_and_chart(tm
     header = re.search(r"Zuletzt:.*?</span>", html, re.S)
     assert header is not None, "die Kopfzeile des Wohlbefinden-Tabs fehlt"
     header_html = header.group(0)
-    assert "4 / 5" in header_html, f"die Kopfzeile zeigt nicht den Live-Score: {header_html}"
-    assert "2 / 5" not in header_html, f"die Kopfzeile zeigt den veralteten Score: {header_html}"
+    assert "4 / 10" in header_html, f"die Kopfzeile zeigt nicht den Live-Score: {header_html}"
+    assert "2 / 10" not in header_html, f"die Kopfzeile zeigt den veralteten Score: {header_html}"
 
     # (b) Chart: aria-label und `point-current` nennen denselben Wert 4.
     svg = _svg_of(html)
-    assert "aktuell 4 von 5" in _aria_label(svg), (
+    assert "aktuell 4 von 10" in _aria_label(svg), (
         f"die aria-label nennt nicht den Live-Score: {_aria_label(svg)}"
     )
-    assert "aktuell 2 von 5" not in _aria_label(svg), (
+    assert "aktuell 2 von 10" not in _aria_label(svg), (
         f"die aria-label nennt den veralteten Score: {_aria_label(svg)}"
     )
 
@@ -871,7 +871,7 @@ def test_req_hom_112_panel_wellbeing_tab_shows_live_score_in_header_and_chart(tm
     )
 
     # (c) Der veraltete Snapshot-Score taucht nirgends im Panel auf.
-    assert "2 / 5" not in html, "der veraltete Snapshot-Score (2) wird noch angezeigt"
+    assert "2 / 10" not in html, "der veraltete Snapshot-Score (2) wird noch angezeigt"
 
 
 # --- REQ-HOM-112: Quelltext-Assertions zur Aufloesungsregel -----------------
@@ -956,13 +956,13 @@ def test_req_hom_112_panel_chart_marks_exactly_one_current_point(tmp_path):
         "der `point-current`-Marker sitzt nicht auf dem aktuellen Score "
         f"(erwartet {_CURRENT_A['score']}, gefunden {current_points[0]['score']})"
     )
-    assert f"({_CURRENT_A['score']} / 5)" in current_points[0]["title"], (
+    assert f"({_CURRENT_A['score']} / 10)" in current_points[0]["title"], (
         f"der Tooltip des aktuellen Punkts nennt nicht den aktuellen Score: "
         f"{current_points[0]['title']!r}"
     )
 
     label = _aria_label(svg)
-    assert f"aktuell {_CURRENT_A['score']} von 5" in label, (
+    assert f"aktuell {_CURRENT_A['score']} von 10" in label, (
         f"die aria-label nennt nicht den aktuellen Score: {label!r}"
     )
 
@@ -1010,7 +1010,7 @@ def test_req_hom_112_panel_chart_without_current_score_marks_nothing(tmp_path):
         f"die aria-label behauptet ohne aktuellen Wert einen aktuellen Wert: {label!r}"
     )
     # Der zuletzt gescorte Wert wird als "letzter Wert" genannt (Score 2).
-    assert "letzter Wert 2 von 5" in label, f"die aria-label nennt den falschen Wert: {label!r}"
+    assert "letzter Wert 2 von 10" in label, f"die aria-label nennt den falschen Wert: {label!r}"
 
 
 # Snapshot mit (bewusst veralteten) Label/Emoji.
@@ -1204,7 +1204,7 @@ def test_req_hom_112_card_with_current_score_shows_badge_and_one_current_point(t
     rendered = _card_wellbeing_html(tmp_path, [case])[0]
     html = rendered["html"]
 
-    assert f'class="score">{_CURRENT_A["score"]} / 5<' in html, (
+    assert f'class="score">{_CURRENT_A["score"]} / 10<' in html, (
         f"das Score-Badge zeigt nicht den aktuellen Score: {html!r}"
     )
 
@@ -1217,7 +1217,7 @@ def test_req_hom_112_card_with_current_score_shows_badge_and_one_current_point(t
     assert _score_from_title(current_points[0]["title"]) == _CURRENT_A["score"], (
         f"der `point-current`-Marker sitzt nicht auf dem Badge-Wert: {current_points[0]!r}"
     )
-    assert f"aktuell {_CURRENT_A['score']} von 5" in _aria_label(svg), (
+    assert f"aktuell {_CURRENT_A['score']} von 10" in _aria_label(svg), (
         f"die aria-label nennt nicht den aktuellen Score: {_aria_label(svg)!r}"
     )
 
@@ -1426,11 +1426,14 @@ def test_panel_wellbeing_history_lists_time_emoji_label_and_score():
     # Zeitpunkt (relativ), Emoji, Label und Score pro Eintrag …
     assert "relativeTime(entry.ts)" in body
     assert "wellbeingScore(entry)" in body
-    assert "${WELLBEING_SCORE_MAX}" in body
+    assert "scoreMax" in body and "WELLBEING_SCORE_MAX" in body
     assert "entry.emoji" in body and "entry.label" in body
     # … alle Texte escaped, kein JSON-Dump.
-    for value in ("entryLabel", "entryEmoji", "entryAt"):
+    for value in ("entryLabel", "entryAt"):
         assert f"escapeHtml({value}" in body, f"{value} wird nicht escaped"
+    assert "wellbeingVisual(entryVisual)" in body, (
+        "Emoji/Bild wird nicht ueber wellbeingVisual gerendert"
+    )
     assert "JSON.stringify" not in body, "die Historie wird als rohes JSON gerendert"
 
     # Reihenfolge: Chart zuerst, Liste darunter.
@@ -1489,12 +1492,12 @@ def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
     # Der Historieneintrag traegt Label, Emoji, relativen Zeitpunkt und Score.
     assert "Sehr schlecht" in history_html
     assert "\U0001f635" in history_html
-    assert "1 / 5" in history_html
+    assert "1 / 10" in history_html
     assert re.search(r"vor \d+ |gerade eben", history_html), (
         f"der Zeitpunkt der Verlaufsliste fehlt: {history_html}"
     )
     # Der aktuelle Live-Wert (4) gehoert NICHT in die Verlaufsliste.
-    assert "4 / 5" not in history_html
+    assert "4 / 10" not in history_html
     # Kein rohes JSON.
     assert '{"' not in history_html
 

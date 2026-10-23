@@ -163,7 +163,7 @@ class WellbeingButton(HealthOMatButton):
 
 
 def build_wellbeing_buttons(hass, entry, store):
-    """5 Melden-Buttons (einer pro Status) für Wohlbefinden."""
+    """Zehn Melden-Buttons (einer pro Status) für Wohlbefinden."""
     from .const import WELLBEING_STATES
 
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]

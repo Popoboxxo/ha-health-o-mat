@@ -23,7 +23,7 @@ import {
   normalizeAreas,
   personSlug,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.10.2";
+} from "./health-o-mat-panel-base.js?v=0.11.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 

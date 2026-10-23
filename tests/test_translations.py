@@ -113,4 +113,4 @@ def test_set_wellbeing_service_documented_in_all_translations() -> None:
         block = data["services"]["set_wellbeing"]
         assert block["name"], f"{path}: name fehlt"
         assert block["description"], f"{path}: description fehlt"
-        assert set(block["fields"]) == {"person", "status"}, f"{path}: Felder weichen ab"
+        assert set(block["fields"]) == {"person", "status", "score"}, f"{path}: Felder weichen ab"

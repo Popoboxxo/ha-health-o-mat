@@ -26,14 +26,44 @@ export const QUICK_DRINKS = [
   { label: "Saft", ml: 200, emoji: "\u{1F964}", type: "Saft" },
 ];
 
-/* Wellbeing taps (mirrors const.WELLBEING_STATES). */
+/* Wellbeing taps (mirrors const.WELLBEING_STATES). Index + 1 = Score;
+ * bestehende Keys liegen auf den ungeraden Stufen (1/3/5/7/9). */
 export const WELLBEING_STATES = [
-  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F635}" },
-  { key: "bad", label: "Schlecht", emoji: "\u{1F641}" },
-  { key: "okay", label: "Okay", emoji: "\u{1F610}" },
-  { key: "good", label: "Gut", emoji: "\u{1F642}" },
-  { key: "great", label: "Super", emoji: "\u{1F604}" },
+  { key: "very_bad", label: "Sehr schlecht", emoji: "\u{1F62D}", image: "" },
+  { key: "awful", label: "Elend", emoji: "\u{1F616}", image: "" },
+  { key: "bad", label: "Schlecht", emoji: "\u{1F641}", image: "" },
+  { key: "poor", label: "Mäßig", emoji: "\u{1F614}", image: "" },
+  { key: "okay", label: "Okay", emoji: "\u{1F610}", image: "" },
+  { key: "mixed", label: "Durchwachsen", emoji: "\u{1F615}", image: "" },
+  { key: "good", label: "Gut", emoji: "\u{1F642}", image: "" },
+  { key: "very_good", label: "Sehr gut", emoji: "\u{1F60A}", image: "" },
+  { key: "great", label: "Großartig", emoji: "\u{1F604}", image: "" },
+  { key: "excellent", label: "Ausgezeichnet", emoji: "\u{1F929}", image: "" },
 ];
+
+/* Skala eines panel_data-Payloads: serverseitig inkl. eigener Bilder, sonst
+ * der gepinnte Mirror. Defensiv: fehlende/kaputte Einträge werden gefiltert. */
+export function wellbeingScale(data) {
+  const server = data && Array.isArray(data.wellbeing_scale) ? data.wellbeing_scale : [];
+  const cleaned = server
+    .map((state) => ({
+      key: state && state.key != null ? String(state.key) : "",
+      label: state && state.label ? String(state.label) : "",
+      emoji: state && state.emoji ? String(state.emoji) : "",
+      image: state && state.image ? String(state.image) : "",
+    }))
+    .filter((state) => state.key);
+  return cleaned.length ? cleaned : WELLBEING_STATES;
+}
+
+/* Emoji oder eigenes Bild eines Wellbeing-Zustands. */
+export function wellbeingVisual(state, cls) {
+  const css = cls ? String(cls) : "wb-img";
+  const emoji = escapeHtml((state && state.emoji) || "\u{1F642}");
+  const image = state && state.image ? String(state.image) : "";
+  if (!image) return `<span class="emoji" aria-hidden="true">${emoji}</span>`;
+  return `<img class="${escapeHtml(css)}" src="${escapeHtml(image)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'" /><span class="emoji" aria-hidden="true" style="display:none">${emoji}</span>`;
+}
 
 /* WHO blood-pressure category keys (logic.bp_category) -> label + colour. */
 export const BP_CATEGORIES = {
@@ -203,7 +233,7 @@ export const PANEL_CSS = `
   .tile-sub { font-size: .8rem; color: var(--secondary-text-color, #727272); }
   .tile-row { display: flex; align-items: center; gap: 8px; font-size: .92rem;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tile-row .em { font-size: 1.1rem; flex: none; }
+  .tile-row .em, .tile-row .emoji { font-size: 1.1rem; flex: none; }
   .tile-row .muted { color: var(--secondary-text-color, #727272); }
 
   .dot { width: 10px; height: 10px; border-radius: 50%;
@@ -323,7 +353,7 @@ export const PANEL_CSS = `
   .spark .bar { flex: 1; min-width: 5px; border-radius: 4px 4px 0 0;
     background: var(--primary-color, #03a9f4); }
 
-  .wb-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .wb-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 8px; }
   .wb-btn {
     font: inherit; cursor: pointer; min-height: 86px; padding: 8px 2px;
     border-radius: 14px; border: 1px solid var(--divider-color, rgba(0,0,0,.12));
@@ -333,6 +363,8 @@ export const PANEL_CSS = `
   .wb-btn:active { transform: scale(.97); }
   .wb-btn:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .wb-btn .emoji { font-size: 1.9rem; line-height: 1; }
+  .wb-btn .wb-img { width: 2.1rem; height: 2.1rem; object-fit: cover; border-radius: 50%; }
+  .wb-hist .wb-img, .tile-row .wb-img { width: 1.4rem; height: 1.4rem; object-fit: cover; border-radius: 50%; }
   .wb-btn .lbl { font-size: .72rem; color: var(--secondary-text-color, #727272); text-align: center; }
   .wb-btn.active { border-color: var(--primary-color, #03a9f4);
     background: var(--secondary-background-color, rgba(3,169,244,.1)); }
@@ -350,6 +382,20 @@ export const PANEL_CSS = `
   .wb-hist-time { flex: none; font-size: .72rem; color: var(--secondary-text-color, #727272); }
   .wb-hist-score { flex: none; font-weight: 600; font-size: .78rem;
     color: var(--primary-color, #03a9f4); white-space: nowrap; }
+
+  /* --- Blutdruck-Verlauf ------------------------------------------------- */
+  .bp-chart { width: 100%; }
+  .bp-chart svg { width: 100%; height: auto; display: block; }
+  .bp-chart .grid-line { stroke: var(--divider-color, rgba(0,0,0,.12)); stroke-width: 1; }
+  .bp-chart .axis-text { fill: var(--secondary-text-color, #727272); font-size: 10px; }
+  .bp-chart .bp-line { fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+  .bp-chart .bp-line.bp-sys { stroke: var(--error-color, #db4437); }
+  .bp-chart .bp-line.bp-dia { stroke: var(--primary-color, #03a9f4); }
+  .bp-chart .bp-point.bp-sys { fill: var(--error-color, #db4437); }
+  .bp-chart .bp-point.bp-dia { fill: var(--primary-color, #03a9f4); }
+  .bp-legend { display: flex; gap: 14px; font-size: .78rem; padding-top: 4px; }
+  .bp-legend .bp-sys { color: var(--error-color, #db4437); font-weight: 600; }
+  .bp-legend .bp-dia { color: var(--primary-color, #03a9f4); font-weight: 600; }
 
   /* --- Wohlbefinden-Score-Chart (REQ-HOM-112) ---------------------------- */
   .wb-chart { width: 100%; }
@@ -889,11 +935,81 @@ export function wellbeingChartHtml(history, opts) {
       : "Noch keine Wohlbefinden-Meldung \u2013 der Verlauf erscheint nach der ersten Meldung.";
     return `<div class="card">${head}${messageHtml(empty, false)}</div>`;
   }
-  const worst = WELLBEING_STATES[0] ? WELLBEING_STATES[0].label : "schlecht";
-  const bestState = WELLBEING_STATES[WELLBEING_STATES.length - 1];
+  const scale = Array.isArray(options.scale) && options.scale.length ? options.scale : WELLBEING_STATES;
+  const worst = scale[0] ? scale[0].label : "schlecht";
+  const bestState = scale[scale.length - 1];
   const best = bestState ? bestState.label : "gut";
-  const hint = `${WELLBEING_SCORE_MIN} = ${worst} \u00B7 ${WELLBEING_SCORE_MAX} = ${best}`;
+  const hint = `${WELLBEING_SCORE_MIN} = ${worst} \u00B7 ${scale.length} = ${best}`;
   return `<div class="card">${head}<div class="wb-chart">${wellbeingChartSvg(points)}</div><div class="hint">${escapeHtml(hint)}</div></div>`;
+}
+
+/* Blutdruck-Verlauf als Doppellinie (sys/dia) über die letzten Messungen.
+ * Reine Lese-Anzeige; ohne mindestens zwei gültige Messungen leer. */
+export function bpHistoryChartHtml(entries, opts) {
+  const options = opts || {};
+  const list = (Array.isArray(entries) ? entries : [])
+    .filter(
+      (r) => r && Number.isFinite(toNumber(r.sys, NaN)) && Number.isFinite(toNumber(r.dia, NaN))
+    )
+    .slice(-30);
+  const title = options.title ? String(options.title) : "Blutdruck-Verlauf";
+  const head = `<div class="card-title">${escapeHtml(title)}</div>`;
+  if (list.length < 2) {
+    const empty = "Noch zu wenige Messungen \u2013 der Verlauf erscheint ab zwei Werten.";
+    return `<div class="card">${head}${messageHtml(empty, false)}</div>`;
+  }
+  const width = 320;
+  const height = 170;
+  const pad = { top: 10, right: 12, bottom: 24, left: 32 };
+  const values = [];
+  list.forEach((r) => values.push(toNumber(r.sys, 0), toNumber(r.dia, 0)));
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  min = Math.floor((min - 10) / 10) * 10;
+  max = Math.ceil((max + 10) / 10) * 10;
+  if (max <= min) max = min + 10;
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const step = list.length > 1 ? plotW / (list.length - 1) : 0;
+  const coord = (value, index) => ({
+    x: pad.left + index * step,
+    y: pad.top + ((max - value) / (max - min)) * plotH,
+  });
+  const sysCoords = list.map((r, index) => coord(toNumber(r.sys, 0), index));
+  const diaCoords = list.map((r, index) => coord(toNumber(r.dia, 0), index));
+  const path = (coords) =>
+    coords
+      .map((c, index) => `${index === 0 ? "M" : "L"}${c.x.toFixed(1)} ${c.y.toFixed(1)}`)
+      .join(" ");
+  const grid = [min, Math.round((min + max) / 2), max]
+    .map((value) => {
+      const y = pad.top + ((max - value) / (max - min)) * plotH;
+      return `<line class="grid-line" x1="${pad.left}" y1="${y.toFixed(1)}" x2="${width - pad.right}" y2="${y.toFixed(1)}"></line><text class="axis-text" x="${pad.left - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end">${value}</text>`;
+    })
+    .join("");
+  const dots = list
+    .map((r, index) => {
+      const when = r.ts ? formatChartDateTime(Date.parse(r.ts)) : "ohne Zeitangabe";
+      const title = `${when} \u2013 ${Math.round(toNumber(r.sys, 0))}/${Math.round(toNumber(r.dia, 0))}`;
+      return `<circle class="bp-point bp-sys" cx="${sysCoords[index].x.toFixed(1)}" cy="${sysCoords[index].y.toFixed(1)}" r="2.4"><title>${escapeHtml(title)}</title></circle><circle class="bp-point bp-dia" cx="${diaCoords[index].x.toFixed(1)}" cy="${diaCoords[index].y.toFixed(1)}" r="2.4"><title>${escapeHtml(title)}</title></circle>`;
+    })
+    .join("");
+  const first = list[0].ts ? Date.parse(list[0].ts) : NaN;
+  const last = list[list.length - 1].ts ? Date.parse(list[list.length - 1].ts) : NaN;
+  const xLabels = [];
+  if (Number.isFinite(first)) {
+    xLabels.push(
+      `<text class="axis-text" x="${pad.left}" y="${height - 6}" text-anchor="start">${escapeHtml(formatChartDate(first))}</text>`
+    );
+  }
+  if (Number.isFinite(last) && last !== first) {
+    xLabels.push(
+      `<text class="axis-text" x="${width - pad.right}" y="${height - 6}" text-anchor="end">${escapeHtml(formatChartDate(last))}</text>`
+    );
+  }
+  const latest = list[list.length - 1];
+  const summary = `Blutdruck-Verlauf: ${list.length} Messungen, zuletzt ${Math.round(toNumber(latest.sys, 0))}/${Math.round(toNumber(latest.dia, 0))}`;
+  return `<div class="card">${head}<div class="bp-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg></div><div class="bp-legend"><span class="bp-sys">Systolisch</span><span class="bp-dia">Diastolisch</span></div></div>`;
 }
 
 /* Empty-state message block, shared by every view. */

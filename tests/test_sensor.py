@@ -784,10 +784,15 @@ def test_sensor_unique_ids_stable_across_area_toggle():
 # Score-Skala: 1 = schlechtester … N = bester Wert (Index + 1).
 _EXPECTED_WELLBEING_SCORES = {
     "very_bad": 1,
-    "bad": 2,
-    "okay": 3,
-    "good": 4,
-    "great": 5,
+    "awful": 2,
+    "bad": 3,
+    "poor": 4,
+    "okay": 5,
+    "mixed": 6,
+    "good": 7,
+    "very_good": 8,
+    "great": 9,
+    "excellent": 10,
 }
 
 
@@ -805,7 +810,18 @@ def test_req_hom_112_wellbeing_score_sensor_registered_with_stable_unique_id():
 
 @pytest.mark.parametrize(
     ("status", "expected"),
-    [("very_bad", 1), ("bad", 2), ("okay", 3), ("good", 4), ("great", 5)],
+    [
+        ("very_bad", 1),
+        ("awful", 2),
+        ("bad", 3),
+        ("poor", 4),
+        ("okay", 5),
+        ("mixed", 6),
+        ("good", 7),
+        ("very_good", 8),
+        ("great", 9),
+        ("excellent", 10),
+    ],
 )
 def test_req_hom_112_wellbeing_score_sensor_native_value_matches_status(status, expected):
     """[REQ-HOM-112] native_value = Score des aktuellen Status (Index + 1)."""
@@ -872,7 +888,7 @@ def test_req_hom_112_wellbeing_score_sensor_extra_state_attributes():
 
     assert attrs["reported_at"] == "2026-10-15T10:00:00"
     assert attrs["scale_max"] == len(sensor_module.logic.WELLBEING_STATES)
-    assert attrs["scale_max"] == 5
+    assert attrs["scale_max"] == 10
 
 
 def test_req_hom_112_wellbeing_score_sensor_reported_at_is_none_without_message():
@@ -886,27 +902,32 @@ def test_req_hom_112_wellbeing_score_sensor_scale_max_follows_state_list(monkeyp
     """[REQ-HOM-112] scale_max folgt der Zustandsliste (keine hartcodierte 5).
 
     `sensor.py` liest `logic.WELLBEING_STATES` — dieselbe Quelle wie der
-    Score. Wird die Liste um eine sechste Stufe erweitert, wächst scale_max
-    auf 6; Score und Skala können so nicht auseinanderlaufen.
+    Score. Wird die Liste um eine elfte Stufe erweitert, wächst scale_max
+    auf 11; Score und Skala können so nicht auseinanderlaufen.
     """
     synthetic = [
         {"key": "very_bad", "label": "Sehr schlecht"},
+        {"key": "awful", "label": "Elend"},
         {"key": "bad", "label": "Schlecht"},
+        {"key": "poor", "label": "Mäßig"},
         {"key": "okay", "label": "Okay"},
+        {"key": "mixed", "label": "Durchwachsen"},
         {"key": "good", "label": "Gut"},
-        {"key": "great", "label": "Super"},
+        {"key": "very_good", "label": "Sehr gut"},
+        {"key": "great", "label": "Großartig"},
         {"key": "excellent", "label": "Ausgezeichnet"},
+        {"key": "superb", "label": "Hervorragend"},
     ]
     # `sensor.py` bindet `logic` beim Import; gepatcht wird deshalb das
     # Modulobjekt, das der Sensor tatsächlich benutzt.
     monkeypatch.setattr(sensor_module.logic, "WELLBEING_STATES", synthetic)
 
     sensor = _wellbeing_score_sensor(
-        {"wellbeing": {"status": "excellent", "ts": "2026-10-15T10:00:00"}}
+        {"wellbeing": {"status": "superb", "ts": "2026-10-15T10:00:00"}}
     )
 
-    assert sensor.extra_state_attributes["scale_max"] == 6
-    assert sensor.native_value == 6
+    assert sensor.extra_state_attributes["scale_max"] == 11
+    assert sensor.native_value == 11
 
 
 def test_req_hom_112_wellbeing_score_sensor_follows_area_toggle():

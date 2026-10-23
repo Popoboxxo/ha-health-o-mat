@@ -367,9 +367,10 @@ def set_person_options(
     areas: dict[str, bool],
     goal_ml: int = DEFAULT_GOAL_ML,
 ) -> None:
-    """Configure one person through the real options flow (init -> quick_drinks
-    -> drink_lexicon). `enable_panel` is the opt-in that registers the sidebar
-    panel; the update listener reacts to it (`panel.async_apply_panel_state`)."""
+    """Configure one person through the real options flow
+    (init -> quick_drinks -> wellbeing_images -> drink_lexicon). `enable_panel`
+    is the opt-in that registers the sidebar panel; the update listener reacts
+    to it (`panel.async_apply_panel_state`)."""
     base = f"{base_url}/api/config/config_entries/options/flow"
     flow = _post_json(base, access_token, {"handler": entry_id})
     flow_id = flow["flow_id"]
@@ -397,6 +398,10 @@ def set_person_options(
         quick[f"quick_{index}_icon"] = drink["icon"]
 
     flow = _post_json(f"{base}/{flow_id}", access_token, quick)
+    _require_form_step(flow, "wellbeing_images")
+
+    # Optional images stay empty in E2E (emoji fallback).
+    flow = _post_json(f"{base}/{flow_id}", access_token, {})
     _require_form_step(flow, "drink_lexicon")
 
     flow = _post_json(f"{base}/{flow_id}", access_token, {"drink_lexicon": LEXICON_TEXT})

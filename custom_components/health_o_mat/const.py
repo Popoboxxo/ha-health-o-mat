@@ -96,16 +96,42 @@ CAFFEINE_MG_PER_100ML: dict[str, float] = {
     "Milch": 0.0,
 }
 
-# Wohlbefinden „Wie geht es dir?": key, Anzeigename, Emoji, MDI-Icon
+# Wohlbefinden „Wie geht es dir?": key, Anzeigename, Emoji, MDI-Icon.
+# Die Reihenfolge ist die Score-Skala: Index + 1 = Score (1 = schlechtester,
+# 10 = bester Wert). Bestehende Keys bleiben erhalten und liegen bewusst auf
+# den ungeraden Stufen (1/3/5/7/9) — alte Messwerte bleiben damit lesbar.
 WELLBEING_STATES: list[dict] = [
     {
         "key": "very_bad",
         "label": "Sehr schlecht",
-        "emoji": "😵",
-        "icon": "mdi:emoticon-dead-outline",
+        "emoji": "😭",
+        "icon": "mdi:emoticon-cry-outline",
     },
+    {"key": "awful", "label": "Elend", "emoji": "😖", "icon": "mdi:emoticon-dead-outline"},
     {"key": "bad", "label": "Schlecht", "emoji": "🙁", "icon": "mdi:emoticon-sad-outline"},
+    {"key": "poor", "label": "Mäßig", "emoji": "😔", "icon": "mdi:emoticon-frown-outline"},
     {"key": "okay", "label": "Okay", "emoji": "😐", "icon": "mdi:emoticon-neutral-outline"},
+    {
+        "key": "mixed",
+        "label": "Durchwachsen",
+        "emoji": "😕",
+        "icon": "mdi:emoticon-confused-outline",
+    },
     {"key": "good", "label": "Gut", "emoji": "🙂", "icon": "mdi:emoticon-happy-outline"},
-    {"key": "great", "label": "Super", "emoji": "😄", "icon": "mdi:emoticon-excited-outline"},
+    {
+        "key": "very_good",
+        "label": "Sehr gut",
+        "emoji": "😊",
+        "icon": "mdi:emoticon-smile-outline",
+    },
+    {"key": "great", "label": "Großartig", "emoji": "😄", "icon": "mdi:emoticon-excited-outline"},
+    {
+        "key": "excellent",
+        "label": "Ausgezeichnet",
+        "emoji": "🤩",
+        "icon": "mdi:emoticon-cool-outline",
+    },
 ]
+
+# Options-Schlüssel für eigene PNG/JPG-Bilder je Wellbeing-Key.
+WELLBEING_IMAGES_OPTION = "wellbeing_images"

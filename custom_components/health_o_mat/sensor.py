@@ -444,7 +444,7 @@ class WellbeingSinceSensor(HealthOMatSensor):
 
 
 class WellbeingScoreSensor(HealthOMatSensor):
-    """Numerischer Wohlbefinden-Score 1 … N (REQ-HOM-112).
+    """Numerischer Wohlbefinden-Score 1 … 10 (REQ-HOM-112).
 
     Der Score ist rein abgeleitet (on-read, keine eigene Persistenz): er
     ergibt sich aus der Reihenfolge der Wohlbefinden-Zustände (Index + 1,

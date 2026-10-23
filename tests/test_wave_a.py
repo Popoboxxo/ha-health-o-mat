@@ -560,7 +560,7 @@ def test_export_csv_includes_archived_entries(tmp_path):
 
 
 def test_set_wellbeing_service_registered_with_schema():
-    """Der neue Service ist registriert; `status` ist Pflicht, `person` optional."""
+    """Der Service akzeptiert `status` ODER `score`; `person` ist optional."""
     init = _load_init()
     hass = _runtime_hass([_cfg_entry("e1", "Max")])
 
@@ -569,8 +569,9 @@ def test_set_wellbeing_service_registered_with_schema():
     schema, _func = hass.services.registered["set_wellbeing"]
     assert schema({"status": "good"}) == {"status": "good"}
     assert schema({"person": "Max", "status": "great"})["person"] == "Max"
-    with pytest.raises(vol.Invalid):
-        schema({})  # status ist Pflicht
+    assert schema({"score": 7}) == {"score": 7}
+    # Die Pflichtprüfung (status/score) passiert im Handler, nicht im Schema.
+    assert schema({}) == {}
 
 
 def test_register_services_registers_missing_service_despite_add_drink():
@@ -611,6 +612,22 @@ def test_set_wellbeing_service_persists_and_refreshes(monkeypatch):
 
     assert store.entry("e1")["wellbeing"] == {"status": "good", "ts": "2026-10-15T12:00:00"}
     hass.data[_DOMAIN]["e1"]["coordinator"].async_set_updated_data.assert_called_once()
+
+
+def test_set_wellbeing_service_accepts_numeric_score(monkeypatch):
+    """Numerischer Score 1..10 wird auf den kanonischen Key abgebildet."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 15, 12, 0))
+    )
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    _run(func(_call({"score": 7})))
+
+    assert store.entry("e1")["wellbeing"] == {"status": "good", "ts": "2026-10-15T12:00:00"}
 
 
 @pytest.mark.parametrize("status", ["bogus", "", None, 5])
