@@ -1187,6 +1187,7 @@ class HealthOMatCard extends HTMLElement {
 
   async _undo() {
     if (!this._hass || this._busyMl != null) return;
+    if (this._data && this._data.undo && this._data.undo.drink === false) return;
     this._actionError = "";
     this._busyMl = -1;
     this._render();
@@ -1821,10 +1822,15 @@ class HealthOMatCard extends HTMLElement {
 
   _undoAction() {
     const busy = this._busyMl != null;
+    const canUndo = !(this._data && this._data.undo) || this._data.undo.drink !== false;
+    const disabled = busy || !canUndo ? " disabled" : "";
+    const title = canUndo
+      ? ""
+      : ' title="Keine Getränkebuchung zum Rückgängigmachen vorhanden"';
     return `<div class="actions">
-      <button class="ghost" data-action="undo" aria-label="Letzte Buchung rückgängig machen"${
-        busy ? " disabled" : ""
-      }><span aria-hidden="true">\u21A9</span><span class="ml">Undo</span></button>
+      <button class="ghost" data-action="undo" aria-label="Letzte Getränkebuchung rückgängig machen"${
+        canUndo ? "" : ' aria-disabled="true"'
+      }${title}${disabled}><span aria-hidden="true">\u21A9</span><span class="ml">Undo</span></button>
     </div>`;
   }
 
@@ -1853,6 +1859,7 @@ class HealthOMatCardEditor extends HTMLElement {
     this._drinksEntry = "";
     this._drinksLoaded = false;
     this._drinksLoading = false;
+    this._personFilterEditing = false;
     this._listenersAttached = false;
     this._onValueChange = this._onValueChange.bind(this);
     this._onEditorClick = this._onEditorClick.bind(this);
@@ -2005,6 +2012,7 @@ class HealthOMatCardEditor extends HTMLElement {
     next[key] = target.value;
     if (key === "person_mode") {
       const mode = String(target.value || "");
+      this._personFilterEditing = false;
       if (mode === "selector") {
         delete next.entry_id;
       } else if (!next.entry_id && this._persons && this._persons.length) {
@@ -2094,25 +2102,27 @@ class HealthOMatCardEditor extends HTMLElement {
     if (!allKeys.length) return;
     const next = Object.assign({}, this._config);
     if (role === "person-filter-all") {
-      if (!target.checked) {
-        this._render();
-        return;
+      if (target.checked) {
+        this._personFilterEditing = false;
+        delete next.person_filter;
+      } else {
+        // "Alle" abwählen = Filter-Modus starten: individuelle Boxen werden
+        // sichtbar/aktiv, zunächst ohne Auswahl.
+        this._personFilterEditing = true;
+        delete next.person_filter;
       }
-      delete next.person_filter;
       this._setConfig(next, true);
       return;
     }
     const key = target.getAttribute("data-key") || "";
     if (!key) return;
     let selected = this._personFilterValues();
-    // Ein leerer Filter bedeutet "alle"; beim ersten Abwählen starten wir
-    // deshalb mit der vollständigen Liste.
-    if (!selected.length) selected = allKeys.slice();
     if (target.checked) {
       if (!selected.includes(key)) selected.push(key);
     } else {
       selected = selected.filter((item) => item !== key);
     }
+    this._personFilterEditing = false;
     if (selected.length === allKeys.length) delete next.person_filter;
     else next.person_filter = selected;
     this._setConfig(next, true);
@@ -2242,20 +2252,33 @@ class HealthOMatCardEditor extends HTMLElement {
     const filter = this._personFilterValues();
     const persons = this._persons || [];
     const allKeys = persons.map((person) => person.entry_id).filter(Boolean);
-    const selected = filter.length ? filter : allKeys;
-    const allSelected = allKeys.length > 0 && selected.length === allKeys.length;
+    const filterIsAll =
+      (filter.length === 0 && !this._personFilterEditing) ||
+      (allKeys.length > 0 && filter.length === allKeys.length);
+    const selected = filter.length ? filter : filterIsAll ? allKeys : [];
     const rows = persons
       .map((person) => {
         const key = person && person.entry_id ? String(person.entry_id) : "";
         if (!key) return "";
         const checked = selected.includes(key) ? " checked" : "";
+        const disabled = filterIsAll ? " disabled" : "";
         const label = (person && (person.display_name || person.entry_id)) || key;
         return `<label class="editor-check">
-          <input type="checkbox" data-role="person-filter" data-key="${escapeHtml(key)}"${checked} />
+          <input type="checkbox" data-role="person-filter" data-key="${escapeHtml(key)}"${checked}${disabled} />
           <span>${escapeHtml(label)}</span>
         </label>`;
       })
       .join("");
+    const filterBlock =
+      mode !== "selector"
+        ? `<div class="editor-hint">Fest gebunden — der Dropdown-Filter wird ignoriert.</div>`
+        : persons.length
+          ? `<label class="editor-check">
+              <input type="checkbox" data-role="person-filter-all"${filterIsAll ? " checked" : ""} />
+              <span>Alle Personen im Dropdown</span>
+            </label>${rows}
+            <div class="editor-hint">„Alle Personen“ abwählen, um einzelne Personen fürs Dropdown auszuwählen.</div>`
+          : `<div class="editor-hint">Personenliste wird geladen\u2026</div>`;
     return `<div class="editor-group">
       <div class="editor-group-title">Personen-Bindung</div>
       <div class="editor-row">
@@ -2264,15 +2287,7 @@ class HealthOMatCardEditor extends HTMLElement {
           <option value="fixed"${mode === "fixed" ? " selected" : ""}>Fest an eine Person gebunden</option>
         </select>
       </div>
-      ${
-        persons.length
-          ? `<label class="editor-check">
-              <input type="checkbox" data-role="person-filter-all"${allSelected ? " checked" : ""} />
-              <span>Alle Personen im Dropdown</span>
-            </label>${rows}
-            <div class="editor-hint">Ohne Auswahl erscheinen alle Personen. Der Filter gilt nur für das Dropdown.</div>`
-          : `<div class="editor-hint">Personenliste wird geladen\u2026</div>`
-      }
+      ${filterBlock}
     </div>`;
   }
 
@@ -2353,14 +2368,19 @@ class HealthOMatCardEditor extends HTMLElement {
     } else if (!this._persons.length) {
       hint = "Keine Person eingerichtet \u2014 Karte nutzt den freien person-Anker.";
     }
+    const mode = String(this._config.person_mode || (current ? "fixed" : "selector"));
+    const personPicker =
+      mode === "fixed"
+        ? `<div>
+            <label for="entry_id">Feste Person</label>
+            <select id="entry_id" data-key="entry_id">${this._personOptions(current)}</select>
+            ${hint ? `<div class="editor-hint">${escapeHtml(hint)}</div>` : ""}
+          </div>`
+        : `<div class="editor-hint">Dropdown-Modus: Die angezeigten Personen werden im Abschnitt „Personen-Bindung“ gefiltert.</div>`;
     this.shadowRoot.innerHTML = `
       <style>${CARD_CSS}</style>
       <div class="editor">
-        <div>
-          <label for="entry_id">Person</label>
-          <select id="entry_id" data-key="entry_id">${this._personOptions(current)}</select>
-          ${hint ? `<div class="editor-hint">${escapeHtml(hint)}</div>` : ""}
-        </div>
+        ${personPicker}
         <div>
           <label for="person">person \u2014 optionaler Service-Anker</label>
           <input id="person" data-key="person" type="text"

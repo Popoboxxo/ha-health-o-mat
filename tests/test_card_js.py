@@ -1060,3 +1060,28 @@ def test_card_person_switch_drops_person_scoped_drafts(tmp_path):
     )
     assert reselected["amountDraft"] == "250"
     assert reselected["actionError"] == "aktions-fehler"
+
+
+def test_card_undo_is_disabled_when_no_drink_exists():
+    """[Undo] Ohne Getränkebuchung wird der Button deaktiviert statt zu fehlern."""
+    text = _card_source()
+    action = _js_method_block(text, "_undoAction")
+    undo = _js_method_block(text, "_undo")
+
+    assert "this._data.undo.drink === false" in undo, (
+        "der Undo-Aufruf prüft die serverseitige Verfügbarkeit nicht"
+    )
+    assert "canUndo" in action and "disabled" in action
+    assert "Keine Getränkebuchung" in action
+
+
+def test_card_person_filter_has_explicit_editing_state():
+    """[Personen-Filter] 'Alle' abwählen startet eine leere, explizite Auswahl."""
+    editor = _js_class_block(_card_source(), "HealthOMatCardEditor")
+    toggle = _js_method_block(editor, "_togglePersonFilter")
+    section = _js_method_block(editor, "_personSection")
+
+    assert "_personFilterEditing = true" in toggle
+    assert "_personFilterEditing = false" in toggle
+    assert "filterIsAll" in section
+    assert "disabled" in section, "die Einzelboxen sind bei 'Alle' nicht gesperrt"

@@ -174,7 +174,8 @@ deshalb nicht auseinanderlaufen.
 
 **Eigene Bilder je Wohlbefinden-Stufe (optional)**
 
-In den Integrations-Optionen (Schritt „Wohlbefinden-Bilder") kann je Key ein
+In den Integrations-Optionen (Schritt „Wohlbefinden-Bilder") **oder im
+Admin-Bereich des Panels** (Einstellungen → Wohlbefinden-Bilder) kann je Key ein
 eigenes PNG/JPG/WebP hinterlegt werden. Akzeptiert werden:
 
 - eine Datei unter `/config/www/` als reiner Dateiname (`stufe1.png` → `/local/stufe1.png`),

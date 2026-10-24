@@ -58,26 +58,39 @@ import {
   normalizeAreas,
   normalizeQuickDrinks,
   normalizePersons,
+  WELLBEING_STATES,
   parseDrinkText,
   personSlug,
   resolvePersonByParam,
   areasForPerson,
   enabledTabs,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.11.0";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.11.0";
+} from "./health-o-mat-panel-base.js?v=0.12.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.12.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
-} from "./health-o-mat-panel-admin.js?v=0.11.0";
+} from "./health-o-mat-panel-admin.js?v=0.12.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
 
 /* Person-flow target when the admin adds a person (no custom CRUD flow). */
 const CONFIG_FLOW_URL = "/config/integrations/dashboard";
+
+/* Order-independent JSON for shallow string maps (wellbeing images). */
+function stableJson(value) {
+  if (!value || typeof value !== "object") return "{}";
+  const out = {};
+  Object.keys(value)
+    .sort()
+    .forEach((key) => {
+      out[key] = value[key];
+    });
+  return JSON.stringify(out);
+}
 
 class HealthOMatPanel extends HTMLElement {
   constructor() {
@@ -707,6 +720,14 @@ class HealthOMatPanel extends HTMLElement {
 
     const areas = this._readAreaCheckboxes();
 
+    const wellbeingImages = {};
+    WELLBEING_STATES.forEach((state) => {
+      const key = state && state.key ? String(state.key) : "";
+      if (!key) return;
+      const value = String(this._readField(`wb-image-${key}`, "") || "").trim();
+      if (value) wellbeingImages[key] = value;
+    });
+
     this._readQuickDraftsFromDom();
     const quick = [];
     this._quickDraft.forEach((slot, i) => {
@@ -742,6 +763,7 @@ class HealthOMatPanel extends HTMLElement {
         person_display: display,
         quick_drinks: quick,
         drink_lexicon: lexicon,
+        wellbeing_images: wellbeingImages,
         sys_threshold: sys,
         dia_threshold: dia,
         retention_months: retention,
@@ -777,6 +799,9 @@ class HealthOMatPanel extends HTMLElement {
       String(current.drink_lexicon == null ? "" : current.drink_lexicon) !== payload.drink_lexicon
     ) {
       out.drink_lexicon = payload.drink_lexicon;
+    }
+    if (stableJson(current.wellbeing_images) !== stableJson(payload.wellbeing_images)) {
+      out.wellbeing_images = payload.wellbeing_images;
     }
     if (!sameNum(payload.sys_threshold, current.sys_threshold)) {
       out.sys_threshold = payload.sys_threshold;
@@ -1064,6 +1089,8 @@ class HealthOMatPanel extends HTMLElement {
 
   async _undo(entryId) {
     if (!entryId || this._busy) return;
+    const data = this._data[entryId];
+    if (data && data.undo && data.undo.drink === false) return;
     this._busy = true;
     this._actionError = null;
     this._render();

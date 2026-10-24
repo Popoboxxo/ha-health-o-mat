@@ -17,13 +17,14 @@ import {
   SETTINGS_LIMITS,
   SETTINGS_FALLBACKS,
   EXPORT_DATASETS,
+  WELLBEING_STATES,
   escapeHtml,
   attrValue,
   datasetLabel,
   normalizeAreas,
   personSlug,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.11.0";
+} from "./health-o-mat-panel-base.js?v=0.12.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 
@@ -82,6 +83,8 @@ function settingsForm(panel, settings, entryId, loadError) {
   const lexicon = s.drink_lexicon == null ? "" : String(s.drink_lexicon);
   const display = s.person_display == null ? "" : String(s.person_display);
   const areas = normalizeAreas(s.areas);
+  const images =
+    s.wellbeing_images && typeof s.wellbeing_images === "object" ? s.wellbeing_images : {};
 
   const banner = loadError
     ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(loadError)}</div>`
@@ -124,6 +127,25 @@ function settingsForm(panel, settings, entryId, loadError) {
           <input type="checkbox" data-field="area-wellbeing"${areas.wellbeing ? " checked" : ""} />
           <span>Wohlbefinden</span>
         </label>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Wohlbefinden-Bilder</div>
+        <div class="hint">
+          Optionales eigenes Bild je Stufe. Dateiname unter <code>/config/www/</code>
+          (z.\u00A0B. <code>stufe1.png</code> \u2192 <code>/local/stufe1.png</code>),
+          <code>/local/...</code>-Pfad, HTTP(S)-URL oder PNG/JPEG/WebP-Data-URI.
+          Leer = Emoji.
+        </div>
+        <div class="settings-grid">
+          ${WELLBEING_STATES.map(
+            (state) => `<label class="field">${escapeHtml(state.emoji)} ${escapeHtml(state.label)}
+              <input type="text" data-field="wb-image-${escapeHtml(state.key)}"
+                value="${attrValue(images[state.key] || "")}" autocomplete="off"
+                placeholder="/local/${escapeHtml(state.key)}.png" />
+            </label>`
+          ).join("")}
+        </div>
       </div>
 
       <div class="card">

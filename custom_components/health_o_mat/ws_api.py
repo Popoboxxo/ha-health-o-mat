@@ -165,6 +165,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     "person_display",
     "quick_drinks",
     "drink_lexicon",
+    WELLBEING_IMAGES_OPTION,
     "sys_threshold",
     "dia_threshold",
     "retention_months",
@@ -214,6 +215,10 @@ SETTINGS_SCHEMA = vol.Schema(
             ],
             vol.Length(min=1),
         ),
+        # Eigene Wellbeing-Bilder: optionale Map key -> URL/Pfad. Die
+        # Normalisierung (nur erlaubte Keys/Formate) passiert in
+        # `parse_settings_message` über `logic.normalize_wellbeing_images`.
+        vol.Optional(WELLBEING_IMAGES_OPTION): dict,
         vol.Optional("sys_threshold"): vol.All(
             vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
         ),
@@ -394,6 +399,12 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
             "expected_ml": pace["expected_ml"],
             "delta_ml": pace["delta_ml"],
             "forecast_ml": pace["forecast_ml"],
+        },
+        # Additiv: Undo-Verfügbarkeit, damit die UI den Button deaktivieren
+        # kann, statt einen Service-/WS-Fehler ("keine Getränke") auszulösen.
+        "undo": {
+            "drink": bool(data.get("drinks")),
+            "blood_pressure": bool(readings),
         },
         "bp": _bp_block(entry, readings, now),
         "wellbeing": _wellbeing_block(data, entry),
@@ -1057,6 +1068,9 @@ def build_settings(entry: Any) -> dict[str, Any]:
         "person_display": effective_person(entry),
         "quick_drinks": _quick_drinks(entry),
         "drink_lexicon": format_lexicon_text(options.get("drink_lexicon")),
+        WELLBEING_IMAGES_OPTION: logic.normalize_wellbeing_images(
+            options.get(WELLBEING_IMAGES_OPTION)
+        ),
         "sys_threshold": _option_int(
             entry, "sys_threshold", "sys_threshold", DEFAULT_SYS_THRESHOLD
         ),
@@ -1083,6 +1097,15 @@ def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str 
         return {}, f"Keine Einstellung übergeben (erlaubt: {', '.join(SETTINGS_KEYS)})"
 
     updates: dict[str, Any] = {}
+    if WELLBEING_IMAGES_OPTION in raw:
+        raw_images = raw.pop(WELLBEING_IMAGES_OPTION)
+        if not isinstance(raw_images, dict):
+            return {}, (
+                "Ungültige Einstellung 'wellbeing_images': erwartet ein Objekt, "
+                f"erhalten {type(raw_images).__name__}"
+            )
+        updates[WELLBEING_IMAGES_OPTION] = logic.normalize_wellbeing_images(raw_images)
+
     if "drink_lexicon" in raw:
         raw_text = raw.pop("drink_lexicon")
         if not isinstance(raw_text, str):

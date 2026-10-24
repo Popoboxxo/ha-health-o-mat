@@ -29,7 +29,7 @@ import {
   wellbeingScale,
   wellbeingVisual,
   bpHistoryChartHtml,
-} from "./health-o-mat-panel-base.js?v=0.11.0";
+} from "./health-o-mat-panel-base.js?v=0.12.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -197,7 +197,10 @@ function drinkTab(panel, data, entryId) {
     ? `<div class="msg error">${escapeHtml(panel._formError)}</div>`
     : "";
 
-  const undo = `<button class="btn ghost" data-action="undo" type="button"${panel._busy ? " disabled" : ""}>\u21A9 Undo</button>`;
+  const canUndo = !(data.undo) || data.undo.drink !== false;
+  const undo = `<button class="btn ghost" data-action="undo" type="button"${
+    panel._busy || !canUndo ? " disabled" : ""
+  }${canUndo ? "" : ' title="Keine Getränkebuchung zum Rückgängigmachen vorhanden"'}${canUndo ? "" : ' aria-disabled="true"'}>\u21A9 Undo</button>`;
 
   return `
     <div class="card">
