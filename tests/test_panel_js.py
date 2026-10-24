@@ -1512,3 +1512,25 @@ def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
     assert history_html.index("&lt;img src=x") < history_html.index("Sehr schlecht"), (
         "die Verlaufsliste ist nicht neueste-zuerst sortiert"
     )
+
+
+def test_panel_undo_is_disabled_without_drinks():
+    """[Undo] Panel deaktiviert den Undo-Button ohne Getränkebuchung."""
+    views = _panel_views_source()
+    drink_tab = _js_function_block(views, "drinkTab")
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert "data.undo" in drink_tab and "canUndo" in drink_tab
+    assert "Keine Getränkebuchung" in drink_tab
+    assert "data.undo.drink === false" in entry
+
+
+def test_panel_admin_settings_include_wellbeing_images():
+    """[Admin] Die Personen-Einstellungen bieten Bildfelder je Wellbeing-Key."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert "Wohlbefinden-Bilder" in admin
+    assert "wb-image-" in admin
+    assert "WELLBEING_STATES.map" in admin
+    assert "wellbeing_images: wellbeingImages" in entry

@@ -612,6 +612,7 @@ _PANEL_TOP_LEVEL_KEYS = {
     "goal_ml",
     "reset_hour",
     "today",
+    "undo",
     "bp",
     "wellbeing",
     "wellbeing_scale",
@@ -1738,6 +1739,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                     }
                 ],
                 "drink_lexicon": "wasser=Wasser,250\nkaffee=Kaffee,250",
+                "wellbeing_images": {},
                 "sys_threshold": 135,
                 "dia_threshold": 85,
                 "retention_months": 6,
@@ -1954,7 +1956,12 @@ def test_set_settings_persists_via_async_update_entry_and_fires_listener():
     assert result["daily_goal_ml"] == 3000
     assert result["daily_reset_hour"] == 4
     assert result["retention_months"] == 3
-    assert set(result) == set(SETTINGS_DEFAULTS) | {"quick_drinks", "drink_lexicon", "areas"}
+    assert set(result) == set(SETTINGS_DEFAULTS) | {
+        "quick_drinks",
+        "drink_lexicon",
+        "wellbeing_images",
+        "areas",
+    }
 
 
 def test_set_settings_persists_canonical_quick_drinks():
@@ -2799,3 +2806,54 @@ def test_panel_data_includes_wellbeing_scale_and_images(monkeypatch):
     assert good["image"] == "/local/stufe7.png"
     assert payload["wellbeing"]["image"] == "/local/stufe7.png"
     assert all(item["key"] != "bogus" for item in payload["wellbeing_scale"])
+
+
+def test_panel_data_reports_undo_availability(monkeypatch):
+    """panel_data marks whether a drink/reading exists for undo."""
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["undo"] == {"drink": True, "blood_pressure": True}
+
+
+def test_panel_data_reports_no_undo_without_entries(monkeypatch):
+    """Empty store => both undo flags false (UI disables the button)."""
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass({}, entry, [], monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["undo"] == {"drink": False, "blood_pressure": False}
+
+
+def test_get_settings_includes_normalized_wellbeing_images():
+    """Admin settings expose normalized per-key images."""
+    entry = _entry(
+        "e1",
+        options={"wellbeing_images": {"good": "stufe7.png", "bogus": "x.png"}},
+    )
+
+    assert ws_api.build_settings(entry)["wellbeing_images"] == {"good": "/local/stufe7.png"}
+
+
+def test_parse_settings_message_normalizes_wellbeing_images():
+    """set_settings accepts and normalizes image maps."""
+    updates, error = ws_api.parse_settings_message(
+        {"wellbeing_images": {"very_bad": "/local/1.png", "unknown": "x.png"}}
+    )
+
+    assert error is None
+    assert updates == {"wellbeing_images": {"very_bad": "/local/1.png"}}
+
+
+def test_parse_settings_message_rejects_non_object_wellbeing_images():
+    """A non-object image payload is rejected with a field error."""
+    updates, error = ws_api.parse_settings_message({"wellbeing_images": "x"})
+
+    assert updates == {}
+    assert error is not None
+    assert "wellbeing_images" in error
