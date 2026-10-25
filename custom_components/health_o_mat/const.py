@@ -10,8 +10,15 @@ MODEL = "Health-O-Mat"
 STORE_VERSION = 1
 # Schema-Stufe des Store-Inhalts (steuert die Migrationskette in store.py);
 # v1 = Ursprungsschema, v2 = +inputs (BP-Eingaben) je Person,
-# v3 = +archived_counts (Retention/Archiv-Kennzahlen, REQ-HOM-109) je Person
-STORE_SCHEMA_VERSION = 3
+# v3 = +archived_counts (Retention/Archiv-Kennzahlen, REQ-HOM-109) je Person,
+# v4 = +id/created_at/voided_* je Eintrag, +wellbeing_entries, +audit_log
+#      (Korrigierbarkeit/Audit, REQ-HOM-115)
+STORE_SCHEMA_VERSION = 4
+
+# Audit-Log: Default-Cap an Ereignissen je Person (0 = unbegrenzt).
+DEFAULT_AUDIT_LIMIT = 1000
+# Options-Schlüssel für den Audit-Cap (Verdrahtung im Options-Flow folgt).
+AUDIT_LIMIT_OPTION = "audit_limit"
 
 # HA-Store-Keys: Haupt-Store (Historie) und separater Archiv-Store (Retention).
 MAIN_STORE_KEY = "health_o_mat"

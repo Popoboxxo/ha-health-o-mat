@@ -385,14 +385,74 @@ def test_async_import_csv_missing_file_raises(tmp_path):
 
 def test_build_backup_document_shape():
     """[REQ-HOM-007] Backup-Dokument ist versioniert und enthält alle Einträge."""
-    raw = {"schema": 3, "entries": {"e1": {"person": "Max", "drinks": [{"ml": 250}]}}}
+    raw = {"schema": 4, "entries": {"e1": {"person": "Max", "drinks": [{"ml": 250}]}}}
 
     document = backup.build_backup_document(raw, datetime(2026, 10, 14, 12, 0, 0))
 
     assert document["format"] == backup.BACKUP_FORMAT
-    assert document["version"] == backup.BACKUP_VERSION
+    assert document["version"] == backup.BACKUP_VERSION == 2
+    assert document["schema"] == 4
     assert document["created"] == "2026-10-14T12:00:00"
+    assert document["persons"] == {"e1": "Max"}
+    assert document["counts"] == {
+        "e1": {
+            "drinks": {"total": 1, "active": 1, "voided": 0},
+            "readings": {"total": 0, "active": 0, "voided": 0},
+            "wellbeing": {"total": 0, "active": 0, "voided": 0},
+        }
+    }
     assert document["entries"] == raw["entries"]
+
+
+def test_build_backup_document_counts_voided_separately():
+    """[REQ-HOM-007] counts weist gelöschte (voided) Einträge separat aus."""
+    raw = {
+        "schema": 4,
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "drinks": [{"ml": 250}, {"ml": 500, "voided_at": "2026-10-14T10:00:00"}],
+                "readings": [
+                    {"sys": 120, "dia": 80},
+                    {"sys": 130, "dia": 85, "voided_at": "2026-10-14T11:00:00"},
+                ],
+                "wellbeing_entries": [
+                    {"key": "good"},
+                    {"key": "bad", "voided_at": "2026-10-14T12:00:00"},
+                ],
+            }
+        },
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14))
+
+    assert document["counts"]["e1"] == {
+        "drinks": {"total": 2, "active": 1, "voided": 1},
+        "readings": {"total": 2, "active": 1, "voided": 1},
+        "wellbeing": {"total": 2, "active": 1, "voided": 1},
+    }
+
+
+def test_build_backup_document_legacy_wellbeing_counts():
+    """[REQ-HOM-007] Vor-v4-Bestände: Wellbeing aus Legacy-Spiegel gezählt."""
+    raw = {
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "wellbeing": {"status": "good", "ts": "2026-10-14T10:00:00"},
+                "wellbeing_history": [{"ts": "2026-10-13T10:00:00", "status": "bad"}],
+            }
+        }
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14))
+
+    assert document["schema"] is None
+    assert document["counts"]["e1"]["wellbeing"] == {
+        "total": 2,
+        "active": 2,
+        "voided": 0,
+    }
 
 
 def test_build_backup_document_is_deep_copy():
@@ -431,9 +491,17 @@ def test_async_backup_writes_all_persons(tmp_path, monkeypatch):
 
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     assert document["format"] == backup.BACKUP_FORMAT
+    assert document["version"] == 2
+    assert document["schema"] == 4
     assert set(document["entries"]) == {"e1", "e2"}
+    assert document["persons"] == {"e1": "Max", "e2": "Caro"}
+    assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 1, "voided": 0}
     assert document["entries"]["e1"]["drinks"][0]["ml"] == 250
     assert document["entries"]["e2"]["readings"][0]["sys"] == 120
+    # v4-Felder sind im Backup vollständig enthalten
+    assert document["entries"]["e1"]["drinks"][0]["voided_at"] is None
+    assert document["entries"]["e1"]["audit_log"]
+    assert "wellbeing_entries" in document["entries"]["e1"]
     hass.services.async_call.assert_called_once()
     assert hass.services.async_call.call_args[0][0] == "persistent_notification"
 

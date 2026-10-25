@@ -97,7 +97,11 @@ def test_store_migration_v1_to_current_adds_inputs():
     assert data["schema"] == SCHEMA
     e1 = data["entries"]["e1"]
     assert e1["inputs"] == {}
-    assert e1["drinks"] == _v1_fixture()["entries"]["e1"]["drinks"]  # Daten unverändert
+    # Bestandsdaten unverändert; v4 ergänzt nur id/created_at/voided_*
+    assert [{k: d[k] for k in ("ts", "ml", "type", "src")} for d in e1["drinks"]] == [
+        {k: d[k] for k in ("ts", "ml", "type", "src")}
+        for d in _v1_fixture()["entries"]["e1"]["drinks"]
+    ]
 
 
 def _run(coro):
@@ -131,7 +135,7 @@ def test_store_invalid_schema_creates_backup_and_notification():
 
     _run(store.async_load())
 
-    assert store.raw_data() == {"entries": {}}
+    assert store.raw_data() == {"schema": SCHEMA, "entries": {}}
     hass.services.async_call.assert_called_once()
     args = hass.services.async_call.call_args[0]
     assert args[0] == "persistent_notification"
@@ -147,7 +151,7 @@ def test_store_none_is_fresh_start_without_notification():
 
     _run(store.async_load())
 
-    assert store.raw_data() == {"entries": {}}
+    assert store.raw_data() == {"schema": SCHEMA, "entries": {}}
     hass.services.async_call.assert_not_called()
 
 
