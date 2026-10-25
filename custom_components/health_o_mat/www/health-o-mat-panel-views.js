@@ -34,7 +34,7 @@ import {
   wellbeingVisual,
   bpHistoryChartHtml,
   t,
-} from "./health-o-mat-panel-base.js?v=0.13.0";
+} from "./health-o-mat-panel-base.js?v=0.14.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
