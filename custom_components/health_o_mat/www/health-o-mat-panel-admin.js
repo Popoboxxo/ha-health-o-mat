@@ -27,16 +27,22 @@ import {
   normalizeAreas,
   personSlug,
   messageHtml,
+  t,
 } from "./health-o-mat-panel-base.js?v=0.13.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 
 export function renderSettings(panel) {
-  const head = `<div class="person-head"><span class="dot"></span><span>Einstellungen</span></div>`;
+  const head = `<div class="person-head"><span class="dot"></span><span>${escapeHtml(
+    t("ui_admin_settings", "Einstellungen")
+  )}</span></div>`;
   const persons = panel._persons || [];
   const personsCard = personsPanel(panel);
   if (!persons.length) {
-    return `${head}${personsCard}${messageHtml("Keine Person eingerichtet.", false)}`;
+    return `${head}${personsCard}${messageHtml(
+      t("ui_common_no_person", "Keine Person eingerichtet."),
+      false
+    )}`;
   }
   // Keep the selection in sync with the rendered person list.
   let entryId = panel._settingsEntry;
@@ -60,7 +66,7 @@ export function renderSettings(panel) {
   if (!settings) {
     const inner = loadError
       ? messageHtml(loadError, true)
-      : messageHtml("Lade Einstellungen\u2026", false);
+      : messageHtml(t("ui_admin_loading", "Lade Einstellungen…"), false);
     return `${head}${personsCard}${selector}${inner}`;
   }
   return `${head}${personsCard}${selector}${settingsForm(panel, settings, entryId, loadError)}`;
@@ -101,19 +107,21 @@ function settingsForm(panel, settings, entryId, loadError) {
   return `<form class="settings-form" data-form="settings">
       ${banner}
       <div class="card">
-        <div class="card-title">Allgemein</div>
+        <div class="card-title">${escapeHtml(t("ui_admin_general", "Allgemein"))}</div>
         <div class="settings-grid">
-          <label class="field">Tagesziel (ml)
+          <label class="field">${escapeHtml(t("ui_admin_goal", "Tagesziel (ml)"))}
             <input type="number" inputmode="numeric" data-field="daily_goal_ml"
               min="${SETTINGS_LIMITS.goalMin}" max="${SETTINGS_LIMITS.goalMax}"
               value="${attrValue(goal)}" />
           </label>
-          <label class="field">Tages-Reset (Stunde, 0\u201323)
+          <label class="field">${escapeHtml(
+            t("ui_admin_reset", "Tages-Reset (Stunde, 0–23)")
+          )}
             <input type="number" inputmode="numeric" data-field="daily_reset_hour"
               min="${SETTINGS_LIMITS.resetMin}" max="${SETTINGS_LIMITS.resetMax}"
               value="${attrValue(reset)}" />
           </label>
-          <label class="field">Anzeigename
+          <label class="field">${escapeHtml(t("ui_admin_display_name", "Anzeigename"))}
             <input type="text" data-field="person_display" autocomplete="off"
               value="${attrValue(display)}" />
           </label>
@@ -121,33 +129,44 @@ function settingsForm(panel, settings, entryId, loadError) {
       </div>
 
       <div class="card">
-        <div class="card-title">Bereiche</div>
-        <div class="muted">Abgew\u00E4hlte Bereiche werden in \u00DCbersicht und Detail ausgeblendet.</div>
+        <div class="card-title">${escapeHtml(t("ui_admin_areas", "Bereiche"))}</div>
+        <div class="muted">${escapeHtml(
+          t(
+            "ui_admin_areas_hint",
+            "Abgewählte Bereiche werden in Übersicht und Detail ausgeblendet."
+          )
+        )}</div>
         <label class="check">
           <input type="checkbox" data-field="area-drink"${areas.drink ? " checked" : ""} />
-          <span>Trinken</span>
+          <span>${escapeHtml(t("ui_common_area_drink", "Trinken"))}</span>
         </label>
         <label class="check">
           <input type="checkbox" data-field="area-bp"${areas.bp ? " checked" : ""} />
-          <span>Blutdruck</span>
+          <span>${escapeHtml(t("ui_common_area_bp", "Blutdruck"))}</span>
         </label>
         <label class="check">
           <input type="checkbox" data-field="area-wellbeing"${areas.wellbeing ? " checked" : ""} />
-          <span>Wohlbefinden</span>
+          <span>${escapeHtml(t("ui_common_area_wellbeing", "Wohlbefinden"))}</span>
         </label>
       </div>
 
       <div class="card">
-        <div class="card-title">Wohlbefinden-Bilder</div>
-        <div class="hint">
-          Optionales eigenes Bild je Stufe. Dateiname unter <code>/config/www/</code>
-          (z.\u00A0B. <code>stufe1.png</code> \u2192 <code>/local/stufe1.png</code>),
-          <code>/local/...</code>-Pfad, HTTP(S)-URL oder PNG/JPEG/WebP-Data-URI.
-          Leer = Emoji.
-        </div>
+        <div class="card-title">${escapeHtml(
+          t("ui_admin_wb_images", "Wohlbefinden-Bilder")
+        )}</div>
+        <div class="hint">${escapeHtml(
+          t(
+            "ui_admin_wb_images_hint",
+            "Optionales eigenes Bild je Stufe. Dateiname unter /config/www/ " +
+              "(z. B. stufe1.png → /local/stufe1.png), /local/...-Pfad, HTTP(S)-URL " +
+              "oder PNG/JPEG/WebP-Data-URI. Leer = Emoji."
+          )
+        )}</div>
         <label class="check">
           <input type="checkbox" data-field="wellbeing_confirm"${confirmWellbeing ? " checked" : ""} />
-          <span>Wohlbefinden: Bestätigung vor Übernahme</span>
+          <span>${escapeHtml(
+            t("ui_admin_wb_confirm", "Wohlbefinden: Bestätigung vor Übernahme")
+          )}</span>
         </label>
         <div class="settings-grid">
           ${WELLBEING_STATES.map(
@@ -161,36 +180,51 @@ function settingsForm(panel, settings, entryId, loadError) {
       </div>
 
       <div class="card">
-        <div class="card-title">Quick-Drinks (max. ${SETTINGS_LIMITS.maxQuickDrinks})</div>
-        <div class="muted">Ein leer gelassenes Label entfernt den Slot.</div>
+        <div class="card-title">${escapeHtml(
+          t("ui_admin_quick_drinks", "Quick-Drinks (max. {max})", {
+            max: SETTINGS_LIMITS.maxQuickDrinks,
+          })
+        )}</div>
+        <div class="muted">${escapeHtml(
+          t("ui_admin_quick_hint", "Ein leer gelassenes Label entfernt den Slot.")
+        )}</div>
         <div class="qd-list">${quickSlotsHtml(panel)}</div>
         <button class="btn ghost" type="button" data-action="qd-add"
           ${panel._quickDraft.length >= SETTINGS_LIMITS.maxQuickDrinks ? "disabled" : ""}>
-          \uFF0B Slot hinzufügen
+          \uFF0B ${escapeHtml(t("ui_admin_quick_add", "+ Slot hinzufügen"))}
         </button>
       </div>
 
       <div class="card">
-        <div class="card-title">Getränke-Lexikon</div>
+        <div class="card-title">${escapeHtml(
+          t("ui_admin_lexicon_title", "Getränke-Lexikon")
+        )}</div>
         <div class="hint">
-          Eine Zeile pro Eintrag: <code>wort=Typ,ml</code>
-          (z.\u00A0B. <code>kaffee=Kaffee,250</code>). Zeilen mit <code>#</code> sind Kommentare.
+          ${escapeHtml(
+            t(
+              "ui_admin_lexicon_hint",
+              "Eine Zeile pro Eintrag: wort=Typ,ml (z. B. kaffee=Kaffee,250). " +
+                "Zeilen mit # sind Kommentare."
+            )
+          )}
         </div>
-        <label class="field">Lexikon
+        <label class="field">${escapeHtml(t("ui_admin_lexicon_field", "Lexikon"))}
           <textarea data-field="drink_lexicon" rows="10" spellcheck="false"
             autocapitalize="off" autocomplete="off">${escapeHtml(lexicon)}</textarea>
         </label>
       </div>
 
       <div class="card">
-        <div class="card-title">Blutdruck-Warnschwellen</div>
+        <div class="card-title">${escapeHtml(
+          t("ui_admin_bp_thresholds", "Blutdruck-Warnschwellen")
+        )}</div>
         <div class="settings-grid">
-          <label class="field">Systolisch
+          <label class="field">${escapeHtml(t("ui_panel_chart_bp_systolic", "Systolisch"))}
             <input type="number" inputmode="numeric" data-field="sys_threshold"
               min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
               value="${attrValue(sys)}" />
           </label>
-          <label class="field">Diastolisch
+          <label class="field">${escapeHtml(t("ui_panel_chart_bp_diastolic", "Diastolisch"))}
             <input type="number" inputmode="numeric" data-field="dia_threshold"
               min="${SETTINGS_LIMITS.thresholdMin}" max="${SETTINGS_LIMITS.thresholdMax}"
               value="${attrValue(dia)}" />
@@ -199,14 +233,18 @@ function settingsForm(panel, settings, entryId, loadError) {
       </div>
 
       <div class="card">
-        <div class="card-title">Datenhaltung</div>
+        <div class="card-title">${escapeHtml(t("ui_admin_storage", "Datenhaltung"))}</div>
         <div class="settings-grid">
-          <label class="field">Retention (Monate, 0 = aus)
+          <label class="field">${escapeHtml(
+            t("ui_admin_retention", "Retention (Monate, 0 = aus)")
+          )}
             <input type="number" inputmode="numeric" data-field="retention_months"
               min="${SETTINGS_LIMITS.retentionMin}" max="${SETTINGS_LIMITS.retentionMax}"
               value="${attrValue(retention)}" />
           </label>
-          <label class="field">Audit-Log-Limit (0 = unbegrenzt)
+          <label class="field">${escapeHtml(
+            t("ui_admin_audit", "Audit-Log-Limit (0 = unbegrenzt)")
+          )}
             <input type="number" inputmode="numeric" data-field="audit_limit"
               min="${SETTINGS_LIMITS.auditMin}" max="${SETTINGS_LIMITS.auditMax}"
               value="${attrValue(auditLimit)}" />
@@ -214,23 +252,27 @@ function settingsForm(panel, settings, entryId, loadError) {
         </div>
         <label class="check">
           <input type="checkbox" data-field="enable_sidebar_panel"${sidebar ? " checked" : ""} />
-          <span>Sidebar-Panel anzeigen</span>
+          <span>${escapeHtml(t("ui_admin_sidebar", "Sidebar-Panel anzeigen"))}</span>
         </label>
       </div>
 
       <div class="card">
-        <div class="card-title">Export</div>
-        <div class="muted">Schreibt CSV-Dateien nach <code>/config/health_o_mat_export/</code>.</div>
+        <div class="card-title">${escapeHtml(t("ui_admin_export", "Export"))}</div>
+        <div class="muted">${escapeHtml(
+          t("ui_admin_export_hint", "Schreibt CSV-Dateien nach /config/health_o_mat_export/.")
+        )}</div>
         <div class="export-row">
-          <label class="field">Datensatz
+          <label class="field">${escapeHtml(t("ui_admin_dataset", "Datensatz"))}
             <select data-field="export_dataset">
               ${EXPORT_DATASETS.map(
-                (d) => `<option value="${escapeHtml(d.value)}">${escapeHtml(d.label)}</option>`
+                (d) => `<option value="${escapeHtml(d.value)}">${escapeHtml(
+                  t(d.labelKey, d.label)
+                )}</option>`
               ).join("")}
             </select>
           </label>
           <button class="btn" type="button" data-action="export"
-            ${panel._exportBusy ? "disabled" : ""}>\u2B07 CSV-Export</button>
+            ${panel._exportBusy ? "disabled" : ""}>\u2B07 ${escapeHtml(t("ui_admin_export_btn", "CSV-Export"))}</button>
         </div>
         <div data-export-result>${exportResultHtml(panel)}</div>
       </div>
@@ -241,9 +283,9 @@ function settingsForm(panel, settings, entryId, loadError) {
 
       <div class="settings-actions">
         <button class="btn" type="submit" data-save-button
-          ${panel._settingsBusy ? "disabled" : ""}>\u{1F4BE} Speichern</button>
+          ${panel._settingsBusy ? "disabled" : ""}>\u{1F4BE} ${escapeHtml(t("ui_common_save", "Speichern"))}</button>
         <button class="btn ghost" type="button" data-action="settings-reload"
-          ${panel._settingsBusy ? "disabled" : ""}>\u21BB Neu laden</button>
+          ${panel._settingsBusy ? "disabled" : ""}>\u21BB ${escapeHtml(t("ui_admin_reload", "Neu laden"))}</button>
       </div>
     </form>`;
 }
@@ -253,21 +295,25 @@ function quickSlotsHtml(panel) {
   return panel._quickDraft
     .map(
       (slot, i) => `<div class="qd-slot" data-slot="${i}" data-key="${escapeHtml(slot.key || "")}">
-        <label class="field">Label
+        <label class="field">${escapeHtml(t("ui_admin_label", "Label"))}
           <input type="text" data-field="qd-label" data-index="${i}" autocomplete="off"
-            value="${attrValue(slot.label)}" placeholder="z.\u00A0B. Glas Wasser" />
+            value="${attrValue(slot.label)}" placeholder="${escapeHtml(
+              t("ui_admin_quick_placeholder", "z. B. Glas Wasser")
+            )}" />
         </label>
         <label class="field">ml
           <input type="number" inputmode="numeric" data-field="qd-ml" data-index="${i}"
             min="${SETTINGS_LIMITS.quickMlMin}" max="${SETTINGS_LIMITS.quickMlMax}"
             value="${attrValue(slot.ml)}" />
         </label>
-        <label class="field">Icon
+        <label class="field">${escapeHtml(t("ui_admin_icon", "Icon"))}
           <input type="text" data-field="qd-icon" data-index="${i}" autocomplete="off"
             value="${attrValue(slot.icon || fallbackIcon)}" placeholder="mdi:cup-water" />
         </label>
         <button class="btn ghost" type="button" data-action="qd-remove" data-index="${i}"
-          aria-label="Slot entfernen">\u2715</button>
+          aria-label="${escapeHtml(
+            t("ui_admin_slot_remove", "Slot entfernen")
+          )}">\u2715</button>
       </div>`
     )
     .join("");
@@ -287,18 +333,26 @@ export function exportResultHtml(panel) {
 
 /* The export WS result shape is backend-defined; render defensively. */
 export function exportResultText(res) {
-  if (res == null) return "Export abgeschlossen.";
+  if (res == null) return t("ui_admin_export_done", "Export abgeschlossen.");
   if (typeof res === "string") return res;
   if (typeof res !== "object") return String(res);
   if (Array.isArray(res.files) && res.files.length) {
-    return `Exportiert: ${res.files.map((f) => String(f)).join(", ")}`;
+    return t("ui_admin_exported", "Exportiert: {files}", {
+      files: res.files.map((f) => String(f)).join(", "),
+    });
   }
   if (res.files && typeof res.files === "object") {
     const names = Object.keys(res.files).map((k) => String(res.files[k]));
-    if (names.length) return `Exportiert: ${names.join(", ")}`;
+    if (names.length) {
+      return t("ui_admin_exported", "Exportiert: {files}", { files: names.join(", ") });
+    }
   }
-  if (res.filename) return `Exportiert: ${String(res.filename)}`;
-  if (res.path) return `Exportiert: ${String(res.path)}`;
+  if (res.filename) {
+    return t("ui_admin_exported", "Exportiert: {files}", { files: String(res.filename) });
+  }
+  if (res.path) {
+    return t("ui_admin_exported", "Exportiert: {files}", { files: String(res.path) });
+  }
   if (res.message) return String(res.message);
   if (res.ok === true) {
     // Backend contract: { ok: true, entry_id, person, dataset }.
@@ -306,13 +360,21 @@ export function exportResultText(res) {
     if (res.person) parts.push(String(res.person));
     if (res.dataset) parts.push(datasetLabel(res.dataset));
     const what = parts.length ? ` (${parts.join(" \u00B7 ")})` : "";
-    return `Export ausgel\u00F6st${what} \u2192 /config/health_o_mat_export/`;
+    return t(
+      "ui_admin_export_triggered",
+      "Export ausgelöst{what} → /config/health_o_mat_export/",
+      { what }
+    );
   }
-  if (typeof res.count === "number") return `Export abgeschlossen (${res.count} Zeilen).`;
+  if (typeof res.count === "number") {
+    return t("ui_admin_export_rows", "Export abgeschlossen ({count} Zeilen).", {
+      count: res.count,
+    });
+  }
   try {
     return JSON.stringify(res);
   } catch (_e) {
-    return "Export abgeschlossen.";
+    return t("ui_admin_export_done", "Export abgeschlossen.");
   }
 }
 
@@ -327,16 +389,28 @@ export function personsPanel(panel) {
       const isTarget = panel._deleteTarget === p.entry_id;
       const confirmBlock = isTarget
         ? `<div class="person-manage" data-delete-panel="${escapeHtml(p.entry_id)}">
-            <div class="hint">Backups k\u00F6nnen derzeit <strong>nicht</strong> wiederhergestellt werden. Zum endg\u00FCltigen L\u00F6schen den Schl\u00FCssel <code>${escapeHtml(slug)}</code> eingeben.</div>
-            <label class="field">Zur Best\u00E4tigung \u201E${escapeHtml(slug)}\u201C eingeben
+            <div class="hint">${escapeHtml(
+              t(
+                "ui_admin_delete_warning",
+                "Backups können derzeit nicht wiederhergestellt werden. Zum endgültigen Löschen den Schlüssel {slug} eingeben.",
+                { slug }
+              )
+            )}</div>
+            <label class="field">${escapeHtml(
+              t("ui_admin_delete_confirm_label", "Zur Bestätigung „{slug}“ eingeben", { slug })
+            )}
               <input type="text" data-field="delete-confirm" autocomplete="off"
                 autocapitalize="off" spellcheck="false" />
             </label>
             <div class="settings-actions">
               <button class="btn" type="button" data-action="delete-confirm"
-                data-entry="${escapeHtml(p.entry_id)}"${panel._deleteBusy ? " disabled" : ""}>Endg\u00FCltig l\u00F6schen</button>
+                data-entry="${escapeHtml(p.entry_id)}"${panel._deleteBusy ? " disabled" : ""}>${escapeHtml(
+                t("ui_admin_delete_forever", "Endgültig löschen")
+              )}</button>
               <button class="btn ghost" type="button" data-action="delete-cancel"
-                data-entry="${escapeHtml(p.entry_id)}">Abbrechen</button>
+                data-entry="${escapeHtml(p.entry_id)}">${escapeHtml(
+                  t("ui_common_cancel", "Abbrechen")
+                )}</button>
             </div>
           </div>`
         : "";
@@ -344,7 +418,7 @@ export function personsPanel(panel) {
           <div class="kv"><span class="k">${escapeHtml(p.display_name)}</span><span class="v"><code>${escapeHtml(slug)}</code></span></div>
           <div class="settings-actions">
             <button class="btn ghost" type="button" data-action="delete-begin"
-              data-entry="${escapeHtml(p.entry_id)}"${busy}>\u{1F5D1} L\u00F6schen</button>
+              data-entry="${escapeHtml(p.entry_id)}"${busy}>\u{1F5D1} ${escapeHtml(t("ui_common_delete", "Löschen"))}</button>
           </div>
           ${confirmBlock}
         </div>`;
@@ -353,16 +427,27 @@ export function personsPanel(panel) {
 
   const list = persons.length
     ? `<div class="person-list">${rows}</div>`
-    : `<div class="muted">Keine Person eingerichtet.</div>`;
+    : `<div class="muted">${escapeHtml(
+        t("ui_common_no_person", "Keine Person eingerichtet.")
+      )}</div>`;
 
   return `<div class="card">
-      <div class="card-title">Personen</div>
-      <div class="muted">Verwaltung der eingerichteten Personen (stabiler Schl\u00FCssel in Klammern).</div>
+      <div class="card-title">${escapeHtml(t("ui_admin_persons", "Personen"))}</div>
+      <div class="muted">${escapeHtml(
+        t(
+          "ui_admin_persons_hint",
+          "Verwaltung der eingerichteten Personen (stabiler Schlüssel in Klammern)."
+        )
+      )}</div>
       ${list}
       ${adminStatusHtml(panel)}
       <div class="settings-actions">
-        <button class="btn" type="button" data-action="person-add"${busy}>\uFF0B Person hinzuf\u00FCgen</button>
-        <button class="btn ghost" type="button" data-action="backup"${busy}>\u{1F4BE} Backup erstellen</button>
+        <button class="btn" type="button" data-action="person-add"${busy}>\uFF0B ${escapeHtml(
+          t("ui_admin_person_add", "+ Person hinzufügen")
+        )}</button>
+        <button class="btn ghost" type="button" data-action="backup"${busy}>\u{1F4BE} ${escapeHtml(
+          t("ui_admin_backup_create", "Backup erstellen")
+        )}</button>
       </div>
     </div>`;
 }
@@ -383,7 +468,9 @@ function restoreFileOptions(panel) {
   const files = Array.isArray(panel._restoreFiles) ? panel._restoreFiles : [];
   const current = String((panel._restoreDraft && panel._restoreDraft.filename) || "");
   if (!files.length) {
-    return `<option value="">— keine Backup-Datei vorhanden —</option>`;
+    return `<option value="">${escapeHtml(
+      t("ui_admin_no_backup_file", "— keine Backup-Datei vorhanden —")
+    )}</option>`;
   }
   return files
     .map(
@@ -401,7 +488,7 @@ export function collectRestorePayload(panel) {
   const draft = panel._restoreDraft || {};
   const filename = String(draft.filename == null ? "" : draft.filename).trim();
   if (!filename) {
-    return { ok: false, error: "Bitte eine Backup-Datei auswählen." };
+    return { ok: false, error: t("ui_admin_err_no_file", "Bitte eine Backup-Datei auswählen.") };
   }
   const mode = draft.mode === "replace" ? "replace" : "merge";
 
@@ -411,21 +498,31 @@ export function collectRestorePayload(panel) {
     return flags[value] !== false;
   });
   if (!selected.length) {
-    return { ok: false, error: "Bitte mindestens einen Datensatz auswählen." };
+    return {
+      ok: false,
+      error: t("ui_admin_err_no_dataset", "Bitte mindestens einen Datensatz auswählen."),
+    };
   }
 
   const from = String(draft.from == null ? "" : draft.from).trim();
   const to = String(draft.to == null ? "" : draft.to).trim();
   for (const [label, value] of [
-    ["Von", from],
-    ["Bis", to],
+    [t("ui_admin_from", "Von (optional)"), from],
+    [t("ui_admin_to", "Bis (optional)"), to],
   ]) {
     if (value && !Number.isFinite(Date.parse(value))) {
-      return { ok: false, error: `Zeitraum: „${label}“ ist kein gültiger Zeitpunkt.` };
+      return {
+        ok: false,
+        error: t(
+          "ui_admin_err_invalid_time",
+          "Zeitraum: „{label}“ ist kein gültiger Zeitpunkt.",
+          { label }
+        ),
+      };
     }
   }
   if (from && to && Date.parse(to) < Date.parse(from)) {
-    return { ok: false, error: "Zeitraum: „Bis“ liegt vor „Von“." };
+    return { ok: false, error: t("ui_admin_err_range", "Zeitraum: „Bis“ liegt vor „Von“.") };
   }
 
   const personMapRaw = String(draft.personMap == null ? "" : draft.personMap).trim();
@@ -434,12 +531,18 @@ export function collectRestorePayload(panel) {
     try {
       personMap = JSON.parse(personMapRaw);
     } catch (_e) {
-      return { ok: false, error: "Personen-Mapping: kein gültiges JSON." };
+      return {
+        ok: false,
+        error: t("ui_admin_err_map_json", "Personen-Mapping: kein gültiges JSON."),
+      };
     }
     if (!personMap || typeof personMap !== "object" || Array.isArray(personMap)) {
       return {
         ok: false,
-        error: "Personen-Mapping: JSON-Objekt {Quelle: Ziel-Entry-ID} erwartet.",
+        error: t(
+          "ui_admin_err_map_shape",
+          "Personen-Mapping: JSON-Objekt {Quelle: Ziel-Entry-ID} erwartet."
+        ),
       };
     }
   }
@@ -448,7 +551,11 @@ export function collectRestorePayload(panel) {
   if (mode === "replace" && confirm !== RESTORE_CONFIRM_WORD) {
     return {
       ok: false,
-      error: `Zum Ersetzen muss die Bestätigung „${RESTORE_CONFIRM_WORD}“ eingegeben werden.`,
+      error: t(
+        "ui_admin_err_confirm",
+        "Zum Ersetzen muss die Bestätigung „{word}“ eingegeben werden.",
+        { word: RESTORE_CONFIRM_WORD }
+      ),
     };
   }
 
@@ -476,14 +583,14 @@ export function restoreCard(panel) {
         <input type="checkbox" data-field="restore-dataset-${escapeHtml(dataset.value)}"${
           datasets[dataset.value] !== false ? " checked" : ""
         }${disabled} />
-        <span>${escapeHtml(dataset.label)}</span>
+        <span>${escapeHtml(t(dataset.labelKey, dataset.label))}</span>
       </label>`
   ).join("");
 
   const modeOptions = RESTORE_MODES.map(
     (item) =>
       `<option value="${escapeHtml(item.value)}"${item.value === mode ? " selected" : ""}>${escapeHtml(
-        item.label
+        t(item.labelKey, item.label)
       )}</option>`
   ).join("");
 
@@ -494,9 +601,9 @@ export function restoreCard(panel) {
     ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(panel._restoreError)}</div>`
     : "";
   const busyText = panel._restoreFilesBusy
-    ? "Lade Dateiliste…"
+    ? t("ui_admin_loading_files", "Lade Dateiliste…")
     : panel._restoreBusy
-      ? "Restore läuft…"
+      ? t("ui_admin_restore_running", "Restore läuft…")
       : "";
   const busyHtml = busyText
     ? `<div class="settings-status ok" role="status">${escapeHtml(busyText)}</div>`
@@ -504,7 +611,11 @@ export function restoreCard(panel) {
 
   const confirmRow =
     mode === "replace"
-      ? `<label class="field">Bestätigung (${escapeHtml(RESTORE_CONFIRM_WORD)} eingeben)
+      ? `<label class="field">${escapeHtml(
+          t("ui_admin_confirm_label", "Bestätigung ({word} eingeben)", {
+            word: RESTORE_CONFIRM_WORD,
+          })
+        )}
           <input type="text" data-field="restore-confirm" autocomplete="off"
             autocapitalize="characters" spellcheck="false"
             value="${attrValue(draft.confirm || "")}"${disabled} />
@@ -512,41 +623,75 @@ export function restoreCard(panel) {
       : "";
 
   const fileHint = files.length
-    ? `<div class="hint">${files.length} Datei${files.length === 1 ? "" : "en"} in <code>/config/health_o_mat_import/</code>.</div>`
-    : `<div class="hint">Lege JSON-Backups unter <code>/config/health_o_mat_import/</code> ab und aktualisiere die Liste.</div>`;
+    ? `<div class="hint">${escapeHtml(
+        files.length === 1
+          ? t("ui_admin_files_count_one", "{count} Datei in /config/health_o_mat_import/.", {
+              count: files.length,
+            })
+          : t(
+              "ui_admin_files_count_other",
+              "{count} Dateien in /config/health_o_mat_import/.",
+              { count: files.length }
+            )
+      )}</div>`
+    : `<div class="hint">${escapeHtml(
+        t(
+          "ui_admin_files_hint",
+          "Lege JSON-Backups unter /config/health_o_mat_import/ ab und aktualisiere die Liste."
+        )
+      )}</div>`;
 
   return `<div class="card" data-restore-card>
-      <div class="card-title">Wiederherstellen</div>
-      <div class="hint">Spielt ein JSON-Backup kontrolliert ein. Ein Dry-Run zeigt die Auswirkungen, ohne zu schreiben.</div>
+      <div class="card-title">${escapeHtml(
+        t("ui_admin_restore_title", "Wiederherstellen")
+      )}</div>
+      <div class="hint">${escapeHtml(
+        t(
+          "ui_admin_restore_hint",
+          "Spielt ein JSON-Backup kontrolliert ein. Ein Dry-Run zeigt die Auswirkungen, ohne zu schreiben."
+        )
+      )}</div>
       <div class="restore-row">
-        <label class="field">Backup-Datei
+        <label class="field">${escapeHtml(
+          t("ui_admin_restore_file", "Backup-Datei")
+        )}
           <select data-field="restore-filename"${disabled}>${restoreFileOptions(panel)}</select>
         </label>
         <button class="btn ghost" type="button" data-action="restore-files-refresh"${
           panel._restoreFilesBusy ? " disabled" : ""
-        }>\u21BB Dateien aktualisieren</button>
+        }>\u21BB ${escapeHtml(
+          t("ui_admin_refresh_files", "Dateien aktualisieren")
+        )}</button>
       </div>
       ${fileHint}
       ${filesError}
-      <label class="field">Modus
+      <label class="field">${escapeHtml(t("ui_admin_mode", "Modus"))}
         <select data-field="restore-mode"${disabled}>${modeOptions}</select>
       </label>
       <div class="restore-datasets">${datasetChecks}</div>
       <div class="settings-grid">
-        <label class="field">Von (optional)
+        <label class="field">${escapeHtml(t("ui_admin_from", "Von (optional)"))}
           <input type="datetime-local" data-field="restore-from"
             value="${attrValue(restoreFieldValue(draft.from))}"${disabled} />
         </label>
-        <label class="field">Bis (optional)
+        <label class="field">${escapeHtml(t("ui_admin_to", "Bis (optional)"))}
           <input type="datetime-local" data-field="restore-to"
             value="${attrValue(restoreFieldValue(draft.to))}"${disabled} />
         </label>
       </div>
       <details class="restore-advanced" data-restore-advanced${advanced ? " open" : ""}>
-        <summary>Erweitert: Personen-Mapping</summary>
-        <div class="hint">JSON-Objekt <code>{Quelle: Ziel-Entry-ID}</code>, z. B.
-          <code>{"anna": "abc123"}</code>. Leer = automatische Zuordnung.</div>
-        <label class="field">Personen-Mapping (JSON)
+        <summary>${escapeHtml(
+          t("ui_admin_advanced", "Erweitert: Personen-Mapping")
+        )}</summary>
+        <div class="hint">${escapeHtml(
+          t(
+            "ui_admin_person_map_hint",
+            'JSON-Objekt {Quelle: Ziel-Entry-ID}, z. B. {"anna": "abc123"}. Leer = automatische Zuordnung.'
+          )
+        )}</div>
+        <label class="field">${escapeHtml(
+          t("ui_admin_person_map", "Personen-Mapping (JSON)")
+        )}
           <textarea data-field="restore-person-map" spellcheck="false"
             autocomplete="off" placeholder='{"quelle": "ziel-entry-id"}'${disabled}>${escapeHtml(
               restoreFieldValue(draft.personMap)
@@ -559,10 +704,12 @@ export function restoreCard(panel) {
       <div class="settings-actions">
         <button class="btn ghost" type="button" data-action="restore-dry-run"${
           busy || !files.length ? " disabled" : ""
-        }>Dry-Run</button>
+        }>${escapeHtml(t("ui_admin_dry_run", "Dry-Run"))}</button>
         <button class="btn" type="button" data-action="restore-apply"${
           busy || !files.length ? " disabled" : ""
-        }>Wiederherstellen</button>
+        }>${escapeHtml(
+          t("ui_admin_restore_title", "Wiederherstellen")
+        )}</button>
       </div>
       ${restoreResultHtml(panel)}
     </div>`;
@@ -598,21 +745,37 @@ export function restoreResultHtml(panel) {
   const plan = data.plan && typeof data.plan === "object" ? data.plan : {};
   const totals = restoreTotals(panel);
   if (!totals) return "";
-  const counts = `${totals.added} hinzugefügt, ${totals.skipped} übersprungen, ${
-    totals.conflicts
-  } Konflikte, ${totals.errors} Fehler`;
+  const counts = t(
+    "ui_admin_counts",
+    "{added} hinzugefügt, {skipped} übersprungen, {conflicts} Konflikte, {errors} Fehler",
+    totals
+  );
   const changes = plan.has_changes === true || data.applied === true;
   const mode = String(data.mode || plan.mode || "merge");
+  const replace = mode === "replace";
   const headline = result.dryRun
-    ? `Dry-Run (${mode === "replace" ? "Ersetzen" : "Zusammenführen"}): ${counts}.`
-    : `Wiederhergestellt (${mode === "replace" ? "Ersetzen" : "Zusammenführen"}): ${counts}.`;
+    ? t(
+        replace ? "ui_admin_dry_run_replace" : "ui_admin_dry_run_merge",
+        replace ? "Dry-Run (Ersetzen): {counts}." : "Dry-Run (Zusammenführen): {counts}.",
+        { counts }
+      )
+    : t(
+        replace ? "ui_admin_restored_replace" : "ui_admin_restored_merge",
+        replace
+          ? "Wiederhergestellt (Ersetzen): {counts}."
+          : "Wiederhergestellt (Zusammenführen): {counts}.",
+        { counts }
+      );
   const changeText = result.dryRun
     ? changes
-      ? "Änderungen würden übernommen."
-      : "Keine Änderungen — es würde nichts geschrieben."
+      ? t("ui_admin_changes_would_apply", "Änderungen würden übernommen.")
+      : t(
+          "ui_admin_no_changes_would_write",
+          "Keine Änderungen — es würde nichts geschrieben."
+        )
     : changes
-      ? "Änderungen wurden übernommen."
-      : "Keine Änderungen übernommen.";
+      ? t("ui_admin_changes_applied", "Änderungen wurden übernommen.")
+      : t("ui_admin_no_changes_applied", "Keine Änderungen übernommen.");
 
   const persons = plan.persons && typeof plan.persons === "object" ? plan.persons : {};
   const personRows = Object.keys(persons)
@@ -624,7 +787,7 @@ export function restoreResultHtml(panel) {
     )
     .join("");
   const personsHtml = personRows
-    ? `<div class="muted">Personen</div><ul>${personRows}</ul>`
+    ? `<div class="muted">${escapeHtml(t("ui_admin_persons", "Personen"))}</div><ul>${personRows}</ul>`
     : "";
 
   const warnings = Array.isArray(plan.warnings) ? plan.warnings : data.warnings;
@@ -632,7 +795,7 @@ export function restoreResultHtml(panel) {
     .map((warning) => `<li>${escapeHtml(warning)}</li>`)
     .join("");
   const warningsHtml = warningRows
-    ? `<div class="muted">Warnungen</div><ul>${warningRows}</ul>`
+    ? `<div class="muted">${escapeHtml(t("ui_admin_warnings", "Warnungen"))}</div><ul>${warningRows}</ul>`
     : "";
 
   const actions = Array.isArray(plan.actions) ? plan.actions.slice(0, 10) : [];
@@ -643,20 +806,37 @@ export function restoreResultHtml(panel) {
       const op = action && action.op ? String(action.op) : "?";
       const extra =
         action && action.op === "replace"
-          ? ` (${Number(action.removed) || 0} ersetzt, ${Number(action.added) || 0} neu)`
+          ? ` ${t(
+              "ui_admin_replaced_added",
+              "({removed} ersetzt, {added} neu)",
+              {
+                removed: Number(action.removed) || 0,
+                added: Number(action.added) || 0,
+              }
+            )}`
           : "";
       return `<li>${escapeHtml(`${dataset}: ${op} \u00B7 ${target}${extra}`)}</li>`;
     })
     .join("");
   const truncated = plan.actions_truncated
-    ? `<li class="muted">… weitere Aktionen ausgeblendet.</li>`
+    ? `<li class="muted">${escapeHtml(
+        t("ui_admin_more_actions", "… weitere Aktionen ausgeblendet.")
+      )}</li>`
     : "";
   const actionsHtml = actionRows
-    ? `<div class="muted">Aktionen${plan.actions_truncated ? " (gekürzt)" : ""}</div><ul>${actionRows}${truncated}</ul>`
+    ? `<div class="muted">${escapeHtml(
+        plan.actions_truncated
+          ? t("ui_admin_actions_truncated", "Aktionen (gekürzt)")
+          : t("ui_admin_actions", "Aktionen")
+      )}</div><ul>${actionRows}${truncated}</ul>`
     : "";
 
   const backup = data.backup_path
-    ? `<div class="muted">Sicherheitsbackup: <code>${escapeHtml(data.backup_path)}</code></div>`
+    ? `<div class="muted">${escapeHtml(
+        t("ui_admin_backup_path", "Sicherheitsbackup: {path}", {
+          path: data.backup_path,
+        })
+      )}</div>`
     : "";
 
   return `<div class="restore-result ok" role="status" data-restore-result>

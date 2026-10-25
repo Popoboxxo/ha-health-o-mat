@@ -11,6 +11,7 @@ Reiner JSON-Datei-Test: kein Home-Assistant-Import nötig.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -165,3 +166,70 @@ def test_m2c_restore_backup_service_documented_in_all_translations() -> None:
         for field in expected_fields:
             assert block["fields"][field]["name"], f"{path}: {field}.name fehlt"
             assert block["fields"][field]["description"], f"{path}: {field}.description fehlt"
+
+
+# --- REQ-HOM-117: HA-native UI translations (common) -----------------------
+
+_UI_JS_FILES = (
+    "health-o-mat-panel-base.js",
+    "health-o-mat-panel-views.js",
+    "health-o-mat-panel-admin.js",
+    "health-o-mat-panel.js",
+    "health-o-mat-card.js",
+)
+_UI_KEY_LITERAL_RE = re.compile(r"""["'`](ui_[a-z0-9_]+)["'`]""")
+
+
+def _common(path: Path) -> dict[str, str]:
+    common = _load(path).get("common")
+    assert isinstance(common, dict), f"{path}: Sektion 'common' fehlt"
+    return common
+
+
+def test_req_hom_117_common_keys_parity_and_non_empty() -> None:
+    """[REQ-HOM-117] de/en haben exakt die Master-Keys, alle Werte nicht leer."""
+    master = _common(_MASTER)
+    assert master, "strings.json: common ist leer"
+
+    for lang, path in sorted(_TRANSLATIONS.items()):
+        other = _common(path)
+        assert set(other) == set(master), (
+            f"translations/{lang}.json: common-Keys weichen ab "
+            f"(fehlt: {sorted(set(master) - set(other))[:5]}, "
+            f"überzählig: {sorted(set(other) - set(master))[:5]})"
+        )
+        empty = sorted(key for key, value in other.items() if not str(value).strip())
+        assert not empty, f"translations/{lang}.json: leere common-Werte: {empty[:5]}"
+
+
+def test_req_hom_117_placeholders_match_between_languages() -> None:
+    """[REQ-HOM-117] Beide Sprachen nutzen dieselben `{platzhalter}`."""
+    placeholder_re = re.compile(r"\{([A-Za-z0-9_]+)\}")
+    de = _common(_TRANSLATIONS["de"])
+    en = _common(_TRANSLATIONS["en"])
+    for key, en_text in en.items():
+        assert set(placeholder_re.findall(en_text)) == set(placeholder_re.findall(de[key])), (
+            f"{key}: Platzhalter weichen zwischen de und en ab"
+        )
+
+
+def test_req_hom_117_every_js_key_exists_in_both_languages() -> None:
+    """[REQ-HOM-117] Jeder in www/*.js referenzierte Key existiert in de UND en."""
+    component = Path(__file__).resolve().parent.parent / "custom_components" / "health_o_mat"
+    used: set[str] = set()
+    for name in _UI_JS_FILES:
+        text = (component / "www" / name).read_text(encoding="utf-8")
+        for match in _UI_KEY_LITERAL_RE.finditer(text):
+            key = match.group(1)
+            # Dynamic prefixes like `ui_common_wb_${key}` are not literals.
+            if key.endswith("_"):
+                continue
+            used.add(key)
+
+    assert used, "keine ui_-Keys in den JS-Modulen gefunden"
+    de = _common(_TRANSLATIONS["de"])
+    en = _common(_TRANSLATIONS["en"])
+    missing_de = sorted(used - set(de))
+    missing_en = sorted(used - set(en))
+    assert not missing_de, f"fehlende de-Keys: {missing_de}"
+    assert not missing_en, f"fehlende en-Keys: {missing_en}"

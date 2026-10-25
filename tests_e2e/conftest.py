@@ -42,12 +42,11 @@ _AUTH_SETTLED = (
 def browser_context_args(browser_context_args):
     """English UI + a desktop-sized viewport.
 
-    HA's frontend picks its UI language from the browser's Accept-Language
-    header (the `language` field sent during onboarding only sets the backend's
-    `hass.config.language`), so pinning the locale is what makes any
-    English-text locator reliable. The wide viewport keeps HA's desktop layout
-    (sidebar visible, no mobile overlay) and gives the panel room for its two
-    overview tiles side by side.
+    `hass.language` is the integration's translation source and stays `en` on
+    the E2E instance (the backend/user language, not the browser locale), so
+    the suite asserts English panel/card texts. The wide viewport keeps HA's
+    desktop layout (sidebar visible, no mobile overlay) and gives the panel
+    room for its two overview tiles side by side.
     """
     return {
         **browser_context_args,
@@ -127,18 +126,12 @@ def reset_panel_selection(hass_base_url, hass_fixtures, hass_bearer_token):
     clear_ui_selection(hass_base_url, hass_bearer_token)
 
 
-@pytest.fixture
-def logged_in_page(page, hass_base_url, hass_credentials, hass_bearer_token):
-    """A Playwright page already authenticated against the instance.
-
-    `hass_bearer_token` is not used directly here — depending on it only forces
-    onboarding to have finished before the browser ever loads the page (the
-    token itself is used by tests that talk to the REST/WS API).
-    """
+def _login(page, base_url: str, credentials: tuple[str, str]) -> None:
+    """Authenticate `page` against the instance (shared by both page fixtures)."""
     page.set_default_timeout(60000)
 
-    username, password = hass_credentials
-    page.goto(hass_base_url)
+    username, password = credentials
+    page.goto(base_url)
 
     # Every test gets a fresh browser context (no cookies), so the login form
     # is expected here. Auto-wait on the locator instead of an upfront
@@ -164,4 +157,32 @@ def logged_in_page(page, hass_base_url, hass_credentials, hass_bearer_token):
         f"login did not complete, still on {page.url!r} — check HASS_USERNAME/"
         f"HASS_PASSWORD (the E2E bootstrap user)"
     )
+
+
+@pytest.fixture
+def logged_in_page(page, hass_base_url, hass_credentials, hass_bearer_token):
+    """A Playwright page already authenticated against the instance (de-DE).
+
+    `hass_bearer_token` is not used directly here — depending on it only forces
+    onboarding to have finished before the browser ever loads the page (the
+    token itself is used by tests that talk to the REST/WS API).
+    """
+    _login(page, hass_base_url, hass_credentials)
     return page
+
+
+@pytest.fixture
+def english_page(browser, browser_context_args, hass_base_url, hass_credentials, hass_bearer_token):
+    """A second, English (en-US) browser context authenticated like `page`.
+
+    The default context is already English because `hass.language` is `en` on
+    the E2E instance; this fixture makes the English assumption explicit and
+    isolates the i18n coverage (REQ-HOM-117) without leaking the context.
+    """
+    context = browser.new_context(**{**browser_context_args, "locale": "en-US"})
+    page = context.new_page()
+    try:
+        _login(page, hass_base_url, hass_credentials)
+        yield page
+    finally:
+        context.close()

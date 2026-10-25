@@ -288,7 +288,7 @@ def test_req_hom_113_card_all_blocks_off_shows_the_hint(
     card_dashboard.save_card(panel_person["entry_id"], **ALL_OFF)
     card = _open_card(logged_in_page, card_dashboard, panel_person["display_name"])
 
-    card.locator(".msg", has_text="Keine Blöcke aktiviert").wait_for(
+    card.locator(".msg", has_text="No blocks enabled").wait_for(
         state="visible", timeout=CARD_TIMEOUT
     )
     assert card.locator(RING).count() == 0, "hydration ring must be hidden"
@@ -362,7 +362,7 @@ def test_req_hom_113_card_config_resave_is_applied(card_dashboard, logged_in_pag
 
     card_dashboard.save_card(entry_id, **ALL_OFF)
     card = _open_card(logged_in_page, card_dashboard, panel_person["display_name"])
-    card.locator(".msg", has_text="Keine Blöcke aktiviert").wait_for(
+    card.locator(".msg", has_text="No blocks enabled").wait_for(
         state="visible", timeout=CARD_TIMEOUT
     )
 
@@ -370,7 +370,7 @@ def test_req_hom_113_card_config_resave_is_applied(card_dashboard, logged_in_pag
     card = _reload_card(logged_in_page, card_dashboard, panel_person["display_name"])
 
     card.locator(RING).wait_for(state="visible", timeout=CARD_TIMEOUT)
-    assert card.locator(".msg", has_text="Keine Blöcke aktiviert").count() == 0
+    assert card.locator(".msg", has_text="No blocks enabled").count() == 0
 
 
 # --- (b) blood-pressure input writes ---------------------------------------
@@ -506,6 +506,6 @@ def test_req_hom_113_card_wellbeing_input_writes_and_updates_the_ui(
     card.locator(".wb-btn[data-key='good'][aria-pressed='true']").wait_for(
         state="visible", timeout=CARD_TIMEOUT
     )
-    display = card.locator(ROW, has_text=WB_DISPLAY_EMOJI).locator(".big", has_text="Gut")
+    display = card.locator(ROW, has_text=WB_DISPLAY_EMOJI).locator(".big", has_text="Good")
     display.wait_for(state="visible", timeout=CARD_TIMEOUT)
-    assert display.inner_text().strip() == "Gut"
+    assert display.inner_text().strip() == "Good"

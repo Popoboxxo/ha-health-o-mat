@@ -292,7 +292,7 @@ def test_req_hom_112_panel_base_chart_summary_uses_current_series_point():
     assert re.search(r"const\s+last\s*=\s*list\[\s*list\.length\s*-\s*1\s*\]", text), (
         "die Zusammenfassung nutzt nicht den letzten Serienpunkt"
     )
-    assert re.search(r"aktuell \$\{[^}]*score[^}]*\}", text), (
+    assert re.search(r"aktuell (?:\$\{[^}]*score[^}]*\}|\{score\})", text), (
         "die Zusammenfassung nennt keinen aktuellen Score"
     )
     # Die Chart-Card holt ihre Punkte aus der Series (inkl. aktuellem Punkt).
@@ -828,6 +828,9 @@ def _prepare_views_copy(tmp_path) -> Path:
     (tmp_path / "health-o-mat-panel-views.js").write_text(patched, encoding="utf-8")
     (tmp_path / "health-o-mat-panel-base.js").write_bytes(
         (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    (tmp_path / "health-o-mat-i18n.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-i18n.js").read_bytes()
     )
     # Ohne package.json stuft Node `.js` als CommonJS ein — die Kopien sollen
     # ES-Module bleiben (wie im Browser).
@@ -1780,6 +1783,7 @@ def _prepare_panel_copy(tmp_path) -> Path:
         "health-o-mat-panel-views.js",
         "health-o-mat-panel-admin.js",
         "health-o-mat-panel.js",
+        "health-o-mat-i18n.js",
     ):
         source = (_WWW_DIR / name).read_text(encoding="utf-8")
         patched = re.sub(r'"(\./health-o-mat-panel[^"]*?\.js)\?v=[^"]+"', r'"\1"', source)
@@ -2882,3 +2886,126 @@ def test_req_hom_116_panel_restore_flow(tmp_path):
     assert "3 hinzugefügt" in card_html
     assert "gekürzt" in card_html
     assert "Warnung A" in card_html
+
+
+# --- REQ-HOM-117: HA-native UI translations (panel) ------------------------
+
+_I18N_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+const i18n = await import(pathToFileURL(process.argv[4]).href);
+const spec = JSON.parse(process.argv[5]);
+
+async function load(language, resources, fail) {
+  const hass = {
+    language,
+    callWS: async () => {
+      if (fail) throw new Error("boom");
+      return { resources: resources || {} };
+    },
+  };
+  return i18n.loadUiTranslations(hass);
+}
+
+await load("de", {}, false);
+const fallback = i18n.t("ui_card_goal", "Ziel");
+const missingFallback = i18n.t("ui_missing", "Fallback {x}", { x: 7 });
+const rawKey = i18n.t("ui_missing");
+
+await load("en", spec.resources, false);
+base.setUiTranslator(i18n.t);
+base.setUiLanguage(i18n.currentLanguage());
+const entryId = spec.panel.entry_id;
+const panel = {
+  _selectedEntry: entryId,
+  _persons: [{ entry_id: entryId, display_name: spec.panel.display_name }],
+  _data: { [entryId]: spec.panel.data },
+  _entryErrors: {},
+  _tab: "drink",
+  _actionError: "",
+  _busy: false,
+  _history: {},
+  _historyStatus: null,
+  _historyBusy: false,
+  _tsDraft: {},
+  _formError: "",
+  _canUndo: () => true,
+  _isWarning: () => false,
+  _liveValue: (data, key, fallback) => fallback,
+  _liveNumber: (data, key, fallback) => fallback,
+};
+const english = views.renderDetail(panel);
+
+await i18n.resetUiTranslations();
+await load("en", {}, true);
+const failed = i18n.t("ui_card_goal", "Ziel");
+
+process.stdout.write(JSON.stringify({
+  language: i18n.currentLanguage(),
+  fallback,
+  missingFallback,
+  rawKey,
+  english,
+  failed,
+}));
+"""
+
+_RESOURCES_EN = {
+    "component.health_o_mat.common.ui_common_area_drink": "Drinking",
+    "component.health_o_mat.common.ui_panel_drink_today": "Today",
+    "component.health_o_mat.common.ui_panel_history_title": "History",
+    "component.health_o_mat.common.ui_panel_drink_book": "Add",
+    "component.health_o_mat.common.ui_panel_drink_quick": "Quick add",
+    "component.health_o_mat.common.ui_panel_wb_question": "How are you feeling?",
+    "component.health_o_mat.common.ui_common_wb_good": "Good",
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_117_panel_translations_load_fallback_and_language_switch(tmp_path):
+    """[REQ-HOM-117] Loader-Cache, `t()`-Interpolation, Fallback und de→en-Render."""
+    views_copy = _prepare_views_copy(tmp_path)
+    plugin_dir = views_copy.parent
+    panel = {
+        "entry_id": "entry-1",
+        "display_name": "Alex",
+        "live_wellbeing": "unknown",
+        "live_score": 4,
+        "data": {
+            "goal_ml": 2000,
+            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "entities": {},
+            "today": {"ml": 500, "percent": 25, "count": 1, "breakdown": {}},
+            "bp": {},
+            "wellbeing": {"key": "good", "label": "Gut", "score": 4},
+            "undo": {"drink": True},
+        },
+    }
+    spec = {"resources": _RESOURCES_EN, "panel": panel}
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _I18N_RUNNER,
+            [
+                str(plugin_dir / "health-o-mat-panel-base.js"),
+                str(views_copy),
+                str(plugin_dir / "health-o-mat-i18n.js"),
+                json.dumps(spec),
+            ],
+            "runner_i18n_panel",
+        )
+    )
+
+    assert out["language"] == "en"
+    assert out["fallback"] == "Ziel", "der deutsche Fallback geht verloren"
+    assert out["missingFallback"] == "Fallback 7", "`{platzhalter}` wird nicht interpoliert"
+    assert out["rawKey"] == "", "ein fehlender Key darf nie roh angezeigt werden"
+    assert out["failed"] == "Ziel", "ein Ladefehler muss auf den Fallback zurückfallen"
+
+    html = out["english"]
+    assert "Drinking" in html, "englischer Tab-Text fehlt nach dem Sprachwechsel"
+    assert "Today" in html and "History" in html, "englische Panel-Labels fehlen"
+    assert "Trinken" not in html, "deutscher Tab-Text bleibt trotz en aktiv"
+    assert "ui_" not in html, "roher ui_-Key im gerenderten HTML"
+    assert "Gut" not in html, "das Server-Label wird nicht per Key übersetzt"

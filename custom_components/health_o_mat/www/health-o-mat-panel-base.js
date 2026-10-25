@@ -20,10 +20,34 @@
 /* Quick drinks for the "Trinken" tab. `type` is the canonical drink label
  * stored on the drink (`store.add_drink`), used for the caffeine breakdown. */
 export const QUICK_DRINKS = [
-  { label: "Glas Wasser", ml: 200, emoji: "\u{1F4A7}", type: "Wasser" },
-  { label: "Flasche", ml: 500, emoji: "\u{1F376}", type: "Wasser" },
-  { label: "Kaffee", ml: 250, emoji: "\u2615", type: "Kaffee" },
-  { label: "Saft", ml: 200, emoji: "\u{1F964}", type: "Saft" },
+  {
+    label: "Glas Wasser",
+    labelKey: "ui_common_drink_glass_water",
+    ml: 200,
+    emoji: "\u{1F4A7}",
+    type: "Wasser",
+  },
+  {
+    label: "Flasche",
+    labelKey: "ui_common_drink_bottle",
+    ml: 500,
+    emoji: "\u{1F376}",
+    type: "Wasser",
+  },
+  {
+    label: "Kaffee",
+    labelKey: "ui_common_drink_coffee",
+    ml: 250,
+    emoji: "\u2615",
+    type: "Kaffee",
+  },
+  {
+    label: "Saft",
+    labelKey: "ui_common_drink_juice",
+    ml: 200,
+    emoji: "\u{1F964}",
+    type: "Saft",
+  },
 ];
 
 /* Wellbeing taps (mirrors const.WELLBEING_STATES). Index + 1 = Score;
@@ -52,8 +76,17 @@ export function wellbeingScale(data) {
       emoji: state && state.emoji ? String(state.emoji) : "",
       image: state && state.image ? String(state.image) : "",
     }))
-    .filter((state) => state.key);
-  return cleaned.length ? cleaned : WELLBEING_STATES;
+    .filter((state) => state.key)
+    .map((state) => ({
+      ...state,
+      // The label is a UI string, not user data: translate by canonical key.
+      label: t(`ui_common_wb_${state.key}`, state.label),
+    }));
+  if (cleaned.length) return cleaned;
+  return WELLBEING_STATES.map((state) => ({
+    ...state,
+    label: t(`ui_common_wb_${state.key}`, state.label),
+  }));
 }
 
 /* Emoji oder eigenes Bild eines Wellbeing-Zustands. */
@@ -67,21 +100,25 @@ export function wellbeingVisual(state, cls) {
 
 /* WHO blood-pressure category keys (logic.bp_category) -> label + colour. */
 export const BP_CATEGORIES = {
-  optimal: { label: "Optimal", cls: "good" },
-  normal: { label: "Normal", cls: "good" },
-  high_normal: { label: "Hochnormal", cls: "ok" },
-  grade_1: { label: "Hypertonie Grad 1", cls: "warn" },
-  grade_2: { label: "Hypertonie Grad 2", cls: "warn" },
-  grade_3: { label: "Hypertonie Grad 3", cls: "bad" },
-  crisis: { label: "Krise", cls: "bad" },
+  optimal: { label: "Optimal", labelKey: "ui_common_bp_optimal", cls: "good" },
+  normal: { label: "Normal", labelKey: "ui_common_bp_normal", cls: "good" },
+  high_normal: { label: "Hochnormal", labelKey: "ui_common_bp_high_normal", cls: "ok" },
+  grade_1: { label: "Hypertonie Grad 1", labelKey: "ui_common_bp_grade_1", cls: "warn" },
+  grade_2: { label: "Hypertonie Grad 2", labelKey: "ui_common_bp_grade_2", cls: "warn" },
+  grade_3: { label: "Hypertonie Grad 3", labelKey: "ui_common_bp_grade_3", cls: "bad" },
+  crisis: { label: "Krise", labelKey: "ui_common_bp_crisis", cls: "bad" },
 };
 
 /* Pace labels (ws_api.compute_pace). */
 export const PACE_INFO = {
-  goal_reached: { text: "Tagesziel erreicht", cls: "good" },
-  ahead: { text: "Auf Kurs (voraus)", cls: "good" },
-  on_track: { text: "Auf Kurs", cls: "ok" },
-  behind: { text: "Zu langsam", cls: "warn" },
+  goal_reached: {
+    text: "Tagesziel erreicht",
+    textKey: "ui_common_pace_goal_reached",
+    cls: "good",
+  },
+  ahead: { text: "Auf Kurs (voraus)", textKey: "ui_common_pace_ahead", cls: "good" },
+  on_track: { text: "Auf Kurs", textKey: "ui_common_pace_on_track", cls: "ok" },
+  behind: { text: "Zu langsam", textKey: "ui_common_pace_behind", cls: "warn" },
 };
 
 /* WebSocket commands. Admin-only ones are server-gated as well (see the entry
@@ -121,9 +158,14 @@ export const AREA_LABELS = {
 
 /* Detail tabs, in fixed order; `area` links a tab to its feature toggle. */
 export const TABS = [
-  { key: "drink", label: "Trinken", area: "drink" },
-  { key: "bp", label: "Blutdruck", area: "bp" },
-  { key: "wellbeing", label: "Wohlbefinden", area: "wellbeing" },
+  { key: "drink", label: "Trinken", labelKey: "ui_common_area_drink", area: "drink" },
+  { key: "bp", label: "Blutdruck", labelKey: "ui_common_area_bp", area: "bp" },
+  {
+    key: "wellbeing",
+    label: "Wohlbefinden",
+    labelKey: "ui_common_area_wellbeing",
+    area: "wellbeing",
+  },
 ];
 
 /* Detail-Tab -> kanonisches Korrektur-Ziel der History-API. */
@@ -140,6 +182,12 @@ export const HISTORY_KIND_LABELS = {
   wellbeing: "Wohlbefinden",
 };
 
+export const HISTORY_KIND_KEYS = {
+  drinks: "ui_common_kind_drinks",
+  blood_pressure: "ui_common_kind_blood_pressure",
+  wellbeing: "ui_common_kind_wellbeing",
+};
+
 /* Maximal gerenderte Einträge je Verlauf (die API liefert bereits neueste
  * zuerst; der Deckel hält die Liste mobil kurz). */
 export const HISTORY_LIMIT = 50;
@@ -147,13 +195,13 @@ export const HISTORY_LIMIT = 50;
 /* Restore-Verwaltung (REQ-HOM-116 UI): Datensätze und Bestätigungswort
  * spiegeln `restore.DATASETS`/`restore.REPLACE_CONFIRM`. */
 export const RESTORE_DATASETS = [
-  { value: "drinks", label: "Getränke" },
-  { value: "blood_pressure", label: "Blutdruck" },
-  { value: "wellbeing", label: "Wohlbefinden" },
+  { value: "drinks", label: "Getränke", labelKey: "ui_common_dataset_drinks" },
+  { value: "blood_pressure", label: "Blutdruck", labelKey: "ui_common_dataset_blood_pressure" },
+  { value: "wellbeing", label: "Wohlbefinden", labelKey: "ui_common_dataset_wellbeing" },
 ];
 export const RESTORE_MODES = [
-  { value: "merge", label: "Zusammenführen" },
-  { value: "replace", label: "Ersetzen" },
+  { value: "merge", label: "Zusammenführen", labelKey: "ui_common_mode_merge" },
+  { value: "replace", label: "Ersetzen", labelKey: "ui_common_mode_replace" },
 ];
 export const RESTORE_CONFIRM_WORD = "REPLACE";
 
@@ -199,9 +247,13 @@ export const SETTINGS_FALLBACKS = {
 
 /* Export datasets (mirrors the `export_csv` service schema). */
 export const EXPORT_DATASETS = [
-  { value: "all", label: "Alles" },
-  { value: "drinks", label: "Getränke" },
-  { value: "blood_pressure", label: "Blutdruck" },
+  { value: "all", label: "Alles", labelKey: "ui_common_dataset_all" },
+  { value: "drinks", label: "Getränke", labelKey: "ui_common_dataset_drinks" },
+  {
+    value: "blood_pressure",
+    label: "Blutdruck",
+    labelKey: "ui_common_dataset_blood_pressure",
+  },
 ];
 
 export const RING_RADIUS = 42;
@@ -559,6 +611,76 @@ export const PANEL_CSS = `
   .restore-result li { overflow-wrap: anywhere; }
 `;
 
+/* --- UI translations (HA-native, see health-o-mat-i18n.js) ----------------- */
+
+/* The translator is injected once by the entry module (`setUiTranslator`).
+ * Keeping the hook here means this leaf module stays import-free (Node tests
+ * load it directly) while every view can call `t()` without extra imports.
+ * Without an injected translator — e.g. in the unit tests — `t()` returns the
+ * German fallback embedded at each call site. */
+let _uiTranslate = null;
+let _uiLanguage = "de";
+
+export function setUiTranslator(fn) {
+  _uiTranslate = typeof fn === "function" ? fn : null;
+}
+
+export function setUiLanguage(language) {
+  const raw = language == null ? "" : String(language).trim().toLowerCase();
+  _uiLanguage = raw ? raw.split(/[-_]/)[0] || "de" : "de";
+}
+
+export function currentLanguage() {
+  return _uiLanguage;
+}
+
+function interpolateUi(template, vars) {
+  let out = template == null ? "" : String(template);
+  if (vars && typeof vars === "object") {
+    out = out.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+      Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null
+        ? String(vars[name])
+        : match
+    );
+  }
+  return out;
+}
+
+/** Translate a flat `common` key; falls back to the German call-site text. */
+export function t(key, fallback, vars) {
+  if (_uiTranslate) {
+    try {
+      const value = _uiTranslate(key, fallback, vars);
+      if (value != null) return String(value);
+    } catch (_error) {
+      // A broken translator must never break rendering.
+    }
+  }
+  return interpolateUi(fallback == null ? "" : fallback, vars);
+}
+
+/* Locale for Intl formatting; mirrors the active UI language. */
+function intlLocale() {
+  return _uiLanguage === "de" ? "de-DE" : _uiLanguage || "en";
+}
+
+function intlRelative(value, unit) {
+  try {
+    return new Intl.RelativeTimeFormat(intlLocale(), { numeric: "auto" }).format(value, unit);
+  } catch (_error) {
+    return "";
+  }
+}
+
+export function formatNumber(value) {
+  const n = toNumber(value, 0);
+  try {
+    return new Intl.NumberFormat(intlLocale()).format(n);
+  } catch (_error) {
+    return String(n);
+  }
+}
+
 /* --- pure helpers --------------------------------------------------------- */
 
 export function escapeHtml(value) {
@@ -580,7 +702,7 @@ export function clamp(value, min, max) {
 }
 
 export function errMsg(err) {
-  if (err == null) return "Unbekannter Fehler.";
+  if (err == null) return t("ui_common_unknown_error", "Unbekannter Fehler.");
   if (typeof err === "string") return err;
   if (err.message) return String(err.message);
   if (err.body && err.body.message) return String(err.body.message);
@@ -638,20 +760,21 @@ export function attrValue(value) {
 
 export function datasetLabel(value) {
   const hit = EXPORT_DATASETS.find((d) => d.value === value);
-  return hit ? hit.label : String(value == null ? "" : value);
+  if (!hit) return String(value == null ? "" : value);
+  return t(hit.labelKey, hit.label);
 }
 
 export function relativeTime(iso) {
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return "";
   const diff = Date.now() - ts;
-  if (diff < 60000) return "gerade eben";
+  if (diff < 60000) return intlRelative(0, "minute");
   const min = Math.round(diff / 60000);
-  if (min < 60) return `vor ${min} min`;
+  if (min < 60) return intlRelative(-min, "minute");
   const hours = Math.round(min / 60);
-  if (hours < 24) return `vor ${hours} h`;
+  if (hours < 24) return intlRelative(-hours, "hour");
   const days = Math.round(hours / 24);
-  return `vor ${days} d`;
+  return intlRelative(-days, "day");
 }
 
 /* `datetime-local`-Wert (lokale Browserzeit, ohne Sekunden/Offset).
@@ -673,15 +796,24 @@ export function entryTime(iso) {
   const diff = Date.now() - ts;
   if (diff >= 0 && diff < 24 * 60 * 60 * 1000) return relativeTime(iso);
   const date = new Date(ts);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(
-    date.getHours()
-  )}:${pad(date.getMinutes())}`;
+  try {
+    return new Intl.DateTimeFormat(intlLocale(), {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch (_error) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`;
+  }
 }
 
 export function fmtMl(value) {
-  const n = toNumber(value, 0);
-  return `${Math.round(n)} ml`;
+  return `${formatNumber(Math.round(toNumber(value, 0)))} ml`;
 }
 
 /* Feature-area normalisation: a missing `areas` object OR a missing key means
@@ -788,7 +920,9 @@ export function ringHtml(percent, opts) {
 
 export function categoryInfo(key) {
   const k = String(key == null ? "" : key).toLowerCase();
-  return BP_CATEGORIES[k] || null;
+  const hit = BP_CATEGORIES[k];
+  if (!hit) return null;
+  return { ...hit, label: t(hit.labelKey, hit.label) };
 }
 
 /* --- Wohlbefinden-Score-Chart (REQ-HOM-112) -------------------------------- */
@@ -814,16 +948,33 @@ export function formatChartDate(ts) {
   if (ts == null || !Number.isFinite(ts)) return "";
   const date = new Date(ts);
   if (!Number.isFinite(date.getTime())) return "";
-  return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+  try {
+    return new Intl.DateTimeFormat(intlLocale(), {
+      day: "2-digit",
+      month: "2-digit",
+    }).format(date);
+  } catch (_error) {
+    return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+  }
 }
 
-/* "19.10.2026, 14:30 Uhr" — Zeitpunkt für die Tooltips. */
+/* "19.10.2026, 14:30" — Zeitpunkt für die Tooltips. */
 export function formatChartDateTime(ts) {
   if (ts == null || !Number.isFinite(ts)) return "";
   const date = new Date(ts);
   if (!Number.isFinite(date.getTime())) return "";
-  const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
-  return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())} Uhr`;
+  try {
+    return new Intl.DateTimeFormat(intlLocale(), {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch (_error) {
+    const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+    return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  }
 }
 
 /* Score eines Eintrags — DER SERVER IST DIE WAHRHEIT (REQ-HOM-112).
@@ -1000,8 +1151,11 @@ export function wellbeingChartSvg(points) {
   const dots = list.map((point, index) => {
     const coord = coords[index];
     const current = point.isCurrent === true;
-    const when = point.ts != null ? formatChartDateTime(point.ts) : "ohne Zeitangabe";
-    const label = point.label || "Wohlbefinden";
+    const when =
+      point.ts != null
+        ? formatChartDateTime(point.ts)
+        : t("ui_common_no_time", "ohne Zeitangabe");
+    const label = point.label || t("ui_common_wellbeing", "Wohlbefinden");
     const title = `${when} \u2013 ${label} (${point.score} / ${WELLBEING_SCORE_MAX})`;
     const cls = current ? "point point-current" : "point";
     const radius = current ? 5 : 3.2;
@@ -1030,10 +1184,16 @@ export function wellbeingChartSvg(points) {
    * Kopfzeile, die in dem Fall keinen Score zeigt). */
   const currentPoint = list.find((point) => point && point.isCurrent === true) || null;
   const summary = currentPoint
-    ? `Wohlbefinden-Score-Verlauf: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
-      `aktuell ${currentPoint.score} von ${WELLBEING_SCORE_MAX}${currentPoint.label ? ` (${currentPoint.label})` : ""}`
-    : `Wohlbefinden-Score-Verlauf: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
-      `letzter Wert ${last.score} von ${WELLBEING_SCORE_MAX}${last.label ? ` (${last.label})` : ""}`;
+    ? t("ui_panel_chart_wb_aria_current", "Wohlbefinden-Score-Verlauf: {count} Meldungen, aktuell {score} von {max}", {
+        count: list.length,
+        score: currentPoint.score,
+        max: WELLBEING_SCORE_MAX,
+      }) + (currentPoint.label ? ` (${currentPoint.label})` : "")
+    : t("ui_panel_chart_wb_aria_last", "Wohlbefinden-Score-Verlauf: {count} Meldungen, letzter Wert {score} von {max}", {
+        count: list.length,
+        score: last.score,
+        max: WELLBEING_SCORE_MAX,
+      }) + (last.label ? ` (${last.label})` : "");
 
   return `<svg viewBox="0 0 ${CHART_W} ${CHART_H}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid.join("")}${areaPath ? `<path class="area" d="${areaPath}"></path>` : ""}${coords.length >= 2 ? `<path class="line" d="${linePath}"></path>` : ""}${dots.join("")}${xLabels.join("")}</svg>`;
 }
@@ -1052,19 +1212,26 @@ export function wellbeingChartSvg(points) {
  * Charts gezeigt. */
 export function wellbeingChartHtml(history, opts) {
   const options = opts || {};
-  const title = options.title ? String(options.title) : "Score-Verlauf";
+  const title = options.title ? String(options.title) : t("ui_panel_chart_wb_title", "Score-Verlauf");
   const head = `<div class="card-title">${escapeHtml(title)}</div>`;
   const points = wellbeingSeries(history, options.current);
   if (!points.length) {
     const empty = options.emptyText
       ? String(options.emptyText)
-      : "Noch keine Wohlbefinden-Meldung \u2013 der Verlauf erscheint nach der ersten Meldung.";
+      : t(
+          "ui_panel_chart_wb_empty",
+          "Noch keine Wohlbefinden-Meldung \u2013 der Verlauf erscheint nach der ersten Meldung."
+        );
     return `<div class="card">${head}${messageHtml(empty, false)}</div>`;
   }
   const scale = Array.isArray(options.scale) && options.scale.length ? options.scale : WELLBEING_STATES;
-  const worst = scale[0] ? scale[0].label : "schlecht";
+  const worst = scale[0]
+    ? scale[0].label || t(`ui_common_wb_${scale[0].key}`, scale[0].label)
+    : t("ui_panel_chart_wb_worst", "schlecht");
   const bestState = scale[scale.length - 1];
-  const best = bestState ? bestState.label : "gut";
+  const best = bestState
+    ? bestState.label || t(`ui_common_wb_${bestState.key}`, bestState.label)
+    : t("ui_panel_chart_wb_best", "gut");
   const hint = `${WELLBEING_SCORE_MIN} = ${worst} \u00B7 ${scale.length} = ${best}`;
   return `<div class="card">${head}<div class="wb-chart">${wellbeingChartSvg(points)}</div><div class="hint">${escapeHtml(hint)}</div></div>`;
 }
@@ -1078,10 +1245,15 @@ export function bpHistoryChartHtml(entries, opts) {
       (r) => r && Number.isFinite(toNumber(r.sys, NaN)) && Number.isFinite(toNumber(r.dia, NaN))
     )
     .slice(-30);
-  const title = options.title ? String(options.title) : "Blutdruck-Verlauf";
+  const title = options.title
+    ? String(options.title)
+    : t("ui_panel_chart_bp_title", "Blutdruck-Verlauf");
   const head = `<div class="card-title">${escapeHtml(title)}</div>`;
   if (list.length < 2) {
-    const empty = "Noch zu wenige Messungen \u2013 der Verlauf erscheint ab zwei Werten.";
+    const empty = t(
+      "ui_panel_chart_bp_empty",
+      "Noch zu wenige Messungen \u2013 der Verlauf erscheint ab zwei Werten."
+    );
     return `<div class="card">${head}${messageHtml(empty, false)}</div>`;
   }
   const width = 320;
@@ -1115,7 +1287,9 @@ export function bpHistoryChartHtml(entries, opts) {
     .join("");
   const dots = list
     .map((r, index) => {
-      const when = r.ts ? formatChartDateTime(Date.parse(r.ts)) : "ohne Zeitangabe";
+      const when = r.ts
+        ? formatChartDateTime(Date.parse(r.ts))
+        : t("ui_common_no_time", "ohne Zeitangabe");
       const title = `${when} \u2013 ${Math.round(toNumber(r.sys, 0))}/${Math.round(toNumber(r.dia, 0))}`;
       return `<circle class="bp-point bp-sys" cx="${sysCoords[index].x.toFixed(1)}" cy="${sysCoords[index].y.toFixed(1)}" r="2.4"><title>${escapeHtml(title)}</title></circle><circle class="bp-point bp-dia" cx="${diaCoords[index].x.toFixed(1)}" cy="${diaCoords[index].y.toFixed(1)}" r="2.4"><title>${escapeHtml(title)}</title></circle>`;
     })
@@ -1134,14 +1308,26 @@ export function bpHistoryChartHtml(entries, opts) {
     );
   }
   const latest = list[list.length - 1];
-  const summary = `Blutdruck-Verlauf: ${list.length} Messungen, zuletzt ${Math.round(toNumber(latest.sys, 0))}/${Math.round(toNumber(latest.dia, 0))}`;
-  return `<div class="card">${head}<div class="bp-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg></div><div class="bp-legend"><span class="bp-sys">Systolisch</span><span class="bp-dia">Diastolisch</span></div></div>`;
+  const summary = t(
+    "ui_panel_chart_bp_aria",
+    "Blutdruck-Verlauf: {count} Messungen, zuletzt {sys}/{dia}",
+    {
+      count: list.length,
+      sys: Math.round(toNumber(latest.sys, 0)),
+      dia: Math.round(toNumber(latest.dia, 0)),
+    }
+  );
+  const sysLabel = t("ui_panel_chart_bp_systolic", "Systolisch");
+  const diaLabel = t("ui_panel_chart_bp_diastolic", "Diastolisch");
+  return `<div class="card">${head}<div class="bp-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg></div><div class="bp-legend"><span class="bp-sys">${escapeHtml(sysLabel)}</span><span class="bp-dia">${escapeHtml(diaLabel)}</span></div></div>`;
 }
 
 /* Empty-state message block, shared by every view. */
 export function messageHtml(text, isError) {
   const retry = isError
-    ? `<button class="btn ghost" data-action="retry" type="button">Erneut versuchen</button>`
+    ? `<button class="btn ghost" data-action="retry" type="button">${escapeHtml(
+        t("ui_common_retry", "Erneut versuchen")
+      )}</button>`
     : "";
   return `<div class="msg${isError ? " error" : ""}">${escapeHtml(text)}${retry}</div>`;
 }

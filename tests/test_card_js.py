@@ -766,7 +766,7 @@ def test_card_editor_renders_all_nine_flags_in_two_groups():
     inputs = _js_method_block(editor, "_inputSection")
 
     assert "Anzeige" in display
-    assert "Eingabe &amp; Aktionen" in inputs
+    assert "Eingabe &amp; Aktionen" in inputs or "Eingabe & Aktionen" in inputs
     for key in (
         "show_person",
         "show_hydration",
@@ -1967,3 +1967,86 @@ def test_card_history_and_undo_for_all_kinds(tmp_path):
     assert editor["hasOn"] is True and editor["on"]["show_history"] is True
     assert editor["eventOn"].get("show_history") is True
     assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default false)"
+
+
+# --- REQ-HOM-117: card UI translations (inline loader) ---------------------
+
+_NODE_CARD_I18N_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const resources = JSON.parse(process.argv[3]);
+const context = {
+  HTMLElement: class HTMLElement {},
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+await context._loadUiTranslations({ language: "de", callWS: async () => ({ resources: {} }) });
+const german = context._t("ui_card_goal", "Ziel");
+
+await context._loadUiTranslations({ language: "en", callWS: async () => ({ resources }) });
+const english = context._t("ui_card_goal", "Ziel");
+const interpolated = context._t("ui_card_book_aria", "{label} mit {ml} Milliliter buchen", {
+  label: "Coffee",
+  ml: 250,
+});
+const rawKey = context._t("ui_missing");
+const scale = context.customElements._classes["health-o-mat-card"].prototype._wellbeingScale.call({
+  _data: { wellbeing_scale: [{ key: "good", label: "Gut" }] },
+});
+
+process.stdout.write(JSON.stringify({ german, english, interpolated, rawKey, scale }));
+"""
+
+
+def _run_node(tmp_path, runner_source: str, args: list[str], name: str) -> str:
+    """Fuehrt einen Node-Runner aus und liefert dessen stdout."""
+    runner_path = tmp_path / f"{name}.mjs"
+    runner_path.write_text(runner_source, encoding="utf-8")
+    result = subprocess.run(
+        [shutil.which("node") or "node", str(runner_path), *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner {name} fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    return result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_117_card_inline_translations_and_language_switch(tmp_path):
+    """[REQ-HOM-117] Karte: inline Loader, Interpolation, Fallback, en-Label."""
+    resources = {
+        "component.health_o_mat.common.ui_card_goal": "Goal",
+        "component.health_o_mat.common.ui_common_wb_good": "Good",
+    }
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_CARD_I18N_RUNNER,
+            [str(Path(_CARD_JS)), json.dumps(resources)],
+            "runner_i18n_card",
+        )
+    )
+
+    assert out["german"] == "Ziel", "der deutsche Fallback geht verloren"
+    assert out["english"] == "Goal", "der Sprachwechsel greift nicht"
+    assert out["interpolated"] == "Coffee mit 250 Milliliter buchen", (
+        "`{platzhalter}` wird nicht interpoliert"
+    )
+    assert out["rawKey"] == "", "ein fehlender Key darf nie roh angezeigt werden"
+    assert out["scale"][0]["label"] == "Good", (
+        "das Server-Wellbeing-Label wird nicht per Key übersetzt"
+    )

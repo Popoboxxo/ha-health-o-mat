@@ -68,7 +68,15 @@ import {
   areasForPerson,
   enabledTabs,
   messageHtml,
+  t,
+  setUiTranslator,
+  setUiLanguage,
 } from "./health-o-mat-panel-base.js?v=0.13.0";
+import {
+  loadUiTranslations,
+  t as uiTranslate,
+  currentLanguage as uiCurrentLanguage,
+} from "./health-o-mat-i18n.js?v=0.13.0";
 import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.13.0";
 import {
   renderSettings,
@@ -80,6 +88,11 @@ import {
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
+
+/* Single translation source: the i18n module owns the cache, the base module
+ * owns the `t()` used by every renderer. Injecting once at module load keeps
+ * the base module import-free (unit-testable in Node). */
+setUiTranslator(uiTranslate);
 
 /* Rückdatierung (REQ-HOM-120): dieselbe Toleranz wie der Server. */
 const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
@@ -105,6 +118,8 @@ class HealthOMatPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._hass = null;
     this._panel = null;
+    /* Language whose `common` translations are loaded ("" = not loaded yet). */
+    this._uiLang = "";
 
     this._persons = null; // null = not yet loaded, [] = none configured
     this._data = {}; // entry_id -> panel_data payload
@@ -199,6 +214,12 @@ class HealthOMatPanel extends HTMLElement {
       this._bootstrap();
       return;
     }
+    if (this._normalisedLanguage(hass.language) !== this._uiLang) {
+      // Runtime language switch: reload resources, then re-render with the
+      // new texts (the in-flight marker in the loader prevents duplicate loads).
+      this._syncTranslations();
+      return;
+    }
     if (this._loading) return;
     // The settings form holds unsaved user input and needs no live entity
     // values — a background render would clobber it. Only explicit actions
@@ -210,6 +231,27 @@ class HealthOMatPanel extends HTMLElement {
 
   get hass() {
     return this._hass;
+  }
+
+  _normalisedLanguage(value) {
+    const raw = value == null ? "" : String(value).trim().toLowerCase();
+    return raw ? raw.split(/[-_]/)[0] : "de";
+  }
+
+  /* Load the HA `common` translations for `hass.language` (never throws) and
+   * keep the base module's Intl locale in sync. */
+  async _syncTranslations(silent) {
+    let language = "de";
+    try {
+      language = await loadUiTranslations(this._hass);
+      language = this._normalisedLanguage(language || uiCurrentLanguage());
+    } catch (_error) {
+      language = this._normalisedLanguage(this._hass && this._hass.language);
+    }
+    this._uiLang = language;
+    setUiLanguage(language);
+    if (!silent) this._render();
+    return language;
   }
 
   set panel(panel) {
@@ -240,7 +282,9 @@ class HealthOMatPanel extends HTMLElement {
 
   _ws(message) {
     if (!this._hass || typeof this._hass.callWS !== "function") {
-      return Promise.reject(new Error("Keine Verbindung zu Home Assistant."));
+      return Promise.reject(
+        new Error(t("ui_panel_no_connection", "Keine Verbindung zu Home Assistant."))
+      );
     }
     return this._hass.callWS(message);
   }
@@ -335,6 +379,10 @@ class HealthOMatPanel extends HTMLElement {
     // Re-register the listener (idempotent) so a re-bootstrap never duplicates it.
     this._removePopStateListener();
     this._addPopStateListener();
+    /* Await the (cached) translations before the first paint so an English
+     * instance never flashes German labels. A failed load falls back to the
+     * embedded German texts — `_syncTranslations` never throws. */
+    await this._syncTranslations(true);
     this._render();
     try {
       let saved = "";
@@ -413,7 +461,7 @@ class HealthOMatPanel extends HTMLElement {
         this._data[entryId] = data;
         delete this._entryErrors[entryId];
       } else {
-        this._entryErrors[entryId] = "Keine Daten für diese Person.";
+        this._entryErrors[entryId] = t("ui_common_no_data", "Keine Daten für diese Person.");
       }
     } catch (err) {
       this._entryErrors[entryId] = errMsg(err);
@@ -556,7 +604,9 @@ class HealthOMatPanel extends HTMLElement {
       this._historyStatus = {
         kind,
         ok: true,
-        text: restore ? "Eintrag wiederhergestellt." : "Eintrag gelöscht.",
+        text: restore
+          ? t("ui_panel_entry_restored", "Eintrag wiederhergestellt.")
+          : t("ui_panel_entry_deleted", "Eintrag gelöscht."),
       };
       // Nach der Aktion steht der komplementäre Button im Fokus.
       this._historyFocus = {
@@ -831,7 +881,10 @@ class HealthOMatPanel extends HTMLElement {
         delete this._settingsErrors[entryId];
         if (this._settingsEntry === entryId) this._syncQuickDrafts(res);
       } else {
-        this._settingsErrors[entryId] = "Leere Antwort auf get_settings.";
+        this._settingsErrors[entryId] = t(
+          "ui_panel_empty_settings",
+          "Leere Antwort auf get_settings."
+        );
         delete this._settings[entryId];
       }
     } catch (err) {
@@ -935,29 +988,60 @@ class HealthOMatPanel extends HTMLElement {
 
     const goal = intOrNull(this._readField("daily_goal_ml", ""));
     if (goal === null || goal < L.goalMin || goal > L.goalMax) {
-      errors.push(`Tagesziel: ganze Zahl zwischen ${L.goalMin} und ${L.goalMax} ml.`);
+      errors.push(
+        t("ui_panel_val_goal", "Tagesziel: ganze Zahl zwischen {min} und {max} ml.", {
+          min: L.goalMin,
+          max: L.goalMax,
+        })
+      );
     }
     const reset = intOrNull(this._readField("daily_reset_hour", ""));
     if (reset === null || reset < L.resetMin || reset > L.resetMax) {
-      errors.push(`Reset-Uhrzeit: ganze Zahl zwischen ${L.resetMin} und ${L.resetMax}.`);
+      errors.push(
+        t("ui_panel_val_reset", "Reset-Uhrzeit: ganze Zahl zwischen {min} und {max}.", {
+          min: L.resetMin,
+          max: L.resetMax,
+        })
+      );
     }
     const display = String(this._readField("person_display", "") || "").trim();
     const sys = intOrNull(this._readField("sys_threshold", ""));
     if (sys === null || sys < L.thresholdMin || sys > L.thresholdMax) {
-      errors.push(`Systolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+      errors.push(
+        t(
+          "ui_panel_val_sys_threshold",
+          "Systolische Schwelle: zwischen {min} und {max}.",
+          { min: L.thresholdMin, max: L.thresholdMax }
+        )
+      );
     }
     const dia = intOrNull(this._readField("dia_threshold", ""));
     if (dia === null || dia < L.thresholdMin || dia > L.thresholdMax) {
-      errors.push(`Diastolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+      errors.push(
+        t(
+          "ui_panel_val_dia_threshold",
+          "Diastolische Schwelle: zwischen {min} und {max}.",
+          { min: L.thresholdMin, max: L.thresholdMax }
+        )
+      );
     }
     const retention = intOrNull(this._readField("retention_months", ""));
     if (retention === null || retention < L.retentionMin || retention > L.retentionMax) {
-      errors.push(`Retention: ${L.retentionMin} (aus) bis ${L.retentionMax} Monate.`);
+      errors.push(
+        t("ui_panel_val_retention", "Retention: {min} (aus) bis {max} Monate.", {
+          min: L.retentionMin,
+          max: L.retentionMax,
+        })
+      );
     }
     const auditLimit = intOrNull(this._readField("audit_limit", ""));
     if (auditLimit === null || auditLimit < L.auditMin || auditLimit > L.auditMax) {
       errors.push(
-        `Audit-Log-Limit: ganze Zahl zwischen ${L.auditMin} (unbegrenzt) und ${L.auditMax}.`
+        t(
+          "ui_panel_val_audit",
+          "Audit-Log-Limit: ganze Zahl zwischen {min} (unbegrenzt) und {max}.",
+          { min: L.auditMin, max: L.auditMax }
+        )
       );
     }
 
@@ -966,7 +1050,12 @@ class HealthOMatPanel extends HTMLElement {
     // Guard against wiping the lexicon with an accidental empty textarea; the
     // server re-validates the 'word=Type,ml' format and reports the line.
     if (!lexicon.trim()) {
-      errors.push("Getränke-Lexikon: mindestens eine Zeile (wort=Typ,ml) erforderlich.");
+      errors.push(
+        t(
+          "ui_panel_val_lexicon",
+          "Getränke-Lexikon: mindestens eine Zeile (wort=Typ,ml) erforderlich."
+        )
+      );
     }
 
     const sidebarEl = this.shadowRoot.querySelector('[data-field="enable_sidebar_panel"]');
@@ -993,7 +1082,11 @@ class HealthOMatPanel extends HTMLElement {
       const ml = toNumber(slot.ml, NaN);
       if (!Number.isFinite(ml) || ml < L.quickMlMin || ml > L.quickMlMax) {
         errors.push(
-          `Quick-Drink ${i + 1}: ml zwischen ${L.quickMlMin} und ${L.quickMlMax}.`
+          t("ui_panel_val_quick_ml", "Quick-Drink {index}: ml zwischen {min} und {max}.", {
+            index: i + 1,
+            min: L.quickMlMin,
+            max: L.quickMlMax,
+          })
         );
         return;
       }
@@ -1008,7 +1101,11 @@ class HealthOMatPanel extends HTMLElement {
     // here so the user gets a precise message instead of a schema error.
     if (quick.length < L.minQuickDrinks) {
       errors.push(
-        `Quick-Drinks: mindestens ${L.minQuickDrinks} Slot mit Label erforderlich.`
+        t(
+          "ui_panel_val_quick_label",
+          "Quick-Drinks: mindestens {min} Slot mit Label erforderlich.",
+          { min: L.minQuickDrinks }
+        )
       );
     }
 
@@ -1100,13 +1197,13 @@ class HealthOMatPanel extends HTMLElement {
     }
     const changes = this._changedSettings(entryId, collected.payload);
     if (!Object.keys(changes).length) {
-      this._settingsStatus = { ok: true, text: "Keine Änderungen." };
+      this._settingsStatus = { ok: true, text: t("ui_panel_no_changes", "Keine Änderungen.") };
       this._updateStatusDom();
       return;
     }
 
     this._settingsBusy = true;
-    this._settingsStatus = { ok: true, text: "Speichere…" };
+    this._settingsStatus = { ok: true, text: t("ui_panel_saving", "Speichere…") };
     this._syncSettingsButtons();
     this._updateStatusDom();
     try {
@@ -1122,7 +1219,10 @@ class HealthOMatPanel extends HTMLElement {
       this._syncQuickDrafts(this._settings[entryId]);
       await this._reloadPersons();
       this._settingsBusy = false;
-      this._settingsStatus = { ok: true, text: "Einstellungen gespeichert." };
+      this._settingsStatus = {
+        ok: true,
+        text: t("ui_panel_settings_saved", "Einstellungen gespeichert."),
+      };
       // Full re-render: the form is now rebuilt from the (reloaded) server state.
       this._render();
       this._loadEntry(entryId);
@@ -1141,7 +1241,7 @@ class HealthOMatPanel extends HTMLElement {
     const sel = this.shadowRoot.querySelector('[data-field="export_dataset"]');
     const dataset = sel && sel.value ? String(sel.value) : "all";
     this._exportBusy = true;
-    this._exportResult = { ok: true, text: "Export läuft…" };
+    this._exportResult = { ok: true, text: t("ui_panel_export_running", "Export läuft…") };
     // Targeted DOM updates only — a full re-render would drop unsaved edits.
     this._syncExportButton();
     this._updateExportResultDom();
@@ -1162,14 +1262,17 @@ class HealthOMatPanel extends HTMLElement {
   async _startPersonFlow() {
     if (!this._isAdmin() || this._adminBusy) return;
     this._adminBusy = true;
-    this._adminStatus = { ok: true, text: "Starte Anlegen\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_flow_starting", "Starte Anlegen…") };
     this._render();
     try {
       await this._ws({ type: WS.startPersonFlow });
       this._adminBusy = false;
       this._adminStatus = {
         ok: true,
-        text: "Dialog ge\u00F6ffnet \u2013 bitte die neue Person dort anlegen.",
+        text: t(
+          "ui_panel_flow_opened",
+          "Dialog geöffnet – bitte die neue Person dort anlegen."
+        ),
       };
       this._render();
       this._navigateToConfigFlow();
@@ -1196,11 +1299,11 @@ class HealthOMatPanel extends HTMLElement {
   async _runBackup() {
     if (!this._isAdmin() || this._adminBusy) return;
     this._adminBusy = true;
-    this._adminStatus = { ok: true, text: "Backup l\u00E4uft\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_backup_running", "Backup läuft…") };
     this._render();
     try {
       await this._ws({ type: WS.backup });
-      this._adminStatus = { ok: true, text: "Backup erstellt." };
+      this._adminStatus = { ok: true, text: t("ui_panel_backup_created", "Backup erstellt.") };
     } catch (err) {
       this._adminStatus = { ok: false, text: wsErrorText(err) };
     } finally {
@@ -1357,7 +1460,10 @@ class HealthOMatPanel extends HTMLElement {
     if (!slug || typed !== slug) {
       this._adminStatus = {
         ok: false,
-        text: "Die Best\u00E4tigung stimmt nicht mit dem Personen-Schl\u00FCssel \u00FCberein.",
+        text: t(
+          "ui_panel_delete_confirmation_mismatch",
+          "Die Bestätigung stimmt nicht mit dem Personen-Schlüssel überein."
+        ),
       };
       this._render();
       return;
@@ -1365,18 +1471,22 @@ class HealthOMatPanel extends HTMLElement {
     // Second gate: an explicit browser confirmation with the backup caveat.
     const confirmed = typeof window !== "undefined" && typeof window.confirm === "function"
       ? window.confirm(
-          `\u201E${person.display_name}\u201C endg\u00FCltig l\u00F6schen? Backups k\u00F6nnen derzeit NICHT wiederhergestellt werden.`
+          t(
+            "ui_panel_delete_prompt",
+            "„{name}“ endgültig löschen? Backups können derzeit NICHT wiederhergestellt werden.",
+            { name: person.display_name }
+          )
         )
       : true;
     if (!confirmed) return;
 
     this._deleteBusy = true;
-    this._adminStatus = { ok: true, text: "L\u00F6sche\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_deleting", "Lösche…") };
     this._render();
     try {
       await this._ws({ type: WS.deletePerson, entry_id: entryId, confirm: slug });
       this._deleteBusy = false;
-      this._adminStatus = { ok: true, text: "Person gel\u00F6scht." };
+      this._adminStatus = { ok: true, text: t("ui_panel_person_deleted", "Person gelöscht.") };
       await this._reloadPersons();
       this._afterPersonsChanged(entryId);
     } catch (err) {
@@ -1460,16 +1570,25 @@ class HealthOMatPanel extends HTMLElement {
     if (!raw) return { ok: true, iso: "" };
     const parsed = new Date(raw);
     if (!Number.isFinite(parsed.getTime())) {
-      return { ok: false, error: "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen." };
+      return {
+        ok: false,
+        error: t("ui_panel_val_ts_invalid", "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen."),
+      };
     }
     if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
       return {
         ok: false,
-        error: "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz).",
+        error: t(
+          "ui_panel_val_ts_future",
+          "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz)."
+        ),
       };
     }
     if (parsed.getFullYear() < 1900) {
-      return { ok: false, error: "Der Zeitpunkt ist zu alt (frühestens 1900)." };
+      return {
+        ok: false,
+        error: t("ui_panel_val_ts_old", "Der Zeitpunkt ist zu alt (frühestens 1900)."),
+      };
     }
     return { ok: true, iso: parsed.toISOString() };
   }
@@ -1483,7 +1602,7 @@ class HealthOMatPanel extends HTMLElement {
   _resetTs(field) {
     this._tsDraft[field] = "";
     const el = this._tsInput(field);
-    if (el) el.value = localDateTimeValue(new Date());
+    if (el) el.value = "";
   }
 
   /* ---- Write actions ------------------------------------------------------ */
@@ -1501,7 +1620,10 @@ class HealthOMatPanel extends HTMLElement {
     }
     const value = Math.round(toNumber(ml, 0));
     if (!Number.isFinite(value) || value <= 0 || value > 10000) {
-      this._formError = "Bitte eine Menge zwischen 1 und 10000 ml angeben.";
+      this._formError = t(
+        "ui_panel_val_amount",
+        "Bitte eine Menge zwischen 1 und 10000 ml angeben."
+      );
       this._render();
       return;
     }
@@ -1560,17 +1682,23 @@ class HealthOMatPanel extends HTMLElement {
       ts = read.iso;
     }
     if (!Number.isFinite(sys) || sys < 40 || sys > 300) {
-      this._formError = "Systolisch muss zwischen 40 und 300 liegen.";
+      this._formError = t(
+        "ui_panel_val_bp_sys",
+        "Systolisch muss zwischen 40 und 300 liegen."
+      );
       this._render();
       return;
     }
     if (!Number.isFinite(dia) || dia < 20 || dia > 200) {
-      this._formError = "Diastolisch muss zwischen 20 und 200 liegen.";
+      this._formError = t(
+        "ui_panel_val_bp_dia",
+        "Diastolisch muss zwischen 20 und 200 liegen."
+      );
       this._render();
       return;
     }
     if (pulse != null && (!Number.isFinite(pulse) || pulse < 20 || pulse > 250)) {
-      this._formError = "Puls muss zwischen 20 und 250 liegen.";
+      this._formError = t("ui_panel_val_bp_pulse", "Puls muss zwischen 20 und 250 liegen.");
       this._render();
       return;
     }
@@ -1764,23 +1892,33 @@ class HealthOMatPanel extends HTMLElement {
     const multi = (this._persons || []).length > 1;
     const back =
       this._view === "settings" || (this._view === "detail" && multi)
-        ? `<button class="icon-btn" data-action="back" type="button" aria-label="Zurück zur Übersicht">\u2190</button>`
+        ? `<button class="icon-btn" data-action="back" type="button" aria-label="${escapeHtml(
+            t("ui_panel_back_aria", "Zurück zur Übersicht")
+          )}">\u2190</button>`
         : "";
     const refreshing = this._manualBusy ? " disabled" : "";
     const gear =
       this._isAdmin() && this._view !== "settings"
-        ? `<button class="icon-btn" data-action="settings" type="button" aria-label="Einstellungen" title="Einstellungen">\u2699\uFE0F</button>`
+        ? `<button class="icon-btn" data-action="settings" type="button" aria-label="${escapeHtml(
+            t("ui_panel_settings_aria", "Einstellungen")
+          )}" title="${escapeHtml(
+            t("ui_panel_settings_aria", "Einstellungen")
+          )}">\u2699\uFE0F</button>`
         : "";
     return `<div class="topbar">
         ${back}
         <div class="title"><span aria-hidden="true">\u{1F4A7}</span><span class="name">Health-O-Mat</span></div>
         ${gear}
-        <button class="icon-btn" data-action="refresh" type="button" aria-label="Aktualisieren"${refreshing}>\u21BB</button>
+        <button class="icon-btn" data-action="refresh" type="button" aria-label="${escapeHtml(
+          t("ui_panel_refresh_aria", "Aktualisieren")
+        )}"${refreshing}>\u21BB</button>
       </div>`;
   }
 
   _footerHtml() {
-    return `<div class="footer">Health-O-Mat · keine medizinische Beratung</div>`;
+    return `<div class="footer">${escapeHtml(
+      t("ui_panel_footer", "Health-O-Mat · keine medizinische Beratung")
+    )}</div>`;
   }
 
   _bodyHtml() {
@@ -1788,10 +1926,16 @@ class HealthOMatPanel extends HTMLElement {
       return `<div class="content">${messageHtml(this._fatal, true)}</div>`;
     }
     if (this._persons == null) {
-      return `<div class="content">${messageHtml("Lade Health-O-Mat\u2026", false)}</div>`;
+      return `<div class="content">${messageHtml(
+        t("ui_panel_loading_app", "Lade Health-O-Mat…"),
+        false
+      )}</div>`;
     }
     if (!this._persons.length) {
-      return `<div class="content">${messageHtml("Keine Person eingerichtet.", false)}</div>`;
+      return `<div class="content">${messageHtml(
+        t("ui_common_no_person", "Keine Person eingerichtet."),
+        false
+      )}</div>`;
     }
     if (this._view === "settings" && this._isAdmin()) {
       return `<div class="content">${this._settingsHtml()}</div>`;
@@ -1998,7 +2142,10 @@ class HealthOMatPanel extends HTMLElement {
     const input = this.shadowRoot.querySelector('[data-field="drink-text"]');
     const parsed = parseDrinkText(input ? input.value : "");
     if (!parsed) {
-      this._formError = "Menge nicht erkannt. Beispiel: \u201EKaffee 300 ml\u201C.";
+      this._formError = t(
+        "ui_panel_drink_parse_error",
+        "Menge nicht erkannt. Beispiel: „Kaffee 300 ml“."
+      );
       this._render();
       return;
     }
@@ -2042,7 +2189,11 @@ class HealthOMatPanel extends HTMLElement {
       ? this._data[this._selectedEntry].wellbeing_scale.length
       : 10;
     if (!/^\d+$/.test(raw) || !Number.isInteger(score) || score < 1 || score > scale) {
-      this._formError = `Bitte eine ganze Zahl zwischen 1 und ${scale} eingeben.`;
+      this._formError = t(
+        "ui_panel_val_wb",
+        "Bitte eine ganze Zahl zwischen 1 und {max} eingeben.",
+        { max: scale }
+      );
       this._render();
       return;
     }
