@@ -24,7 +24,7 @@ import {
   normalizeAreas,
   personSlug,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.12.0";
+} from "./health-o-mat-panel-base.js?v=0.13.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 
