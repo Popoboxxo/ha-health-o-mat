@@ -71,6 +71,42 @@
         "data": {
           "drink_lexicon": "Drink dictionary"
         }
+      },
+      "notifications": {
+        "title": "Reminders and weekly report",
+        "description": "All notifications are off by default. An empty notify service sends a persistent notification inside Home Assistant.",
+        "data": {
+          "reminders_enabled": "Enable reminders",
+          "reminder_time": "Reminder time",
+          "reminder_days": "Reminder days",
+          "reminder_notify_service": "Notify service (e.g. mobile_app_phone)",
+          "reminder_quiet_start": "Quiet hours start",
+          "reminder_quiet_end": "Quiet hours end",
+          "reminder_drink_goal": "Remind when the daily goal is not reached",
+          "reminder_no_drink_hours": "Remind after X hours without a drink (0 = off)",
+          "reminder_bp_days": "Remind if blood pressure was not measured for X days (0 = off)",
+          "reminder_wellbeing_days": "Remind if wellbeing was not reported for X days (0 = off)",
+          "weekly_report_enabled": "Enable weekly report",
+          "weekly_report_day": "Weekly report day",
+          "weekly_report_time": "Weekly report time",
+          "weekly_report_notify_service": "Notify service for the weekly report"
+        },
+        "data_description": {
+          "reminders_enabled": "Sends one bundled reminder per selected day, at most once per condition.",
+          "reminder_time": "Local time of the reminder.",
+          "reminder_days": "Monday is the first day of the week.",
+          "reminder_notify_service": "Name of a notify service, with or without the notify. prefix. Empty = persistent notification.",
+          "reminder_quiet_start": "No reminders inside this window. Supports midnight rollover (e.g. 22:00 to 07:00).",
+          "reminder_quiet_end": "End of the quiet window. Both bounds are required for a quiet window.",
+          "reminder_drink_goal": "Reminds while today's amount is below the daily goal.",
+          "reminder_no_drink_hours": "Reminds when the last active drink is older than this many hours.",
+          "reminder_bp_days": "Reminds when no blood pressure reading was recorded within this many days.",
+          "reminder_wellbeing_days": "Reminds when no wellbeing report was recorded within this many days.",
+          "weekly_report_enabled": "Sends the last seven days as a Markdown notification.",
+          "weekly_report_day": "Day of the week for the report.",
+          "weekly_report_time": "Local time of the report.",
+          "weekly_report_notify_service": "Name of a notify service, with or without the notify. prefix. Empty = persistent notification."
+        }
       }
     },
     "error": {
@@ -396,6 +432,16 @@
         "restore_audit": {
           "name": "Import audit log",
           "description": "Also import the backup audit log (experts only; by default only new restore events are written)."
+        }
+      }
+    },
+    "weekly_report": {
+      "name": "Send weekly report",
+      "description": "Sends the last seven days as one Markdown notification per person (no file export).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Person name (empty = every configured person gets their own report)."
         }
       }
     }

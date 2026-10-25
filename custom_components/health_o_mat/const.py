@@ -150,3 +150,16 @@ WELLBEING_IMAGES_OPTION = "wellbeing_images"
 # Options-Schlüssel (REQ-HOM-114): Wohlbefinden-Auswahl erst nach Bestätigung
 # übernehmen. Default aus = bisheriges Sofort-Verhalten.
 OPTION_WELLBEING_CONFIRM = "wellbeing_confirm"
+
+# --- Benachrichtigungen (REQ-HOM-118) ---------------------------------------
+# Options-Schlüssel der genesteten Erinnerungs-/Berichtsstrukturen. Beide
+# Defaults sind AUS: bestehende Installationen ändern ihr Verhalten nicht.
+OPTION_REMINDERS = "reminders"
+OPTION_WEEKLY_REPORT = "weekly_report"
+
+DEFAULT_REMINDER_TIME = "20:00"
+DEFAULT_WEEKLY_REPORT_TIME = "18:00"
+# Default für "seit X Stunden nichts getrunken" (0 = Bedingung aus).
+DEFAULT_REMINDER_NO_DRINK_HOURS = 3
+# Fällige Erinnerungs-Arten in stabiler Reihenfolge (Notification-Reihenfolge).
+REMINDER_KINDS: tuple[str, ...] = ("drink_goal", "no_drink", "bp", "wellbeing")

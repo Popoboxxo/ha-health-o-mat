@@ -21,11 +21,21 @@ from .const import (
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .panel import async_apply_panel_state
+from .reminders import (
+    async_send_notification,
+    async_setup_reminders,
+    async_unload_reminders,
+    collect_weekly_metrics,
+    normalize_weekly_report,
+    render_weekly_report_markdown,
+    weekly_report_title,
+)
 from .statistics import async_migrate_legacy_volume_statistics
 from .store import HealthOMatStore
 from .ws_api import async_register_ws_api
@@ -61,6 +71,7 @@ _SERVICE_NAMES = (
     "backup",
     "restore_backup",
     "set_wellbeing",
+    "weekly_report",
 )
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
@@ -155,6 +166,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     # Opt-in-Sidebar-Panel (L2) erst NACH der Options-Auswertung anwenden.
     await _async_apply_panel_layer(hass)
     await _apply_retention(hass, entry, store)
+    await async_setup_reminders(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     return True
@@ -304,6 +316,9 @@ async def _options_updated(hass, entry) -> None:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
+        # Vor dem Reload: Timer neu aufsetzen (der Reload löst zwar erneut
+        # Setup aus, aber bis dahin soll die neue Options-Wahl schon gelten).
+        await async_setup_reminders(hass, entry, store)
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
 
@@ -315,12 +330,15 @@ async def _options_updated(hass, entry) -> None:
     await _apply_retention(hass, entry, store)
     # Opt-in-Sidebar-Panel: Option enable/disable → Panel registrieren/entfernen.
     await _async_apply_panel_layer(hass)
+    # Erinnerungs-/Berichts-Timer an die neuen Optionen anpassen (idempotent).
+    await async_setup_reminders(hass, entry, store)
     signal_refresh(hass, entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        await async_unload_reminders(hass, entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not _has_runtime_entries(hass):
             # Letzter Entry entladen → Frontend-Fallback zurückbauen (defensiv:
@@ -671,6 +689,52 @@ def _register_services(hass: HomeAssistant) -> None:
         except RestoreError as err:
             raise ServiceValidationError(str(err)) from err
 
+    async def weekly_report(call: ServiceCall) -> None:
+        """Wochenbericht als Markdown-Notification senden (REQ-HOM-118).
+
+        Kein Datei-Schreiben, kein Export-Ordner: der Bericht ist eine reine
+        Notification. Ohne ``person`` bekommt jede laufende Person einen
+        eigenen Bericht; eine unbekannte Person wird abgelehnt.
+        """
+        store: HealthOMatStore = hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
+        try:
+            if store is None:
+                raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+            if (call.data.get("person") or "").strip():
+                entry_id, _info = get_runtime_data(hass, call)
+                target_ids = [entry_id]
+            else:
+                target_ids = [
+                    key
+                    for key, value in hass.data.get(DOMAIN, {}).items()
+                    if key not in _NON_ENTRY_KEYS
+                    and isinstance(value, dict)
+                    and "coordinator" in value
+                ]
+                if not target_ids:
+                    raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+            entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
+            language = getattr(hass.config, "language", "de")
+            now = dt_util.now()
+            for entry_id in target_ids:
+                entry = entries.get(entry_id)
+                if entry is None:
+                    continue
+                options = entry.options or {}
+                report = normalize_weekly_report(options.get(OPTION_WEEKLY_REPORT))
+                metrics = collect_weekly_metrics(store.active_entry(entry_id), options, now)
+                person = effective_person(entry)
+                await async_send_notification(
+                    hass,
+                    report["notify_service"],
+                    weekly_report_title(person, language),
+                    render_weekly_report_markdown(metrics, person, language),
+                )
+        except ServiceValidationError:
+            raise
+        except Exception as err:  # noqa: BLE001 - einheitliche Service-Fehlersemantik
+            raise ServiceValidationError(f"Wochenbericht fehlgeschlagen: {err}") from err
+
     hass.services.async_register(
         DOMAIN,
         "add_drink",
@@ -797,4 +861,10 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=restore_backup,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "weekly_report",
+        schema=vol.Schema({vol.Optional("person"): str}),
+        service_func=weekly_report,
     )

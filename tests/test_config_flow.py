@@ -117,9 +117,9 @@ def test_options_flow_async_step_init_chains_to_quick_drinks():
     assert options_flow._pending["daily_goal_ml"] == 2250
 
 
-def test_options_flow_full_three_step_flow_creates_entry():
-    """[REQ-HOM-101] init → quick_drinks → drink_lexicon → create_entry mit
-    zusammengeführten Daten."""
+def test_options_flow_full_five_step_flow_creates_entry():
+    """[REQ-HOM-101/118] init → quick_drinks → wellbeing_images →
+    drink_lexicon → notifications → create_entry mit zusammengeführten Daten."""
     options_flow = config_flow_module.HealthOMatOptionsFlow()
 
     entry = MagicMock()
@@ -156,6 +156,7 @@ def test_options_flow_full_three_step_flow_creates_entry():
     assert images_result["step_id"] == "drink_lexicon"
 
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     options_flow.async_create_entry.assert_called_once()
     data = options_flow.async_create_entry.call_args[1]["data"]
@@ -318,6 +319,7 @@ def test_options_flow_preserves_other_options_on_submit():
     _async_test(options_flow.async_step_quick_drinks(user_input))
     _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     options_flow.async_create_entry.assert_called_once()
     data = options_flow.async_create_entry.call_args[1]["data"]
@@ -524,6 +526,7 @@ def test_options_flow_persists_retention_months():
     _async_test(options_flow.async_step_quick_drinks(quick))
     _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["retention_months"] == 6
@@ -602,6 +605,7 @@ def test_options_flow_persists_sidebar_panel_option():
     _async_test(options_flow.async_step_quick_drinks(quick))
     _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["enable_sidebar_panel"] is True
@@ -696,6 +700,7 @@ def test_options_flow_persists_areas_in_create_entry():
     _async_test(options_flow.async_step_quick_drinks(quick))
     _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["areas"] == {"drink": True, "bp": False, "wellbeing": True}
@@ -764,7 +769,217 @@ def test_req_hom_114_options_flow_preserves_wellbeing_confirm():
     _async_test(options_flow.async_step_quick_drinks(quick))
     _async_test(options_flow.async_step_wellbeing_images({}))
     _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+    _async_test(options_flow.async_step_notifications({}))
 
     data = options_flow.async_create_entry.call_args[1]["data"]
     assert data["wellbeing_confirm"] is True
     assert data["daily_goal_ml"] == 2200
+
+
+# --- REQ-HOM-118: Erinnerungen + Wochenbericht im Options-Flow ---------------
+
+
+def _notifications_flow(options=None, data=None):
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+    entry = MagicMock()
+    entry.options = options if options is not None else {}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.data = data if data is not None else {"person": "Max"}
+
+    hass = MagicMock()
+    hass.data = {}
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    return options_flow
+
+
+def test_notifications_step_is_terminal_after_drink_lexicon():
+    """[REQ-HOM-118] drink_lexicon verkettet auf den neuen Notifications-Schritt."""
+    options_flow = _notifications_flow()
+    _async_test(
+        options_flow.async_step_init(
+            {"daily_goal_ml": 2000, "set_lifetime_ml": 0, "person_display": ""}
+        )
+    )
+    quick = {}
+    for i in range(4):
+        quick[f"quick_{i}_label"] = f"Drink {i}"
+        quick[f"quick_{i}_ml"] = 200
+        quick[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_wellbeing_images({}))
+
+    result = _async_test(
+        options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"})
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "notifications"
+
+
+def test_notifications_step_defaults_are_all_off():
+    """[REQ-HOM-118] Alle Benachrichtigungen standardmäßig AUS."""
+    result = _async_test(_notifications_flow().async_step_notifications(None))
+    defaults = {str(key): key.default() for key in result["data_schema"].schema}
+
+    assert result["step_id"] == "notifications"
+    assert defaults["reminders_enabled"] is False
+    assert defaults["reminder_time"] == "20:00"
+    assert defaults["reminder_days"] == ["0", "1", "2", "3", "4", "5", "6"]
+    assert defaults["reminder_notify_service"] == ""
+    assert defaults["reminder_quiet_start"] == ""
+    assert defaults["reminder_quiet_end"] == ""
+    assert defaults["reminder_drink_goal"] is True
+    assert defaults["reminder_no_drink_hours"] == 3
+    assert defaults["reminder_bp_days"] == 0
+    assert defaults["reminder_wellbeing_days"] == 0
+    assert defaults["weekly_report_enabled"] is False
+    assert defaults["weekly_report_day"] == "0"
+    assert defaults["weekly_report_time"] == "18:00"
+
+
+def test_notifications_step_reads_existing_nested_options():
+    """[REQ-HOM-118] Formular-Defaults kommen aus den genesteten Optionen."""
+    options = {
+        "reminders": {
+            "enabled": True,
+            "time": "07:30",
+            "days": [0, 2],
+            "notify_service": "notify.mobile_app_phone",
+            "quiet_start": "22:00",
+            "quiet_end": "06:30",
+            "conditions": {"drink_goal": False, "no_drink_hours": 5, "bp_days": 14},
+        },
+        "weekly_report": {"enabled": True, "day": 4, "time": "09:15"},
+    }
+    result = _async_test(_notifications_flow(options).async_step_notifications(None))
+    defaults = {str(key): key.default() for key in result["data_schema"].schema}
+
+    assert defaults["reminders_enabled"] is True
+    assert defaults["reminder_time"] == "07:30"
+    assert defaults["reminder_days"] == ["0", "2"]
+    assert defaults["reminder_notify_service"] == "mobile_app_phone"
+    assert defaults["reminder_quiet_start"] == "22:00"
+    assert defaults["reminder_quiet_end"] == "06:30"
+    assert defaults["reminder_drink_goal"] is False
+    assert defaults["reminder_no_drink_hours"] == 5
+    assert defaults["reminder_bp_days"] == 14
+    assert defaults["weekly_report_enabled"] is True
+    assert defaults["weekly_report_day"] == "4"
+    assert defaults["weekly_report_time"] == "09:15"
+
+
+def test_notifications_submit_saves_nested_structures_only():
+    """[REQ-HOM-118] Flache Formularfelder werden nicht persistiert."""
+    options_flow = _notifications_flow()
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_notifications(
+            {
+                "reminders_enabled": True,
+                "reminder_time": "20:30",
+                "reminder_days": ["0", "3"],
+                "reminder_notify_service": "notify.mobile_app_phone",
+                "reminder_quiet_start": "22:00",
+                "reminder_quiet_end": "07:00",
+                "reminder_drink_goal": False,
+                "reminder_no_drink_hours": 4,
+                "reminder_bp_days": 7,
+                "reminder_wellbeing_days": 3,
+                "weekly_report_enabled": True,
+                "weekly_report_day": "2",
+                "weekly_report_time": "18:30",
+                "weekly_report_notify_service": "mobile_app_phone",
+            }
+        )
+    )
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["reminders"] == {
+        "enabled": True,
+        "time": "20:30",
+        "days": [0, 3],
+        "notify_service": "mobile_app_phone",
+        "quiet_start": "22:00",
+        "quiet_end": "07:00",
+        "conditions": {
+            "drink_goal": False,
+            "no_drink_hours": 4,
+            "bp_days": 7,
+            "wellbeing_days": 3,
+        },
+    }
+    assert data["weekly_report"] == {
+        "enabled": True,
+        "day": 2,
+        "time": "18:30",
+        "notify_service": "mobile_app_phone",
+    }
+    assert not any(key.startswith("reminder_") for key in data)
+    assert not any(key.startswith("weekly_report_") for key in data)
+
+
+def test_notifications_submit_merges_foreign_options():
+    """[REQ-HOM-118] Merge erhält Optionen ohne Formularfeld."""
+    options_flow = _notifications_flow(
+        {"wellbeing_confirm": True, "audit_limit": 500, "daily_goal_ml": 1800}
+    )
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(options_flow.async_step_notifications({}))
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["wellbeing_confirm"] is True
+    assert data["audit_limit"] == 500
+    assert data["daily_goal_ml"] == 1800
+    assert data["reminders"]["enabled"] is False
+
+
+def test_notifications_submit_normalizes_invalid_values():
+    """[REQ-HOM-118] Ungültige Zeiten/Wochentage/Zahlen → Defaults."""
+    options_flow = _notifications_flow()
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_notifications(
+            {
+                "reminders_enabled": True,
+                "reminder_time": "25:99",
+                "reminder_days": ["0", "x", "8"],
+                "reminder_quiet_start": "abc",
+                "reminder_quiet_end": "24:00",
+                "reminder_no_drink_hours": 99,
+                "reminder_bp_days": -3,
+                "reminder_wellbeing_days": 999,
+                "weekly_report_day": "9",
+                "weekly_report_time": "later",
+            }
+        )
+    )
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["reminders"]["time"] == "20:00"
+    assert data["reminders"]["days"] == [0]
+    assert data["reminders"]["quiet_start"] == ""
+    assert data["reminders"]["quiet_end"] == ""
+    assert data["reminders"]["conditions"]["no_drink_hours"] == 3
+    assert data["reminders"]["conditions"]["bp_days"] == 0
+    assert data["reminders"]["conditions"]["wellbeing_days"] == 0
+    assert data["weekly_report"]["day"] == 0
+    assert data["weekly_report"]["time"] == "18:00"
+
+
+def test_notifications_schema_rejects_out_of_range_values():
+    """[REQ-HOM-118] Die Formular-Validierung begrenzt Stunden/Tage."""
+    import voluptuous as vol  # noqa: PLC0415
+
+    schema = _async_test(_notifications_flow().async_step_notifications(None))["data_schema"]
+
+    with pytest.raises(vol.Invalid):
+        schema({"reminder_no_drink_hours": 25})
+    with pytest.raises(vol.Invalid):
+        schema({"reminder_bp_days": 366})
+    with pytest.raises(vol.Invalid):
+        schema({"reminder_wellbeing_days": -1})

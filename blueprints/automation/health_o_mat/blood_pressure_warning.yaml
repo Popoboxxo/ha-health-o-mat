@@ -1,0 +1,53 @@
+blueprint:
+  name: Health-O-Mat Blutdruck-Warnung
+  description: >-
+    Sendet eine Benachrichtigung, sobald der Warn-Sensor der Person auf "on"
+    wechselt (Blutdruck über der konfigurierten Schwelle).
+    English: sends a notification when the person's blood pressure warning
+    binary sensor turns "on".
+  domain: automation
+  source_url: https://github.com/Popoboxxo/ha-health-o-mat/blob/main/blueprints/automation/health_o_mat/blood_pressure_warning.yaml
+  input:
+    person_name:
+      name: Person
+      description: >-
+        Name der Person (nur für den Benachrichtigungstext).
+        English: person name used in the message.
+      default: ""
+      selector:
+        text:
+    warning_sensor:
+      name: Blutdruck-Warnung (Binary Sensor)
+      description: >-
+        Binary Sensor "Blutdruck-Warnung" der Person.
+        English: the "Blood pressure warning" binary sensor of the person.
+      selector:
+        entity:
+          domain: binary_sensor
+    notify_service:
+      name: Benachrichtigungsdienst
+      description: >-
+        Notify-Service (z. B. notify.mobile_app_phone).
+        English: notify service to call.
+      default: notify.notify
+      selector:
+        text:
+
+trigger:
+  - platform: state
+    entity_id: !input warning_sensor
+    to: "on"
+
+condition: []
+
+action:
+  - service: !input notify_service
+    data:
+      title: Health-O-Mat Blutdruck-Warnung
+      message: >-
+        {{ 'Blutdruck-Warnung für ' ~ person_name ~ ': ' if person_name else
+        'Blutdruck-Warnung: ' }}Der gemessene Wert liegt über der
+        konfigurierten Schwelle. / The measured value is above the configured
+        threshold.
+
+mode: single

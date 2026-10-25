@@ -1,0 +1,65 @@
+blueprint:
+  name: Health-O-Mat Wochenbericht
+  description: >-
+    Sendet einmal pro Woche den Wochenbericht als Benachrichtigung. Der
+    Benachrichtigungsdienst wird in den Optionen der Integration gewählt
+    (leer = Hinweis in Home Assistant).
+    English: sends the weekly report once a week through the integration's
+    configured notification service.
+  domain: automation
+  source_url: https://github.com/Popoboxxo/ha-health-o-mat/blob/main/blueprints/automation/health_o_mat/weekly_report.yaml
+  input:
+    person_name:
+      name: Person
+      description: >-
+        Name der Person (leer = alle eingerichteten Personen).
+        English: person name (empty = all persons).
+      default: ""
+      selector:
+        text:
+    report_day:
+      name: Wochentag
+      description: >-
+        Tag, an dem der Bericht gesendet wird.
+        English: weekday of the report.
+      default: mon
+      selector:
+        select:
+          options:
+            - label: Montag / Monday
+              value: mon
+            - label: Dienstag / Tuesday
+              value: tue
+            - label: Mittwoch / Wednesday
+              value: wed
+            - label: Donnerstag / Thursday
+              value: thu
+            - label: Freitag / Friday
+              value: fri
+            - label: Samstag / Saturday
+              value: sat
+            - label: Sonntag / Sunday
+              value: sun
+    report_time:
+      name: Uhrzeit
+      description: >-
+        Zeitpunkt des Berichts (lokal).
+        English: local report time.
+      default: "18:00:00"
+      selector:
+        time:
+
+trigger:
+  - platform: time
+    at: !input report_time
+
+condition:
+  - condition: time
+    weekday: !input report_day
+
+action:
+  - service: health_o_mat.weekly_report
+    data:
+      person: !input person_name
+
+mode: single

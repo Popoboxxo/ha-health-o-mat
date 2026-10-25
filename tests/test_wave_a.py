@@ -299,9 +299,12 @@ class _FakeServices:
 
     def __init__(self) -> None:
         self.registered: dict[str, tuple] = {}
+        # Vorhandene Fremd-Services (z. B. notify.mobile_app_phone).
+        self.known: set[str] = set()
+        self.async_call = AsyncMock()
 
     def has_service(self, domain, name) -> bool:
-        return name in self.registered
+        return name in self.registered or f"{domain}.{name}" in self.known
 
     def async_register(self, domain, name, *, schema=None, service_func=None) -> None:
         self.registered[name] = (schema, service_func)
@@ -1072,3 +1075,131 @@ def test_req_hom_120_service_ts_without_value_keeps_now(monkeypatch):
     drink = store.entry("e1")["drinks"][0]
     assert drink["ts"] == "2026-10-15T12:00:00"
     assert drink["created_at"] == "2026-10-15T12:00:00"
+
+
+# --- M3d: Wochenbericht-Service (REQ-HOM-118) -------------------------------
+
+
+def test_weekly_report_service_registered_with_schema():
+    """`weekly_report` ist registriert; `person` ist optional."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+
+    schema, _func = hass.services.registered["weekly_report"]
+    assert schema({}) == {}
+    assert schema({"person": "Max"}) == {"person": "Max"}
+    assert "weekly_report" in init._SERVICE_NAMES
+
+
+def _seed_week(store) -> None:
+    """Kleine Woche für den Bericht (heute = 2026-10-26)."""
+    for ts, ml, drink_type in (
+        ("2026-10-26T09:00:00", 500, "Wasser"),
+        ("2026-10-25T09:00:00", 500, "Wasser"),
+        ("2026-10-24T09:00:00", 250, "Kaffee"),
+    ):
+        store.entry("e1")["drinks"].append({"ts": ts, "ml": ml, "type": drink_type})
+
+
+def test_weekly_report_service_sends_one_notification_per_person(monkeypatch):
+    """Ohne `person`: je laufender Person genau eine Markdown-Notification."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    hass.config.language = "de"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({})))
+
+    assert hass.services.async_call.await_count == 2
+    calls = [call.args for call in hass.services.async_call.await_args_list]
+    assert [args[0] for args in calls] == ["persistent_notification", "persistent_notification"]
+    titles = [args[2]["title"] for args in calls]
+    assert titles == ["Wochenbericht — Max", "Wochenbericht — Caro"]
+    assert "## Wochenbericht" in calls[0][2]["message"]
+    assert "1250 ml" in calls[0][2]["message"]
+
+
+def test_weekly_report_service_filters_person(monkeypatch):
+    """`person` wählt genau eine Person (Case-insensitive, wie alle Services)."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    hass.config.language = "en"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({"person": "caro"})))
+
+    assert hass.services.async_call.await_count == 1
+    args = hass.services.async_call.await_args.args
+    assert args[2]["title"] == "Weekly report — Caro"
+    assert "## Weekly report" in args[2]["message"]
+
+
+def test_weekly_report_service_uses_configured_notify_service(monkeypatch):
+    """Konfigurierter Notify-Service wird genutzt (kein persistent-Fallback)."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    options = {"weekly_report": {"enabled": False, "notify_service": "mobile_app_phone"}}
+    hass = _runtime_hass([_cfg_entry("e1", "Max", options)], store=store)
+    hass.services.known.add("notify.mobile_app_phone")
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({})))
+
+    args = hass.services.async_call.await_args.args
+    assert args[:2] == ("notify", "mobile_app_phone")
+
+
+def test_weekly_report_service_unknown_person_raises():
+    """Unbekannte Person → ServiceValidationError, keine Notification."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({"person": "Niemand"})))
+
+    hass.services.async_call.assert_not_awaited()
+
+
+def test_weekly_report_service_without_runtime_entries_raises():
+    """Keine laufende Person → ServiceValidationError."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({})))
+
+
+def test_weekly_report_service_without_store_raises():
+    """Fehlender Store → ServiceValidationError statt AttributeError."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({})))

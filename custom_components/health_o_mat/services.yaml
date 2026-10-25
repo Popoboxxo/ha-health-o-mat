@@ -295,3 +295,17 @@ restore_backup:
       default: false
       selector:
         boolean:
+
+weekly_report:
+  name: Wochenbericht senden
+  description: >-
+    Sendet die letzten sieben Tage je Person als Markdown-Benachrichtigung
+    (kein Datei-Export). Leerer Benachrichtigungsdienst erzeugt einen Hinweis
+    in Home Assistant.
+  fields:
+    person:
+      name: Person
+      description: >-
+        Name der Person (leer = jede eingerichtete Person erhält einen eigenen
+        Bericht).
+      example: "Caro"

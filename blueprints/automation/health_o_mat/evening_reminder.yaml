@@ -1,0 +1,61 @@
+blueprint:
+  name: Health-O-Mat Abend-Erinnerung
+  description: >-
+    Erinnert am Abend, wenn das Tagesziel noch nicht erreicht ist.
+    English: reminds you in the evening when the daily drinking goal is not
+    reached yet. Pick the "Daily goal progress" sensor of the person.
+  domain: automation
+  source_url: https://github.com/Popoboxxo/ha-health-o-mat/blob/main/blueprints/automation/health_o_mat/evening_reminder.yaml
+  input:
+    person_name:
+      name: Person
+      description: >-
+        Name der Person (nur für den Benachrichtigungstext).
+        English: person name used in the message.
+      default: ""
+      selector:
+        text:
+    goal_sensor:
+      name: Tagesziel-Fortschritt (Sensor)
+      description: >-
+        Sensor "Tagesziel-Fortschritt" der Person (Prozent, 0-100).
+        English: the "Daily goal progress" sensor of the person.
+      selector:
+        entity:
+          domain: sensor
+    notify_service:
+      name: Benachrichtigungsdienst
+      description: >-
+        Notify-Service (z. B. notify.mobile_app_phone).
+        English: notify service to call.
+      default: notify.notify
+      selector:
+        text:
+    reminder_time:
+      name: Uhrzeit
+      description: >-
+        Zeitpunkt der Erinnerung (lokal).
+        English: local reminder time.
+      default: "20:00:00"
+      selector:
+        time:
+
+trigger:
+  - platform: time
+    at: !input reminder_time
+
+condition:
+  - condition: numeric_state
+    entity_id: !input goal_sensor
+    below: 100
+
+action:
+  - service: !input notify_service
+    data:
+      title: Health-O-Mat Erinnerung
+      message: >-
+        {{ 'Erinnerung für ' ~ person_name ~ ': ' if person_name else
+        'Erinnerung: ' }}Das Tagesziel ist noch nicht erreicht. /
+        The daily drinking goal has not been reached yet.
+
+mode: single

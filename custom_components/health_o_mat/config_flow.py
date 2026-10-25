@@ -1,4 +1,5 @@
-"""Config-Flow: eine Person pro Einrichtung (+ Options: Ziel, Quick-Drinks, Anzeigename).
+"""Config-Flow: eine Person pro Einrichtung (+ Options: Ziel, Quick-Drinks,
+Anzeigename, Erinnerungen, Wochenbericht).
 
 Schema-Versionen:
 - v1 (≤ v0.4.0): quick_drinks lagen in entry.data (unveränderlich — Fund F1)
@@ -17,13 +18,15 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from . import areas, logic, parser
+from . import areas, logic, parser, reminders
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_QUICK_DRINKS,
     DOMAIN,
     DRINK_LEXICON,
     MAX_RETENTION_MONTHS,
+    OPTION_REMINDERS,
+    OPTION_WEEKLY_REPORT,
     WELLBEING_IMAGES_OPTION,
     WELLBEING_STATES,
 )
@@ -108,6 +111,125 @@ def wellbeing_images_from_user_input(user_input: dict[str, Any]) -> dict[str, st
     return logic.normalize_wellbeing_images(raw)
 
 
+_WEEKDAY_LABELS: dict[str, tuple[str, ...]] = {
+    "de": ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"),
+    "en": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"),
+}
+
+_WEEKDAY_NAMES: dict[str, tuple[str, ...]] = {
+    "de": (
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+        "Sonntag",
+    ),
+    "en": (
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ),
+}
+
+
+class OptionalTimeSelector(selector.TimeSelector):
+    """TimeSelector, der ein leeres Feld zulässt (optionale Quiet-Hours-Grenze).
+
+    ``cv.time`` weist ``""`` ab; für die optionalen Ruhefenster ist ein leeres
+    Feld aber der Normalfall (kein Ruhefenster). Die UI rendert weiterhin einen
+    Time-Picker, weil ``selector_type`` geerbt wird.
+    """
+
+    def __call__(self, data):
+        if data is None or (isinstance(data, str) and not data.strip()):
+            return ""
+        return super().__call__(data)
+
+
+def notifications_schema(options: dict[str, Any] | None, language: str = "de") -> vol.Schema:
+    """Formular für Erinnerungen + Wochenbericht (Defaults aus entry.options)."""
+    raw = options if isinstance(options, dict) else {}
+    rem = reminders.normalize_reminders(raw.get(OPTION_REMINDERS))
+    weekly = reminders.normalize_weekly_report(raw.get(OPTION_WEEKLY_REPORT))
+    lang = reminders.normalize_language(language)
+    day_options = [
+        selector.SelectOptionDict(value=str(index), label=label)
+        for index, label in enumerate(_WEEKDAY_LABELS[lang])
+    ]
+    weekly_options = [
+        selector.SelectOptionDict(value=str(index), label=label)
+        for index, label in enumerate(_WEEKDAY_NAMES[lang])
+    ]
+    return vol.Schema(
+        {
+            vol.Optional("reminders_enabled", default=rem["enabled"]): bool,
+            vol.Optional("reminder_time", default=rem["time"]): selector.TimeSelector(),
+            vol.Optional(
+                "reminder_days",
+                default=[str(day) for day in rem["days"]],
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=day_options, multiple=True)
+            ),
+            vol.Optional("reminder_notify_service", default=rem["notify_service"]): str,
+            vol.Optional(
+                "reminder_quiet_start", default=rem["quiet_start"]
+            ): OptionalTimeSelector(),
+            vol.Optional("reminder_quiet_end", default=rem["quiet_end"]): OptionalTimeSelector(),
+            vol.Optional("reminder_drink_goal", default=rem["conditions"]["drink_goal"]): bool,
+            vol.Optional(
+                "reminder_no_drink_hours", default=rem["conditions"]["no_drink_hours"]
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=24)),
+            vol.Optional("reminder_bp_days", default=rem["conditions"]["bp_days"]): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=365)
+            ),
+            vol.Optional(
+                "reminder_wellbeing_days", default=rem["conditions"]["wellbeing_days"]
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=365)),
+            vol.Optional("weekly_report_enabled", default=weekly["enabled"]): bool,
+            vol.Optional("weekly_report_day", default=str(weekly["day"])): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=weekly_options)
+            ),
+            vol.Optional("weekly_report_time", default=weekly["time"]): selector.TimeSelector(),
+            vol.Optional("weekly_report_notify_service", default=weekly["notify_service"]): str,
+        }
+    )
+
+
+def notifications_from_user_input(user_input: dict[str, Any]) -> dict[str, Any]:
+    """Flache Formularfelder → normalisierte genestete Options-Strukturen."""
+    rem = reminders.normalize_reminders(
+        {
+            "enabled": user_input.get("reminders_enabled", False),
+            "time": user_input.get("reminder_time"),
+            "days": user_input.get("reminder_days"),
+            "notify_service": user_input.get("reminder_notify_service", ""),
+            "quiet_start": user_input.get("reminder_quiet_start", ""),
+            "quiet_end": user_input.get("reminder_quiet_end", ""),
+            "conditions": {
+                "drink_goal": user_input.get("reminder_drink_goal", True),
+                "no_drink_hours": user_input.get("reminder_no_drink_hours", 3),
+                "bp_days": user_input.get("reminder_bp_days", 0),
+                "wellbeing_days": user_input.get("reminder_wellbeing_days", 0),
+            },
+        }
+    )
+    weekly = reminders.normalize_weekly_report(
+        {
+            "enabled": user_input.get("weekly_report_enabled", False),
+            "day": user_input.get("weekly_report_day", 0),
+            "time": user_input.get("weekly_report_time"),
+            "notify_service": user_input.get("weekly_report_notify_service", ""),
+        }
+    )
+    return {OPTION_REMINDERS: rem, OPTION_WEEKLY_REPORT: weekly}
+
+
 def drink_lexicon_schema(current_text: str) -> vol.Schema:
     """Formular für das Getränke-Lexikon (mehrzeiliges Textfeld)."""
     return vol.Schema(
@@ -154,7 +276,7 @@ class HealthOMatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class HealthOMatOptionsFlow(config_entries.OptionsFlow):
-    """Options: Tagesziel/Lebenszähler → Quick-Drinks → Speichern."""
+    """Options: Allgemein → Quick-Drinks → Bilder → Lexikon → Benachrichtigungen."""
 
     def __init__(self) -> None:
         self._pending: dict[str, Any] = {}
@@ -258,7 +380,7 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_drink_lexicon(self, user_input: dict[str, Any] | None = None):
-        """Schritt 3 (terminal): Getränke-Lexikon bearbeiten, dann Entry speichern."""
+        """Schritt 4: Getränke-Lexikon bearbeiten, dann zu den Benachrichtigungen."""
         if user_input is not None:
             raw_text = user_input["drink_lexicon"]
             try:
@@ -273,13 +395,33 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
             # Bestehende Optionen übernehmen: der Options-Flow zeigt nicht jede
             # Option als Feld (z. B. `wellbeing_confirm` aus dem Panel). Ein
             # reiner `_pending`-Dict würde sie beim Speichern verlieren.
-            merged = dict(self.config_entry.options)
-            merged.update(self._pending)
-            merged["drink_lexicon"] = lexicon
-            return self.async_create_entry(title="", data=merged)
+            self._pending["drink_lexicon"] = lexicon
+            return await self.async_step_notifications()
 
         current = self.config_entry.options.get("drink_lexicon") or DRINK_LEXICON
         return self.async_show_form(
             step_id="drink_lexicon",
             data_schema=drink_lexicon_schema(parser.format_lexicon(current)),
+        )
+
+    async def async_step_notifications(self, user_input: dict[str, Any] | None = None):
+        """Schritt 5 (terminal): Erinnerungen + Wochenbericht, dann speichern.
+
+        Die Felder sind flach (HA-Formular), gespeichert werden die
+        genesteten, normalisierten Strukturen. Bestehende Optionen, die kein
+        Formularfeld haben (z. B. `wellbeing_confirm`, `audit_limit`), bleiben
+        über den Merge erhalten.
+        """
+        if user_input is not None:
+            self._pending.update(notifications_from_user_input(user_input))
+            merged = dict(self.config_entry.options)
+            merged.update(self._pending)
+            return self.async_create_entry(title="", data=merged)
+
+        language = reminders.normalize_language(
+            getattr(getattr(self.hass, "config", None), "language", None)
+        )
+        return self.async_show_form(
+            step_id="notifications",
+            data_schema=notifications_schema(self.config_entry.options, language),
         )

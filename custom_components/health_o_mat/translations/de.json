@@ -71,6 +71,42 @@
         "data": {
           "drink_lexicon": "Getränke-Lexikon"
         }
+      },
+      "notifications": {
+        "title": "Erinnerungen und Wochenbericht",
+        "description": "Alle Benachrichtigungen sind standardmäßig aus. Ein leerer Benachrichtigungsdienst erzeugt einen Hinweis in Home Assistant.",
+        "data": {
+          "reminders_enabled": "Erinnerungen aktivieren",
+          "reminder_time": "Uhrzeit der Erinnerung",
+          "reminder_days": "Erinnerungstage",
+          "reminder_notify_service": "Benachrichtigungsdienst (z. B. mobile_app_phone)",
+          "reminder_quiet_start": "Ruhezeit ab",
+          "reminder_quiet_end": "Ruhezeit bis",
+          "reminder_drink_goal": "Erinnern, wenn das Tagesziel nicht erreicht ist",
+          "reminder_no_drink_hours": "Erinnern nach X Stunden ohne Getränk (0 = aus)",
+          "reminder_bp_days": "Erinnern, wenn der Blutdruck X Tage nicht gemessen wurde (0 = aus)",
+          "reminder_wellbeing_days": "Erinnern, wenn das Wohlbefinden X Tage nicht gemeldet wurde (0 = aus)",
+          "weekly_report_enabled": "Wochenbericht aktivieren",
+          "weekly_report_day": "Tag des Wochenberichts",
+          "weekly_report_time": "Uhrzeit des Wochenberichts",
+          "weekly_report_notify_service": "Benachrichtigungsdienst für den Wochenbericht"
+        },
+        "data_description": {
+          "reminders_enabled": "Sendet pro gewähltem Tag eine gebündelte Erinnerung, je Bedingung höchstens einmal.",
+          "reminder_time": "Lokale Uhrzeit der Erinnerung.",
+          "reminder_days": "Montag ist der erste Tag der Woche.",
+          "reminder_notify_service": "Name eines Notify-Dienstes, mit oder ohne notify.-Präfix. Leer = Hinweis in Home Assistant.",
+          "reminder_quiet_start": "In diesem Fenster wird nicht erinnert. Mitternachtsüberlauf wird unterstützt (z. B. 22:00 bis 07:00).",
+          "reminder_quiet_end": "Ende des Ruhefensters. Beide Grenzen sind für ein Ruhefenster nötig.",
+          "reminder_drink_goal": "Erinnert, solange die heutige Menge unter dem Tagesziel liegt.",
+          "reminder_no_drink_hours": "Erinnert, wenn die letzte aktive Buchung länger als diese Stundenzahl zurückliegt.",
+          "reminder_bp_days": "Erinnert, wenn innerhalb dieser Tage keine Blutdruckmessung erfasst wurde.",
+          "reminder_wellbeing_days": "Erinnert, wenn innerhalb dieser Tage kein Wohlbefinden gemeldet wurde.",
+          "weekly_report_enabled": "Sendet die letzten sieben Tage als Markdown-Benachrichtigung.",
+          "weekly_report_day": "Wochentag für den Bericht.",
+          "weekly_report_time": "Lokale Uhrzeit des Berichts.",
+          "weekly_report_notify_service": "Name eines Notify-Dienstes, mit oder ohne notify.-Präfix. Leer = Hinweis in Home Assistant."
+        }
       }
     },
     "error": {
@@ -396,6 +432,16 @@
         "restore_audit": {
           "name": "Audit-Log importieren",
           "description": "Audit-Log aus dem Backup zusätzlich übernehmen (nur für Experten; standardmäßig werden nur neue Restore-Ereignisse geschrieben)."
+        }
+      }
+    },
+    "weekly_report": {
+      "name": "Wochenbericht senden",
+      "description": "Sendet die letzten sieben Tage je Person als Markdown-Benachrichtigung (kein Datei-Export).",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Name der Person (leer = jede eingerichtete Person erhält einen eigenen Bericht)."
         }
       }
     }

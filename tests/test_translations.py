@@ -233,3 +233,48 @@ def test_req_hom_117_every_js_key_exists_in_both_languages() -> None:
     missing_en = sorted(used - set(en))
     assert not missing_de, f"fehlende de-Keys: {missing_de}"
     assert not missing_en, f"fehlende en-Keys: {missing_en}"
+
+
+# --- M3d: Erinnerungen/Wochenbericht (REQ-HOM-118) -------------------------
+
+_NOTIFICATION_FIELDS = {
+    "reminders_enabled",
+    "reminder_time",
+    "reminder_days",
+    "reminder_notify_service",
+    "reminder_quiet_start",
+    "reminder_quiet_end",
+    "reminder_drink_goal",
+    "reminder_no_drink_hours",
+    "reminder_bp_days",
+    "reminder_wellbeing_days",
+    "weekly_report_enabled",
+    "weekly_report_day",
+    "weekly_report_time",
+    "weekly_report_notify_service",
+}
+
+
+def test_m3d_weekly_report_service_documented_in_all_translations() -> None:
+    """[REQ-HOM-118] `weekly_report` ist in Master + beiden Sprachen vollständig."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        block = _load(path)["services"]["weekly_report"]
+        assert block["name"], f"{path}: weekly_report.name fehlt"
+        assert block["description"], f"{path}: weekly_report.description fehlt"
+        assert set(block["fields"]) == {"person"}, f"{path}: Felder weichen ab"
+        assert block["fields"]["person"]["name"]
+        assert block["fields"]["person"]["description"]
+
+
+def test_m3d_notifications_options_step_documented_in_all_translations() -> None:
+    """[REQ-HOM-118] Der Notifications-Schritt ist in allen drei Dateien gleich."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        step = _load(path)["options"]["step"]["notifications"]
+        assert step["title"]
+        assert step["description"]
+        assert set(step["data"]) == _NOTIFICATION_FIELDS, f"{path}: data-Keys weichen ab"
+        assert set(step["data_description"]) == _NOTIFICATION_FIELDS, (
+            f"{path}: data_description-Keys weichen ab"
+        )
+        empty = [key for key, value in step["data"].items() if not str(value).strip()]
+        assert not empty, f"{path}: leere Labels: {empty}"
