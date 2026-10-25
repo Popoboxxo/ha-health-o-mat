@@ -1387,9 +1387,7 @@ def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
     mismatched = out["mismatched"]
     assert 'data-action="wellbeing-confirm"' not in mismatched["html"]
     assert "noch nicht gemeldet" not in mismatched["html"]
-    assert mismatched["calls"] == [], (
-        "die Bestaetigung meldet eine Vormerkung einer anderen Person"
-    )
+    assert mismatched["calls"] == [], "die Bestaetigung meldet eine Vormerkung einer anderen Person"
 
 
 def test_req_hom_114_card_confirm_button_needs_pending_selection():
@@ -1407,9 +1405,9 @@ def test_req_hom_114_card_confirm_button_needs_pending_selection():
     assert "const confirmRow = staged" in form
     # Erst die Bestätigung ruft die Meldung auf.
     assert "_reportWellbeing" in confirm and "_reportWellbeingScore" in confirm
-    assert re.search(
-        r'action === "wellbeing-confirm"[\s\S]*?_confirmWellbeing\(\)', click
-    ), "der Klick auf 'Übernehmen' ruft nicht `_confirmWellbeing()` auf"
+    assert re.search(r'action === "wellbeing-confirm"[\s\S]*?_confirmWellbeing\(\)', click), (
+        "der Klick auf 'Übernehmen' ruft nicht `_confirmWellbeing()` auf"
+    )
 
 
 def test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox():
@@ -1459,7 +1457,5 @@ def test_req_hom_114_card_editor_toggle_writes_config(tmp_path):
     assert editor["eventOn"]["wellbeing_confirm"] is True, (
         "`config-changed` traegt den neuen Schalter nicht"
     )
-    assert editor["hasOff"] is False, (
-        "Ausschalten muss den Key entfernen (Default ist `false`)"
-    )
+    assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default ist `false`)"
     assert editor["eventOff"].get("wellbeing_confirm") is None

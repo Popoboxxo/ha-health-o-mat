@@ -2914,9 +2914,7 @@ def test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm(value):
         ws_api.websocket_set_settings(
             hass,
             connection,
-            _settings_msg(
-                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", wellbeing_confirm=value
-            ),
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", wellbeing_confirm=value),
         )
     )
 

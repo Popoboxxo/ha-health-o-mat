@@ -2013,9 +2013,7 @@ def test_req_hom_114_panel_admin_payload_carries_wellbeing_confirm(tmp_path):
     )["admin"]
 
     assert out["errors"] == [], f"das Formular meldet Fehler: {out['errors']}"
-    assert out["payload"]["wellbeing_confirm"] is True, (
-        "die Admin-Checkbox landet nicht im Payload"
-    )
+    assert out["payload"]["wellbeing_confirm"] is True, "die Admin-Checkbox landet nicht im Payload"
     assert out["changes"] == {"wellbeing_confirm": True}, (
         f"das Change-Set traegt den Schalter nicht korrekt: {out['changes']!r}"
     )
