@@ -336,6 +336,52 @@
     "backup": {
       "name": "Backup",
       "description": "Writes a JSON backup of all persons and datasets to /config/health_o_mat_export/."
+    },
+    "restore_backup": {
+      "name": "Restore backup",
+      "description": "Restores a JSON backup from /config/health_o_mat_import/ (merge or replace, optionally limited to persons, datasets and a time range). A safety backup is written before any change. Administrators only.",
+      "fields": {
+        "filename": {
+          "name": "File name",
+          "description": "File name inside /config/health_o_mat_import/."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Merge adds entries (duplicates are skipped); replace clears the selected scope first and requires the REPLACE confirmation."
+        },
+        "persons": {
+          "name": "Persons",
+          "description": "Only restore these persons (source slug, source entry ID or target entry ID; empty = all)."
+        },
+        "datasets": {
+          "name": "Datasets",
+          "description": "Only restore these datasets (empty = all)."
+        },
+        "from": {
+          "name": "From (ISO)",
+          "description": "Only entries at or after this timestamp (inclusive)."
+        },
+        "to": {
+          "name": "To (ISO)",
+          "description": "Only entries at or before this timestamp (inclusive)."
+        },
+        "person_map": {
+          "name": "Person mapping",
+          "description": "Mapping {source: target entry ID}. Required when the person cannot be matched unambiguously by name. Persons are never created automatically."
+        },
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Plan only, write nothing."
+        },
+        "confirm": {
+          "name": "Confirmation",
+          "description": "Mode \"replace\" requires exactly \"REPLACE\"."
+        },
+        "restore_audit": {
+          "name": "Import audit log",
+          "description": "Also import the backup audit log (experts only; by default only new restore events are written)."
+        }
+      }
     }
   }
 }

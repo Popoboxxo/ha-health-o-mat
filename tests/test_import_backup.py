@@ -696,3 +696,94 @@ def test_backup_contains_voided_entries_and_audit(tmp_path, monkeypatch):
         "entry_voided",
     ]
     assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 0, "voided": 1}
+
+
+# ============================================================================
+# Backup v2 — Archiv-Store (M2c)
+# ============================================================================
+
+
+def test_build_backup_document_includes_archive_additively():
+    """[M2c] v2-Backup nimmt den Archiv-Store additiv mit auf."""
+    raw = {"schema": 4, "entries": {"e1": {"person": "Max", "drinks": []}}}
+    archive = {
+        "schema": 4,
+        "entries": {
+            "e1": {
+                "drinks": [{"ml": 500, "voided_at": None}],
+                "readings": [{"sys": 120, "dia": 80, "voided_at": None}],
+            }
+        },
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14), archive)
+
+    assert document["archive_schema"] == 4
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+    assert document["archive_entries"]["e1"]["readings"][0]["sys"] == 120
+    assert document["archive_counts"]["e1"]["drinks"] == {
+        "total": 1,
+        "active": 1,
+        "voided": 0,
+    }
+    # Hauptbestand bleibt unverändert enthalten (keine Regression).
+    assert document["entries"]["e1"]["person"] == "Max"
+
+
+def test_build_backup_document_without_archive_is_empty():
+    """[M2c] Ohne Archiv bleiben die Archivfelder leer (abwärtskompatibel)."""
+    document = backup.build_backup_document({"schema": 4, "entries": {}}, datetime(2026, 10, 14))
+
+    assert document["archive_entries"] == {}
+    assert document["archive_schema"] is None
+    assert document["archive_counts"] == {}
+
+
+def test_async_backup_includes_archive_store(tmp_path, monkeypatch):
+    """[M2c] async_backup schreibt Archiv-Einträge in dasselbe Dokument."""
+    store = _fresh_store()
+    archive = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Kaffee", "button"))
+    _run(archive.append_archive("e1", [{"ml": 500, "ts": "2025-01-01T08:00:00"}], []))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store, archive))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document["archive_schema"] == 4
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_backup_service_passes_archive_store():
+    """[M2c] Der Backup-Service übergibt den vorhandenen Archiv-Store."""
+    init = _load_init()
+    store = _fresh_store()
+    archive = _fresh_store()
+    hass = _import_hass(Path("/tmp"))
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    hass.data[_DOMAIN]["shared"]["archive_store"] = archive
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    _schema, func = hass.services.registered["backup"]
+    calls = []
+
+    async def _fake_backup(hass_, store_, archive_=None):
+        calls.append((store_, archive_))
+        return "/tmp/x.json"
+
+    original = backup.async_backup
+    lazy_backup = importlib.import_module(f"{_PKG}.init.backup")
+    lazy_backup.async_backup = _fake_backup
+    try:
+        _run(func(_call({})))
+    finally:
+        lazy_backup.async_backup = original
+
+    assert calls == [(store, archive)]

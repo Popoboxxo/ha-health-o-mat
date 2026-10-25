@@ -336,6 +336,52 @@
     "backup": {
       "name": "Backup",
       "description": "Schreibt ein JSON-Backup aller Personen und Datensätze nach /config/health_o_mat_export/."
+    },
+    "restore_backup": {
+      "name": "Backup wiederherstellen",
+      "description": "Spielt ein JSON-Backup aus /config/health_o_mat_import/ zurück (Zusammenführen oder Ersetzen, optional nur bestimmte Personen, Datensätze und Zeiträume). Vor jeder Änderung wird ein Sicherheitsbackup geschrieben. Nur für Administratoren.",
+      "fields": {
+        "filename": {
+          "name": "Dateiname",
+          "description": "Dateiname innerhalb von /config/health_o_mat_import/."
+        },
+        "mode": {
+          "name": "Modus",
+          "description": "Zusammenführen ergänzt Einträge (Duplikate werden übersprungen); Ersetzen leert zuerst den gewählten Bereich und benötigt die Bestätigung REPLACE."
+        },
+        "persons": {
+          "name": "Personen",
+          "description": "Nur diese Personen wiederherstellen (Quell-Slug, Quell-Entry-ID oder Ziel-Entry-ID; leer = alle)."
+        },
+        "datasets": {
+          "name": "Datensätze",
+          "description": "Nur diese Datensätze wiederherstellen (leer = alle)."
+        },
+        "from": {
+          "name": "Von (ISO)",
+          "description": "Nur Einträge ab diesem Zeitstempel (inklusive)."
+        },
+        "to": {
+          "name": "Bis (ISO)",
+          "description": "Nur Einträge bis zu diesem Zeitstempel (inklusive)."
+        },
+        "person_map": {
+          "name": "Personen-Zuordnung",
+          "description": "Zuordnung {Quelle: Ziel-Entry-ID}. Nötig, wenn die Person im Ziel nicht über den Namen eindeutig gefunden wird. Personen werden nie automatisch angelegt."
+        },
+        "dry_run": {
+          "name": "Probelauf",
+          "description": "Nur planen, nichts schreiben."
+        },
+        "confirm": {
+          "name": "Bestätigung",
+          "description": "Bei Modus \"replace\" ist exakt \"REPLACE\" erforderlich."
+        },
+        "restore_audit": {
+          "name": "Audit-Log importieren",
+          "description": "Audit-Log aus dem Backup zusätzlich übernehmen (nur für Experten; standardmäßig werden nur neue Restore-Ereignisse geschrieben)."
+        }
+      }
     }
   }
 }

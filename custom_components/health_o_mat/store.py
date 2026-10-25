@@ -30,6 +30,7 @@ hier bleibt der Fall „valides JSON, falsches Schema": Backup als
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import uuid
@@ -164,6 +165,28 @@ _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
 }
 
 
+def migrate_store_data(data: dict) -> dict:
+    """Bringt Store-Daten idempotent auf ``STORE_SCHEMA_VERSION`` (HA-frei).
+
+    Gemeinsamer Pfad für ``async_load`` und den Restore: ein Backup kann eine
+    ältere Schema-Stufe tragen (v1/v2/v3) und wird hier über dieselbe
+    Migrationskette normalisiert wie ein persistierter Altbestand. Wiederholte
+    Aufrufe ändern nichts (idempotent).
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Store-Daten müssen ein Objekt sein")
+    try:
+        schema = max(1, int(data.get("schema", 1)))
+    except (TypeError, ValueError):
+        schema = 1
+    for step in range(schema, STORE_SCHEMA_VERSION):
+        migration = _MIGRATIONS.get(step)
+        if migration:
+            data = migration(data)
+    data["schema"] = STORE_SCHEMA_VERSION
+    return data
+
+
 class HealthOMatStore:
     """Append-only Historie je Person, persistiert via HA-Store.
 
@@ -194,13 +217,7 @@ class HealthOMatStore:
 
     def _migrate(self, data: dict) -> dict:
         """Bringt geladene Daten idempotent auf STORE_SCHEMA_VERSION."""
-        schema = int(data.get("schema", 1))
-        for step in range(schema, STORE_SCHEMA_VERSION):
-            migration = _MIGRATIONS.get(step)
-            if migration:
-                data = migration(data)
-        data["schema"] = STORE_SCHEMA_VERSION
-        return data
+        return migrate_store_data(data)
 
     async def _load_with_recovery(self) -> dict | None:
         """Load mit Recovery (REQ-HOM-103).
@@ -312,19 +329,41 @@ class HealthOMatStore:
         `details` trägt nur Metadaten (z. B. `{"ml": 250}`), nie vollständige
         Gesundheitswerte — die stehen im Eintrag selbst.
         """
-        audit = self.entry(entry_id).setdefault("audit_log", [])
-        audit.append(
-            {
-                "id": str(uuid.uuid4()),
-                "ts": _now_iso(),
-                "action": action,
-                "kind": kind,
-                "target_id": target_id,
-                "actor": actor,
-                "details": details or {},
-            }
+        append_audit_event_to_entry(
+            self.entry(entry_id),
+            action,
+            kind,
+            target_id=target_id,
+            actor=actor,
+            details=details,
+            audit_limit=audit_limit,
         )
-        self._prune_audit(audit, audit_limit)
+
+    def append_audit_event(
+        self,
+        entry_id: str,
+        action: str,
+        kind: str,
+        target_id: str | None = None,
+        actor: str | None = None,
+        details: dict[str, Any] | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> dict:
+        """Öffentliches Audit-Ereignis anhängen — OHNE Save.
+
+        Für den Restore: der Plan wird in-memory aufgebaut und in genau einem
+        ``async_set_entries``-Save persistiert. Reguläre Schreibpfade nutzen
+        weiterhin ``_append_audit`` + eigenen Save.
+        """
+        return append_audit_event_to_entry(
+            self.entry(entry_id),
+            action,
+            kind,
+            target_id=target_id,
+            actor=actor,
+            details=details,
+            audit_limit=audit_limit,
+        )
 
     @staticmethod
     def _prune_audit(audit: list[dict], audit_limit: int) -> None:
@@ -335,35 +374,7 @@ class HealthOMatStore:
         das Limit selbst sprengen); ab zwei Ereignissen bleibt ein
         `audit_pruned`-Summary am Ende stehen.
         """
-        limit = int(audit_limit)
-        if limit <= 0 or len(audit) <= limit:
-            return
-        if limit == 1:
-            audit[:] = audit[-1:]
-            return
-
-        # Ein Platz ist für das (einzige) Summary-Ereignis reserviert. Ältere
-        # Summaries werden durch das neue ersetzt statt sich anzusammeln.
-        keep = limit - 1
-        body = [
-            event
-            for event in audit
-            if isinstance(event, dict) and event.get("action") != "audit_pruned"
-        ]
-        retained = body[-keep:]
-        pruned = len(audit) - len(retained)
-        oldest_retained = retained[0].get("ts") if retained else None
-        audit[:] = retained + [
-            {
-                "id": str(uuid.uuid4()),
-                "ts": _now_iso(),
-                "action": "audit_pruned",
-                "kind": "audit",
-                "target_id": None,
-                "actor": None,
-                "details": {"pruned": pruned, "oldest_retained": oldest_retained},
-            }
-        ]
+        prune_audit_log(audit, audit_limit)
 
     # ------------------------------------------------------------------
     # Getränke
@@ -784,8 +795,99 @@ class HealthOMatStore:
         """Rohe Store-Daten (für Tests/Diagnostics)."""
         return self._data
 
+    def raw_entries_copy(self) -> dict:
+        """Tiefe Kopie von ``entries`` (Restore-Planung, keine Referenzteilung)."""
+        return copy.deepcopy(self._data.get("entries", {}))
+
+    async def async_set_entries(self, entries: dict) -> None:
+        """Ersetzt ``entries`` in genau EINEM Save (Restore-Pfad).
+
+        Das Schema bleibt erhalten. Schlägt der Save fehl, wird der vorherige
+        In-Memory-Stand wiederhergestellt (kein stiller Teil-Schreibstand).
+        """
+        if not isinstance(entries, dict):
+            raise ValueError("entries müssen ein Objekt sein")
+        previous = self._data.get("entries", {})
+        self._data["schema"] = STORE_SCHEMA_VERSION
+        self._data["entries"] = entries
+        try:
+            await self._async_save()
+        except Exception:
+            self._data["entries"] = previous
+            raise
+
+    def rebuild_wellbeing_mirrors(self, entry: dict) -> None:
+        """Legacy-Spiegel aus ``wellbeing_entries`` neu bauen (Restore-Helfer)."""
+        sync_wellbeing_mirrors(entry)
+
     async def _async_save(self) -> None:
         await self._store.async_save(self._data)
+
+
+def prune_audit_log(audit: list[dict], audit_limit: int) -> None:
+    """Audit-Liste in-place auf ``audit_limit`` kappen (0 = unbegrenzt).
+
+    Öffentliche Variante der Store-Logik, damit der Restore denselben Cap
+    anwendet, ohne die privaten Interna zu duplizieren.
+    """
+    limit = int(audit_limit)
+    if limit <= 0 or len(audit) <= limit:
+        return
+    if limit == 1:
+        audit[:] = audit[-1:]
+        return
+
+    # Ein Platz ist für das (einzige) Summary-Ereignis reserviert. Ältere
+    # Summaries werden durch das neue ersetzt statt sich anzusammeln.
+    keep = limit - 1
+    body = [
+        event
+        for event in audit
+        if isinstance(event, dict) and event.get("action") != "audit_pruned"
+    ]
+    retained = body[-keep:]
+    pruned = len(audit) - len(retained)
+    oldest_retained = retained[0].get("ts") if retained else None
+    audit[:] = retained + [
+        {
+            "id": str(uuid.uuid4()),
+            "ts": _now_iso(),
+            "action": "audit_pruned",
+            "kind": "audit",
+            "target_id": None,
+            "actor": None,
+            "details": {"pruned": pruned, "oldest_retained": oldest_retained},
+        }
+    ]
+
+
+def append_audit_event_to_entry(
+    entry: dict,
+    action: str,
+    kind: str,
+    target_id: str | None = None,
+    actor: str | None = None,
+    details: dict[str, Any] | None = None,
+    audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ts: str | None = None,
+) -> dict:
+    """Audit-Ereignis an ein Eintrags-Dict anhängen (HA-frei, ohne Save).
+
+    ``details`` trägt nur Metadaten, nie vollständige Gesundheitswerte.
+    """
+    audit = entry.setdefault("audit_log", [])
+    event = {
+        "id": str(uuid.uuid4()),
+        "ts": ts or _now_iso(),
+        "action": action,
+        "kind": kind,
+        "target_id": target_id,
+        "actor": actor,
+        "details": details or {},
+    }
+    audit.append(event)
+    prune_audit_log(audit, audit_limit)
+    return event
 
 
 def _find_by_id(items: Any, item_id: str) -> dict | None:
@@ -830,6 +932,11 @@ def _active_view(entry: dict) -> dict:
         view["wellbeing_entries"] = _active_items(entry.get("wellbeing_entries"))
         _sync_wellbeing_mirrors(view)
     return view
+
+
+def sync_wellbeing_mirrors(entry: dict) -> None:
+    """Öffentlicher Wrapper für ``_sync_wellbeing_mirrors`` (Restore, HA-frei)."""
+    _sync_wellbeing_mirrors(entry)
 
 
 def _sync_wellbeing_mirrors(entry: dict) -> None:

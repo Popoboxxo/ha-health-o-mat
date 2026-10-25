@@ -109,6 +109,7 @@ COMMAND_EXPORT_CSV = "health_o_mat/export_csv"
 COMMAND_START_PERSON_FLOW = "health_o_mat/start_person_flow"
 COMMAND_DELETE_PERSON = "health_o_mat/delete_person"
 COMMAND_BACKUP = "health_o_mat/backup"
+COMMAND_RESTORE_BACKUP = "health_o_mat/restore_backup"
 
 # Admin-only (Konzept §8.4, Entscheidung 4): Settings lesen/schreiben und
 # Export sind Verwaltungsvorgänge. Die Alltags-Schreibkommandos
@@ -122,6 +123,7 @@ ADMIN_ONLY_COMMANDS: frozenset[str] = frozenset(
         COMMAND_START_PERSON_FLOW,
         COMMAND_DELETE_PERSON,
         COMMAND_BACKUP,
+        COMMAND_RESTORE_BACKUP,
     }
 )
 
@@ -164,6 +166,7 @@ else:  # pragma: no cover - nur ohne WS-Komponente
 # Probleme als `ServiceValidationError` (z. B. „Keine Daten zum Exportieren").
 ERR_EXPORT_FAILED = "export_failed"
 ERR_BACKUP_FAILED = "backup_failed"
+ERR_RESTORE_FAILED = "restore_failed"
 
 
 # --- Admin-/Settings-Kommandos (L3, Konzept §4.5/§8.4) ---------------------
@@ -891,6 +894,22 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
             {vol.Required("entry_id"): str, vol.Required("confirm"): str},
         ),
         (COMMAND_BACKUP, websocket_backup, {}),
+        (
+            COMMAND_RESTORE_BACKUP,
+            websocket_restore_backup,
+            {
+                vol.Required("filename"): str,
+                vol.Optional("mode", default="merge"): vol.In(["merge", "replace"]),
+                vol.Optional("persons"): [str],
+                vol.Optional("datasets"): [str],
+                vol.Optional("from"): str,
+                vol.Optional("to"): str,
+                vol.Optional("person_map"): dict,
+                vol.Optional("dry_run", default=False): bool,
+                vol.Optional("confirm"): str,
+                vol.Optional("restore_audit", default=False): bool,
+            },
+        ),
     )
     for command, handler, extra in commands:
         wrapped = websocket_api.async_response(handler)
@@ -1561,3 +1580,26 @@ async def websocket_backup(hass: HomeAssistant, connection: Any, msg: dict[str, 
         connection.send_error(msg["id"], ERR_BACKUP_FAILED, str(err))
         return
     connection.send_result(msg["id"], {"ok": True})
+
+
+async def websocket_restore_backup(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/restore_backup` → JSON-Backup kontrolliert einspielen (nur Admin).
+
+    Teilt sich den Pfad mit dem Service (`restore.async_restore_command`):
+    derselbe Plan-/Apply-Vertrag, dieselbe Bestätigungspflicht für `replace`.
+    Bei `dry_run` wird nichts geschrieben; die Antwort enthält den Plan.
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    data = {key: value for key, value in msg.items() if key not in ("id", "type")}
+    from .restore import RestoreError, async_restore_command
+
+    try:
+        result = await async_restore_command(hass, data, actor=user_id_of(connection))
+    except (RestoreError, HomeAssistantError) as err:
+        connection.send_error(msg["id"], ERR_RESTORE_FAILED, str(err))
+        return
+    connection.send_result(msg["id"], result)

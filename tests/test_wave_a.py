@@ -903,3 +903,68 @@ def test_service_registration_includes_void_and_restore():
     init._register_services(hass)
 
     assert {"void_entry", "restore_entry"}.issubset(hass.services.registered)
+
+
+# --- restore_backup-Service (M2c) -------------------------------------------
+
+
+def test_restore_backup_service_registered_with_schema():
+    """[M2c] restore_backup ist registriert; Defaults und Pflichtfelder stimmen."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+
+    schema, _func = hass.services.registered["restore_backup"]
+    validated = schema({"filename": "backup.json"})
+    assert validated["mode"] == "merge"
+    assert validated["dry_run"] is False
+    assert validated["restore_audit"] is False
+    with pytest.raises(vol.Invalid):
+        schema({})
+    with pytest.raises(vol.Invalid):
+        schema({"filename": "backup.json", "mode": "bogus"})
+
+
+def test_restore_backup_service_rejects_non_admin():
+    """[M2c] Nicht-Admin → ServiceValidationError, kein Restore."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.auth = MagicMock()
+    hass.auth.async_get_user = AsyncMock(return_value=types.SimpleNamespace(is_admin=False))
+    init._register_services(hass)
+    _schema, func = hass.services.registered["restore_backup"]
+    call = MagicMock()
+    call.data = {"filename": "backup.json"}
+    call.context.user_id = "user-1"
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(call))
+
+    assert "Administratoren" in str(exc.value)
+
+
+def test_restore_backup_service_without_user_is_trusted(tmp_path, monkeypatch):
+    """[M2c] Ohne User-ID (Automation) läuft der Restore-Pfad weiter."""
+    init = _load_init()
+    restore = _import_restore_module()
+    called = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.config.config_dir = str(tmp_path)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["restore_backup"]
+    call = MagicMock()
+    call.data = {"filename": "backup.json", "dry_run": True}
+    call.context.user_id = None
+
+    _run(func(call))
+
+    called.assert_awaited_once()
+    assert called.await_args.args[1] == {"filename": "backup.json", "dry_run": True}
+    assert called.await_args.kwargs["actor"] is None
+
+
+def _import_restore_module():
+    """Lazy-Modul des Service-Handlers (``__init__`` ist als ``<pkg>.init`` geladen)."""
+    return importlib.import_module(f"{_PKG}.init.restore")

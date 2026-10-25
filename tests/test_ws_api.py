@@ -791,6 +791,7 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_START_PERSON_FLOW,
     ws_api.COMMAND_DELETE_PERSON,
     ws_api.COMMAND_BACKUP,
+    ws_api.COMMAND_RESTORE_BACKUP,
 )
 
 
@@ -986,6 +987,16 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
         == 1
     )
     assert schemas[ws_api.COMMAND_BACKUP]({"id": 1, "type": ws_api.COMMAND_BACKUP})["id"] == 1
+    assert (
+        schemas[ws_api.COMMAND_RESTORE_BACKUP](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_RESTORE_BACKUP,
+                "filename": "backup.json",
+            }
+        )["mode"]
+        == "merge"
+    )
 
 
 def test_register_ws_api_uses_real_registration():
@@ -2644,6 +2655,7 @@ def test_admin_only_commands_are_marked():
         ws_api.COMMAND_START_PERSON_FLOW,
         ws_api.COMMAND_DELETE_PERSON,
         ws_api.COMMAND_BACKUP,
+        ws_api.COMMAND_RESTORE_BACKUP,
     }
     for command in (
         ws_api.COMMAND_BOOK_DRINK,
@@ -3522,3 +3534,91 @@ def test_settings_audit_limit_default_zero_and_validation():
     for bad in (-1, "1000", 1000.5, True, 1_000_001):
         _updates, error = ws_api.parse_settings_message({"audit_limit": bad})
         assert error is not None and "audit_limit" in error, bad
+
+
+# --- restore_backup (M2c) ---------------------------------------------------
+
+
+def _restore_module():
+    return importlib.import_module(f"{_PKG}.restore")
+
+
+def test_restore_backup_requires_admin(monkeypatch):
+    """[M2c] Nicht-Admin → `unauthorized`, kein Restore-Aufruf."""
+    restore = _restore_module()
+    called = AsyncMock()
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _settings_hass(_entry("e1"))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_RESTORE_BACKUP, filename="backup.json"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    called.assert_not_awaited()
+
+
+def test_restore_backup_dry_run_returns_plan(monkeypatch):
+    """[M2c] Admin + Dry-Run → Plan wird unverändert zurückgegeben."""
+    restore = _restore_module()
+    payload = {
+        "plan": {"mode": "merge", "totals": {"added": 1}},
+        "applied": False,
+        "dry_run": True,
+        "backup_path": None,
+    }
+    called = AsyncMock(return_value=payload)
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_RESTORE_BACKUP,
+                filename="backup.json",
+                dry_run=True,
+                persons=["Max"],
+            ),
+        )
+    )
+
+    assert connection.results == [(1, payload)]
+    data = called.await_args.args[1]
+    kwargs = called.await_args.kwargs
+    assert data["filename"] == "backup.json"
+    assert data["dry_run"] is True
+    assert data["persons"] == ["Max"]
+    assert kwargs["actor"] == "user-1"
+
+
+def test_restore_backup_error_is_structured(monkeypatch):
+    """[M2c] Restore-Fehler → eigener Fehlercode `restore_failed`."""
+    restore = _restore_module()
+    monkeypatch.setattr(
+        restore,
+        "async_restore_command",
+        AsyncMock(side_effect=restore.RestoreError("Backup-Version 9 zu neu")),
+    )
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_RESTORE_BACKUP, filename="backup.json"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "restore_failed"
+    assert "Version 9" in connection.errors[0][2]

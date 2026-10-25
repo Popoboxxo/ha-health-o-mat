@@ -58,6 +58,7 @@ _SERVICE_NAMES = (
     "export_csv",
     "import_csv",
     "backup",
+    "restore_backup",
     "set_wellbeing",
 )
 
@@ -446,6 +447,25 @@ def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+async def _async_require_admin(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Admin-Gate für Verwaltungs-Services (z. B. Restore).
+
+    Ein Service-Call OHNE User-ID stammt aus einer Automation/einem Skript und
+    gilt als vertrauenswürdig (dokumentiert: Automationen laufen bewusst ohne
+    Login). Mit User-ID wird der HA-User geladen und ``is_admin`` geprüft.
+    """
+    user_id = getattr(getattr(call, "context", None), "user_id", None)
+    if not user_id:
+        return
+    auth = getattr(hass, "auth", None)
+    get_user = getattr(auth, "async_get_user", None)
+    if get_user is None:
+        raise ServiceValidationError("Admin-Prüfung ist nicht verfügbar")
+    user = await get_user(user_id)
+    if not getattr(user, "is_admin", False):
+        raise ServiceValidationError("Dieser Service ist Administratoren vorbehalten")
+
+
 # Menschliche Bezeichnung der Korrektur-Ziele (Fehlertexte).
 _KIND_LABELS: dict[str, str] = {
     "drinks": "Getränke",
@@ -613,7 +633,17 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = shared.get("store")
         from .backup import async_backup
 
-        await async_backup(hass, store)
+        await async_backup(hass, store, shared.get("archive_store"))
+
+    async def restore_backup(call: ServiceCall) -> None:
+        """Backup kontrolliert zurückspielen (Admin-only, optional Dry-Run)."""
+        await _async_require_admin(hass, call)
+        from .restore import RestoreError, async_restore_command
+
+        try:
+            await async_restore_command(hass, dict(call.data), actor=_service_actor(call))
+        except RestoreError as err:
+            raise ServiceValidationError(str(err)) from err
 
     hass.services.async_register(
         DOMAIN,
@@ -719,4 +749,23 @@ def _register_services(hass: HomeAssistant) -> None:
         "backup",
         schema=vol.Schema({}),
         service_func=backup,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "restore_backup",
+        schema=vol.Schema(
+            {
+                vol.Required("filename"): str,
+                vol.Optional("mode", default="merge"): vol.In(["merge", "replace"]),
+                vol.Optional("persons"): [str],
+                vol.Optional("datasets"): [str],
+                vol.Optional("from"): str,
+                vol.Optional("to"): str,
+                vol.Optional("person_map"): dict,
+                vol.Optional("dry_run", default=False): bool,
+                vol.Optional("confirm"): str,
+                vol.Optional("restore_audit", default=False): bool,
+            }
+        ),
+        service_func=restore_backup,
     )

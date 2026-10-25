@@ -128,3 +128,28 @@ def test_m2b_void_and_restore_services_documented_in_all_translations() -> None:
                 f"{path}: {service}-Felder weichen ab"
             )
         assert set(data["services"]["remove_last_entry"]["fields"]) == {"person", "kind"}
+
+
+def test_m2c_restore_backup_service_documented_in_all_translations() -> None:
+    """[M2c] `restore_backup` ist in Master + beiden Sprachen vollständig."""
+    expected_fields = {
+        "filename",
+        "mode",
+        "persons",
+        "datasets",
+        "from",
+        "to",
+        "person_map",
+        "dry_run",
+        "confirm",
+        "restore_audit",
+    }
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        block = data["services"]["restore_backup"]
+        assert block["name"], f"{path}: restore_backup.name fehlt"
+        assert block["description"], f"{path}: restore_backup.description fehlt"
+        assert set(block["fields"]) == expected_fields, f"{path}: Felder weichen ab"
+        for field in expected_fields:
+            assert block["fields"][field]["name"], f"{path}: {field}.name fehlt"
+            assert block["fields"][field]["description"], f"{path}: {field}.description fehlt"
