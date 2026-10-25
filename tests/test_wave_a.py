@@ -406,7 +406,11 @@ def test_remove_last_entry_default_kind_removes_drink():
     assert validated["kind"] == "drinks"
 
     _run(func(_call({"kind": validated["kind"]})))
-    assert store.entry("e1")["drinks"] == []
+    # M2b: Undo voidet (kein Pop) — die Rohliste behält den Eintrag.
+    assert store.active_drinks("e1") == []
+    assert len(store.entry("e1")["drinks"]) == 1
+    assert store.entry("e1")["drinks"][0]["voided_at"] is not None
+    assert store.entry("e1")["total_ml_lifetime"] == 0
 
 
 def test_remove_last_entry_kind_blood_pressure_removes_reading():
@@ -420,8 +424,8 @@ def test_remove_last_entry_kind_blood_pressure_removes_reading():
     _run(func(_call({"kind": "blood_pressure"})))
 
     readings = store.entry("e1")["readings"]
-    assert len(readings) == 1
-    assert readings[0]["sys"] == 120
+    assert len(readings) == 2, "der voided Eintrag bleibt in der Rohliste"
+    assert [r["sys"] for r in store.active_readings("e1")] == [120]
 
 
 def test_remove_last_entry_blood_pressure_empty_raises():
@@ -778,3 +782,124 @@ def test_apply_retention_with_only_voided_entries_is_noop(monkeypatch):
     assert store.entry("e1")["archived_counts"] == {"drinks": 0, "readings": 0}
     # Kein Archiv-Store angelegt (kein Verschieben nötig).
     assert "archive_store" not in hass.data[_DOMAIN]["shared"]
+
+
+# --- M2b: Void/Restore-Services + Undo-Semantik -----------------------------
+
+
+def _registered_service(hass, name):
+    init = _load_init()
+    init._register_services(hass)
+    return init, hass.services.registered[name]
+
+
+def test_remove_last_entry_kind_wellbeing_voids_last_report():
+    """[M2b] remove_last_entry unterstützt kind=wellbeing (Void, kein Pop)."""
+    store = _fresh_store()
+    _run(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _run(store.set_wellbeing("e1", "bad", "2026-10-14T09:00:00"))
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "remove_last_entry")
+
+    _run(func(_call({"kind": "wellbeing"})))
+
+    entry = store.entry("e1")
+    assert len(entry["wellbeing_entries"]) == 2, "kein Hard-Delete"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("e1")["key"] == "good"
+
+    # Zweites Undo voidet die verbleibende aktive Meldung …
+    _run(func(_call({"kind": "wellbeing"})))
+    assert store.current_wellbeing("e1") is None
+    # … danach gibt es nichts mehr zu entfernen.
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "wellbeing"})))
+    assert "Wohlbefinden" in str(exc.value)
+
+
+def test_remove_last_entry_schema_accepts_wellbeing():
+    """[M2b] Das Service-Schema kennt das dritte Ziel."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    _init, (schema, _func) = _registered_service(hass, "remove_last_entry")
+
+    assert schema({"kind": "wellbeing"})["kind"] == "wellbeing"
+
+
+def test_void_entry_service_marks_entry_deleted_and_audits():
+    """[M2b] health_o_mat.void_entry voidet per ID und schreibt Audit."""
+    store = _fresh_store()
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "service"))
+    drink_id = store.entry("e1")["drinks"][0]["id"]
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "void_entry")
+
+    _run(func(_call({"kind": "drinks", "id": drink_id})))
+
+    assert store.active_drinks("e1") == []
+    assert store.entry("e1")["total_ml_lifetime"] == 0
+    assert any(
+        event["action"] == "entry_voided" and event["target_id"] == drink_id
+        for event in store.entry("e1")["audit_log"]
+    )
+
+
+def test_void_entry_service_unknown_id_raises():
+    """[M2b] Unbekannte ID → ServiceValidationError (kein stiller Erfolg)."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "void_entry")
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "drinks", "id": "nope"})))
+
+    assert "nicht gefunden" in str(exc.value)
+
+
+def test_void_entry_service_schema_requires_kind_and_id():
+    """[M2b] kind und id sind Pflichtfelder des Service-Schemas."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    _init, (schema, _func) = _registered_service(hass, "void_entry")
+
+    with pytest.raises(vol.Invalid):
+        schema({})
+    with pytest.raises(vol.Invalid):
+        schema({"kind": "tea", "id": "x"})
+    validated = schema({"kind": "wellbeing", "id": "w1"})
+    assert validated == {"kind": "wellbeing", "id": "w1"}
+
+
+def test_restore_entry_service_restores_voided_entry():
+    """[M2b] health_o_mat.restore_entry hebt die Löschmarkierung auf."""
+    store = _fresh_store()
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "service"))
+    drink_id = store.entry("e1")["drinks"][0]["id"]
+    _run(store.void_drink("e1", drink_id))
+    assert store.entry("e1")["total_ml_lifetime"] == 0
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "restore_entry")
+
+    _run(func(_call({"kind": "drinks", "id": drink_id})))
+
+    assert [d["id"] for d in store.active_drinks("e1")] == [drink_id]
+    assert store.entry("e1")["total_ml_lifetime"] == 250
+    assert any(
+        event["action"] == "entry_restored" and event["target_id"] == drink_id
+        for event in store.entry("e1")["audit_log"]
+    )
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "drinks", "id": drink_id})))
+    assert "nicht gelöscht" in str(exc.value)
+
+
+def test_service_registration_includes_void_and_restore():
+    """[M2b] Beide neuen Services werden idempotent registriert."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init = _load_init()
+    init._register_services(hass)
+    init._register_services(hass)
+
+    assert {"void_entry", "restore_entry"}.issubset(hass.services.registered)

@@ -137,6 +137,9 @@ export const SETTINGS_LIMITS = {
   thresholdMax: 260,
   retentionMin: 0,
   retentionMax: 120,
+  // Audit log cap: 0 = unlimited; MAX_AUDIT_LIMIT in const.py.
+  auditMin: 0,
+  auditMax: 1000000,
   quickMlMin: 1,
   quickMlMax: 10000,
   maxQuickDrinks: 4,
@@ -152,6 +155,7 @@ export const SETTINGS_FALLBACKS = {
   sys_threshold: 140,
   dia_threshold: 90,
   retention_months: 0,
+  audit_limit: 1000,
   enable_sidebar_panel: false,
   wellbeing_confirm: false,
   quick_icon: "mdi:cup-water",

@@ -24,7 +24,7 @@ from datetime import datetime
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
-from .const import MAX_AMOUNT_ML, NO_TYPE_LABEL
+from .const import DEFAULT_AUDIT_LIMIT, MAX_AMOUNT_ML, NO_TYPE_LABEL
 from .entity import signal_refresh
 from .store import HealthOMatStore
 
@@ -299,6 +299,7 @@ async def async_import_csv(
     store: HealthOMatStore,
     entry_id: str,
     call: ServiceCall,
+    audit_limit: int = DEFAULT_AUDIT_LIMIT,
 ) -> dict:
     """Service ``health_o_mat.import_csv`` — liest und übernimmt eine CSV-Datei.
 
@@ -339,7 +340,14 @@ async def async_import_csv(
     plan = plan_import(text, dataset, entry.get("drinks", []), entry.get("readings", []))
 
     for drink in plan.drinks:
-        await store.add_drink(entry_id, drink["ts"], drink["ml"], drink["type"], drink["src"])
+        await store.add_drink(
+            entry_id,
+            drink["ts"],
+            drink["ml"],
+            drink["type"],
+            drink["src"],
+            audit_limit=audit_limit,
+        )
     for reading in plan.readings:
         await store.add_reading(
             entry_id,
@@ -349,6 +357,7 @@ async def async_import_csv(
             reading["pulse"],
             reading["note"],
             reading["src"],
+            audit_limit=audit_limit,
         )
     signal_refresh(hass, entry_id)
 

@@ -263,7 +263,7 @@
     },
     "remove_last_entry": {
       "name": "Letzte Buchung löschen",
-      "description": "Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).",
+      "description": "Entfernt die letzte aktive Getränke-, Blutdruck- oder Wohlbefinden-Buchung (Undo). Der Eintrag bleibt wiederherstellbar.",
       "fields": {
         "person": {
           "name": "Person",
@@ -271,7 +271,43 @@
         },
         "kind": {
           "name": "Art",
-          "description": "Welche Buchung entfernt wird: drinks (Standard) oder blood_pressure."
+          "description": "Welche Buchung entfernt wird: drinks (Standard), blood_pressure oder wellbeing."
+        }
+      }
+    },
+    "void_entry": {
+      "name": "Eintrag löschen",
+      "description": "Markiert einen einzelnen Eintrag als gelöscht (kein endgültiges Löschen). Der Eintrag bleibt wiederherstellbar.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Name der Person (leer = einzige konfigurierte Person)."
+        },
+        "kind": {
+          "name": "Art",
+          "description": "Art des Eintrags: drinks, blood_pressure oder wellbeing."
+        },
+        "id": {
+          "name": "Eintrags-ID",
+          "description": "ID des Eintrags aus dem Verlauf."
+        }
+      }
+    },
+    "restore_entry": {
+      "name": "Eintrag wiederherstellen",
+      "description": "Hebt die Löschmarkierung eines Eintrags wieder auf.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Name der Person (leer = einzige konfigurierte Person)."
+        },
+        "kind": {
+          "name": "Art",
+          "description": "Art des Eintrags: drinks, blood_pressure oder wellbeing."
+        },
+        "id": {
+          "name": "Eintrags-ID",
+          "description": "ID des gelöschten Eintrags aus dem Verlauf."
         }
       }
     },

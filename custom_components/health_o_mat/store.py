@@ -404,14 +404,28 @@ class HealthOMatStore:
         )
         await self._async_save()
 
-    async def remove_last_drink(self, entry_id: str) -> bool:
-        e = self.entry(entry_id)
-        if not e["drinks"]:
+    async def remove_last_drink(
+        self,
+        entry_id: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Undo: letzten **aktiven** Drink voiden (kein Hard-Delete).
+
+        Bewusst KEIN `pop()`: ein bereits gelöschter Eintrag am Listenende
+        bliebe sonst hart entfernbar und würde `total_ml_lifetime` doppelt
+        kürzen. Der voided Eintrag bleibt in der Rohliste (Audit/Backup).
+        """
+        drink = self.last_active_drink(entry_id)
+        if drink is None:
             return False
-        removed = e["drinks"].pop()
-        e["total_ml_lifetime"] = max(0, int(e.get("total_ml_lifetime", 0)) - int(removed["ml"]))
-        await self._async_save()
-        return True
+        return await self.void_drink(
+            entry_id, drink.get("id"), actor=actor, audit_limit=audit_limit
+        )
+
+    def last_active_drink(self, entry_id: str) -> dict | None:
+        """Letzter nicht-gelöschter Drink (None = kein aktiver Eintrag)."""
+        return _last_active(self.entry(entry_id).get("drinks"))
 
     def active_drinks(self, entry_id: str) -> list[dict]:
         """Nur nicht-gelöschte Getränke (Reihenfolge bleibt Erfassungsreihenfolge)."""
@@ -472,18 +486,28 @@ class HealthOMatStore:
         await self._async_save()
         return True
 
-    async def remove_last_reading(self, entry_id: str) -> bool:
-        """Letzte Blutdruckmessung entfernen (Undo, N-7).
+    async def remove_last_reading(
+        self,
+        entry_id: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Undo: letzte **aktive** Blutdruckmessung voiden (N-7).
 
         Berührt `total_ml_lifetime` bewusst NICHT — Messwerte tragen keine
-        Trinkmenge. Leerer Bestand → False (Aufrufer entscheidet über Fehler).
+        Trinkmenge. Leerer Bestand/keine aktive Messung → False (Aufrufer
+        entscheidet über den Fehlertext).
         """
-        e = self.entry(entry_id)
-        if not e["readings"]:
+        reading = self.last_active_reading(entry_id)
+        if reading is None:
             return False
-        e["readings"].pop()
-        await self._async_save()
-        return True
+        return await self.void_reading(
+            entry_id, reading.get("id"), actor=actor, audit_limit=audit_limit
+        )
+
+    def last_active_reading(self, entry_id: str) -> dict | None:
+        """Letzte nicht-gelöschte Messung (None = keine aktive Messung)."""
+        return _last_active(self.entry(entry_id).get("readings"))
 
     # ------------------------------------------------------------------
     # Blutdruck-Messungen
@@ -714,6 +738,24 @@ class HealthOMatStore:
         await self._async_save()
         return True
 
+    async def remove_last_wellbeing(
+        self,
+        entry_id: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Undo: letzte **aktive** Wohlbefinden-Meldung voiden (kein Pop)."""
+        item = self.last_active_wellbeing(entry_id)
+        if item is None:
+            return False
+        return await self.void_wellbeing(
+            entry_id, item.get("id"), actor=actor, audit_limit=audit_limit
+        )
+
+    def last_active_wellbeing(self, entry_id: str) -> dict | None:
+        """Letzte nicht-gelöschte Wohlbefinden-Meldung (None = keine)."""
+        return _last_active(self.entry(entry_id).get("wellbeing_entries"))
+
     async def apply_retention(self, entry_id: str, kept_drinks: list, kept_readings: list) -> None:
         """Retention anwenden: nur die behaltenen Listen speichern (REQ-HOM-109).
 
@@ -752,6 +794,16 @@ def _find_by_id(items: Any, item_id: str) -> dict | None:
         return None
     for item in items:
         if isinstance(item, dict) and item.get("id") == item_id:
+            return item
+    return None
+
+
+def _last_active(items: Any) -> dict | None:
+    """Letzter aktiver (nicht voided) Dict-Eintrag einer Store-Liste."""
+    if not isinstance(items, list):
+        return None
+    for item in reversed(items):
+        if isinstance(item, dict) and not item.get("voided_at"):
             return item
     return None
 

@@ -67,14 +67,19 @@ set_wellbeing:
 
 remove_last_entry:
   name: Letzte Buchung löschen
-  description: Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).
+  description: >-
+    Entfernt die letzte aktive Getränke-, Blutdruck- oder
+    Wohlbefinden-Buchung (Undo). Der Eintrag wird als gelöscht markiert und
+    bleibt im Verlauf wiederherstellbar.
   fields:
     person:
       name: Person
       description: Name der Person (leer = einzige konfigurierte Person).
     kind:
       name: Art
-      description: Welche Buchung entfernt wird — Getränk (Standard) oder Blutdruckmessung.
+      description: >-
+        Welche Buchung entfernt wird — Getränk (Standard), Blutdruckmessung
+        oder Wohlbefinden-Meldung.
       example: "drinks"
       selector:
         select:
@@ -83,6 +88,63 @@ remove_last_entry:
               value: "drinks"
             - label: Blutdruckmessung
               value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+
+void_entry:
+  name: Eintrag löschen
+  description: >-
+    Markiert einen einzelnen Eintrag als gelöscht (kein endgültiges Löschen).
+    Die ID stammt aus dem Eintrags-Verlauf; der Eintrag bleibt
+    wiederherstellbar.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+    kind:
+      name: Art
+      description: Art des Eintrags.
+      example: "drinks"
+      selector:
+        select:
+          options:
+            - label: Getränk
+              value: "drinks"
+            - label: Blutdruckmessung
+              value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+    id:
+      name: Eintrags-ID
+      description: ID des Eintrags (aus dem Verlauf).
+      example: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60"
+      required: true
+
+restore_entry:
+  name: Eintrag wiederherstellen
+  description: Hebt die Löschmarkierung eines Eintrags wieder auf.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+    kind:
+      name: Art
+      description: Art des Eintrags.
+      example: "drinks"
+      selector:
+        select:
+          options:
+            - label: Getränk
+              value: "drinks"
+            - label: Blutdruckmessung
+              value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+    id:
+      name: Eintrags-ID
+      description: ID des gelöschten Eintrags (aus dem Verlauf).
+      example: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60"
+      required: true
 
 export_csv:
   name: CSV-Export

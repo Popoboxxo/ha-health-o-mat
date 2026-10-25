@@ -156,8 +156,8 @@ def test_add_drink_calls_async_save(mock_store_fixture):
 # ============================================================================
 # Test 2: remove_last_drink removes and updates lifetime
 # ============================================================================
-def test_remove_last_drink_removes_entry(mock_store_fixture):
-    """[STORE-005] remove_last_drink removes the last drink from the list."""
+def test_remove_last_drink_voids_entry(mock_store_fixture):
+    """[STORE-005] remove_last_drink voidet den letzten Eintrag (kein Hard-Delete)."""
     store, _ = mock_store_fixture
     _async_test(store.async_load())
 
@@ -170,12 +170,13 @@ def test_remove_last_drink_removes_entry(mock_store_fixture):
     entry = store.entry(entry_id)
     assert len(entry["drinks"]) == 2
 
-    # Remove last drink
+    # Undo voidet den letzten Eintrag; die Rohliste behält ihn (Audit/Backup).
     success = _async_test(store.remove_last_drink(entry_id))
 
     assert success is True
-    assert len(entry["drinks"]) == 1
-    assert entry["drinks"][0]["ml"] == 250
+    assert len(entry["drinks"]) == 2, "der voided Eintrag darf nicht hart entfernt werden"
+    assert entry["drinks"][-1]["voided_at"] is not None
+    assert [d["ml"] for d in store.active_drinks(entry_id)] == [250]
 
 
 def test_remove_last_drink_updates_lifetime(mock_store_fixture):
@@ -225,7 +226,14 @@ def test_remove_last_drink_prevents_negative_lifetime(mock_store_fixture):
     # Manually set to test edge case
     entry["total_ml_lifetime"] = 300
     entry["drinks"].append(
-        {"ts": "2026-09-05T12:00:00Z", "ml": 500, "type": "juice", "src": "button"}
+        {
+            "id": "raw-1",
+            "ts": "2026-09-05T12:00:00Z",
+            "ml": 500,
+            "type": "juice",
+            "src": "button",
+            "voided_at": None,
+        }
     )
 
     # Remove this drink: should be max(0, 300 - 500) = 0
@@ -735,8 +743,8 @@ def test_async_load_preserves_existing_data(mock_store_fixture):
 # ============================================================================
 # Finding N-7: remove_last_reading (BP-Undo)
 # ============================================================================
-def test_remove_last_reading_removes_last_reading(mock_store_fixture):
-    """[N-7] remove_last_reading entfernt die zuletzt angehängte Messung."""
+def test_remove_last_reading_voids_last_active_reading(mock_store_fixture):
+    """[N-7] remove_last_reading voidet die letzte aktive Messung (kein Pop)."""
     store, _ = mock_store_fixture
     _async_test(store.async_load())
 
@@ -747,8 +755,9 @@ def test_remove_last_reading_removes_last_reading(mock_store_fixture):
 
     assert success is True
     readings = store.entry("person-1")["readings"]
-    assert len(readings) == 1
-    assert readings[0]["sys"] == 120
+    assert len(readings) == 2, "der voided Eintrag bleibt in der Rohliste"
+    assert readings[-1]["voided_at"] is not None
+    assert [r["sys"] for r in store.active_readings("person-1")] == [120]
 
 
 def test_remove_last_reading_on_empty_returns_false(mock_store_fixture):
@@ -1586,3 +1595,99 @@ def test_active_entry_all_wellbeing_voided_leaves_empty_mirrors(mock_store_fixtu
     assert view["wellbeing_entries"] == []
     assert view["wellbeing"] == {}
     assert view["wellbeing_history"] == []
+
+
+# ============================================================================
+# M2b: Undo-Semantik (letzter AKTIVER Eintrag) + Wellbeing-Undo + Audit
+# ============================================================================
+def test_remove_last_drink_skips_already_voided_tail(mock_store_fixture):
+    """[M2b] Undo voidet den letzten AKTIVEN Drink, nicht den voided Tail."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    entry_id = "person-1"
+    _async_test(store.add_drink(entry_id, "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink(entry_id, "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    last_id = store.entry(entry_id)["drinks"][-1]["id"]
+    _async_test(store.remove_last_drink(entry_id))
+    assert store.entry(entry_id)["total_ml_lifetime"] == 250
+
+    # Zweites Undo: der Tail ist bereits voided → der erste Drink wird voided.
+    assert _async_test(store.remove_last_drink(entry_id)) is True
+    drinks = store.entry(entry_id)["drinks"]
+    assert len(drinks) == 2, "kein Hard-Delete"
+    assert drinks[1]["id"] == last_id
+    assert all(d["voided_at"] for d in drinks)
+    # Lifetime darf NICHT doppelt gekürzt werden (einmal pro voided Drink).
+    assert store.entry(entry_id)["total_ml_lifetime"] == 0
+
+    # Drittes Undo: kein aktiver Eintrag mehr → False, unverändert.
+    assert _async_test(store.remove_last_drink(entry_id)) is False
+    assert store.entry(entry_id)["total_ml_lifetime"] == 0
+
+
+def test_remove_last_drink_audit_event_records_void(mock_store_fixture):
+    """[M2b] Undo schreibt ein Audit-Ereignis (Akteur + Ziel-ID)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("person-1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    target_id = store.entry("person-1")["drinks"][0]["id"]
+
+    _async_test(store.remove_last_drink("person-1", actor="user-7", audit_limit=50))
+
+    audit = store.entry("person-1")["audit_log"]
+    void_events = [event for event in audit if event["action"] == "entry_voided"]
+    assert len(void_events) == 1
+    assert void_events[0]["target_id"] == target_id
+    assert void_events[0]["actor"] == "user-7"
+    assert void_events[0]["kind"] == "drinks"
+
+
+def test_remove_last_reading_skips_voided_tail(mock_store_fixture):
+    """[M2b] BP-Undo voidet die letzte aktive Messung."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_reading("person-1", "2026-10-14T08:00:00", 120, 80, 60))
+    first_id = store.entry("person-1")["readings"][0]["id"]
+    _async_test(store.add_reading("person-1", "2026-10-14T09:00:00", 130, 85, 65))
+    _async_test(store.void_reading("person-1", store.entry("person-1")["readings"][-1]["id"]))
+
+    assert _async_test(store.remove_last_reading("person-1")) is True
+
+    readings = store.entry("person-1")["readings"]
+    assert len(readings) == 2
+    assert readings[0]["id"] == first_id and readings[0]["voided_at"] is not None
+    assert store.active_readings("person-1") == []
+    assert _async_test(store.remove_last_reading("person-1")) is False
+
+
+def test_remove_last_wellbeing_voids_last_active_event(mock_store_fixture):
+    """[M2b] Wellbeing-Undo voidet die letzte aktive Meldung, Spiegel folgen."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_wellbeing("person-1", "good", "2026-10-14T08:00:00"))
+    _async_test(store.set_wellbeing("person-1", "bad", "2026-10-14T09:00:00"))
+
+    assert _async_test(store.remove_last_wellbeing("person-1", actor="user-1")) is True
+
+    entry = store.entry("person-1")
+    assert len(entry["wellbeing_entries"]) == 2, "kein Hard-Delete"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("person-1")["key"] == "good"
+    assert entry["wellbeing"]["status"] == "good"
+    assert _async_test(store.remove_last_wellbeing("person-1")) is True
+    assert store.current_wellbeing("person-1") is None
+    assert _async_test(store.remove_last_wellbeing("person-1")) is False
+
+
+def test_last_active_helpers_ignore_voided_entries(mock_store_fixture):
+    """[M2b] last_active_* liefert den letzten nicht-voided Eintrag."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("person-1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_reading("person-1", "2026-10-14T08:00:00", 120, 80, 60))
+    _async_test(store.set_wellbeing("person-1", "okay", "2026-10-14T08:00:00"))
+    _async_test(store.void_drink("person-1", store.entry("person-1")["drinks"][0]["id"]))
+
+    assert store.last_active_drink("person-1") is None
+    assert store.last_active_reading("person-1")["sys"] == 120
+    assert store.last_active_wellbeing("person-1")["key"] == "okay"

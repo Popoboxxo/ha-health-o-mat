@@ -721,6 +721,12 @@ class HealthOMatPanel extends HTMLElement {
     if (retention === null || retention < L.retentionMin || retention > L.retentionMax) {
       errors.push(`Retention: ${L.retentionMin} (aus) bis ${L.retentionMax} Monate.`);
     }
+    const auditLimit = intOrNull(this._readField("audit_limit", ""));
+    if (auditLimit === null || auditLimit < L.auditMin || auditLimit > L.auditMax) {
+      errors.push(
+        `Audit-Log-Limit: ganze Zahl zwischen ${L.auditMin} (unbegrenzt) und ${L.auditMax}.`
+      );
+    }
 
     const lexiconEl = this.shadowRoot.querySelector('[data-field="drink_lexicon"]');
     const lexicon = lexiconEl && lexiconEl.value != null ? String(lexiconEl.value) : "";
@@ -785,6 +791,7 @@ class HealthOMatPanel extends HTMLElement {
         sys_threshold: sys,
         dia_threshold: dia,
         retention_months: retention,
+        audit_limit: auditLimit,
         enable_sidebar_panel: sidebar,
         wellbeing_confirm: wellbeingConfirm,
         areas,
@@ -830,6 +837,9 @@ class HealthOMatPanel extends HTMLElement {
     }
     if (!sameNum(payload.retention_months, current.retention_months)) {
       out.retention_months = payload.retention_months;
+    }
+    if (!sameNum(payload.audit_limit, current.audit_limit)) {
+      out.audit_limit = payload.audit_limit;
     }
     if (!!current.enable_sidebar_panel !== payload.enable_sidebar_panel) {
       out.enable_sidebar_panel = payload.enable_sidebar_panel;

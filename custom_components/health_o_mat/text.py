@@ -8,7 +8,7 @@ from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from . import areas, parser
+from . import areas, logic, parser
 from .const import DOMAIN, DRINK_LEXICON
 from .entity import HealthOMatEntity, signal_refresh
 
@@ -52,6 +52,7 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
             result.amount_ml,
             result.drink_type,
             "freetext",
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
         )
         self._last_parsed = {
             "amount_ml": result.amount_ml,

@@ -1905,6 +1905,7 @@ admin._settings = {
     sys_threshold: 140,
     dia_threshold: 90,
     retention_months: 12,
+    audit_limit: 1000,
     enable_sidebar_panel: false,
     wellbeing_confirm: false,
     areas: { drink: true, bp: true, wellbeing: true },
@@ -1918,6 +1919,7 @@ admin.shadowRoot._fields = {
   sys_threshold: { value: "140" },
   dia_threshold: { value: "90" },
   retention_months: { value: "12" },
+  audit_limit: { value: "1000" },
   drink_lexicon: { value: "wasser=Wasser,250" },
   enable_sidebar_panel: { checked: false },
   wellbeing_confirm: { checked: true },
@@ -2017,3 +2019,146 @@ def test_req_hom_114_panel_admin_payload_carries_wellbeing_confirm(tmp_path):
     assert out["changes"] == {"wellbeing_confirm": True}, (
         f"das Change-Set traegt den Schalter nicht korrekt: {out['changes']!r}"
     )
+
+
+# --- M2b: Audit-Log-Limit im Admin-Formular ---------------------------------
+
+_NODE_AUDIT_LIMIT_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "settings";
+  panel._persons = [{ entry_id: "entry-1", display_name: "Alex" }];
+  panel._quickDraft = [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }];
+  panel._settings = {
+    "entry-1": {
+      daily_goal_ml: 2000,
+      daily_reset_hour: 0,
+      person_display: "Alex",
+      quick_drinks: [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }],
+      drink_lexicon: "wasser=Wasser,250",
+      wellbeing_images: {},
+      sys_threshold: 140,
+      dia_threshold: 90,
+      retention_months: 0,
+      audit_limit: 1000,
+      enable_sidebar_panel: false,
+      wellbeing_confirm: false,
+      areas: { drink: true, bp: true, wellbeing: true },
+    },
+  };
+  panel._render = () => {};
+  panel._messages = [];
+  panel._ws = async () => ({});
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function fields(audit) {
+  return {
+    daily_goal_ml: { value: "2000" },
+    daily_reset_hour: { value: "0" },
+    person_display: { value: "Alex" },
+    sys_threshold: { value: "140" },
+    dia_threshold: { value: "90" },
+    retention_months: { value: "0" },
+    audit_limit: { value: audit },
+    drink_lexicon: { value: "wasser=Wasser,250" },
+    enable_sidebar_panel: { checked: false },
+    wellbeing_confirm: { checked: false },
+    "area-drink": { checked: true },
+    "area-bp": { checked: true },
+    "area-wellbeing": { checked: true },
+  };
+}
+
+function run(audit) {
+  const panel = makePanel();
+  panel.shadowRoot._fields = fields(audit);
+  const collected = panel._collectSettingsPayload();
+  return {
+    payload: collected.payload.audit_limit,
+    errors: collected.errors,
+    changes: panel._changedSettings("entry-1", collected.payload),
+  };
+}
+
+process.stdout.write(
+  JSON.stringify({
+    unchanged: run("1000"),
+    zero: run("0"),
+    negative: run("-1"),
+    text: run("abc"),
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_m2b_panel_audit_limit_payload_and_change_set(tmp_path):
+    """[M2b] `audit_limit` wird gelesen, validiert und nur bei Änderung gesendet."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_AUDIT_LIMIT_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_audit_limit",
+        )
+    )
+
+    unchanged = out["unchanged"]
+    assert unchanged["errors"] == [], f"Formular meldet Fehler: {unchanged['errors']}"
+    assert unchanged["payload"] == 1000
+    assert unchanged["changes"] == {}, "unveraendertes Limit wird faelschlich gesendet"
+
+    zero = out["zero"]
+    assert zero["errors"] == [], "0 (unbegrenzt) wird als ungueltig abgelehnt"
+    assert zero["payload"] == 0
+    assert zero["changes"] == {"audit_limit": 0}, f"Change-Set: {zero['changes']!r}"
+
+    for key in ("negative", "text"):
+        invalid = out[key]
+        assert invalid["errors"], f"{key} wird nicht abgelehnt"
+        assert any("Audit" in message for message in invalid["errors"]), invalid["errors"]
+
+
+def test_m2b_panel_audit_limit_field_is_wired_into_admin_form():
+    """[M2b] Das Admin-Feld sitzt in der Karte „Datenhaltung" (number, min 0)."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    assert "Audit-Log-Limit (0 = unbegrenzt)" in admin
+    assert 'data-field="audit_limit"' in admin
+    assert "SETTINGS_FALLBACKS.audit_limit" in admin
+
+    base = _panel_base_source()
+    assert "audit_limit: 1000" in base
+    assert "auditMin: 0" in base

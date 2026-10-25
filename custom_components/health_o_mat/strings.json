@@ -263,7 +263,7 @@
     },
     "remove_last_entry": {
       "name": "Remove last entry",
-      "description": "Removes the last drink or blood-pressure entry (undo).",
+      "description": "Removes the last active drink, blood-pressure or wellbeing entry (undo). The entry stays restorable.",
       "fields": {
         "person": {
           "name": "Person",
@@ -271,7 +271,43 @@
         },
         "kind": {
           "name": "Type",
-          "description": "Which entry to remove: drinks (default) or blood_pressure."
+          "description": "Which entry to remove: drinks (default), blood_pressure or wellbeing."
+        }
+      }
+    },
+    "void_entry": {
+      "name": "Delete entry",
+      "description": "Marks a single entry as deleted (not a hard delete). The entry stays restorable.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Person name (empty = the only configured person)."
+        },
+        "kind": {
+          "name": "Type",
+          "description": "Entry type: drinks, blood_pressure or wellbeing."
+        },
+        "id": {
+          "name": "Entry ID",
+          "description": "Entry ID from the history."
+        }
+      }
+    },
+    "restore_entry": {
+      "name": "Restore entry",
+      "description": "Clears the deletion marker of an entry.",
+      "fields": {
+        "person": {
+          "name": "Person",
+          "description": "Person name (empty = the only configured person)."
+        },
+        "kind": {
+          "name": "Type",
+          "description": "Entry type: drinks, blood_pressure or wellbeing."
+        },
+        "id": {
+          "name": "Entry ID",
+          "description": "Entry ID of the deleted entry from the history."
         }
       }
     },

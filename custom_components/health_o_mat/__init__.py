@@ -53,6 +53,8 @@ _SERVICE_NAMES = (
     "add_drink",
     "add_blood_pressure",
     "remove_last_entry",
+    "void_entry",
+    "restore_entry",
     "export_csv",
     "import_csv",
     "backup",
@@ -428,6 +430,62 @@ async def _async_apply_panel_layer(
         _LOGGER.exception("Health-O-Mat: Sidebar-Panel-Zustand nicht anwendbar")
 
 
+def _service_actor(call: ServiceCall) -> str | None:
+    """HA-User-ID eines Service-Calls (None bei Automationen/anonymen Aufrufen)."""
+    user_id = getattr(getattr(call, "context", None), "user_id", None)
+    return str(user_id) if user_id else None
+
+
+def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
+    """Audit-Cap der Person aus `entry.options` (Default 1000, 0 = unbegrenzt)."""
+    try:
+        entry = hass.config_entries.async_get_entry(entry_id)
+    except Exception:  # noqa: BLE001 - Options-Lesen ist nie service-kritisch
+        entry = None
+    options = getattr(entry, "options", None) if entry is not None else None
+    return logic.audit_limit_from_options(options)
+
+
+# Menschliche Bezeichnung der Korrektur-Ziele (Fehlertexte).
+_KIND_LABELS: dict[str, str] = {
+    "drinks": "Getränke",
+    "blood_pressure": "Blutdruckmessungen",
+    "wellbeing": "Wohlbefinden-Meldungen",
+}
+
+
+async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: bool) -> None:
+    """Gemeinsamer Pfad für `void_entry`/`restore_entry` (ein Store-Aufruf je Ziel).
+
+    `kind` und `id` werden fachlich validiert; ein unbekanntes/bereits im
+    Zielzustand befindliches Ziel wird als `ServiceValidationError` gemeldet
+    (kein stiller Erfolg). Schreibwege bleiben die bestehenden `void_*`/
+    `restore_*`-Methoden — inklusive Audit-Eintrag und Store-Persistenz.
+    """
+    entry_id, _info = get_runtime_data(hass, call)
+    kind = logic.normalize_history_kind(call.data.get("kind"))
+    if kind is None:
+        raise ServiceValidationError(
+            f"Unbekannter kind '{call.data.get('kind')}' — "
+            f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+        )
+    item_id = str(call.data.get("id") or "").strip()
+    if not item_id:
+        raise ServiceValidationError("id fehlt")
+    store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+    methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
+    changed = await getattr(store, methods[kind])(
+        entry_id,
+        item_id,
+        actor=_service_actor(call),
+        audit_limit=_entry_audit_limit(hass, entry_id),
+    )
+    if not changed:
+        state = "nicht gelöscht" if restore else "bereits gelöscht"
+        raise ServiceValidationError(f"Eintrag '{item_id}' nicht gefunden oder {state}")
+    signal_refresh(hass, entry_id)
+
+
 def _register_services(hass: HomeAssistant) -> None:
     """Öffentliche Services (idempotent registriert).
 
@@ -451,6 +509,8 @@ def _register_services(hass: HomeAssistant) -> None:
             ml,
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
         )
         signal_refresh(hass, entry_id)
 
@@ -466,6 +526,8 @@ def _register_services(hass: HomeAssistant) -> None:
             int(pulse) if pulse else None,
             call.data.get("note") or "",
             "service",
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
         )
         signal_refresh(hass, entry_id)
 
@@ -488,22 +550,42 @@ def _register_services(hass: HomeAssistant) -> None:
                 f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
             )
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        await store.set_wellbeing(entry_id, status, dt_util.now().isoformat())
+        await store.set_wellbeing(
+            entry_id,
+            status,
+            dt_util.now().isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
         signal_refresh(hass, entry_id)
 
     async def remove_last_entry(call: ServiceCall) -> None:
+        """Letzte **aktive** Buchung voiden (Undo, drinks|blood_pressure|wellbeing)."""
         entry_id, _info = get_runtime_data(hass, call)
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        kind = call.data.get("kind") or "drinks"
-        if kind == "blood_pressure":
-            removed = await store.remove_last_reading(entry_id)
-            if not removed:
-                raise ServiceValidationError("Keine Blutdruckmessungen zum Entfernen")
-        else:
-            removed = await store.remove_last_drink(entry_id)
-            if not removed:
-                raise ServiceValidationError("Keine Getränke zum Entfernen")
+        kind = logic.normalize_history_kind(call.data.get("kind") or "drinks")
+        if kind is None:
+            raise ServiceValidationError(
+                f"Unbekannter kind '{call.data.get('kind')}' — "
+                f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+            )
+        remove_last = getattr(store, logic.REMOVE_LAST_METHOD_BY_KIND[kind])
+        removed = await remove_last(
+            entry_id,
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        if not removed:
+            raise ServiceValidationError(f"Keine {_KIND_LABELS[kind]} zum Entfernen")
         signal_refresh(hass, entry_id)
+
+    async def void_entry(call: ServiceCall) -> None:
+        """Einen Eintrag als gelöscht markieren (kein Hard-Delete)."""
+        await _set_entry_state(hass, call, restore=False)
+
+    async def restore_entry(call: ServiceCall) -> None:
+        """Einen gelöschten Eintrag wiederherstellen."""
+        await _set_entry_state(hass, call, restore=True)
 
     async def export_csv(call: ServiceCall) -> None:
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
@@ -518,7 +600,13 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = shared.get("store")
         from .importer import async_import_csv
 
-        await async_import_csv(hass, store, entry_id, call)
+        await async_import_csv(
+            hass,
+            store,
+            entry_id,
+            call,
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
 
     async def backup(call: ServiceCall) -> None:
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
@@ -572,10 +660,36 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Optional("kind", default="drinks"): vol.In(["drinks", "blood_pressure"]),
+                vol.Optional("kind", default="drinks"): vol.In(
+                    ["drinks", "blood_pressure", "wellbeing"]
+                ),
             }
         ),
         service_func=remove_last_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "void_entry",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("id"): str,
+            }
+        ),
+        service_func=void_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "restore_entry",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("id"): str,
+            }
+        ),
+        service_func=restore_entry,
     )
     hass.services.async_register(
         DOMAIN,

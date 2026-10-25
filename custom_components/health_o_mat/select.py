@@ -45,7 +45,12 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         if option not in self._by_key:
             return
-        await self._store.set_wellbeing(self._entry.entry_id, option, dt_util.now().isoformat())
+        await self._store.set_wellbeing(
+            self._entry.entry_id,
+            option,
+            dt_util.now().isoformat(),
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
+        )
         signal_refresh(self.hass, self._entry.entry_id)
 
     @property

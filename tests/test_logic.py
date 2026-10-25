@@ -1325,3 +1325,38 @@ def test_wellbeing_scale_includes_images_and_scores():
     # Frische Kopien: Änderungen am Ergebnis dürfen const nicht verändern.
     scale[0]["label"] = "x"
     assert logic.WELLBEING_STATES[0]["label"] != "x"
+
+
+# --- M2b: Audit-Cap aus Options + Kind-Normalisierung -----------------------
+
+
+def test_audit_limit_from_options_defaults_and_bounds():
+    """[M2b] Default 1000, 0 = unbegrenzt, Negative/Unsinn → Default, Max-Cap."""
+    assert logic.audit_limit_from_options(None) == 1000
+    assert logic.audit_limit_from_options({}) == 1000
+    assert logic.audit_limit_from_options({"other": 1}) == 1000
+    assert logic.audit_limit_from_options({"audit_limit": 0}) == 0
+    assert logic.audit_limit_from_options({"audit_limit": 250}) == 250
+    assert logic.audit_limit_from_options({"audit_limit": -5}) == 1000
+    assert logic.audit_limit_from_options({"audit_limit": "viele"}) == 1000
+    assert logic.audit_limit_from_options({"audit_limit": True}) == 1000
+    assert logic.audit_limit_from_options({"audit_limit": 10_000_000}) == 1_000_000
+    # Nicht-Mapping (z. B. Mock) → Default, kein Crash.
+    assert logic.audit_limit_from_options(object()) == 1000
+
+
+def test_normalize_history_kind_aliases_and_unknown():
+    """[M2b] `kind`-Aliase: readings → blood_pressure, leer/unbekannt → None."""
+    assert logic.normalize_history_kind("drinks") == "drinks"
+    assert logic.normalize_history_kind("drink") == "drinks"
+    assert logic.normalize_history_kind("blood_pressure") == "blood_pressure"
+    assert logic.normalize_history_kind("readings") == "blood_pressure"
+    assert logic.normalize_history_kind("Wellbeing") == "wellbeing"
+    assert logic.normalize_history_kind("") is None
+    assert logic.normalize_history_kind(None) is None
+    assert logic.normalize_history_kind("tea") is None
+
+    assert set(logic.HISTORY_KINDS) == set(logic.HISTORY_LIST_BY_KIND)
+    assert set(logic.HISTORY_KINDS) == set(logic.VOID_METHOD_BY_KIND)
+    assert set(logic.HISTORY_KINDS) == set(logic.RESTORE_METHOD_BY_KIND)
+    assert set(logic.HISTORY_KINDS) == set(logic.REMOVE_LAST_METHOD_BY_KIND)

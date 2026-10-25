@@ -26,6 +26,7 @@ from homeassistant.util import dt as dt_util
 from . import logic, parser
 from .areas import AREAS, OPTION_AREAS, active_areas
 from .const import (
+    AUDIT_LIMIT_OPTION,
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
     DEFAULT_QUICK_DRINKS,
@@ -34,6 +35,7 @@ from .const import (
     DOMAIN,
     DRINK_LEXICON,
     MAX_AMOUNT_ML,
+    MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
@@ -95,6 +97,9 @@ COMMAND_BOOK_DRINK = "health_o_mat/book_drink"
 COMMAND_UNDO_LAST = "health_o_mat/undo_last"
 COMMAND_SAVE_MEASUREMENT = "health_o_mat/save_measurement"
 COMMAND_SET_WELLBEING = "health_o_mat/set_wellbeing"
+COMMAND_LIST_HISTORY = "health_o_mat/list_history"
+COMMAND_VOID_ENTRY = "health_o_mat/void_entry"
+COMMAND_RESTORE_ENTRY = "health_o_mat/restore_entry"
 COMMAND_SUBSCRIBE = "health_o_mat/subscribe"
 COMMAND_GET_UI_SETTINGS = "health_o_mat/get_ui_settings"
 COMMAND_SET_UI_SETTINGS = "health_o_mat/set_ui_settings"
@@ -126,10 +131,19 @@ MIN_DRINK_ML = 1
 # Undo-Ziel-Typen (empfängt die schon normalisierte Form).
 UNDO_DRINK = "drinks"
 UNDO_BLOOD_PRESSURE = "blood_pressure"
+UNDO_WELLBEING = "wellbeing"
 _UNDO_ALIASES: dict[str, str] = {
     "drink": UNDO_DRINK,
     "drinks": UNDO_DRINK,
     "blood_pressure": UNDO_BLOOD_PRESSURE,
+    "wellbeing": UNDO_WELLBEING,
+}
+
+# Menschliche Bezeichnung des Undo-Ziels (Fehlertexte).
+_UNDO_LABELS: dict[str, str] = {
+    UNDO_DRINK: "Getränke",
+    UNDO_BLOOD_PRESSURE: "Blutdruckmessungen",
+    UNDO_WELLBEING: "Wohlbefinden-Meldungen",
 }
 
 # Shared-Bereich: Lazy-Singleton des Per-User-UI-Stores.
@@ -173,6 +187,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     "retention_months",
     OPTION_ENABLE_SIDEBAR_PANEL,
     OPTION_AREAS,
+    AUDIT_LIMIT_OPTION,
 )
 
 # Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
@@ -207,6 +222,18 @@ def _strict_bool(value: Any) -> bool:
     raise vol.Invalid(
         f"erwartet true oder false (Boolean), erhalten {type(value).__name__} {value!r}"
     )
+
+
+def _strict_int(value: Any) -> int:
+    """Strikter Ganzzahl-Validator (kein Coerce, Booleans sind keine Zahlen).
+
+    `vol.Coerce(int)` würde `"1000"` und `1000.7` stillschweigend umwandeln.
+    Für `audit_limit` ist das eine stille Verhaltensänderung — das Admin-Feld
+    liefert echte JSON-Ganzzahlen, alles andere wird abgewiesen.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise vol.Invalid(f"erwartet eine ganze Zahl, erhalten {type(value).__name__} {value!r}")
+    return value
 
 
 # Feldgenaue Validierung eines `set_settings`-Payloads.
@@ -252,6 +279,11 @@ SETTINGS_SCHEMA = vol.Schema(
         vol.Optional(OPTION_ENABLE_SIDEBAR_PANEL): vol.Boolean(),
         vol.Optional(OPTION_AREAS): vol.Schema(
             {vol.Optional(area): vol.Boolean() for area in AREAS}
+        ),
+        # Audit-Log-Cap: strikt int, 0 = unbegrenzt, Obergrenze schützt vor
+        # Zahlendrehern (das Log würde sonst unbegrenzt wachsen).
+        vol.Optional(AUDIT_LIMIT_OPTION): vol.All(
+            _strict_int, vol.Range(min=0, max=MAX_AUDIT_LIMIT)
         ),
     }
 )
@@ -325,8 +357,9 @@ def normalize_undo_kind(kind: Any) -> str | None:
     """Freies `kind` → kanonisches Undo-Ziel (None = unbekannt/ungültig).
 
     Akzeptiert die Service-Aliase (`drink`/`drinks` → Getränke,
-    `blood_pressure` → Blutdruck) und behandelt fehlend/leer wie Getränke
-    (Rückwärtskompatibilität zur bisherigen Service-Semantik).
+    `blood_pressure` → Blutdruck, `wellbeing` → Wohlbefinden) und behandelt
+    fehlend/leer wie Getränke (Rückwärtskompatibilität zur bisherigen
+    Service-Semantik).
     """
     if kind is None or kind == "":
         return UNDO_DRINK
@@ -654,6 +687,80 @@ def _runtime_int(entry: Any, attribute: str, default: int) -> int:
     return default if value is None else _as_int(value, default)
 
 
+def _audit_limit(hass: HomeAssistant, entry_id: str) -> int:
+    """Audit-Cap der Person aus `entry.options` (Default 1000, 0 = unbegrenzt)."""
+    entry = _runtime_entry(hass, entry_id)
+    options = getattr(entry, "options", None) if entry is not None else None
+    return logic.audit_limit_from_options(options)
+
+
+# --- Historie / Korrekturen (REQ-HOM-115) -----------------------------------
+
+
+def _history_item(kind: str, item: Mapping[str, Any]) -> dict[str, Any]:
+    """Einen Roh-Eintrag auf den stabilen History-Vertrag abbilden.
+
+    Immer enthalten: `id`, `ts`, `created_at`, `voided_at`, `voided_by`,
+    `void_reason` — plus die typischen Felder des jeweiligen Ziels. Fehlende
+    Felder werden zu `None` (kein KeyError bei Altbeständen).
+    """
+    entry: dict[str, Any] = {
+        "id": item.get("id"),
+        "ts": item.get("ts"),
+        "created_at": item.get("created_at"),
+        "voided_at": item.get("voided_at"),
+        "voided_by": item.get("voided_by"),
+        "void_reason": item.get("void_reason"),
+    }
+    if kind == UNDO_DRINK:
+        entry.update(
+            ml=item.get("ml"),
+            type=item.get("type"),
+            src=item.get("src"),
+        )
+    elif kind == UNDO_BLOOD_PRESSURE:
+        entry.update(
+            sys=item.get("sys"),
+            dia=item.get("dia"),
+            pulse=item.get("pulse"),
+            note=item.get("note"),
+            src=item.get("src"),
+        )
+    else:  # wellbeing
+        entry.update(key=item.get("key"))
+    return entry
+
+
+def build_history(
+    store: Any, entry_id: str, kind: str, include_voided: bool = False
+) -> list[dict[str, Any]]:
+    """Roh-Historie einer Person für ein Ziel, neueste zuerst.
+
+    Liest bewusst die ROHLISTE (`store.entry`), nicht die aktive Sicht: nur so
+    sind gelöschte Einträge inkl. `voided_at`/`voided_by`/`void_reason`
+    nachvollziehbar. `include_voided=False` (Default) filtert sie heraus.
+
+    Sortierung: `ts` absteigend, Tiebreaker `created_at` (ebenfalls absteigend).
+    ISO-Strings werden — wie in den übrigen Sortierpfaden dieses Moduls —
+    lexikografisch verglichen; fehlende Werte sortieren nach hinten.
+    """
+    list_name = logic.HISTORY_LIST_BY_KIND[kind]
+    raw = store.entry(entry_id) if store is not None else {}
+    items = raw.get(list_name) if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        return []
+    selected = [
+        item
+        for item in items
+        if isinstance(item, Mapping) and (include_voided or not item.get("voided_at"))
+    ]
+    selected.sort(
+        key=lambda item: (str(item.get("ts") or ""), str(item.get("created_at") or "")),
+        reverse=True,
+    )
+    return [_history_item(kind, item) for item in selected]
+
+
 # --- WebSocket-Kommandos ----------------------------------------------------
 
 
@@ -695,6 +802,36 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
             COMMAND_UNDO_LAST,
             websocket_undo_last,
             {vol.Required("entry_id"): str, vol.Optional("kind"): str},
+        ),
+        (
+            COMMAND_LIST_HISTORY,
+            websocket_list_history,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("kind"): str,
+                vol.Optional("include_voided", default=False): _strict_bool,
+            },
+        ),
+        # Eintrags-ID bewusst als `item_id`: das Feld `id` ist im
+        # HA-WS-Protokoll die Message-ID (BASE_COMMAND_MESSAGE_SCHEMA, strikt
+        # int) — eine Eintrags-UUID kann dort nicht reisen.
+        (
+            COMMAND_VOID_ENTRY,
+            websocket_void_entry,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("kind"): str,
+                vol.Required("item_id"): str,
+            },
+        ),
+        (
+            COMMAND_RESTORE_ENTRY,
+            websocket_restore_entry,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("kind"): str,
+                vol.Required("item_id"): str,
+            },
         ),
         (
             COMMAND_SAVE_MEASUREMENT,
@@ -813,13 +950,15 @@ async def websocket_book_drink(hass: HomeAssistant, connection: Any, msg: dict[s
         ml,
         msg.get("drink_type") or "Eigen",
         "panel",
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
     )
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
 
 
 async def websocket_undo_last(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
-    """`health_o_mat/undo_last` → letzten Eintrag entfernen (drinks|blood_pressure)."""
+    """`health_o_mat/undo_last` → letzten aktiven Eintrag voiden (drinks|bp|wellbeing)."""
     entry_id = msg["entry_id"]
     store = _store(hass)
     if store is None or not _entry_ready(hass, entry_id):
@@ -830,20 +969,117 @@ async def websocket_undo_last(hass: HomeAssistant, connection: Any, msg: dict[st
         connection.send_error(
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: drinks, blood_pressure)",
+            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(sorted(_UNDO_ALIASES))})",
         )
         return
-    if kind == UNDO_BLOOD_PRESSURE:
-        removed = await store.remove_last_reading(entry_id)
-        what = "Blutdruckmessungen"
-    else:
-        removed = await store.remove_last_drink(entry_id)
-        what = "Getränke"
+    remove_last = getattr(store, logic.REMOVE_LAST_METHOD_BY_KIND[kind])
+    removed = await remove_last(
+        entry_id,
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
     if not removed:
-        connection.send_error(msg["id"], ERR_NOT_FOUND, f"Keine {what} zum Entfernen")
+        connection.send_error(msg["id"], ERR_NOT_FOUND, f"Keine {_UNDO_LABELS[kind]} zum Entfernen")
         return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
+
+
+async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/list_history` → Roh-Historie eines Ziels (neueste zuerst).
+
+    Lesbar für alle angemeldeten User (wie `panel_data`) — Alltags-Korrekturen
+    sind kein Verwaltungsvorgang.
+    """
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    kind = logic.normalize_history_kind(msg.get("kind"))
+    if kind is None:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(logic.HISTORY_KINDS)})",
+        )
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "kind": kind,
+            "entries": build_history(
+                store, entry_id, kind, include_voided=bool(msg.get("include_voided"))
+            ),
+        },
+    )
+
+
+def _entry_item_id(msg: Mapping[str, Any]) -> str | None:
+    """Eintrags-ID aus einem WS-Payload (Schema-Feld `item_id`).
+
+    `id` ist im HA-WS-Protokoll die Message-ID und daher kein Eintrags-Slot;
+    als Kompatibilitäts-Fallback wird ein STRING-`id` (nur bei direkten
+    Handler-Aufrufen möglich) akzeptiert.
+    """
+    item_id = msg.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        return item_id
+    legacy = msg.get("id")
+    return legacy if isinstance(legacy, str) and legacy else None
+
+
+async def _set_entry_voided(
+    hass: HomeAssistant,
+    connection: Any,
+    msg: dict[str, Any],
+    *,
+    restore: bool,
+) -> None:
+    """Gemeinsamer Pfad für `void_entry`/`restore_entry` (kein Zweitweg)."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    if store is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    kind = logic.normalize_history_kind(msg.get("kind"))
+    if kind is None:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(logic.HISTORY_KINDS)})",
+        )
+        return
+    item_id = _entry_item_id(msg)
+    methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
+    changed = await getattr(store, methods[kind])(
+        entry_id,
+        item_id,
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
+    if not changed:
+        state = "nicht gelöscht" if restore else "bereits gelöscht"
+        connection.send_error(
+            msg["id"],
+            ERR_NOT_FOUND,
+            f"Eintrag {item_id!r} nicht gefunden oder {state}",
+        )
+        return
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"], {"ok": True, "kind": kind, "id": item_id})
+
+
+async def websocket_void_entry(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/void_entry` → Eintrag als gelöscht markieren (kein Hard-Delete)."""
+    await _set_entry_voided(hass, connection, msg, restore=False)
+
+
+async def websocket_restore_entry(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/restore_entry` → gelöschten Eintrag wiederherstellen."""
+    await _set_entry_voided(hass, connection, msg, restore=True)
 
 
 async def websocket_save_measurement(
@@ -875,6 +1111,8 @@ async def websocket_save_measurement(
         int(pulse) if pulse is not None else None,
         msg.get("note") or "",
         "panel",
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
     )
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
@@ -906,7 +1144,13 @@ async def websocket_set_wellbeing(
     if _wellbeing_state(key) is None:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, f"Unbekannter Wohlbefinden-Key: {key}")
         return
-    await store.set_wellbeing(entry_id, key, dt_util.now().isoformat())
+    await store.set_wellbeing(
+        entry_id,
+        key,
+        dt_util.now().isoformat(),
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
 
@@ -1109,6 +1353,9 @@ def build_settings(entry: Any) -> dict[str, Any]:
         "retention_months": _as_int(options.get("retention_months"), DEFAULT_RETENTION_MONTHS),
         OPTION_ENABLE_SIDEBAR_PANEL: bool(options.get(OPTION_ENABLE_SIDEBAR_PANEL, False)),
         OPTION_AREAS: active_areas(options),
+        # Audit-Cap: ungültige/negative Werte fallen auf den Default zurück,
+        # 0 bleibt "unbegrenzt" (logic.audit_limit_from_options).
+        AUDIT_LIMIT_OPTION: logic.audit_limit_from_options(options),
     }
 
 

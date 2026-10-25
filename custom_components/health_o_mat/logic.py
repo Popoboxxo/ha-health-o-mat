@@ -8,11 +8,17 @@ from __future__ import annotations
 import calendar
 import csv
 import io
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from .const import CAFFEINE_MG_PER_100ML, WELLBEING_STATES
+from .const import (
+    AUDIT_LIMIT_OPTION,
+    CAFFEINE_MG_PER_100ML,
+    DEFAULT_AUDIT_LIMIT,
+    MAX_AUDIT_LIMIT,
+    WELLBEING_STATES,
+)
 
 
 def day_start(now: datetime, hour: int = 0, minute: int = 0) -> datetime:
@@ -802,3 +808,83 @@ def wellbeing_scale(images: Any = None) -> list[dict[str, Any]]:
         }
         for index, state in enumerate(WELLBEING_STATES)
     ]
+
+
+# --- Korrigierbarkeit / Audit (REQ-HOM-115) --------------------------------
+
+
+def audit_limit_from_options(options: Any) -> int:
+    """Audit-Cap aus den Entry-Options (HA-frei, defensiv).
+
+    Vertrag:
+    - fehlend/``None``/nicht-numerisch/negativ → ``DEFAULT_AUDIT_LIMIT``
+    - ``0`` = unbegrenzt (bewusst KEIN Default-Ersatz)
+    - Werte über ``MAX_AUDIT_LIMIT`` werden auf das Maximum begrenzt
+    - Booleans gelten als ungültig (``True`` ist keine Zahl 1)
+
+    ``options`` darf ``None`` oder ein beliebiger Nicht-Mapping-Wert sein
+    (z. B. ein Mock/Fake in Tests) — dann greift der Default.
+    """
+    if not isinstance(options, Mapping):
+        return DEFAULT_AUDIT_LIMIT
+    raw = options.get(AUDIT_LIMIT_OPTION)
+    if raw is None or isinstance(raw, bool):
+        return DEFAULT_AUDIT_LIMIT
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_AUDIT_LIMIT
+    if value < 0:
+        return DEFAULT_AUDIT_LIMIT
+    return min(value, MAX_AUDIT_LIMIT)
+
+
+# Kanonische Korrektur-Ziele (Store-Listen + Methoden je Ziel).
+HISTORY_KINDS: tuple[str, ...] = ("drinks", "blood_pressure", "wellbeing")
+
+# Kanonisches Ziel → Store-Listenname (Rohlisten, inkl. voided Einträge).
+HISTORY_LIST_BY_KIND: dict[str, str] = {
+    "drinks": "drinks",
+    "blood_pressure": "readings",
+    "wellbeing": "wellbeing_entries",
+}
+
+# Kanonisches Ziel → Store-Methoden (ein Name, kein Zweitweg in der API).
+VOID_METHOD_BY_KIND: dict[str, str] = {
+    "drinks": "void_drink",
+    "blood_pressure": "void_reading",
+    "wellbeing": "void_wellbeing",
+}
+RESTORE_METHOD_BY_KIND: dict[str, str] = {
+    "drinks": "restore_drink",
+    "blood_pressure": "restore_reading",
+    "wellbeing": "restore_wellbeing",
+}
+REMOVE_LAST_METHOD_BY_KIND: dict[str, str] = {
+    "drinks": "remove_last_drink",
+    "blood_pressure": "remove_last_reading",
+    "wellbeing": "remove_last_wellbeing",
+}
+
+_KIND_ALIASES: dict[str, str] = {
+    "drink": "drinks",
+    "drinks": "drinks",
+    "blood_pressure": "blood_pressure",
+    # Toleranter Alias: der Store führt Messungen intern als `readings`.
+    "reading": "blood_pressure",
+    "readings": "blood_pressure",
+    "wellbeing": "wellbeing",
+    "wellbeing_entries": "wellbeing",
+}
+
+
+def normalize_history_kind(kind: Any) -> str | None:
+    """Freies ``kind`` → kanonisches Korrektur-Ziel (``None`` = unbekannt).
+
+    Anders als ``ws_api.normalize_undo_kind`` gibt es hier KEINEN
+    Leer-Default: ``void_entry``/``restore_entry``/``list_history`` brauchen
+    ein explizites Ziel, sonst wäre eine Löschung mehrdeutig.
+    """
+    if not isinstance(kind, str):
+        return None
+    return _KIND_ALIASES.get(kind.strip().lower())

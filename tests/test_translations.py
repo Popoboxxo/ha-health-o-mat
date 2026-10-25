@@ -114,3 +114,17 @@ def test_set_wellbeing_service_documented_in_all_translations() -> None:
         assert block["name"], f"{path}: name fehlt"
         assert block["description"], f"{path}: description fehlt"
         assert set(block["fields"]) == {"person", "status", "score"}, f"{path}: Felder weichen ab"
+
+
+def test_m2b_void_and_restore_services_documented_in_all_translations() -> None:
+    """[M2b] `void_entry`/`restore_entry` sind in Master + beiden Sprachen vollständig."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service in ("void_entry", "restore_entry"):
+            block = data["services"][service]
+            assert block["name"], f"{path}: {service}.name fehlt"
+            assert block["description"], f"{path}: {service}.description fehlt"
+            assert set(block["fields"]) == {"person", "kind", "id"}, (
+                f"{path}: {service}-Felder weichen ab"
+            )
+        assert set(data["services"]["remove_last_entry"]["fields"]) == {"person", "kind"}

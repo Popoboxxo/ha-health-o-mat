@@ -17,7 +17,11 @@ STORE_SCHEMA_VERSION = 4
 
 # Audit-Log: Default-Cap an Ereignissen je Person (0 = unbegrenzt).
 DEFAULT_AUDIT_LIMIT = 1000
-# Options-Schlüssel für den Audit-Cap (Verdrahtung im Options-Flow folgt).
+# Obergrenze des Audit-Caps (Admin-Feld/Settings-Schema). Höhere Werte werden
+# auf diesen Wert begrenzt, damit ein Zahlendreher das Log nicht unbegrenzt
+# wachsen lässt (0 bleibt der explizite "unbegrenzt"-Wert).
+MAX_AUDIT_LIMIT = 1_000_000
+# Options-Schlüssel für den Audit-Cap (Admin-Maske via ws_api set_settings).
 AUDIT_LIMIT_OPTION = "audit_limit"
 
 # HA-Store-Keys: Haupt-Store (Historie) und separater Archiv-Store (Retention).

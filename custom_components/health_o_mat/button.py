@@ -6,7 +6,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from . import areas
+from . import areas, logic
 from .const import DEFAULT_QUICK_DRINKS, DOMAIN
 from .entity import HealthOMatEntity, signal_refresh
 
@@ -51,7 +51,12 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
     async def _book(self, ml: int, drink_type: str, src: str) -> None:
         await self._store.add_drink(
-            self._entry.entry_id, dt_util.now().isoformat(), ml, drink_type, src
+            self._entry.entry_id,
+            dt_util.now().isoformat(),
+            ml,
+            drink_type,
+            src,
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
         )
         signal_refresh(self.hass, self._entry.entry_id)
 
@@ -107,7 +112,10 @@ class UndoDrinkButton(HealthOMatButton):
         super().__init__(coordinator, entry, store, "button_undo_drink")
 
     async def async_press(self) -> None:
-        removed = await self._store.remove_last_drink(self._entry.entry_id)
+        removed = await self._store.remove_last_drink(
+            self._entry.entry_id,
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
+        )
         if not removed:
             raise HomeAssistantError("Keine Getränke zum Entfernen")
         signal_refresh(self.hass, self._entry.entry_id)
@@ -137,6 +145,7 @@ class SaveReadingButton(HealthOMatButton):
             int(pulse_v) if pulse_v else None,
             "",
             "button",
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
         )
         await self._store.clear_inputs(self._entry.entry_id)
         signal_refresh(self.hass, self._entry.entry_id)
@@ -160,6 +169,7 @@ class WellbeingButton(HealthOMatButton):
             self._entry.entry_id,
             self._status["key"],
             dt_util.now().isoformat(),
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
         )
         signal_refresh(self.hass, self._entry.entry_id)
 

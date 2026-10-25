@@ -79,6 +79,7 @@ function settingsForm(panel, settings, entryId, loadError) {
   const sys = s.sys_threshold == null ? SETTINGS_FALLBACKS.sys_threshold : s.sys_threshold;
   const dia = s.dia_threshold == null ? SETTINGS_FALLBACKS.dia_threshold : s.dia_threshold;
   const retention = s.retention_months == null ? SETTINGS_FALLBACKS.retention_months : s.retention_months;
+  const auditLimit = s.audit_limit == null ? SETTINGS_FALLBACKS.audit_limit : s.audit_limit;
   const sidebar = s.enable_sidebar_panel === true;
   const lexicon = s.drink_lexicon == null ? "" : String(s.drink_lexicon);
   const display = s.person_display == null ? "" : String(s.person_display);
@@ -201,6 +202,11 @@ function settingsForm(panel, settings, entryId, loadError) {
             <input type="number" inputmode="numeric" data-field="retention_months"
               min="${SETTINGS_LIMITS.retentionMin}" max="${SETTINGS_LIMITS.retentionMax}"
               value="${attrValue(retention)}" />
+          </label>
+          <label class="field">Audit-Log-Limit (0 = unbegrenzt)
+            <input type="number" inputmode="numeric" data-field="audit_limit"
+              min="${SETTINGS_LIMITS.auditMin}" max="${SETTINGS_LIMITS.auditMax}"
+              value="${attrValue(auditLimit)}" />
           </label>
         </div>
         <label class="check">
