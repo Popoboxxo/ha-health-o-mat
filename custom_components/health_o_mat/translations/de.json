@@ -20,20 +20,36 @@
   "options": {
     "step": {
       "init": {
-        "title": "Optionen",
+        "title": "Health-O-Mat-Optionen",
+        "menu_options": {
+          "basics": "Grundlagen",
+          "drinks": "Getränke",
+          "wellbeing": "Wohlbefinden",
+          "notifications": "Erinnerungen und Wochenbericht",
+          "defaults": "Defaults übernehmen",
+          "summary": "Zusammenfassung"
+        },
+        "description": "Wähle einen Abschnitt für {person}. Änderungen werden erst beim Speichern in der Zusammenfassung übernommen."
+      },
+      "basics": {
+        "title": "Grundlagen",
+        "description": "Tagesziel, Lebenszähler, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel und erfasste Bereiche.",
         "data": {
           "daily_goal_ml": "Tagesziel in ml",
+          "set_lifetime_ml": "Lebenszähler (ml)",
+          "person_display": "Anzeigename",
           "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)",
           "retention_months": "Aufbewahrung der Historie in Monaten (0 = aus)",
           "enable_sidebar_panel": "Sidebar-Panel anzeigen",
           "area_drink": "Trinken erfassen",
           "area_bp": "Blutdruck erfassen",
-          "area_wellbeing": "Wohlbefinden erfassen"
+          "area_wellbeing": "Wohlbefinden erfassen",
+          "skip": "Diesen Schritt überspringen"
         }
       },
-      "quick_drinks": {
-        "title": "Voreingestellte Getränke",
-        "description": "Konfiguriere die 4 Quick-Drink-Buttons für {person} (Bezeichnung, Größe in ml, Icon).",
+      "drinks": {
+        "title": "Getränke",
+        "description": "Quick-Drinks und Getränke-Lexikon für {person}.",
         "data": {
           "quick_0_label": "Voreinstellung 1 – Bezeichnung",
           "quick_0_ml": "Voreinstellung 1 – Größe (ml)",
@@ -46,10 +62,12 @@
           "quick_2_icon": "Voreinstellung 3 – Icon",
           "quick_3_label": "Voreinstellung 4 – Bezeichnung",
           "quick_3_ml": "Voreinstellung 4 – Größe (ml)",
-          "quick_3_icon": "Voreinstellung 4 – Icon"
+          "quick_3_icon": "Voreinstellung 4 – Icon",
+          "drink_lexicon": "Getränke-Lexikon",
+          "skip": "Diesen Schritt überspringen"
         }
       },
-      "wellbeing_images": {
+      "wellbeing": {
         "title": "Wohlbefinden-Bilder",
         "description": "Optionales eigenes Bild je Wohlbefinden-Stufe. Bild-URL, /local/...-Pfad oder Dateiname unter /config/www/ (PNG, JPG oder WebP). Leer lassen, um das Emoji zu verwenden.",
         "data": {
@@ -62,14 +80,8 @@
           "wellbeing_image_good": "Stufe 7 (gut) – Bild",
           "wellbeing_image_very_good": "Stufe 8 (sehr gut) – Bild",
           "wellbeing_image_great": "Stufe 9 (großartig) – Bild",
-          "wellbeing_image_excellent": "Stufe 10 (ausgezeichnet) – Bild"
-        }
-      },
-      "drink_lexicon": {
-        "title": "Getränke-Lexikon",
-        "description": "Ein Eintrag pro Zeile: wort=Typ,ml (z. B. kaffee=Kaffee,250). Zeilen mit '#' sind Kommentare.",
-        "data": {
-          "drink_lexicon": "Getränke-Lexikon"
+          "wellbeing_image_excellent": "Stufe 10 (ausgezeichnet) – Bild",
+          "skip": "Diesen Schritt überspringen"
         }
       },
       "notifications": {
@@ -89,7 +101,8 @@
           "weekly_report_enabled": "Wochenbericht aktivieren",
           "weekly_report_day": "Tag des Wochenberichts",
           "weekly_report_time": "Uhrzeit des Wochenberichts",
-          "weekly_report_notify_service": "Benachrichtigungsdienst für den Wochenbericht"
+          "weekly_report_notify_service": "Benachrichtigungsdienst für den Wochenbericht",
+          "skip": "Diesen Schritt überspringen"
         },
         "data_description": {
           "reminders_enabled": "Sendet pro gewähltem Tag eine gebündelte Erinnerung, je Bedingung höchstens einmal.",
@@ -107,6 +120,14 @@
           "weekly_report_time": "Lokale Uhrzeit des Berichts.",
           "weekly_report_notify_service": "Name eines Notify-Dienstes, mit oder ohne notify.-Präfix. Leer = Hinweis in Home Assistant."
         }
+      },
+      "defaults": {
+        "title": "Defaults übernehmen",
+        "description": "Übernimmt die Standard-Quick-Drinks, das eingebaute Lexikon, keine eigenen Bilder und ausgeschaltete Erinnerungen. Gespeichert wird erst nach der Bestätigung in der Zusammenfassung."
+      },
+      "summary": {
+        "title": "Zusammenfassung",
+        "description": "Geänderte Einstellungen:\n{changes}\n\nNicht aufgeführte Optionen bleiben unverändert. Speichern übernimmt die Änderungen."
       }
     },
     "error": {

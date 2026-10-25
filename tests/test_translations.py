@@ -272,9 +272,57 @@ def test_m3d_notifications_options_step_documented_in_all_translations() -> None
         step = _load(path)["options"]["step"]["notifications"]
         assert step["title"]
         assert step["description"]
-        assert set(step["data"]) == _NOTIFICATION_FIELDS, f"{path}: data-Keys weichen ab"
+        assert set(step["data"]) == _NOTIFICATION_FIELDS | {"skip"}, f"{path}: data-Keys weichen ab"
         assert set(step["data_description"]) == _NOTIFICATION_FIELDS, (
             f"{path}: data_description-Keys weichen ab"
         )
         empty = [key for key, value in step["data"].items() if not str(value).strip()]
         assert not empty, f"{path}: leere Labels: {empty}"
+
+
+# --- M3e: Options-Menü (REQ-HOM-119) ---------------------------------------
+
+_OPTIONS_MENU_STEPS = (
+    "basics",
+    "drinks",
+    "wellbeing",
+    "notifications",
+    "defaults",
+    "summary",
+)
+_OPTIONS_SECTIONS_WITH_SKIP = ("basics", "drinks", "wellbeing", "notifications")
+
+
+def test_m3e_options_menu_steps_documented_in_all_translations() -> None:
+    """[REQ-HOM-119] Menü-Labels und Schritt-Titel sind in allen Dateien vorhanden."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        steps = _load(path)["options"]["step"]
+        missing = [step for step in _OPTIONS_MENU_STEPS if not steps.get(step, {}).get("title")]
+        assert not missing, f"{path}: Titel fehlen für {missing}"
+        menu_labels = steps["init"].get("menu_options", {})
+        assert set(menu_labels) == set(_OPTIONS_MENU_STEPS), f"{path}: menu_options weichen ab"
+        empty = [step for step, label in menu_labels.items() if not str(label).strip()]
+        assert not empty, f"{path}: leere Menü-Labels: {empty}"
+
+
+def test_m3e_skip_documented_for_optional_sections() -> None:
+    """[REQ-HOM-119] Alle optionalen Abschnitte dokumentieren den `skip`-Schalter."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        steps = _load(path)["options"]["step"]
+        for step_id in _OPTIONS_SECTIONS_WITH_SKIP:
+            label = steps[step_id]["data"].get("skip")
+            assert label and str(label).strip(), f"{path}: {step_id}.skip fehlt"
+
+
+def test_m3e_summary_documents_changes_placeholder() -> None:
+    """[REQ-HOM-119] Die Zusammenfassung zeigt `{changes}` in allen drei Dateien."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        description = _load(path)["options"]["step"]["summary"]["description"]
+        assert "{changes}" in description, f"{path}: summary.description ohne {{changes}}"
+
+
+def test_m3e_defaults_step_has_description_in_all_translations() -> None:
+    """[REQ-HOM-119] „Defaults übernehmen" ist in allen drei Dateien beschrieben."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        description = _load(path)["options"]["step"]["defaults"]["description"]
+        assert description and str(description).strip(), f"{path}: defaults.description fehlt"

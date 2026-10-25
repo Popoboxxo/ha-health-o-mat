@@ -210,6 +210,9 @@ if not _USING_REAL_HA:
         def async_show_form(self, **kwargs):
             return {"type": "form", **kwargs}
 
+        def async_show_menu(self, **kwargs):
+            return {"type": "menu", **kwargs}
+
     class HomeAssistant:
         """Minimal stand-in for homeassistant.core.HomeAssistant (type hints only)."""
 

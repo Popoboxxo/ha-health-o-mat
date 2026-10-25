@@ -40,6 +40,37 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 3. Einstellungen → Geräte & Dienste → Integration hinzufügen → **HA Health-O-Mat**
 4. Person anlegen (pro Person einmal durchlaufen)
 
+## Schnellstart: Person anlegen, Defaults nutzen
+
+Eine neu angelegte Person ist **sofort einsatzbereit**, ohne dass der
+Options-Dialog geöffnet werden muss: Die Quick-Drinks (Glas Wasser, Flasche
+Wasser, Tasse Kaffee, Glas Saft), das eingebaute Getränke-Lexikon und
+ausgeschaltete Erinnerungen greifen automatisch. Eigene Wellbeing-Bilder sind
+leer (es erscheinen die Emojis). Anpassen lässt sich alles später unter
+Einstellungen → Geräte & Dienste → **HA Health-O-Mat** → *Konfigurieren*.
+
+### Options-Wizard
+
+Der Options-Dialog ist ein **Menü mit optionalen Abschnitten**. Änderungen
+werden nur vorgemerkt und erst in der Zusammenfassung gespeichert:
+
+| Abschnitt | Inhalt |
+|---|---|
+| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel, Bereichs-Toggles |
+| **Getränke** | Quick-Drinks **und** Getränke-Lexikon in einem Formular (Lexikon mit Zeilen-Validierung) |
+| **Wohlbefinden** | Eigene Bilder je Stufe (optional, sonst Emojis) |
+| **Benachrichtigungen** | Erinnerungen und Wochenbericht (Standard: aus) |
+| **Defaults übernehmen** | Setzt Standard-Quick-Drinks, eingebautes Lexikon, leere Bilder und ausgeschaltete Erinnerungen |
+| **Zusammenfassung** | Zeigt die geänderten Schlüssel/Werte; **Speichern** übernimmt sie |
+
+- Jeder Abschnitt hat **„Diesen Schritt überspringen"** — er kehrt dann ohne
+  Änderung ins Menü zurück.
+- **Direkte Navigation:** Jeder Menüpunkt ist jederzeit erreichbar; die
+  Zusammenfassung ist der einzige Speicherpunkt.
+- **Nichts geht verloren:** Optionen, die der Wizard nicht anzeigt (z. B.
+  Wohlbefinden-Bestätigung, Audit-Aufbewahrung), bleiben beim Speichern
+  unverändert erhalten. Ein Abbruch des Dialogs ändert nichts.
+
 ## Entities & Benennung (je Person)
 
 **Sprechende englische IDs, lokalisierte Anzeigenamen:** Die Entity-IDs sind

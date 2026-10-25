@@ -20,20 +20,36 @@
   "options": {
     "step": {
       "init": {
-        "title": "Options",
+        "title": "Health-O-Mat options",
+        "menu_options": {
+          "basics": "Basics",
+          "drinks": "Drinks",
+          "wellbeing": "Wellbeing images",
+          "notifications": "Reminders and weekly report",
+          "defaults": "Use defaults",
+          "summary": "Summary"
+        },
+        "description": "Choose a section for {person}. Settings are only applied after saving in the summary."
+      },
+      "basics": {
+        "title": "Basics",
+        "description": "Daily goal, lifetime counter, display name, daily reset, retention, sidebar panel and tracked areas.",
         "data": {
           "daily_goal_ml": "Daily goal in ml",
+          "set_lifetime_ml": "Lifetime counter (ml)",
+          "person_display": "Display name",
           "daily_reset_hour": "Daily reset hour (0-23)",
           "retention_months": "History retention in months (0 = off)",
           "enable_sidebar_panel": "Show sidebar panel",
           "area_drink": "Track drinking",
           "area_bp": "Track blood pressure",
-          "area_wellbeing": "Track wellbeing"
+          "area_wellbeing": "Track wellbeing",
+          "skip": "Skip this section"
         }
       },
-      "quick_drinks": {
-        "title": "Preset drinks",
-        "description": "Configure the 4 preset-drink buttons for {person} (label, size in ml, icon).",
+      "drinks": {
+        "title": "Drinks",
+        "description": "Preset drinks and drink dictionary for {person}.",
         "data": {
           "quick_0_label": "Preset 1 – Label",
           "quick_0_ml": "Preset 1 – Size (ml)",
@@ -46,10 +62,12 @@
           "quick_2_icon": "Preset 3 – Icon",
           "quick_3_label": "Preset 4 – Label",
           "quick_3_ml": "Preset 4 – Size (ml)",
-          "quick_3_icon": "Preset 4 – Icon"
+          "quick_3_icon": "Preset 4 – Icon",
+          "drink_lexicon": "Drink dictionary",
+          "skip": "Skip this section"
         }
       },
-      "wellbeing_images": {
+      "wellbeing": {
         "title": "Wellbeing images",
         "description": "Optional own image per wellbeing level. Enter an image URL, a /local/... path or a file name below /config/www/ (PNG, JPG or WebP). Leave empty to use the emoji.",
         "data": {
@@ -62,14 +80,8 @@
           "wellbeing_image_good": "Level 7 (good) – image",
           "wellbeing_image_very_good": "Level 8 (very good) – image",
           "wellbeing_image_great": "Level 9 (great) – image",
-          "wellbeing_image_excellent": "Level 10 (excellent) – image"
-        }
-      },
-      "drink_lexicon": {
-        "title": "Drink dictionary",
-        "description": "One entry per line: word=Type,ml (e.g. kaffee=Coffee,250). Lines starting with '#' are comments.",
-        "data": {
-          "drink_lexicon": "Drink dictionary"
+          "wellbeing_image_excellent": "Level 10 (excellent) – image",
+          "skip": "Skip this section"
         }
       },
       "notifications": {
@@ -89,7 +101,8 @@
           "weekly_report_enabled": "Enable weekly report",
           "weekly_report_day": "Weekly report day",
           "weekly_report_time": "Weekly report time",
-          "weekly_report_notify_service": "Notify service for the weekly report"
+          "weekly_report_notify_service": "Notify service for the weekly report",
+          "skip": "Skip this section"
         },
         "data_description": {
           "reminders_enabled": "Sends one bundled reminder per selected day, at most once per condition.",
@@ -107,6 +120,14 @@
           "weekly_report_time": "Local time of the report.",
           "weekly_report_notify_service": "Name of a notify service, with or without the notify. prefix. Empty = persistent notification."
         }
+      },
+      "defaults": {
+        "title": "Use defaults",
+        "description": "Applies preset drinks, the built-in drink dictionary, no custom images and notifications off. Nothing is saved until you confirm in the summary."
+      },
+      "summary": {
+        "title": "Summary",
+        "description": "Changed settings:\n{changes}\n\nUnlisted options stay unchanged. Save applies the changes."
       }
     },
     "error": {
