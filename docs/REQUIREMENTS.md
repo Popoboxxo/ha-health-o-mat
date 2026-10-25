@@ -1,19 +1,24 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-24 (Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; zuvor 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-25 (UX-P1: **REQ-HOM-115…120** aufgenommen — Vorbereitung Release **0.14.0**, Branch `feat/ux-p1`, Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** neu aufgenommen (Feature, Wohlbefinden-Score & Score-Chart) ·
 **REQ-HOM-113** neu aufgenommen (Feature, Konfigurierbare Health-O-Mat-Karte) ·
 **REQ-HOM-114** neu aufgenommen (Feature, Wohlbefinden-Bestätigung vor Übernahme,
 Branch `feat/wellbeing-confirm`) ·
-Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
+**REQ-HOM-115…120** neu aufgenommen (UX-P1, P1, Branch `feat/ux-p1`, Release **0.14.0**):
+Korrigierbarkeit/Verlauf/Void-Restore/Audit-Log (115), Backup-Restore inkl. Teil-Restore
+und Dry-Run (116), UI-Internationalisierung de/en (117), Erinnerungen/Wochenbericht/
+Blueprints (118), Onboarding-/Options-Wizard (119), unbegrenztes Rückdatieren (120) ·
+Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
+**`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…114: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…120: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
    Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
@@ -21,7 +26,9 @@ Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planne
    (Branch `feat/wellbeing-score`) — sowie **REQ-HOM-113** (Konfigurierbare
    Karte, Branch `feat/configurable-card`) nach REQ-HOM-112 und
    **REQ-HOM-114** (Wohlbefinden-Bestätigung vor Übernahme, Branch
-   `feat/wellbeing-confirm`) nach REQ-HOM-113.
+   `feat/wellbeing-confirm`) nach REQ-HOM-113. Nach REQ-HOM-114 folgen
+   **REQ-HOM-115…120** (UX-P1, Branch `feat/ux-p1`) — der Arbeitsplan dazu liegt
+   in **`docs/PLAN-UX-P1.md`** und ist der Release-Schnitt **0.14.0**.
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -792,6 +799,141 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     kein Server-Write vor Bestätigung, Übernahme per Button) und Panel-Admin-
     Option (Checkbox speichert, Panel meldet erst nach Bestätigung).
 
+#### REQ-HOM-115 — Korrigierbarkeit: Verlauf, Void/Restore, Audit-Log
+- **Priorität:** P1 · **Aufwand:** L (6–8 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS1
+- **Anforderung:** Getränke, Blutdruck und Wohlbefinden sind nachträglich
+  korrigierbar: je Datentyp gibt es einen **Verlauf** (aktiv/gelöscht), **Löschen
+  (Void)**, **Wiederherstellen (Restore)** und **Undo**. Ein **Hard-Delete in der
+  UI ist dauerhaft ausgeschlossen** — Löschen bedeutet Void, Wiederherstellen
+  bedeutet Restore; vollständige Datenentfernung bleibt ein manueller Vorgang
+  außerhalb der UI (dokumentiertes Restrisiko). Jede Änderung erzeugt ein
+  **Audit-Ereignis** (wer/was/wann), das Audit-Log ist append-only und enthält
+  keine vollen Gesundheitswerte. Der **Audit-Cap** liegt per Default bei **1000
+  Ereignissen pro Person**; im Admin ist `0` = **unbegrenzt** einstellbar.
+- **Akzeptanzkriterien:**
+  - [ ] Kein stilles Überschreiben/Entfernen; jede Änderung hat ein Audit-Event.
+  - [ ] Gelöschte Einträge sind in allen abgeleiteten Werten nicht enthalten
+    (heute/gestern/Prozent, Trends, Streak, BD-Ø, Koffein, Lifetime,
+    Panel-Payload, Sensoren, Export, Import).
+  - [ ] Restore stellt den exakten Vorher-Zustand wieder her.
+  - [ ] `remove_last_entry` verliert keine Daten (Void statt Pop).
+  - [ ] Backup enthält Audit- und voided Einträge; CSV exportiert standardmäßig
+    nur aktive Einträge (dokumentiert).
+  - [ ] Kein Hard-Delete in der UI; Audit-Cap wirkt (Default 1000, `0` =
+    unbegrenzt); voided Einträge bleiben erhalten.
+  - [ ] Verlauf/Undo in Panel und Karte; mobil bedienbar; de/en.
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
+#### REQ-HOM-116 — Backup-Restore inkl. Teil-Restore und Dry-Run
+- **Priorität:** P1 · **Aufwand:** L (5–7 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS2
+- **Anforderung:** Backups lassen sich validiert und kontrolliert zurückspielen —
+  **Merge (Default) und Replace**, zusätzlich **Teil-Restore** nach Person,
+  Datensatz (Getränke/Blutdruck/Wohlbefinden) und Zeitraum, immer mit
+  **Dry-Run** und **Pre-Restore-Sicherheitsbackup**. Mehrere Personen werden über
+  ein explizites **Personen-Mapping** zugeordnet; unbekannte Personen werden
+  **nie stillschweigend angelegt**. V1-Backups bleiben lesbar, neuere Versionen
+  werden klar abgelehnt.
+- **Akzeptanzkriterien:**
+  - [ ] Restore ist ohne Datenverlust möglich; Dry-Run zeigt die Wahrheit und
+    schreibt nichts.
+  - [ ] Replace ist auf den gewählten Scope begrenzt und doppelt bestätigt.
+  - [ ] Unbekannte Personen werden nie stillschweigend angelegt (Mapping oder
+    Fehler/Skip).
+  - [ ] V1-Backups funktionieren; kaputte/neuere Backups werden klar abgelehnt.
+  - [ ] Vor jedem echten Restore existiert ein Sicherheitsbackup.
+  - [ ] Restore ist atomar (Rollback bei Fehler) und admin-only.
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
+#### REQ-HOM-117 — UI-Internationalisierung de/en über HA-Translations
+- **Priorität:** P1 · **Aufwand:** L (4–6 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS3
+- **Anforderung:** Panel, Karte und Editor folgen der HA-Sprache — **nur
+  HA-nativ de/en**, kein eigenes i18n-Framework. Die UI-Texte liegen als flache
+  Schlüssel im von `hassfest` erlaubten `common`-Bereich und werden im Frontend
+  über `frontend/get_translations` geladen (mit eingebetteter de/en-Fallback-Map,
+  nie rohe Keys). **Entity- und Service-Übersetzungen bleiben unverändert**
+  HA-nativ. Datum/Zahlen/relative Zeit laufen über `Intl`/`hass.locale`; ein
+  Sprachwechsel zur Laufzeit rendert neu.
+- **Akzeptanzkriterien:**
+  - [ ] Englische HA-Instanz zeigt englische UI; Deutsch bleibt vollständig.
+  - [ ] Fehlende Übersetzung fällt sauber zurück und zeigt nie `ui_...`-Rohkeys.
+  - [ ] `hassfest` bleibt grün (nur erlaubte `common`-Struktur).
+  - [ ] Entity-/Service-Übersetzungen unverändert; Paritätstest de/en.
+  - [ ] Keine nutzersichtbaren hartkodierten deutschen Strings in Render-Pfaden
+    (Logs/Testdaten ausgenommen).
+  - [ ] Sprachwechsel zur Laufzeit wird ohne Reload sichtbar (Neu-Rendern).
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
+#### REQ-HOM-118 — Erinnerungen, Wochenbericht und Blueprints
+- **Priorität:** P1 · **Aufwand:** M–L (5–7 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS4
+- **Anforderung:** Die Integration erinnert aktiv und liefert einen
+  Wochenbericht. **Eingebaute Reminder** laufen über einen beliebigen
+  `notify.*`-Service mit **Fallback `persistent_notification`** (Dedup pro Tag,
+  Quiet Hours). Der **Wochenbericht wird ausschließlich als Notification**
+  (Markdown) versendet — **keine Datei**. Erweiterbare Automationen stehen als
+  **Blueprints** (Abend-Erinnerung, BD-Warnung, Wochenbericht) mit frei wählbarer
+  Person bereit. Alle Einstellungen sind de/en, Defaults aus, ohne
+  Setup-Blockade.
+- **Akzeptanzkriterien:**
+  - [ ] Reminder feuern nur bei erfüllter Bedingung, zur richtigen Zeit, ohne
+    Duplikate; Quiet Hours werden respektiert.
+  - [ ] Bedingungen abgedeckt: Ziel nicht erreicht, keine Buchung seit X Stunden,
+    keine BD-Messung seit X Tagen, keine Wohlbefindens-Meldung seit X Tagen.
+  - [ ] Wochenbericht als Service und optional geplant; Inhalt korrekt;
+    Zustellung **nur als Notification** (keine Datei).
+  - [ ] Zustellfehler sind sichtbar, aber nicht setup-kritisch.
+  - [ ] Blueprints sind importierbar und valide; Person frei wählbar.
+  - [ ] Alle Einstellungen de/en; Defaults aus; keine Setup-Blockade.
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
+#### REQ-HOM-119 — Onboarding/Options-Wizard mit optionalen Schritten
+- **Priorität:** P1 · **Aufwand:** M (3–4 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS5
+- **Anforderung:** Der Options-Flow wird ein **Menü mit optionalen Schritten**
+  (Grundlagen · Getränke · Wohlbefinden · Benachrichtigungen · Zusammenfassung).
+  Jeder Abschnitt ist überspringbar bzw. übernimmt **Defaults**; Änderungen werden
+  vorgemerkt und erst in der **Zusammenfassung** gespeichert. Nicht angezeigte
+  Optionen bleiben erhalten — **keine Datenverluste**, bestehende Entries
+  funktionieren unverändert.
+- **Akzeptanzkriterien:**
+  - [ ] Neuer Nutzer kann mit Defaults in ≤ 2 Schritten abschließen.
+  - [ ] Jeder optionale Schritt ist überspringbar; Defaults werden angewandt.
+  - [ ] Bestehende Optionen (inkl. `wellbeing_confirm`) bleiben unverändert.
+  - [ ] Nicht angezeigte Options-Keys bleiben beim Speichern erhalten (Merge).
+  - [ ] Zusammenfassung vor dem Speichern; Abbrechen ändert nichts.
+  - [ ] Bestehende Entries funktionieren unverändert.
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
+#### REQ-HOM-120 — Rückdatierte Einträge (unbegrenzt)
+- **Priorität:** P1 · **Aufwand:** M (3–4 Tage)
+- **Status: Offen — geplant für Release 0.14.0 (Branch `feat/ux-p1`)**
+- **Plan:** `docs/PLAN-UX-P1.md`, WS6
+- **Anforderung:** Getränke, Blutdruck und Wohlbefinden lassen sich mit
+  **beliebig weit zurückliegendem Datum/Zeitpunkt** erfassen — **keine
+  Zukunft**. Der Erfassungszeitpunkt (`created_at`) wird getrennt vom
+  Mess-/Buchungszeitpunkt (`ts`) gespeichert; alle Tages-/Wochen-/Streak-Aggregate
+  und Reports verwenden `ts`. **Undo** bezieht sich auf den **zuletzt erfassten**
+  Eintrag (Insertion Order), nicht auf den zeitlich größten `ts`.
+- **Akzeptanzkriterien:**
+  - [ ] Rückdatieren funktioniert für alle drei Datentypen, unbegrenzt zurück.
+  - [ ] Zukunft wird verständlich abgelehnt.
+  - [ ] `created_at` (Erfassung) und `ts` (Messung) sind getrennt gespeichert.
+  - [ ] Aggregate, Charts und Reports verwenden den gewählten Zeitpunkt (`ts`).
+  - [ ] Undo entfernt den zuletzt erfassten, nicht den zeitlich letzten Eintrag;
+    Semantik ist dokumentiert und getestet.
+  - [ ] Ungültige/naive Zeitstempel werden klar abgelehnt bzw. dokumentiert lokal
+    interpretiert.
+  - [ ] UI bleibt mobil bedienbar; de/en.
+  - **Beleg: ausstehend (Umsetzung 0.14.0).**
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -827,3 +969,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-23 | **v0.12.0 — Undo-/Personenfilter-/Admin-Bild-Fixes** (Branch `fix/undo-person-filter-images-admin`): Undo-Button in Card und Panel wird ohne vorhandene Getränkebuchung deaktiviert (`panel_data.undo.drink`) statt einen Service-/WS-Fehler auszulösen; Personen-Filter im Karten-Editor hat einen expliziten Bearbeitungsmodus („Alle Personen“ abwählen → Einzelauswahl), im Modus `fixed` werden die Filter-Checkboxen ausgeblendet; der Panel-Admin-Dialog bietet jetzt Bildfelder für alle zehn Wellbeing-Keys (`set_settings`/`get_settings` um `wellbeing_images` erweitert, serverseitig normalisiert). `pytest -q` → 787 passed; `ruff` clean. |
 | 2026-10-24 | **Neu angelegt: REQ-HOM-114 — Wohlbefinden-Bestätigung vor Übernahme** (Branch `feat/wellbeing-confirm`) — **erledigt im Working Tree**, noch kein Commit/Release und **kein Versions-Bump**. Zwei **unabhängige** Schalter `wellbeing_confirm` (bool, Default `false` → kein Verhaltenswechsel): **Teil A** als Panel-/Server-Option pro Config-Entry in `entry.options` über `health_o_mat/set_settings` (`SETTINGS_KEYS`/`SETTINGS_SCHEMA`, `build_settings`, `parse_settings_message`; **strikt bool** — `"true"`/`"false"`/`1`/`0` → `invalid_format`, ohne Teil-Update), Checkbox in der Admin-Maske, `panel_data` liefert den Wert als echtes Boolean, Detail-Tab merkt die Auswahl vor (eigene `pending`-Markierung) und meldet erst per Bestätigungsbutton; **Teil B** als eigenständige Karten-Option mit Editor-Checkbox, Vormerkung (Key oder Score) + Bestätigungsbutton, **nicht** an die Server-Option gekoppelt; Vormerkung wird bei Personenwechsel, `setConfig`, Wechsel zur Übersicht und Reload verworfen, bleibt bei einem Fehler für den erneuten Versuch erhalten. **Belege:** `tests/test_ws_api.py` (7 Testfunktionen `test_req_hom_114_*`, u. a. `::test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm`, `::test_req_hom_114_panel_data_carries_wellbeing_confirm`), `tests/test_panel_js.py::test_req_hom_114_panel_admin_has_wellbeing_confirm_checkbox`, `::test_req_hom_114_panel_defers_wellbeing_report_until_confirmation`, `tests/test_card_js.py::test_req_hom_114_card_defers_wellbeing_report_until_confirmation`, `::test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox`, `tests/test_config_flow.py::test_req_hom_114_options_flow_preserves_wellbeing_confirm`; `pytest -q` → **807 passed**, `ruff check .` clean (**Implementierer-Angabe**; die parallel laufende Tester-Verifikation bleibt abzuwarten). README („Karten-Konfiguration" + Admin-Abschnitt) aktualisiert. |
 | 2026-10-25 | **v0.13.0 — Wohlbefinden-Bestätigung vor Übernahme (REQ-HOM-114)** (Branch `feat/wellbeing-confirm`): zwei unabhängige Optionen `wellbeing_confirm` (Default `false`) — pro Person in der Panel-Admin-Maske und als eigene Karten-Option; Auswahl wird vorgemerkt, erst der Bestätigungsbutton meldet. Options-Flow erhält nicht gezeigte Optionen. Unit `812 passed`, E2E `15 passed` (2 neue), ruff check/format clean. Release v0.13.0 (MINOR). |
+| 2026-10-25 | **Neu aufgenommen: REQ-HOM-115…120 — UX-P1 / Release 0.14.0** (Branch `feat/ux-p1`): sechs P1-Anforderungen aus `docs/PLAN-UX-P1.md` (WS1–WS6) in Kapitel 2 nach REQ-HOM-114 eingetragen, **Status: Offen — geplant für 0.14.0**, Akzeptanzkriterien als offene Checkboxen. Inhalt: **115** Korrigierbarkeit (Verlauf, Void/Restore, Audit-Log; kein Hard-Delete in der UI; Audit-Cap Default 1000 Ereignisse/Person, Admin `0` = unbegrenzt), **116** Backup-Restore (Merge/Replace + Teil-Restore nach Person/Datensatz/Zeitraum, Dry-Run, Pre-Restore-Backup, Personen-Mapping), **117** UI-i18n **nur HA-nativ de/en** über `common`-Translations/`frontend/get_translations` (Entity-/Service-Translations unverändert), **118** Reminder (`notify.*` + persistenter Fallback), Wochenbericht **nur als Notification** (Markdown, keine Datei) und Blueprints, **119** Options-Wizard mit optionalen Schritten/Defaults und Zusammenfassung ohne Datenverluste, **120** unbegrenzt rückdatierte Einträge (keine Zukunft, `created_at` vs. `ts`, Undo = zuletzt erfasst). Keine bestehenden REQ-IDs umnummeriert; Umsetzung/Belege stehen aus. |
