@@ -968,3 +968,107 @@ def test_restore_backup_service_without_user_is_trusted(tmp_path, monkeypatch):
 def _import_restore_module():
     """Lazy-Modul des Service-Handlers (``__init__`` ist als ``<pkg>.init`` geladen)."""
     return importlib.import_module(f"{_PKG}.init.restore")
+
+
+# --- REQ-HOM-120: Rückdatierung über die Services ---------------------------
+
+
+def _services_hass(monkeypatch, now: datetime = datetime(2026, 10, 15, 12, 0)):
+    init = _load_init()
+    monkeypatch.setattr(init, "dt_util", types.SimpleNamespace(now=lambda: now))
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    return init, store, hass
+
+
+def test_req_hom_120_add_drink_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `add_drink` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    schema, func = hass.services.registered["add_drink"]
+
+    assert schema({"amount_ml": 250, "ts": "2026-10-15T09:30:00"})["ts"] == ("2026-10-15T09:30:00")
+    _run(func(_call({"amount_ml": 250, "ts": "2026-10-15T09:30:00"})))
+
+    drink = store.entry("e1")["drinks"][0]
+    assert drink["ts"].startswith("2026-10-15T09:30:00")
+    assert drink["created_at"] == "2026-10-15T12:00:00"
+
+
+def test_req_hom_120_add_blood_pressure_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `add_blood_pressure` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(
+        func(
+            _call(
+                {
+                    "systolic": 124,
+                    "diastolic": 82,
+                    "ts": "2026-10-15T07:15:00",
+                }
+            )
+        )
+    )
+
+    reading = store.entry("e1")["readings"][0]
+    assert reading["ts"].startswith("2026-10-15T07:15:00")
+    assert reading["created_at"] == "2026-10-15T12:00:00"
+
+
+def test_req_hom_120_set_wellbeing_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `set_wellbeing` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    _run(func(_call({"status": "good", "ts": "2026-10-14T20:00:00"})))
+
+    entry = store.entry("e1")
+    assert entry["wellbeing"] == {
+        "status": "good",
+        "ts": entry["wellbeing_entries"][0]["ts"],
+    }
+    assert entry["wellbeing_entries"][0]["ts"].startswith("2026-10-14T20:00:00")
+    assert entry["wellbeing_entries"][0]["created_at"] == "2026-10-15T12:00:00"
+
+
+@pytest.mark.parametrize(
+    "ts",
+    [
+        "kaputt",
+        "2026-10-15T13:00:00",  # mehr als 5 Minuten in der Zukunft
+        "1899-12-31T23:59:59",  # vor 1900
+    ],
+)
+@pytest.mark.parametrize("service", ["add_drink", "add_blood_pressure", "set_wellbeing"])
+def test_req_hom_120_services_reject_invalid_ts(monkeypatch, service, ts):
+    """[REQ-HOM-120] Ungültige/zukünftige/zu alte Zeitpunkte → ServiceValidationError."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered[service]
+    payloads = {
+        "add_drink": {"amount_ml": 250},
+        "add_blood_pressure": {"systolic": 120, "diastolic": 80},
+        "set_wellbeing": {"status": "good"},
+    }
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({**payloads[service], "ts": ts})))
+
+    assert "Zeitpunkt" in str(exc.value)
+    entry = store.entry("e1")
+    assert entry["drinks"] == []
+    assert entry["readings"] == []
+    assert entry.get("wellbeing_entries", []) == []
+
+
+def test_req_hom_120_service_ts_without_value_keeps_now(monkeypatch):
+    """[REQ-HOM-120] Ohne `ts` bleibt das bisherige Verhalten (jetzt) erhalten."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["add_drink"]
+
+    _run(func(_call({"amount_ml": 250})))
+
+    drink = store.entry("e1")["drinks"][0]
+    assert drink["ts"] == "2026-10-15T12:00:00"
+    assert drink["created_at"] == "2026-10-15T12:00:00"

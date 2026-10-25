@@ -1328,6 +1328,7 @@ def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
         "kind": "key",
         "key": "good",
         "score": None,
+        "ts": "",
     }, "der Klick merkt die Auswahl nicht inkl. Personenbezug vor"
     assert staged["calls"] == [], "der Klick meldet trotz Bestätigungsmodus sofort"
     assert 'data-action="wellbeing-confirm"' in staged["html"], (
@@ -1356,6 +1357,7 @@ def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
         "kind": "score",
         "key": "",
         "score": 7,
+        "ts": "",
     }, "die Zahleneingabe wird nicht vorgemerkt"
     assert score["calls"] == []
     assert score["confirmedCalls"][0][2]["score"] == 7
@@ -1459,3 +1461,229 @@ def test_req_hom_114_card_editor_toggle_writes_config(tmp_path):
     )
     assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default ist `false`)"
     assert editor["eventOff"].get("wellbeing_confirm") is None
+
+
+# --- REQ-HOM-120: Rückdatierung in der Karte --------------------------------
+
+_NODE_CARD_TS_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-role="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+  appendChild(child) { return child; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+  dispatchEvent() { return true; }
+  setAttribute() {}
+  removeAttribute() {}
+}
+
+const context = {
+  HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail ? init.detail : null;
+    }
+  },
+  customElements: { get: () => undefined, define: () => {} },
+  window: {},
+  document: { createElement: () => ({}), addEventListener: () => {} },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  __out: null,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const outPromise = vm.runInContext(
+  `(async () => {
+  function makeCard(confirm) {
+    const card = new HealthOMatCard();
+    card._config = { entry_id: "e1", wellbeing_confirm: confirm };
+    card._data = { person: "Caro", wellbeing: { key: "bad", label: "Schlecht" } };
+    card._activeEntry = "e1";
+    card._render = () => {};
+    card._loadData = () => Promise.resolve();
+    card._calls = [];
+    card._hass = {
+      callWS: () => Promise.resolve({}),
+      callService: (domain, service, payload) => {
+        card._calls.push([domain, service, payload]);
+        return Promise.resolve();
+      },
+      states: {},
+    };
+    card.shadowRoot._fields = {
+      "drink-ts": { value: "" },
+      "bp-ts": { value: "" },
+      "wb-ts": { value: "" },
+      "bp-sys": { value: "120" },
+      "bp-dia": { value: "80" },
+      "bp-pulse": { value: "" },
+      "bp-note": { value: "" },
+    };
+    return card;
+  }
+
+  const drink = makeCard(false);
+  drink.shadowRoot._fields["drink-ts"].value = "2026-10-24T18:30";
+  await drink._book(250, "Wasser");
+  const drinkResult = {
+    calls: drink._calls,
+    draft: drink._tsDraft["drink-ts"],
+    field: drink.shadowRoot._fields["drink-ts"].value,
+  };
+
+  const future = makeCard(false);
+  future.shadowRoot._fields["drink-ts"].value = "2999-01-01T10:00";
+  await future._book(250, "Wasser");
+  const futureResult = { calls: future._calls, error: future._actionError };
+
+  const bp = makeCard(false);
+  bp.shadowRoot._fields["bp-ts"].value = "2026-10-24T07:15";
+  await bp._saveBp();
+  const bpResult = { calls: bp._calls, draft: bp._tsDraft["bp-ts"] };
+
+  const wb = makeCard(true);
+  wb.shadowRoot._fields["wb-ts"].value = "2026-10-23T20:00";
+  wb._stageWellbeing("great", null);
+  const wbStaged = { pending: wb._wbPending, calls: wb._calls.slice() };
+  await wb._confirmWellbeing();
+  const wbConfirmed = { pending: wb._wbPending, calls: wb._calls };
+
+  const wbFuture = makeCard(false);
+  wbFuture.shadowRoot._fields["wb-ts"].value = "2999-01-01T10:00";
+  await wbFuture._reportWellbeing("great");
+  const wbFutureResult = { calls: wbFuture._calls, error: wbFuture._wbError };
+
+  __out = {
+    drink: drinkResult,
+    future: futureResult,
+    bp: bpResult,
+    wbStaged,
+    wbConfirmed,
+    wbFuture: wbFutureResult,
+  };
+  return __out;
+  })()`,
+  context,
+  { filename: "card-ts-probe.js" }
+);
+
+process.stdout.write(JSON.stringify(await outPromise));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_120_card_sends_ts_and_validates_future(tmp_path):
+    """[REQ-HOM-120] Karte: ts in allen drei Schreibpfaden, Zukunft blockiert."""
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_ts.mjs"
+    runner_path.write_text(_NODE_CARD_TS_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    out = json.loads(result.stdout)
+
+    drink = out["drink"]
+    assert len(drink["calls"]) == 1
+    assert drink["calls"][0][1] == "add_drink"
+    assert drink["calls"][0][2]["ts"]
+    assert drink["draft"] == "", "der Zeitpunkt-Entwurf wird nach Erfolg nicht geleert"
+    assert drink["field"] == ""
+
+    future = out["future"]
+    assert future["calls"] == [], "ein Zukunft-Zeitpunkt wird trotzdem gebucht"
+    assert "Zukunft" in future["error"]
+
+    bp = out["bp"]
+    assert len(bp["calls"]) == 1 and bp["calls"][0][1] == "add_blood_pressure"
+    assert bp["calls"][0][2]["ts"]
+    assert bp["draft"] == ""
+
+    staged = out["wbStaged"]
+    assert staged["calls"] == [], "die Vormerkung meldet trotz Bestätigungsmodus sofort"
+    assert staged["pending"]["ts"], "die Vormerkung trägt keinen Zeitpunkt"
+
+    confirmed = out["wbConfirmed"]
+    assert len(confirmed["calls"]) == 1 and confirmed["calls"][0][1] == "set_wellbeing"
+    assert confirmed["calls"][0][2]["ts"]
+    assert confirmed["pending"] is None
+
+    wb_future = out["wbFuture"]
+    assert wb_future["calls"] == []
+    assert "Zukunft" in wb_future["error"]
+
+
+def test_req_hom_120_card_renders_ts_fields_in_all_three_blocks():
+    """[REQ-HOM-120] Karte: kompaktes `datetime-local` in Getränk/BD/Wohlbefinden."""
+    text = _card_source()
+
+    assert 'this._tsFieldHtml("drink-ts")' in _js_method_block(text, "_drinkActions")
+    assert 'this._tsFieldHtml("drink-ts")' in _js_method_block(text, "_manualAmounts")
+    assert 'this._tsFieldHtml("bp-ts")' in _js_method_block(text, "_bloodPressureInput")
+    assert 'this._tsFieldHtml("wb-ts")' in _js_method_block(text, "_wellbeingInput")
+
+    field = _js_method_block(text, "_tsFieldHtml")
+    assert '<label class="field">' in field, "das Feld nutzt nicht das kompakte Feld-Layout"
+    assert 'type="datetime-local"' in field
+    assert 'data-role="${role}"' in field
+    # Leer = jetzt (kein stiller Fallback auf eine erfundene Zeit).
+    assert "leer = jetzt" in field
+
+
+def test_req_hom_120_card_payloads_carry_ts():
+    """[REQ-HOM-120] Alle drei Service-Payloads senden `ts` nur wenn gesetzt."""
+    text = _card_source()
+
+    assert re.search(r'_readEntryTs\(\s*"drink-ts"\s*\)', _js_method_block(text, "_book"))
+    assert re.search(r"payload\.ts\s*=\s*ts\.iso", _js_method_block(text, "_book"))
+    assert re.search(r'_readEntryTs\(\s*"bp-ts"\s*\)', _js_method_block(text, "_saveBp"))
+    assert re.search(r"payload\.ts\s*=\s*ts\.iso", _js_method_block(text, "_saveBp"))
+
+    stage = _js_method_block(text, "_stageWellbeing")
+    assert 'this._readEntryTs("wb-ts")' in stage
+    assert "ts: ts.iso" in stage
+    confirm = _js_method_block(text, "_confirmWellbeing")
+    assert "pending.ts" in confirm
+    report = _js_method_block(text, "_reportWellbeing")
+    assert "timestamp" in report and "payload.ts" in report
+
+
+def test_req_hom_120_card_time_label_relative_then_absolute():
+    """[REQ-HOM-120] Karte: frisch relativ, älter als 24 h absolut."""
+    text = _card_source()
+
+    label = _js_method_block(text, "_timeLabel")
+    assert "this._relativeTime(iso)" in label
+    assert "24 * 60 * 60 * 1000" in label
+    assert "pad(date.getDate())" in label
+    # Beide Anzeigepfade (BD, Wohlbefinden) nutzen den Helfer.
+    assert "_timeLabel(bp.at)" in text
+    assert "_timeLabel(wb.at)" in text

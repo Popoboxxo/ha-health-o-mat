@@ -113,7 +113,19 @@ def test_set_wellbeing_service_documented_in_all_translations() -> None:
         block = data["services"]["set_wellbeing"]
         assert block["name"], f"{path}: name fehlt"
         assert block["description"], f"{path}: description fehlt"
-        assert set(block["fields"]) == {"person", "status", "score"}, f"{path}: Felder weichen ab"
+        assert set(block["fields"]) == {"person", "status", "score", "ts"}, (
+            f"{path}: Felder weichen ab"
+        )
+
+
+def test_req_hom_120_ts_field_documented_for_all_write_services() -> None:
+    """[REQ-HOM-120] `ts` ist in Master + beiden Sprachen vollständig beschrieben."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service in ("add_drink", "add_blood_pressure", "set_wellbeing"):
+            field = data["services"][service]["fields"]["ts"]
+            assert field["name"], f"{path}: {service}.ts.name fehlt"
+            assert field["description"], f"{path}: {service}.ts.description fehlt"
 
 
 def test_m2b_void_and_restore_services_documented_in_all_translations() -> None:

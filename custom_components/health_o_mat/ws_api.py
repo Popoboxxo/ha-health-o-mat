@@ -697,6 +697,20 @@ def _audit_limit(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+def parse_entry_ts(value: Any, now: datetime) -> str | None:
+    """Optionales WS-Feld `ts` validieren (REQ-HOM-120).
+
+    ``None`` = kein Zeitpunkt übergeben (Aufrufer setzt "jetzt").
+    ``ValueError`` bei ungültigem, zu neuem oder vor 1900 liegendem Wert.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    parsed = logic.parse_entry_timestamp(value, now=now)
+    if parsed is None:
+        raise ValueError(logic.ENTRY_TS_INVALID_MESSAGE.format(value=value))
+    return parsed.isoformat()
+
+
 # --- Historie / Korrekturen (REQ-HOM-115) -----------------------------------
 
 
@@ -799,6 +813,7 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                     vol.Coerce(int), vol.Range(min=MIN_DRINK_ML, max=MAX_AMOUNT_ML)
                 ),
                 vol.Optional("drink_type"): str,
+                vol.Optional("ts"): str,
             },
         ),
         (
@@ -849,6 +864,7 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 ),
                 vol.Optional("pulse"): vol.Coerce(int),
                 vol.Optional("note"): str,
+                vol.Optional("ts"): str,
             },
         ),
         (
@@ -858,6 +874,7 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Required("entry_id"): str,
                 vol.Optional("key"): str,
                 vol.Optional("score"): vol.Coerce(int),
+                vol.Optional("ts"): str,
             },
         ),
         (COMMAND_SUBSCRIBE, websocket_subscribe, {vol.Optional("entry_id"): str}),
@@ -963,12 +980,19 @@ async def websocket_book_drink(hass: HomeAssistant, connection: Any, msg: dict[s
             f"ml muss zwischen {MIN_DRINK_ML} und {MAX_AMOUNT_ML} liegen",
         )
         return
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
+    except ValueError as err:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+        return
     await store.add_drink(
         entry_id,
-        dt_util.now().isoformat(),
+        ts_iso,
         ml,
         msg.get("drink_type") or "Eigen",
         "panel",
+        created_ts_iso=now.isoformat(),
         actor=user_id_of(connection),
         audit_limit=_audit_limit(hass, entry_id),
     )
@@ -1122,14 +1146,21 @@ async def websocket_save_measurement(
         )
         return
     pulse = msg.get("pulse")
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
+    except ValueError as err:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+        return
     await store.add_reading(
         entry_id,
-        dt_util.now().isoformat(),
+        ts_iso,
         sys_value,
         dia_value,
         int(pulse) if pulse is not None else None,
         msg.get("note") or "",
         "panel",
+        created_ts_iso=now.isoformat(),
         actor=user_id_of(connection),
         audit_limit=_audit_limit(hass, entry_id),
     )
@@ -1163,10 +1194,17 @@ async def websocket_set_wellbeing(
     if _wellbeing_state(key) is None:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, f"Unbekannter Wohlbefinden-Key: {key}")
         return
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
+    except ValueError as err:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+        return
     await store.set_wellbeing(
         entry_id,
         key,
-        dt_util.now().isoformat(),
+        ts_iso,
+        created_ts_iso=now.isoformat(),
         actor=user_id_of(connection),
         audit_limit=_audit_limit(hass, entry_id),
     )

@@ -18,7 +18,8 @@ import {
   toNumber,
   clamp,
   fmtMl,
-  relativeTime,
+  localDateTimeValue,
+  entryTime,
   ringHtml,
   categoryInfo,
   messageHtml,
@@ -75,7 +76,7 @@ export function renderTile(panel, person) {
 
   const wb = data.wellbeing || {};
   const wbState = wellbeingView(panel, data);
-  const wbAt = wb.at ? relativeTime(wb.at) : "";
+  const wbAt = wb.at ? entryTime(wb.at) : "";
 
   const rest = goal > 0 ? Math.max(0, Math.round(goal - ml)) : null;
   const sub = goal > 0
@@ -161,6 +162,27 @@ function tabButton(activeTab, tab) {
   return `<button class="tab${active}" data-action="tab" data-tab="${tab.key}" type="button" role="tab" aria-selected="${active ? "true" : "false"}">${escapeHtml(tab.label)}</button>`;
 }
 
+/* ---- Rückdatierung (REQ-HOM-120) ----------------------------------------- */
+
+/* `datetime-local`-Feld + Schnellwahl „Jetzt"/„Gestern". Der Entwurf des
+ * Panels (`_tsDraft`) überlebt Re-Renders; ohne Entwurf startet das Feld auf
+ * "jetzt". Ein leeres Feld bedeutet beim Senden ebenfalls "jetzt". */
+function tsFieldHtml(panel, field) {
+  const draft = panel && panel._tsDraft ? panel._tsDraft[field] : "";
+  const value = draft || localDateTimeValue(new Date());
+  const prefix = field.replace(/-ts$/, "");
+  const disabled = panel && panel._busy ? " disabled" : "";
+  return `<div class="ts-row">
+      <label class="field">Zeitpunkt
+        <input type="datetime-local" data-field="${field}" value="${escapeHtml(value)}" />
+      </label>
+      <div class="ts-quick">
+        <button class="btn ghost" data-action="${prefix}-ts-now" type="button"${disabled}>Jetzt</button>
+        <button class="btn ghost" data-action="${prefix}-ts-yesterday" type="button"${disabled}>Gestern</button>
+      </div>
+    </div>`;
+}
+
 /* ---- Tab: Trinken (4.2) -------------------------------------------------- */
 
 function drinkTab(panel, data, entryId) {
@@ -211,6 +233,7 @@ function drinkTab(panel, data, entryId) {
     </div>
     <div class="card">
       <div class="muted">Schnell buchen</div>
+      ${tsFieldHtml(panel, "drink-ts")}
       <div class="quick">${quick}</div>
       <form class="freetext" data-form="drink">
         <input type="text" data-field="drink-text" placeholder="z. B. Kaffee 300 ml"
@@ -258,7 +281,7 @@ function bpTab(panel, data, entryId) {
 
   const metaParts = [];
   if (Number.isFinite(pulse)) metaParts.push(`${Math.round(pulse)} bpm`);
-  if (bp.at) metaParts.push(relativeTime(bp.at));
+  if (bp.at) metaParts.push(entryTime(bp.at));
 
   const head = `<div class="bp-head">
       <div class="bp-big">${hasReading ? `${Math.round(sys)} / ${Math.round(dia)}` : "\u2013 / \u2013"}</div>
@@ -290,6 +313,7 @@ function bpTab(panel, data, entryId) {
 
   const form = `<form class="card" data-form="bp">
       <div class="muted">Neue Messung</div>
+      ${tsFieldHtml(panel, "bp-ts")}
       <div class="bp-inputs">
         <label class="field">Systolisch
           <input type="number" inputmode="numeric" data-field="sys" min="40" max="300" placeholder="120" />
@@ -416,7 +440,7 @@ function wellbeingTab(panel, data, entryId) {
       </div>`
     : "";
 
-  const at = view.at ? relativeTime(view.at) : "";
+  const at = view.at ? entryTime(view.at) : "";
   const scoreText =
     view.score != null ? ` \u00B7 ${view.score} / ${scoreMax}` : "";
   const last = `<div class="tile-row">
@@ -455,7 +479,7 @@ function wellbeingTab(panel, data, entryId) {
       if (!entry || typeof entry !== "object") return "";
       const entryKey = String(entry.key || "").toLowerCase();
       const knownState = scale.find((state) => state.key === entryKey);
-      const entryAt = entry.ts ? relativeTime(entry.ts) : "";
+      const entryAt = entry.ts ? entryTime(entry.ts) : "";
       const entryLabel = entry.label || (knownState && knownState.label) || "Keine Angabe";
       const entryVisual = {
         emoji: entry.emoji || (knownState && knownState.emoji) || "\u{1F642}",
@@ -502,6 +526,7 @@ function wellbeingTab(panel, data, entryId) {
 
   return `<div class="card">
       <div class="muted">Wie geht es dir?</div>
+      ${tsFieldHtml(panel, "wb-ts")}
       <div class="wb-row">${buttons}</div>
       ${confirmRow}
       ${last}

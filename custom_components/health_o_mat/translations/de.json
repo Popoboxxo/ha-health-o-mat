@@ -237,11 +237,23 @@
   "services": {
     "add_drink": {
       "name": "Getränk buchen",
-      "description": "Bucht eine Getränkemenge für eine Person."
+      "description": "Bucht eine Getränkemenge für eine Person.",
+      "fields": {
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt der Erfassung (ISO 8601, z. B. 2026-10-24T18:30 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
+        }
+      }
     },
     "add_blood_pressure": {
       "name": "Blutdruckmessung speichern",
-      "description": "Speichert systolischen/diastolischen Wert und optional Puls."
+      "description": "Speichert systolischen/diastolischen Wert und optional Puls.",
+      "fields": {
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt der Erfassung (ISO 8601, z. B. 2026-10-24T18:30 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
+        }
+      }
     },
     "set_wellbeing": {
       "name": "Wohlbefinden melden",
@@ -258,6 +270,10 @@
         "score": {
           "name": "Zahl",
           "description": "Numerischer Wert von 1 (sehr schlecht) bis 10 (ausgezeichnet). Alternative zu status."
+        },
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt der Erfassung (ISO 8601, z. B. 2026-10-24T18:30 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
         }
       }
     },

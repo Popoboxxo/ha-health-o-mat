@@ -9,7 +9,7 @@ import calendar
 import csv
 import io
 from collections.abc import Iterable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any
 
 from .const import (
@@ -136,6 +136,74 @@ def _parse_ts(value: Any) -> datetime | None:
         return datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+
+
+# --- Rückdatierung (REQ-HOM-120) -------------------------------------------
+
+# Zukunfts-Toleranz: Uhren zwischen Browser und Server driften leicht; bis
+# 5 Minuten "Zukunft" gilt als "jetzt" statt als Fehler.
+ENTRY_TS_FUTURE_TOLERANCE = timedelta(minutes=5)
+
+# Untergrenze: ältere Werte sind keine plausiblen Erfassungen (und würden in
+# Zeitfenster-/Trend-Berechnungen nur Rauschen erzeugen).
+ENTRY_TS_MIN = datetime(1900, 1, 1, tzinfo=UTC)
+
+# Einheitliche Fehlermeldung für Services/WS (beide Schreibwege).
+ENTRY_TS_INVALID_MESSAGE = (
+    "Ungültiger Zeitpunkt '{value}' — erwartet ISO 8601 (z. B. 2026-10-24T18:30), "
+    "höchstens 5 Minuten in der Zukunft und nicht vor 1900."
+)
+
+
+def parse_entry_timestamp(
+    value: Any,
+    *,
+    now: datetime | None = None,
+    tz: tzinfo | None = None,
+) -> datetime | None:
+    """Nutzer-Zeitstempel (ISO 8601) validieren und lokalisieren.
+
+    HA-frei: naive Werte werden in der übergebenen Zeitzone interpretiert
+    (``tz``), sonst in der Zone von ``now`` bzw. der lokalen Systemzone. Ein
+    tz-aware Wert wird in dieselbe Zone umgerechnet, damit der Rückgabewert
+    einheitlich lokal (mit Offset) ist.
+
+    Rückgabe ``None`` bei: fehlendem/nicht-String-Wert, kaputtem ISO-String,
+    Zeitpunkten mehr als ``ENTRY_TS_FUTURE_TOLERANCE`` in der Zukunft und
+    Werten vor ``ENTRY_TS_MIN`` (1900-01-01).
+    """
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    # `fromisoformat` akzeptiert "Z" erst ab Python 3.11; defensiv normalisieren.
+    if raw[-1:] in ("Z", "z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+    reference = now if now is not None else datetime.now().astimezone()
+    zone = tz or reference.tzinfo
+    if zone is None:
+        zone = datetime.now().astimezone().tzinfo
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=zone)
+    else:
+        parsed = parsed.astimezone(zone)
+
+    # Grenzprüfung im UTC-Raum: DST-unabhängig und ohne naive/aware-Mischung.
+    ts_utc = parsed.astimezone(UTC)
+    ref_aware = reference if reference.tzinfo is not None else reference.replace(tzinfo=zone)
+    now_utc = ref_aware.astimezone(UTC)
+    if ts_utc > now_utc + ENTRY_TS_FUTURE_TOLERANCE:
+        return None
+    if ts_utc < ENTRY_TS_MIN:
+        return None
+    return parsed
 
 
 def _align_tz(ts: datetime, reference: datetime) -> datetime:

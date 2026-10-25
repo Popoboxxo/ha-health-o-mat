@@ -1424,8 +1424,8 @@ def test_panel_wellbeing_history_lists_time_emoji_label_and_score():
     assert 'class="wb-history"' in body
     assert 'class="wb-hist-label"' in body
     assert 'class="wb-hist-score"' in body
-    # Zeitpunkt (relativ), Emoji, Label und Score pro Eintrag …
-    assert "relativeTime(entry.ts)" in body
+    # Zeitpunkt (relativ frisch / absolut älter), Emoji, Label und Score …
+    assert "entryTime(entry.ts)" in body
     assert "wellbeingScore(entry)" in body
     assert "scoreMax" in body and "WELLBEING_SCORE_MAX" in body
     assert "entry.emoji" in body and "entry.label" in body
@@ -1494,7 +1494,7 @@ def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
     assert "Sehr schlecht" in history_html
     assert "\U0001f635" in history_html
     assert "1 / 10" in history_html
-    assert re.search(r"vor \d+ |gerade eben", history_html), (
+    assert re.search(r"vor \d+ |gerade eben|\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", history_html), (
         f"der Zeitpunkt der Verlaufsliste fehlt: {history_html}"
     )
     # Der aktuelle Live-Wert (4) gehoert NICHT in die Verlaufsliste.
@@ -1758,15 +1758,20 @@ def test_req_hom_114_panel_defers_wellbeing_report_until_confirmation(tmp_path):
     assert out["staged"]["calls"] == [], (
         "der Klick loest trotz Bestätigungsmodus sofort `_setWellbeing` aus"
     )
-    assert out["staged"]["pending"] == {"entryId": "entry-1", "key": "great", "score": None}
+    assert out["staged"]["pending"] == {
+        "entryId": "entry-1",
+        "key": "great",
+        "score": None,
+        "ts": "",
+    }
 
     assert len(out["immediate"]["calls"]) == 1, (
         "ohne Bestätigungsmodus wird die Meldung nicht sofort gesendet"
     )
-    assert out["immediate"]["calls"][0] == ["entry-1", "great"]
+    assert out["immediate"]["calls"][0] == ["entry-1", "great", None, ""]
     assert out["immediate"]["pending"] is None
 
-    assert out["confirmed"]["calls"] == [["entry-1", "good", None]], (
+    assert out["confirmed"]["calls"] == [["entry-1", "good", None, ""]], (
         "der Bestätigungsbutton sendet die vorgemerkte Auswahl nicht"
     )
 
@@ -1778,6 +1783,7 @@ def test_req_hom_114_panel_defers_wellbeing_report_until_confirmation(tmp_path):
         "entryId": "entry-1",
         "key": "good",
         "score": None,
+        "ts": "",
     }, "ein unbeteiligter Reload verwirft die Vormerkung"
 
 
@@ -1963,16 +1969,18 @@ def test_req_hom_114_panel_pending_survives_unrelated_writes(tmp_path):
         "entryId": "entry-1",
         "key": "k3",
         "score": None,
+        "ts": "",
     }, "eine Getraenkebuchung verwirft die vorgemerkte Auswahl"
     assert out["reload"]["pending"] == {
         "entryId": "entry-1",
         "key": "k3",
         "score": None,
+        "ts": "",
     }, "`_reloadEntry` verwirft die vorgemerkte Auswahl"
 
     # S4a: Zahleneingabe merkt vor, sendet nichts, Bestaetigung sendet den Score.
     staged = out["scoreStaged"]
-    assert staged["pending"] == {"entryId": "entry-1", "key": "", "score": 7}, (
+    assert staged["pending"] == {"entryId": "entry-1", "key": "", "score": 7, "ts": ""}, (
         "die Zahleneingabe wird nicht (mit Personenbezug) vorgemerkt"
     )
     assert staged["sent"] == 0, "die Zahleneingabe meldet trotz Bestaetigungsmodus sofort"
@@ -2162,3 +2170,197 @@ def test_m2b_panel_audit_limit_field_is_wired_into_admin_form():
     base = _panel_base_source()
     assert "audit_limit: 1000" in base
     assert "auditMin: 0" in base
+
+
+# --- REQ-HOM-120: Rückdatierung im Panel ------------------------------------
+
+_NODE_PANEL_TS_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel(confirm) {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "detail";
+  panel._data = { "entry-1": { wellbeing_confirm: confirm } };
+  panel._busy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._ws = async (msg) => { panel._messages.push(msg); return {}; };
+  panel._reloadEntry = async () => {};
+  panel.shadowRoot._fields = {
+    "drink-ts": { value: "" },
+    "bp-ts": { value: "" },
+    "wb-ts": { value: "" },
+  };
+  return panel;
+}
+
+function messagesOf(panel) {
+  return panel._messages.map((msg) => ({
+    type: msg.type,
+    ts: msg.ts || "",
+    ml: msg.ml,
+  }));
+}
+
+/* Getränk: bewusster Zeitpunkt wird gesendet, danach Feld zurückgesetzt. */
+const drink = makePanel(false);
+drink.shadowRoot._fields["drink-ts"].value = "2026-10-24T18:30";
+await drink._book("entry-1", 250, "Wasser");
+const drinkAfter = {
+  messages: messagesOf(drink),
+  draft: drink._tsDraft["drink-ts"],
+  field: drink.shadowRoot._fields["drink-ts"].value,
+};
+
+/* Getränk: Zukunft wird clientseitig abgelehnt (keine stille Buchung). */
+const future = makePanel(false);
+future.shadowRoot._fields["drink-ts"].value = "2999-01-01T10:00";
+await future._book("entry-1", 250, "Wasser");
+const futureResult = { messages: messagesOf(future), error: future._actionError };
+
+/* Schnellwahl „Gestern" setzt Entwurf + Feld ohne Render. */
+const quick = makePanel(false);
+quick._onClick({
+  target: {
+    closest: () => ({
+      getAttribute: (name) => (name === "data-action" ? "drink-ts-yesterday" : ""),
+    }),
+  },
+});
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+const pad = (n) => String(n).padStart(2, "0");
+const expectedYesterday = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(
+  yesterday.getDate()
+)}T${pad(yesterday.getHours())}:${pad(yesterday.getMinutes())}`;
+const quickResult = {
+  draft: quick._tsDraft["drink-ts"],
+  field: quick.shadowRoot._fields["drink-ts"].value,
+  expected: expectedYesterday,
+};
+
+/* Blutdruck: ts wird mitgesendet. */
+const bp = makePanel(false);
+bp.shadowRoot._fields["bp-ts"].value = "2026-10-24T07:15";
+await bp._saveMeasurement("entry-1", 120, 80, null, "");
+const bpResult = { messages: messagesOf(bp), draft: bp._tsDraft["bp-ts"] };
+
+/* Wohlbefinden: Vormerkung trägt den Zeitpunkt, erst „Übernehmen" sendet ihn. */
+const wb = makePanel(true);
+wb.shadowRoot._fields["wb-ts"].value = "2026-10-23T20:00";
+wb._stageWellbeing("entry-1", "great", null);
+const wbStaged = { pending: wb._wbPending, sent: messagesOf(wb) };
+await wb._confirmWellbeing();
+const wbConfirmed = { pending: wb._wbPending, sent: messagesOf(wb) };
+
+/* Wohlbefinden: Zukunft wird im Formularpfad verständlich gemeldet. */
+const wbFuture = makePanel(false);
+wbFuture.shadowRoot._fields["wb-ts"].value = "2999-01-01T10:00";
+wbFuture.shadowRoot._fields["wb-score"] = { value: "7" };
+wbFuture._submitWellbeing();
+const wbFutureResult = { messages: messagesOf(wbFuture), error: wbFuture._formError };
+
+process.stdout.write(
+  JSON.stringify({
+    drink: drinkAfter,
+    future: futureResult,
+    quick: quickResult,
+    bp: bpResult,
+    wbStaged,
+    wbConfirmed,
+    wbFuture: wbFutureResult,
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_120_panel_sends_ts_and_validates_future(tmp_path):
+    """[REQ-HOM-120] Panel: ts in allen drei Schreibpfaden, Zukunft blockiert."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(tmp_path, _NODE_PANEL_TS_RUNNER, [str(panel_copy)], "runner_panel_ts")
+    )
+
+    drink = out["drink"]
+    assert len(drink["messages"]) == 1
+    assert drink["messages"][0]["type"] == "health_o_mat/book_drink"
+    assert drink["messages"][0]["ts"]
+    assert drink["draft"] == "", "das Zeitpunkt-Feld wird nach Erfolg nicht zurückgesetzt"
+    assert drink["field"] != "2026-10-24T18:30"
+
+    future = out["future"]
+    assert future["messages"] == [], "ein Zukunft-Zeitpunkt wird trotzdem gebucht"
+    assert "Zukunft" in future["error"]
+
+    quick = out["quick"]
+    assert quick["draft"] == quick["expected"]
+    assert quick["field"] == quick["expected"], "die Schnellwahl setzt das Feld nicht"
+
+    bp = out["bp"]
+    assert len(bp["messages"]) == 1 and bp["messages"][0]["ts"]
+    assert bp["messages"][0]["type"] == "health_o_mat/save_measurement"
+    assert bp["draft"] == ""
+
+    staged = out["wbStaged"]
+    assert staged["sent"] == [], "die Vormerkung sendet trotz Bestätigungsmodus sofort"
+    assert staged["pending"]["ts"], "die Vormerkung trägt keinen Zeitpunkt"
+
+    confirmed = out["wbConfirmed"]
+    assert len(confirmed["sent"]) == 1
+    assert confirmed["sent"][0]["type"] == "health_o_mat/set_wellbeing"
+    assert confirmed["sent"][0]["ts"], "die Bestätigung sendet den Zeitpunkt nicht"
+    assert confirmed["pending"] is None
+
+    wb_future = out["wbFuture"]
+    assert wb_future["messages"] == []
+    assert "Zukunft" in wb_future["error"]
+
+
+def test_req_hom_120_panel_views_render_ts_fields_and_quick_buttons():
+    """[REQ-HOM-120] Alle drei Tabs rendern `datetime-local` + Jetzt/Gestern."""
+    views = _panel_views_source()
+
+    for field in ("drink-ts", "bp-ts", "wb-ts"):
+        assert f'tsFieldHtml(panel, "{field}")' in views, f"{field}-Feld fehlt im Tab"
+    assert 'data-field="${field}"' in views
+    assert 'data-action="${prefix}-ts-now"' in views
+    assert 'data-action="${prefix}-ts-yesterday"' in views
+    assert "localDateTimeValue" in views, "kein Default 'jetzt' für die Felder"
+
+
+def test_req_hom_120_panel_entry_time_is_relative_then_absolute():
+    """[REQ-HOM-120] Anzeige: frisch relativ, älter als 24 h absolut."""
+    base = _panel_base_source()
+
+    assert re.search(r"export\s+function\s+entryTime\s*\(", base)
+    body = _js_function_block(base, "entryTime")
+    assert "relativeTime(iso)" in body
+    assert "24 * 60 * 60 * 1000" in body
+    assert re.search(r"pad\(date\.getDate\(\)\)", body)
+    assert "entryTime(" in _panel_views_source()

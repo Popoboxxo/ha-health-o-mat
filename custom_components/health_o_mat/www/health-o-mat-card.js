@@ -144,6 +144,9 @@ const PULSE_MAX = 250;
 /* Anzahl der Meldungen im kompakten Trend der Karte. */
 const WELLBEING_TREND_POINTS = 14;
 
+/* Rückdatierung (REQ-HOM-120): gleiche Zukunfts-Toleranz wie Server/Panel. */
+const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
 /* WHO blood-pressure category keys (logic.bp_category) -> friendly label.
  * Unknown/legacy values fall back to the raw value (see bpCategoryLabel). */
 const BP_CATEGORY_LABELS = {
@@ -794,8 +797,11 @@ class HealthOMatCard extends HTMLElement {
     this._wbError = "";
     this._wbScoreDraft = "";
     /* REQ-HOM-114: vorgemerkte, noch nicht gemeldete Wohlbefinden-Auswahl
-     * (`{kind: "key"|"score", key, score}`) — nur bei `wellbeing_confirm`. */
+     * (`{kind: "key"|"score", key, score, ts}`) — nur bei `wellbeing_confirm`. */
     this._wbPending = null;
+    /* REQ-HOM-120: Zeitpunkt-Entwürfe der `datetime-local`-Felder (leer =
+     * jetzt). Ein Re-Render darf eine getroffene Auswahl nicht verwerfen. */
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
     /* Fehler einer AKTION (buchen/undo) — eigener Kanal, damit er auch
      * sichtbar bleibt, wenn Daten bereits geladen sind (`_error` ist fuer
      * Ladefehler reserviert). */
@@ -834,6 +840,7 @@ class HealthOMatCard extends HTMLElement {
     this._wbError = "";
     this._wbScoreDraft = "";
     this._wbPending = null;
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
     this._actionError = "";
     this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     this._amountDraft = "";
@@ -1044,19 +1051,26 @@ class HealthOMatCard extends HTMLElement {
     if (!this._hass || this._busyMl != null) return;
     const value = toNumber(ml, 0);
     if (value <= 0) return;
+    const ts = this._readEntryTs("drink-ts");
+    if (!ts.ok) {
+      this._actionError = ts.error;
+      this._render();
+      return;
+    }
     // Neuer Versuch: eine alte Aktions-Meldung verschwindet sofort.
     this._actionError = "";
     this._busyMl = value;
     this._render();
     try {
-      await Promise.resolve(
-        this._hass.callService("health_o_mat", "add_drink", {
-          amount_ml: value,
-          drink_type: drinkType ? String(drinkType) : "Eigen",
-          person: this._servicePerson(),
-        })
-      );
+      const payload = {
+        amount_ml: value,
+        drink_type: drinkType ? String(drinkType) : "Eigen",
+        person: this._servicePerson(),
+      };
+      if (ts.iso) payload.ts = ts.iso;
+      await Promise.resolve(this._hass.callService("health_o_mat", "add_drink", payload));
       this._actionError = "";
+      this._resetTs("drink-ts");
       await this._loadData(true);
     } catch (err) {
       this._actionError = (err && err.message) ? err.message : String(err);
@@ -1078,6 +1092,42 @@ class HealthOMatCard extends HTMLElement {
     const raw = this._readInput(role);
     if (!/^\d+$/.test(raw)) return NaN;
     return Number.parseInt(raw, 10);
+  }
+
+  /* ---- Rückdatierung (REQ-HOM-120) ---------------------------------------- */
+
+  /* `datetime-local`-Feld lesen und validieren.
+   * Rückgabe `{ ok: true, iso }` (iso "" = jetzt) oder `{ ok: false, error }`. */
+  _readEntryTs(role) {
+    const raw = this._readInput(role);
+    if (!raw) return { ok: true, iso: "" };
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) {
+      return { ok: false, error: "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen." };
+    }
+    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
+      return {
+        ok: false,
+        error: "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz).",
+      };
+    }
+    if (parsed.getFullYear() < 1900) {
+      return { ok: false, error: "Der Zeitpunkt ist zu alt (frühestens 1900)." };
+    }
+    return { ok: true, iso: parsed.toISOString() };
+  }
+
+  _tsFieldHtml(role) {
+    const draft = (this._tsDraft && this._tsDraft[role]) || "";
+    return `<label class="field"><span>Zeitpunkt (leer = jetzt)</span>
+      <input type="datetime-local" data-role="${role}" value="${escapeHtml(draft)}" />
+    </label>`;
+  }
+
+  _resetTs(role) {
+    if (this._tsDraft) this._tsDraft[role] = "";
+    const el = this.shadowRoot.querySelector(`[data-role="${role}"]`);
+    if (el) el.value = "";
   }
 
   async _submitCustomAmount() {
@@ -1114,8 +1164,12 @@ class HealthOMatCard extends HTMLElement {
     const pulse = pulseRaw === "" ? null : this._readInt("bp-pulse");
     const note = this._readInput("bp-note");
 
+    const ts = this._readEntryTs("bp-ts");
+
     let error = "";
-    if (!Number.isInteger(sys) || sys < BP_SYS_MIN || sys > BP_SYS_MAX) {
+    if (!ts.ok) {
+      error = ts.error;
+    } else if (!Number.isInteger(sys) || sys < BP_SYS_MIN || sys > BP_SYS_MAX) {
       error = `Systolisch: ganze Zahl zwischen ${BP_SYS_MIN} und ${BP_SYS_MAX}.`;
     } else if (!Number.isInteger(dia) || dia < BP_DIA_MIN || dia > BP_DIA_MAX) {
       error = `Diastolisch: ganze Zahl zwischen ${BP_DIA_MIN} und ${BP_DIA_MAX}.`;
@@ -1138,12 +1192,14 @@ class HealthOMatCard extends HTMLElement {
       };
       if (pulse != null) payload.pulse = pulse;
       if (note) payload.note = note;
+      if (ts.iso) payload.ts = ts.iso;
       await Promise.resolve(
         this._hass.callService("health_o_mat", "add_blood_pressure", payload)
       );
       // Erfolgreich gespeichert: der Entwurf ist erledigt (der naechste
       // Render startet mit leeren Feldern).
       this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+      this._resetTs("bp-ts");
       await this._loadData(true);
     } catch (err) {
       this._bpError = (err && err.message) ? err.message : String(err);
@@ -1161,8 +1217,15 @@ class HealthOMatCard extends HTMLElement {
     return this._configNorm().wellbeingConfirm === true;
   }
 
-  /* Merkt die Auswahl nur vor — gemeldet wird sie erst mit „Übernehmen". */
+  /* Merkt die Auswahl nur vor — gemeldet wird sie erst mit „Übernehmen".
+   * Der Zeitpunkt gehört zur Vormerkung (REQ-HOM-120). */
   _stageWellbeing(key, score) {
+    const ts = this._readEntryTs("wb-ts");
+    if (!ts.ok) {
+      this._wbError = ts.error;
+      this._render();
+      return;
+    }
     this._wbPending = {
       /* Personenbezug: die Karte darf eine Vormerkung nur unter der Person
        * anzeigen/übernehmen, für die sie entstanden ist (REQ-HOM-114). */
@@ -1170,6 +1233,7 @@ class HealthOMatCard extends HTMLElement {
       kind: score == null ? "key" : "score",
       key: key == null ? "" : String(key),
       score: score == null ? null : Number(score),
+      ts: ts.iso,
     };
     this._wbError = "";
     this._render();
@@ -1198,26 +1262,38 @@ class HealthOMatCard extends HTMLElement {
   async _confirmWellbeing() {
     const pending = this._wbPendingFor();
     if (!pending || this._busyWb) return;
-    if (pending.kind === "score") await this._reportWellbeingScore(pending.score);
-    else await this._reportWellbeing(pending.key);
+    if (pending.kind === "score") await this._reportWellbeingScore(pending.score, pending.ts);
+    else await this._reportWellbeing(pending.key, pending.ts);
   }
 
-  async _reportWellbeing(key) {
+  /* `ts`: undefined = aus dem Feld lesen (Sofort-Modus), String = bereits
+   * aufgelöster Zeitpunkt der Vormerkung. */
+  async _reportWellbeing(key, ts) {
     if (!this._hass || this._busyWb) return;
     const status = key == null ? "" : String(key);
     if (!this._wellbeingScale().some((state) => state.key === status)) return;
+    let timestamp = ts;
+    if (timestamp === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._wbError = read.error;
+        this._render();
+        return;
+      }
+      timestamp = read.iso;
+    }
     this._busyWb = true;
     this._wbError = "";
     this._render();
     try {
+      const payload = { status: status, person: this._servicePerson() };
+      if (timestamp) payload.ts = String(timestamp);
       await Promise.resolve(
-        this._hass.callService("health_o_mat", "set_wellbeing", {
-          status: status,
-          person: this._servicePerson(),
-        })
+        this._hass.callService("health_o_mat", "set_wellbeing", payload)
       );
       // Erfolgreich gemeldet: eine vorgemerkte Auswahl ist erledigt.
       this._wbPending = null;
+      this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1228,7 +1304,7 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
-  async _reportWellbeingScore(rawScore) {
+  async _reportWellbeingScore(rawScore, ts) {
     if (!this._hass || this._busyWb) return;
     const value = toNumber(rawScore, NaN);
     const max = this._wellbeingScale().length;
@@ -1237,18 +1313,28 @@ class HealthOMatCard extends HTMLElement {
       this._render();
       return;
     }
+    let timestamp = ts;
+    if (timestamp === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._wbError = read.error;
+        this._render();
+        return;
+      }
+      timestamp = read.iso;
+    }
     this._busyWb = true;
     this._wbError = "";
     this._render();
     try {
+      const payload = { score: value, person: this._servicePerson() };
+      if (timestamp) payload.ts = String(timestamp);
       await Promise.resolve(
-        this._hass.callService("health_o_mat", "set_wellbeing", {
-          score: value,
-          person: this._servicePerson(),
-        })
+        this._hass.callService("health_o_mat", "set_wellbeing", payload)
       );
       this._wbScoreDraft = "";
       this._wbPending = null;
+      this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1345,6 +1431,10 @@ class HealthOMatCard extends HTMLElement {
     if (!target || !target.getAttribute) return;
     const role = target.getAttribute("data-role") || "";
     const value = target.value == null ? "" : String(target.value);
+    if (role.endsWith("-ts")) {
+      if (this._tsDraft) this._tsDraft[role] = value;
+      return;
+    }
     if (role === "custom-amount") {
       // Getippte eigene Menge ebenfalls ohne Re-Render merken.
       this._amountDraft = value;
@@ -1413,6 +1503,7 @@ class HealthOMatCard extends HTMLElement {
       this._wbError = "";
       this._wbScoreDraft = "";
       this._wbPending = null;
+      this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
       this._actionError = "";
       this._activeEntry = nextEntry;
     }
@@ -1632,7 +1723,7 @@ class HealthOMatCard extends HTMLElement {
     const subParts = [];
     if (Number.isFinite(pulse)) subParts.push(`${escapeHtml(Math.round(pulse))} bpm`);
     if (category) subParts.push(escapeHtml(bpCategoryLabel(category)));
-    const at = bp.at ? this._relativeTime(bp.at) : "";
+    const at = bp.at ? this._timeLabel(bp.at) : "";
     if (at) subParts.push(escapeHtml(at));
 
     const warningHtml = warning
@@ -1703,7 +1794,7 @@ class HealthOMatCard extends HTMLElement {
       wb.label ||
       scaleEntry.label ||
       (displayKey ? displayKey.charAt(0).toUpperCase() + displayKey.slice(1) : "Keine Angabe");
-    const at = (wb.at && this._relativeTime(wb.at)) || "";
+    const at = (wb.at && this._timeLabel(wb.at)) || "";
 
     // Score (1..N): Live-Entity, sonst Server-Feld (der Server ist die
     // Wahrheit: `score: null` bedeutet "kein Score"); nur wenn das Feld
@@ -1785,7 +1876,7 @@ class HealthOMatCard extends HTMLElement {
     const status = busy
       ? `<div class="msg" role="status" aria-live="polite">Buchen\u2026</div>`
       : "";
-    return `<div class="actions">${buttons}</div>${status}`;
+    return `${this._tsFieldHtml("drink-ts")}<div class="actions">${buttons}</div>${status}`;
   }
 
   _manualAmounts() {
@@ -1822,7 +1913,7 @@ class HealthOMatCard extends HTMLElement {
     const error = this._amountError
       ? `<div class="form-error" role="alert">${escapeHtml(this._amountError)}</div>`
       : "";
-    return `<div class="block"><div class="actions">${presets}</div>${custom}${status}${error}</div>`;
+    return `<div class="block">${cfg.flags.show_drinks ? "" : this._tsFieldHtml("drink-ts")}<div class="actions">${presets}</div>${custom}${status}${error}</div>`;
   }
 
   _bloodPressureInput() {
@@ -1837,6 +1928,7 @@ class HealthOMatCard extends HTMLElement {
       : "";
     const disabled = busy ? " disabled" : "";
     return `<div class="block">
+      ${this._tsFieldHtml("bp-ts")}
       <div class="form">
         <label class="field"><span>Systolisch</span>
           <input type="number" inputmode="numeric" min="${BP_SYS_MIN}" max="${BP_SYS_MAX}"
@@ -1932,7 +2024,7 @@ class HealthOMatCard extends HTMLElement {
     const status = busy
       ? `<div class="msg" role="status" aria-live="polite">Melde\u2026</div>`
       : "";
-    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
+    return `<div class="block">${this._tsFieldHtml("wb-ts")}<div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
   }
 
   _undoAction() {
@@ -1959,6 +2051,20 @@ class HealthOMatCard extends HTMLElement {
     if (hours < 24) return `vor ${hours} h`;
     const days = Math.round(hours / 24);
     return `vor ${days} d`;
+  }
+
+  /* Anzeige-Zeitpunkt (REQ-HOM-120): relativ für frische Einträge (< 24 h),
+   * sonst absolutes Datum/Uhrzeit ("24.10.2026 18:30"). */
+  _timeLabel(iso) {
+    const ts = Date.parse(iso);
+    if (!Number.isFinite(ts)) return "";
+    const diff = Date.now() - ts;
+    if (diff >= 0 && diff < 24 * 60 * 60 * 1000) return this._relativeTime(iso);
+    const date = new Date(ts);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`;
   }
 }
 

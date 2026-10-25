@@ -354,6 +354,10 @@ export const PANEL_CSS = `
     border-radius: 10px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
     background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
   }
+  .ts-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+  .ts-row .field { flex: 1 1 180px; }
+  .ts-quick { display: flex; gap: 8px; }
+  .ts-quick .btn { flex: none; }
   .spark { display: flex; align-items: flex-end; gap: 4px; height: 72px; padding-top: 4px; }
   .spark .bar { flex: 1; min-width: 5px; border-radius: 4px 4px 0 0;
     background: var(--primary-color, #03a9f4); }
@@ -565,6 +569,31 @@ export function relativeTime(iso) {
   if (hours < 24) return `vor ${hours} h`;
   const days = Math.round(hours / 24);
   return `vor ${days} d`;
+}
+
+/* `datetime-local`-Wert (lokale Browserzeit, ohne Sekunden/Offset).
+ * Leer/null -> leerer String; ungültige Eingaben ebenfalls. */
+export function localDateTimeValue(value) {
+  const date = value instanceof Date ? value : new Date(value == null ? Date.now() : value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
+/* Anzeige-Zeitpunkt (REQ-HOM-120): relativ für frische Einträge (< 24 h),
+ * sonst absolutes Datum/Uhrzeit ("24.10.2026 18:30"). */
+export function entryTime(iso) {
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return "";
+  const diff = Date.now() - ts;
+  if (diff >= 0 && diff < 24 * 60 * 60 * 1000) return relativeTime(iso);
+  const date = new Date(ts);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
 }
 
 export function fmtMl(value) {

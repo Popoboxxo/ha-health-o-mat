@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -447,6 +448,22 @@ def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
+    """Optionales Service-Feld `ts` validieren (REQ-HOM-120).
+
+    ``None`` bedeutet "kein Zeitpunkt übergeben" → der Aufrufer setzt jetzt.
+    Ein ungültiger, zu weit in der Zukunft oder vor 1900 liegender Wert wird
+    als ``ServiceValidationError`` gemeldet.
+    """
+    raw = call.data.get("ts")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    parsed = logic.parse_entry_timestamp(raw, now=now)
+    if parsed is None:
+        raise ServiceValidationError(logic.ENTRY_TS_INVALID_MESSAGE.format(value=raw))
+    return parsed.isoformat()
+
+
 async def _async_require_admin(hass: HomeAssistant, call: ServiceCall) -> None:
     """Admin-Gate für Verwaltungs-Services (z. B. Restore).
 
@@ -522,13 +539,16 @@ def _register_services(hass: HomeAssistant) -> None:
         ml = int(call.data["amount_ml"])
         if ml <= 0 or ml > 10000:
             raise ServiceValidationError("amount_ml muss zwischen 1 und 10000 liegen")
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         await store.add_drink(
             entry_id,
-            dt_util.now().isoformat(),
+            ts_iso,
             ml,
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
+            created_ts_iso=now.isoformat(),
             actor=_service_actor(call),
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
@@ -538,14 +558,17 @@ def _register_services(hass: HomeAssistant) -> None:
         entry_id, _info = get_runtime_data(hass, call)
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         pulse = call.data.get("pulse")
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         await store.add_reading(
             entry_id,
-            dt_util.now().isoformat(),
+            ts_iso,
             int(call.data["systolic"]),
             int(call.data["diastolic"]),
             int(pulse) if pulse else None,
             call.data.get("note") or "",
             "service",
+            created_ts_iso=now.isoformat(),
             actor=_service_actor(call),
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
@@ -569,11 +592,14 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
             )
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         await store.set_wellbeing(
             entry_id,
             status,
-            dt_util.now().isoformat(),
+            ts_iso,
+            created_ts_iso=now.isoformat(),
             actor=_service_actor(call),
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
@@ -654,6 +680,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("drink_type"): str,
                 vol.Optional("person"): str,
                 vol.Optional("source"): str,
+                vol.Optional("ts"): str,
             }
         ),
         service_func=add_drink,
@@ -668,6 +695,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("pulse"): vol.Coerce(int),
                 vol.Optional("person"): str,
                 vol.Optional("note"): str,
+                vol.Optional("ts"): str,
             }
         ),
         service_func=add_blood_pressure,
@@ -680,6 +708,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("person"): str,
                 vol.Optional("status"): str,
                 vol.Optional("score"): vol.Coerce(int),
+                vol.Optional("ts"): str,
             }
         ),
         service_func=set_wellbeing,

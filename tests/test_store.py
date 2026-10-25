@@ -13,6 +13,7 @@ import importlib.util
 import os
 import sys
 import types
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -431,10 +432,12 @@ def test_set_wellbeing_history_capped_at_100(mock_store_fixture):
 
     entry_id = "person-1"
 
-    # Add 101 wellbeing updates
+    # Add 101 wellbeing updates (chronologisch aufsteigend — die Reihenfolge
+    # der Meldungen ist seit REQ-HOM-120 der `ts`, nicht die Erfassungsfolge).
+    base = datetime(2026, 9, 5, 0, 0)
     for i in range(101):
         status = f"status-{i}"
-        ts = f"2026-09-05T{i % 24:02d}:{i % 60:02d}:00Z"
+        ts = (base + timedelta(minutes=i)).isoformat()
         _async_test(store.set_wellbeing(entry_id, status, ts))
 
     entry = store.entry(entry_id)
@@ -1691,3 +1694,89 @@ def test_last_active_helpers_ignore_voided_entries(mock_store_fixture):
     assert store.last_active_drink("person-1") is None
     assert store.last_active_reading("person-1")["sys"] == 120
     assert store.last_active_wellbeing("person-1")["key"] == "okay"
+
+
+# ============================================================================
+# REQ-HOM-120: Rückdatierte Wohlbefinden-Meldungen
+# ============================================================================
+
+
+def test_req_hom_120_backdated_wellbeing_current_follows_ts_not_capture_order(
+    mock_store_fixture,
+):
+    """[REQ-HOM-120] Aktueller Wert = zeitlich letzter, nicht zuletzt erfasst."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "great", "2026-10-14T09:00:00+02:00"))
+    # Rückdatiert NACH der neuesten Meldung erfasst.
+    _async_test(store.set_wellbeing("e1", "awful", "2026-10-14T07:00:00+02:00"))
+
+    entry = store.entry("e1")
+    assert entry["wellbeing"] == {"status": "great", "ts": "2026-10-14T09:00:00+02:00"}
+    assert entry["wellbeing_history"] == [
+        {"ts": "2026-10-14T07:00:00+02:00", "status": "awful"},
+        {"ts": "2026-10-14T08:00:00+02:00", "status": "good"},
+    ]
+    assert [item["key"] for item in store.active_wellbeing_entries("e1")] == [
+        "awful",
+        "good",
+        "great",
+    ]
+    assert store.current_wellbeing("e1")["key"] == "great"
+
+
+def test_req_hom_120_wellbeing_sort_tiebreak_is_created_at_then_insertion(
+    mock_store_fixture,
+):
+    """[REQ-HOM-120] Gleicher `ts`: `created_at`, danach Einfüge-Reihenfolge."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    ts = "2026-10-14T08:00:00+02:00"
+    _async_test(store.set_wellbeing("e1", "good", ts, created_ts_iso="2026-10-14T12:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "bad", ts, created_ts_iso="2026-10-14T12:05:00+02:00"))
+    assert store.current_wellbeing("e1")["key"] == "bad"
+
+    # Gleicher ts UND gleiches created_at: die spätere Erfassung gewinnt (stabil).
+    _async_test(store.set_wellbeing("e1", "okay", ts, created_ts_iso="2026-10-14T12:05:00+02:00"))
+    assert store.current_wellbeing("e1")["key"] == "okay"
+
+
+def test_req_hom_120_remove_last_wellbeing_uses_capture_order(mock_store_fixture):
+    """[REQ-HOM-120] Undo nimmt die zuletzt ERFASSTE Meldung, nicht den größten `ts`."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T09:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "awful", "2026-10-14T07:00:00+02:00"))
+
+    assert store.current_wellbeing("e1")["key"] == "good"
+    assert _async_test(store.remove_last_wellbeing("e1")) is True
+
+    entry = store.entry("e1")
+    assert entry["wellbeing_entries"][-1]["key"] == "awful"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("e1")["key"] == "good"
+    assert entry["wellbeing_history"] == []
+
+    assert _async_test(store.remove_last_wellbeing("e1")) is True
+    assert store.current_wellbeing("e1") is None
+
+
+def test_req_hom_120_legacy_mirrors_follow_chronology_after_rebuild(mock_store_fixture):
+    """[REQ-HOM-120] `rebuild_wellbeing_mirrors` sortiert gemischte Roh-Reihenfolge."""
+    store, _ = mock_store_fixture
+    entry = {
+        "wellbeing_entries": [
+            {"key": "great", "ts": "2026-10-14T10:00:00+02:00", "created_at": None},
+            {"key": "bad", "ts": "2026-10-14T08:00:00+02:00", "created_at": None},
+            {"key": "good", "ts": "2026-10-14T09:00:00+02:00", "created_at": None},
+        ]
+    }
+
+    store.rebuild_wellbeing_mirrors(entry)
+
+    assert entry["wellbeing"] == {"status": "great", "ts": "2026-10-14T10:00:00+02:00"}
+    assert [item["status"] for item in entry["wellbeing_history"]] == ["bad", "good"]

@@ -6,6 +6,7 @@ import re
 import sys
 import types
 from datetime import UTC, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -32,6 +33,8 @@ def _load(name: str):
 
 logic = _load("logic")
 const = _load("const")
+
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def test_day_start_midnight():
@@ -1360,3 +1363,88 @@ def test_normalize_history_kind_aliases_and_unknown():
     assert set(logic.HISTORY_KINDS) == set(logic.VOID_METHOD_BY_KIND)
     assert set(logic.HISTORY_KINDS) == set(logic.RESTORE_METHOD_BY_KIND)
     assert set(logic.HISTORY_KINDS) == set(logic.REMOVE_LAST_METHOD_BY_KIND)
+
+
+# --- REQ-HOM-120: Rückdatierung — Zeitstempel-Helfer ------------------------
+
+
+def test_req_hom_120_parse_entry_timestamp_accepts_z_and_offsets():
+    """[REQ-HOM-120] ISO mit `Z` und mit Offset werden korrekt gelesen."""
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+    with_z = logic.parse_entry_timestamp("2026-10-25T10:00:00Z", now=now)
+    assert with_z == datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
+    assert with_z.utcoffset() == timedelta(0)
+
+    with_offset = logic.parse_entry_timestamp("2026-10-25T12:00:00+02:00", now=now)
+    assert with_offset == datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
+
+    # Offset-Wert wird in die Referenzzone umgerechnet (nicht nur verglichen).
+    local = logic.parse_entry_timestamp("2026-10-25T10:00:00+00:00", now=now, tz=_BERLIN)
+    assert local is not None
+    assert local.utcoffset() == timedelta(hours=1)  # Winterzeit (Ende Oktober)
+    assert (local.hour, local.minute) == (11, 0)
+
+
+def test_req_hom_120_parse_entry_timestamp_naive_is_local_time():
+    """[REQ-HOM-120] Naive Werte gelten als lokale Zeit (Sommer +2, Winter +1)."""
+    summer_now = datetime(2026, 7, 1, 13, 0, tzinfo=_BERLIN)
+    summer = logic.parse_entry_timestamp("2026-07-01T12:00:00", now=summer_now, tz=_BERLIN)
+    assert summer is not None
+    assert summer.utcoffset() == timedelta(hours=2)
+    assert (summer.hour, summer.minute) == (12, 0)
+
+    winter_now = datetime(2026, 1, 15, 13, 0, tzinfo=_BERLIN)
+    winter = logic.parse_entry_timestamp("2026-01-15T12:00:00", now=winter_now, tz=_BERLIN)
+    assert winter is not None
+    assert winter.utcoffset() == timedelta(hours=1)
+
+    # DST-Fenster rechnet denselben UTC-Wert in die jeweilige Lokalzeit um.
+    assert summer.astimezone(UTC) == datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
+    assert winter.astimezone(UTC) == datetime(2026, 1, 15, 11, 0, tzinfo=UTC)
+
+
+def test_req_hom_120_parse_entry_timestamp_rejects_future_with_tolerance():
+    """[REQ-HOM-120] Zukunft: bis 5 Minuten Toleranz, darüber None."""
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+    assert (
+        logic.parse_entry_timestamp((now + timedelta(minutes=5)).isoformat(), now=now) is not None
+    )
+    assert (
+        logic.parse_entry_timestamp((now + timedelta(minutes=5, seconds=1)).isoformat(), now=now)
+        is None
+    )
+    assert logic.parse_entry_timestamp("2026-10-26T12:00:00Z", now=now) is None
+
+
+def test_req_hom_120_parse_entry_timestamp_rejects_too_old_values():
+    """[REQ-HOM-120] Vor 1900 ist kein plausibler Erfassungszeitpunkt."""
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+    assert logic.parse_entry_timestamp("1899-12-31T23:59:59Z", now=now) is None
+    accepted = logic.parse_entry_timestamp("1900-01-01T00:00:00Z", now=now)
+    assert accepted == datetime(1900, 1, 1, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "   ", "kaputt", "2026-13-01T00:00:00", "2026-10-25T25:00:00", None, 42, [], {}],
+)
+def test_req_hom_120_parse_entry_timestamp_rejects_garbage(value):
+    """[REQ-HOM-120] Ungültige Werte liefern None statt einer Ausnahme."""
+    now = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+    assert logic.parse_entry_timestamp(value, now=now) is None
+
+
+def test_req_hom_120_parse_entry_timestamp_defaults_to_local_reference():
+    """[REQ-HOM-120] Ohne `tz`/`now`: lokale Systemzone, kein Naivitätsfehler."""
+    parsed = logic.parse_entry_timestamp("2026-10-25T10:00:00")
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+
+    # Naives `now` (z. B. monkeypatchter Test-Stub) wird ebenfalls toleriert.
+    parsed_naive_now = logic.parse_entry_timestamp(
+        "2026-10-25T10:00:00", now=datetime(2026, 10, 25, 12, 0)
+    )
+    assert parsed_naive_now is not None and parsed_naive_now.tzinfo is not None

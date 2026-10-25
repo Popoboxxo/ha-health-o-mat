@@ -52,6 +52,7 @@ import {
   REFRESH_DEBOUNCE_MS,
   escapeHtml,
   toNumber,
+  localDateTimeValue,
   intOrNull,
   errMsg,
   wsErrorText,
@@ -76,6 +77,9 @@ import {
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
+
+/* Rückdatierung (REQ-HOM-120): dieselbe Toleranz wie der Server. */
+const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 /* Person-flow target when the admin adds a person (no custom CRUD flow). */
 const CONFIG_FLOW_URL = "/config/integrations/dashboard";
@@ -131,8 +135,11 @@ class HealthOMatPanel extends HTMLElement {
     this._busy = false;
     this._manualBusy = false;
     /* REQ-HOM-114: vorgemerkte, noch nicht übernommene Wohlbefinden-Auswahl
-     * (`{ entryId, key, score }`) — nur im Bestätigungsmodus befüllt. */
+     * (`{ entryId, key, score, ts }`) — nur im Bestätigungsmodus befüllt. */
     this._wbPending = null;
+    /* REQ-HOM-120: Zeitpunkt-Entwürfe der `datetime-local`-Felder. Leer =
+     * "jetzt"; ein Re-Render darf eine bewusste Auswahl nicht verwerfen. */
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
 
     this._unsub = null;
     this._pending = new Set();
@@ -1092,10 +1099,59 @@ class HealthOMatPanel extends HTMLElement {
     if (node) node.innerHTML = exportResultHtml(this);
   }
 
+  /* ---- Rückdatierung (REQ-HOM-120) ---------------------------------------- */
+
+  _tsInput(field) {
+    return this.shadowRoot.querySelector(`[data-field="${field}"]`);
+  }
+
+  /* `datetime-local`-Feld lesen und validieren.
+   * Rückgabe `{ ok: true, iso }` (iso "" = jetzt) oder `{ ok: false, error }`. */
+  _readEntryTs(field) {
+    const el = this._tsInput(field);
+    const raw = el && el.value != null ? String(el.value).trim() : "";
+    if (!raw) return { ok: true, iso: "" };
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) {
+      return { ok: false, error: "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen." };
+    }
+    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
+      return {
+        ok: false,
+        error: "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz).",
+      };
+    }
+    if (parsed.getFullYear() < 1900) {
+      return { ok: false, error: "Der Zeitpunkt ist zu alt (frühestens 1900)." };
+    }
+    return { ok: true, iso: parsed.toISOString() };
+  }
+
+  _setTsDraft(field, value) {
+    this._tsDraft[field] = value == null ? "" : String(value);
+    const el = this._tsInput(field);
+    if (el) el.value = this._tsDraft[field] || localDateTimeValue(new Date());
+  }
+
+  _resetTs(field) {
+    this._tsDraft[field] = "";
+    const el = this._tsInput(field);
+    if (el) el.value = localDateTimeValue(new Date());
+  }
+
   /* ---- Write actions ------------------------------------------------------ */
 
-  async _book(entryId, ml, drinkType) {
+  async _book(entryId, ml, drinkType, ts) {
     if (!entryId || this._busy) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("drink-ts");
+      if (!read.ok) {
+        this._actionError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     const value = Math.round(toNumber(ml, 0));
     if (!Number.isFinite(value) || value <= 0 || value > 10000) {
       this._formError = "Bitte eine Menge zwischen 1 und 10000 ml angeben.";
@@ -1109,7 +1165,9 @@ class HealthOMatPanel extends HTMLElement {
     try {
       const message = { type: WS.bookDrink, entry_id: entryId, ml: value };
       if (drinkType) message.drink_type = String(drinkType);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("drink-ts");
       await this._reloadEntry(entryId);
     } catch (err) {
       this._actionError = errMsg(err);
@@ -1137,8 +1195,17 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  async _saveMeasurement(entryId, sys, dia, pulse, note) {
+  async _saveMeasurement(entryId, sys, dia, pulse, note, ts) {
     if (!entryId || this._busy) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("bp-ts");
+      if (!read.ok) {
+        this._formError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     if (!Number.isFinite(sys) || sys < 40 || sys > 300) {
       this._formError = "Systolisch muss zwischen 40 und 300 liegen.";
       this._render();
@@ -1167,7 +1234,9 @@ class HealthOMatPanel extends HTMLElement {
       };
       if (pulse != null) message.pulse = Math.round(pulse);
       if (note) message.note = String(note);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("bp-ts");
       await this._reloadEntry(entryId);
     } catch (err) {
       this._actionError = errMsg(err);
@@ -1193,12 +1262,22 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   /* Merkt eine Auswahl nur vor — gesendet wird sie erst mit „Übernehmen". */
-  _stageWellbeing(entryId, key, score) {
+  _stageWellbeing(entryId, key, score, ts) {
     if (!entryId || (!key && score == null)) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._formError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     this._wbPending = {
       entryId,
       key: key == null ? "" : String(key),
       score: score == null ? null : Number(score),
+      ts: ts == null ? "" : String(ts),
     };
     this._actionError = null;
     this._formError = null;
@@ -1208,10 +1287,10 @@ class HealthOMatPanel extends HTMLElement {
   async _confirmWellbeing() {
     const pending = this._wbPendingFor(this._selectedEntry);
     if (!pending || this._busy) return;
-    await this._setWellbeing(pending.entryId, pending.key || null, pending.score);
+    await this._setWellbeing(pending.entryId, pending.key || null, pending.score, pending.ts || "");
   }
 
-  async _setWellbeing(entryId, key, score) {
+  async _setWellbeing(entryId, key, score, ts = "") {
     if (!entryId || (!key && score == null) || this._busy) return;
     this._busy = true;
     this._actionError = null;
@@ -1221,7 +1300,9 @@ class HealthOMatPanel extends HTMLElement {
       const message = { type: WS.setWellbeing, entry_id: entryId };
       if (key) message.key = String(key);
       else message.score = Number(score);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("wb-ts");
       await this._reloadEntry(entryId);
       // Erst die erfolgreiche Übernahme erledigt die Vormerkung; bei einem
       // Fehler bleibt sie für den nächsten Versuch stehen (REQ-HOM-114).
@@ -1380,6 +1461,13 @@ class HealthOMatPanel extends HTMLElement {
     const el = ev.target && ev.target.closest ? ev.target.closest("[data-action]") : null;
     if (!el) return;
     const action = el.getAttribute("data-action");
+    const tsQuick = /^(drink|bp|wb)-ts-(now|yesterday)$/.exec(action || "");
+    if (tsQuick) {
+      const when = new Date();
+      if (tsQuick[2] === "yesterday") when.setDate(when.getDate() - 1);
+      this._setTsDraft(`${tsQuick[1]}-ts`, localDateTimeValue(when));
+      return;
+    }
     try {
       switch (action) {
         case "open":
@@ -1426,23 +1514,38 @@ class HealthOMatPanel extends HTMLElement {
         case "tab":
           this._setTab(el.getAttribute("data-tab"));
           break;
-        case "book":
+        case "book": {
+          const ts = this._readEntryTs("drink-ts");
+          if (!ts.ok) {
+            this._actionError = ts.error;
+            this._render();
+            break;
+          }
           this._book(
             this._selectedEntry,
             toNumber(el.getAttribute("data-ml"), 0),
-            el.getAttribute("data-drink") || ""
+            el.getAttribute("data-drink") || "",
+            ts.iso
           );
           break;
+        }
         case "undo":
           this._undo(this._selectedEntry);
           break;
-        case "wb":
+        case "wb": {
+          const ts = this._readEntryTs("wb-ts");
+          if (!ts.ok) {
+            this._formError = ts.error;
+            this._render();
+            break;
+          }
           if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
-            this._stageWellbeing(this._selectedEntry, el.getAttribute("data-key"), null);
+            this._stageWellbeing(this._selectedEntry, el.getAttribute("data-key"), null, ts.iso);
           } else {
-            this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"));
+            this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"), null, ts.iso);
           }
           break;
+        }
         case "wb-confirm":
           this._confirmWellbeing();
           break;
@@ -1458,6 +1561,11 @@ class HealthOMatPanel extends HTMLElement {
   _onChange(ev) {
     const el = ev.target;
     if (!el || !el.getAttribute) return;
+    const field = el.getAttribute("data-field") || "";
+    if (field.endsWith("-ts")) {
+      this._tsDraft[field] = el.value == null ? "" : String(el.value);
+      return;
+    }
     if (el.getAttribute("data-action") === "settings-person") {
       this._selectSettingsPerson(el.value ? String(el.value) : "");
     }
@@ -1490,7 +1598,13 @@ class HealthOMatPanel extends HTMLElement {
       this._render();
       return;
     }
-    this._book(this._selectedEntry, parsed.ml, parsed.type);
+    const ts = this._readEntryTs("drink-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
+      this._render();
+      return;
+    }
+    this._book(this._selectedEntry, parsed.ml, parsed.type, ts.iso);
   }
 
   _submitBp() {
@@ -1507,7 +1621,13 @@ class HealthOMatPanel extends HTMLElement {
     const pulse = read("pulse");
     const noteEl = this.shadowRoot.querySelector('[data-field="note"]');
     const note = noteEl && noteEl.value ? String(noteEl.value).trim() : "";
-    this._saveMeasurement(this._selectedEntry, sys, dia, pulse, note);
+    const ts = this._readEntryTs("bp-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
+      this._render();
+      return;
+    }
+    this._saveMeasurement(this._selectedEntry, sys, dia, pulse, note, ts.iso);
   }
 
   _submitWellbeing() {
@@ -1522,11 +1642,17 @@ class HealthOMatPanel extends HTMLElement {
       this._render();
       return;
     }
-    if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
-      this._stageWellbeing(this._selectedEntry, null, score);
+    const ts = this._readEntryTs("wb-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
+      this._render();
       return;
     }
-    this._setWellbeing(this._selectedEntry, null, score);
+    if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
+      this._stageWellbeing(this._selectedEntry, null, score, ts.iso);
+      return;
+    }
+    this._setWellbeing(this._selectedEntry, null, score, ts.iso);
   }
 }
 

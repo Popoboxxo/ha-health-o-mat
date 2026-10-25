@@ -18,6 +18,12 @@ add_drink:
       name: Quelle
       description: Freier Herkunfts-Tag (optional).
       example: "automation"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 add_blood_pressure:
   name: Blutdruckmessung speichern
@@ -43,6 +49,12 @@ add_blood_pressure:
       name: Notiz
       description: Freitext-Notiz zur Messung (optional).
       example: "morgens"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 set_wellbeing:
   name: Wohlbefinden melden
@@ -64,6 +76,12 @@ set_wellbeing:
         Numerischer Wert von 1 (sehr schlecht) bis 10 (ausgezeichnet).
         Alternative zu `status`.
       example: 7
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 remove_last_entry:
   name: Letzte Buchung löschen

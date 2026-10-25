@@ -35,7 +35,7 @@ import logging
 import os
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -652,7 +652,13 @@ class HealthOMatStore:
         actor: str | None = None,
         audit_limit: int = DEFAULT_AUDIT_LIMIT,
     ) -> None:
-        """Wohlbefinden-Meldung setzen + Historie führen."""
+        """Wohlbefinden-Meldung setzen + Historie führen.
+
+        Die Legacy-Spiegel werden nach dem Append aus der Ereignisliste neu
+        gebaut (REQ-HOM-120): rückdatierte Meldungen werden dadurch nach
+        ihrem Zeitstempel einsortiert, statt die Erfassungsreihenfolge zu
+        übernehmen.
+        """
         e = self.entry(entry_id)
         event = {
             "id": str(uuid.uuid4()),
@@ -664,16 +670,7 @@ class HealthOMatStore:
             "void_reason": None,
         }
         e.setdefault("wellbeing_entries", []).append(event)
-        wb = e.setdefault("wellbeing", {})
-        history = e.setdefault("wellbeing_history", [])
-        if wb.get("status"):
-            # Der abgelöste Status wird mit SEINEM eigenen Zeitstempel archiviert
-            # (wann er gemeldet wurde) — nicht mit dem Zeitstempel der Meldung,
-            # die ihn ablöst. Sonst zeigt der Verlauf den Vorgänger zu neu.
-            history.append({"ts": wb.get("ts") or ts_iso, "status": wb["status"]})
-            del history[:-_WELLBEING_HISTORY_LIMIT]
-        wb["status"] = status
-        wb["ts"] = ts_iso
+        _sync_wellbeing_mirrors(e)
         self._append_audit(
             entry_id,
             "wellbeing_added",
@@ -686,12 +683,19 @@ class HealthOMatStore:
         await self._async_save()
 
     def active_wellbeing_entries(self, entry_id: str) -> list[dict]:
-        """Nur nicht-gelöschte Wohlbefinden-Meldungen (Erfassungsreihenfolge)."""
-        return [
+        """Nur nicht-gelöschte Wohlbefinden-Meldungen, chronologisch (nach `ts`).
+
+        Sortiert wie die Legacy-Spiegel: `ts` aufsteigend, Tiebreaker
+        `created_at`, Gleichstand behält die Einfüge-Reihenfolge (stabiler
+        Sort). Damit ist der letzte Eintrag der zeitlich neueste — nicht der
+        zuletzt erfasste (REQ-HOM-120).
+        """
+        active = [
             item
             for item in self.entry(entry_id).get("wellbeing_entries", [])
             if isinstance(item, dict) and not item.get("voided_at")
         ]
+        return sorted(active, key=_wellbeing_chrono_key)
 
     def current_wellbeing(self, entry_id: str) -> dict | None:
         """Aktueller Wohlbefindenswert = letzter nicht-gelöschter Eintrag."""
@@ -939,21 +943,49 @@ def sync_wellbeing_mirrors(entry: dict) -> None:
     _sync_wellbeing_mirrors(entry)
 
 
+def _chrono_sort_key(value: Any) -> datetime:
+    """ISO-Zeitstempel als vergleichbarer (naiver UTC-)Schlüssel.
+
+    Fehlende/kaputte Werte sortieren an den Anfang (``datetime.min``).
+    tz-aware Werte werden nach UTC normalisiert; naive Werte (Altbestand
+    vor M-3) gelten als lokale Wanduhr-Zeit und werden ebenso umgerechnet.
+    So ist der Vergleich innerhalb der Ereignisliste nie ein TypeError und
+    naive/aware Mischbestände sortieren chronologisch korrekt.
+    """
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return datetime.min
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+def _wellbeing_chrono_key(item: dict) -> tuple[datetime, datetime]:
+    """Sortierschlüssel eines Wellbeing-Ereignisses: `ts`, dann `created_at`."""
+    return (_chrono_sort_key(item.get("ts")), _chrono_sort_key(item.get("created_at")))
+
+
 def _sync_wellbeing_mirrors(entry: dict) -> None:
     """Legacy-Spiegel `wellbeing`/`wellbeing_history` aus v4-Events neu bauen.
 
-    Aktueller Wert = letzter aktiver Eintrag. Die Historie führt alle übrigen
-    aktiven Meldungen (abgelöste Werte) in Erfassungsreihenfolge, begrenzt auf
-    die letzten 100 — exakt die Semantik, die `set_wellbeing` bisher pflegte.
+    Aktueller Wert = aktive Meldung mit dem größten `ts` (nicht die zuletzt
+    erfasste — rückdatierte Meldungen dürfen den aktuellen Wert nicht
+    überschreiben, REQ-HOM-120). Die Historie führt alle übrigen aktiven
+    Meldungen chronologisch (Tiebreaker `created_at`, dann Einfüge-Reihenfolge),
+    begrenzt auf die letzten 100.
     """
     entries = entry.get("wellbeing_entries")
     if not isinstance(entries, list):
         return
-    active = [
-        item
-        for item in entries
-        if isinstance(item, dict) and item.get("key") and not item.get("voided_at")
-    ]
+    active = sorted(
+        (
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("key") and not item.get("voided_at")
+        ),
+        key=_wellbeing_chrono_key,
+    )
     if not active:
         entry["wellbeing"] = {}
         entry["wellbeing_history"] = []

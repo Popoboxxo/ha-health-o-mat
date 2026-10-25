@@ -237,11 +237,23 @@
   "services": {
     "add_drink": {
       "name": "Add drink",
-      "description": "Books a drink amount for a person."
+      "description": "Books a drink amount for a person.",
+      "fields": {
+        "ts": {
+          "name": "Timestamp",
+          "description": "Time of the entry (ISO 8601, e.g. 2026-10-24T18:30 or with offset). Empty = now. At most 5 minutes in the future, not before 1900."
+        }
+      }
     },
     "add_blood_pressure": {
       "name": "Save blood pressure reading",
-      "description": "Stores systolic/diastolic values and optional pulse."
+      "description": "Stores systolic/diastolic values and optional pulse.",
+      "fields": {
+        "ts": {
+          "name": "Timestamp",
+          "description": "Time of the entry (ISO 8601, e.g. 2026-10-24T18:30 or with offset). Empty = now. At most 5 minutes in the future, not before 1900."
+        }
+      }
     },
     "set_wellbeing": {
       "name": "Report wellbeing",
@@ -258,6 +270,10 @@
         "score": {
           "name": "Score",
           "description": "Numeric wellbeing score from 1 (very bad) to 10 (excellent). Alternative to status."
+        },
+        "ts": {
+          "name": "Timestamp",
+          "description": "Time of the entry (ISO 8601, e.g. 2026-10-24T18:30 or with offset). Empty = now. At most 5 minutes in the future, not before 1900."
         }
       }
     },

@@ -1430,7 +1430,12 @@ def test_set_wellbeing_valid_key(monkeypatch):
 
     assert connection.results == [(1, None)]
     store.set_wellbeing.assert_awaited_once_with(
-        "e1", "good", NOW.isoformat(), actor="user-1", audit_limit=1000
+        "e1",
+        "good",
+        NOW.isoformat(),
+        created_ts_iso=NOW.isoformat(),
+        actor="user-1",
+        audit_limit=1000,
     )
     assert coordinator.updated == [NOW.isoformat()]
 
@@ -1473,7 +1478,12 @@ def test_set_wellbeing_accepts_numeric_score(monkeypatch):
 
     assert connection.results == [(3, None)]
     store.set_wellbeing.assert_awaited_once_with(
-        "e1", "good", NOW.isoformat(), actor="user-1", audit_limit=1000
+        "e1",
+        "good",
+        NOW.isoformat(),
+        created_ts_iso=NOW.isoformat(),
+        actor="user-1",
+        audit_limit=1000,
     )
 
 
@@ -3518,7 +3528,11 @@ def test_book_drink_forwards_actor_and_audit_limit(monkeypatch):
     )
 
     _args, kwargs = store.add_drink.await_args
-    assert kwargs == {"actor": "user-1", "audit_limit": 0}
+    assert kwargs == {
+        "created_ts_iso": NOW.isoformat(),
+        "actor": "user-1",
+        "audit_limit": 0,
+    }
 
 
 def test_settings_audit_limit_default_zero_and_validation():
@@ -3622,3 +3636,152 @@ def test_restore_backup_error_is_structured(monkeypatch):
     assert connection.results == []
     assert connection.errors[0][1] == "restore_failed"
     assert "Version 9" in connection.errors[0][2]
+
+
+# --- REQ-HOM-120: Rückdatierung über die WebSocket-Schreibpfade --------------
+
+
+def test_req_hom_120_book_drink_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `book_drink` trennt `ts` (Rückdatierung) von `created_at`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_BOOK_DRINK,
+                "entry_id": "e1",
+                "ml": 250,
+                "ts": "2026-10-15T09:30:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.add_drink.await_args.args[1].startswith("2026-10-15T09:30:00")
+    assert store.add_drink.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+def test_req_hom_120_save_measurement_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `save_measurement` übernimmt das optionale `ts`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+                "ts": "2026-10-15T07:15:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.add_reading.await_args.args[1].startswith("2026-10-15T07:15:00")
+    assert store.add_reading.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+def test_req_hom_120_set_wellbeing_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `set_wellbeing` übernimmt das optionale `ts`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {
+                "id": 3,
+                "type": ws_api.COMMAND_SET_WELLBEING,
+                "entry_id": "e1",
+                "key": "good",
+                "ts": "2026-10-14T20:00:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.set_wellbeing.await_args.args[2].startswith("2026-10-14T20:00:00")
+    assert store.set_wellbeing.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+@pytest.mark.parametrize("ts", ["kaputt", "2026-10-15T13:00:00", "1899-12-31T23:59:59"])
+@pytest.mark.parametrize(
+    ("handler", "message", "method"),
+    [
+        (
+            ws_api.websocket_book_drink,
+            {"ml": 250},
+            "add_drink",
+        ),
+        (
+            ws_api.websocket_save_measurement,
+            {"sys": 120, "dia": 80},
+            "add_reading",
+        ),
+        (
+            ws_api.websocket_set_wellbeing,
+            {"key": "good"},
+            "set_wellbeing",
+        ),
+    ],
+)
+def test_req_hom_120_ws_rejects_invalid_ts(monkeypatch, ts, handler, message, method):
+    """[REQ-HOM-120] Ungültig/zukünftig/zu alt → `invalid_format`, kein Schreibzugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        handler(
+            hass,
+            connection,
+            {
+                "id": 9,
+                "type": "health_o_mat/test",
+                "entry_id": "e1",
+                **message,
+                "ts": ts,
+            },
+        )
+    )
+
+    assert connection.results == []
+    assert len(connection.errors) == 1
+    assert connection.errors[0][1] == ws_api.ERR_INVALID_FORMAT
+    assert "Zeitpunkt" in connection.errors[0][2]
+    getattr(store, method).assert_not_awaited()
+
+
+def test_req_hom_120_ws_without_ts_keeps_now(monkeypatch):
+    """[REQ-HOM-120] Ohne `ts` bleibt "jetzt" (rückwärtskompatibel)."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 250},
+        )
+    )
+
+    assert store.add_drink.await_args.args[1] == NOW.isoformat()
