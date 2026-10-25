@@ -1462,3 +1462,127 @@ def test_add_reading_and_set_wellbeing_set_v4_fields(mock_store_fixture):
         assert item["voided_by"] is None
         assert item["void_reason"] is None
     assert reading["id"] != wellbeing["id"]
+
+
+# ============================================================================
+# M2a: aktive Sicht (active_entry/active_entries)
+# ============================================================================
+
+
+def _void_all(store, entry_id, kind):
+    for item in list(store.entry(entry_id)[kind]):
+        if kind == "drinks":
+            _async_test(store.void_drink(entry_id, item["id"]))
+        elif kind == "readings":
+            _async_test(store.void_reading(entry_id, item["id"]))
+        else:
+            _async_test(store.void_wellbeing(entry_id, item["id"]))
+
+
+def test_active_entry_filters_voided_lists_and_rebuilds_wellbeing(mock_store_fixture):
+    """[M2a] active_entry liefert nur aktive Einträge + aktive Wellbeing-Spiegel."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.add_reading("e1", "2026-10-14T09:00:00", 120, 80, 60))
+    _async_test(store.add_reading("e1", "2026-10-14T10:00:00", 180, 110, 90))
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _async_test(store.set_wellbeing("e1", "bad", "2026-10-14T09:00:00"))
+    _async_test(store.set_wellbeing("e1", "great", "2026-10-14T10:00:00"))
+
+    raw = store.entry("e1")
+    _async_test(store.void_drink("e1", raw["drinks"][1]["id"]))
+    _async_test(store.void_reading("e1", raw["readings"][1]["id"]))
+    _async_test(store.void_wellbeing("e1", raw["wellbeing_entries"][2]["id"]))
+
+    view = store.active_entry("e1")
+
+    assert [d["type"] for d in view["drinks"]] == ["Wasser"]
+    assert [r["sys"] for r in view["readings"]] == [120]
+    assert [e["key"] for e in view["wellbeing_entries"]] == ["good", "bad"]
+    assert view["wellbeing"] == {"status": "bad", "ts": "2026-10-14T09:00:00"}
+    assert view["wellbeing_history"] == [{"ts": "2026-10-14T08:00:00", "status": "good"}]
+
+
+def test_active_entry_leaves_raw_data_untouched(mock_store_fixture):
+    """[M2a] entry()/all_entries() bleiben roh; active_entry verändert nichts."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+
+    view = store.active_entry("e1")
+    view["drinks"].clear()
+    view["drinks"].append({"ts": "x", "ml": 1, "type": "Fake", "voided_at": None})
+
+    raw = store.all_entries()["e1"]
+    assert len(raw["drinks"]) == 2
+    assert [d["ml"] for d in raw["drinks"]] == [250, 500]
+    assert raw["drinks"][1]["voided_at"] is not None
+
+    # Zweiter Aufruf liefert wieder die unveränderte aktive Sicht.
+    assert [d["ml"] for d in store.active_entry("e1")["drinks"]] == [250]
+
+
+def test_active_entry_carries_person_lifetime_inputs_counts_and_audit(mock_store_fixture):
+    """[M2a] Nicht-Listen-Felder werden unverändert übernommen."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_person("e1", "Caro"))
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    _async_test(store.set_inputs("e1", "sys", 120))
+    raw = store.entry("e1")
+    raw["archived_counts"] = {"drinks": 3, "readings": 2}
+
+    view = store.active_entry("e1")
+
+    assert view["person"] == "Caro"
+    assert view["total_ml_lifetime"] == 250  # korrigierte M1-Summe
+    assert view["inputs"] == {"sys": 120}
+    assert view["archived_counts"] == {"drinks": 3, "readings": 2}
+    assert view["audit_log"] == raw["audit_log"]
+
+
+def test_active_entry_unknown_person_returns_empty_without_creating(mock_store_fixture):
+    """[M2a] Unbekannte Person: leeres Dict, kein Seiteneffekt im Store."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    assert store.active_entry("unknown") == {}
+    assert "unknown" not in store.all_entries()
+
+
+def test_active_entries_returns_filtered_views_for_all_persons(mock_store_fixture):
+    """[M2a] active_entries filtert je Person, Schlüssel bleiben erhalten."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e2", "2026-10-14T08:00:00", 300, "Kaffee", "button"))
+    _async_test(store.add_drink("e2", "2026-10-14T09:00:00", 400, "Wasser", "button"))
+    _async_test(store.void_drink("e2", store.entry("e2")["drinks"][0]["id"]))
+
+    views = store.active_entries()
+
+    assert set(views) == {"e1", "e2"}
+    assert [d["ml"] for d in views["e1"]["drinks"]] == [250]
+    assert [d["ml"] for d in views["e2"]["drinks"]] == [400]
+    # Rohbestand bleibt vollständig (Schreibpfad/Backup/Diagnostics).
+    assert len(store.entry("e2")["drinks"]) == 2
+
+
+def test_active_entry_all_wellbeing_voided_leaves_empty_mirrors(mock_store_fixture):
+    """[M2a] Alle Meldungen voided → leere Wellbeing-Spiegel in der aktiven Sicht."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _void_all(store, "e1", "wellbeing_entries")
+
+    view = store.active_entry("e1")
+
+    assert view["wellbeing_entries"] == []
+    assert view["wellbeing"] == {}
+    assert view["wellbeing_history"] == []

@@ -12,6 +12,12 @@ Legacy-Felder `wellbeing`/`wellbeing_history` bleiben als abgeleitete
 Kompatibilitäts-Spiegel erhalten. `audit_log` ist append-only und wird je
 Person optional gekappt (Default 1000, `0` = unbegrenzt).
 
+Lesepfade für Anzeige/Auswertung nutzen die **aktive Sicht**
+(`active_entry`/`active_entries`): voided Einträge (`voided_at` gesetzt) sind
+dort herausgefiltert und die Wellbeing-Spiegel aus den aktiven Ereignissen neu
+aufgebaut. `entry()`/`all_entries()` bleiben bewusst **roh** (Schreibpfad,
+Backup, Diagnostics-Rohzahlen).
+
 Die Klasse bedient sowohl den Haupt-Store (`MAIN_STORE_KEY`) als auch den
 separaten Archiv-Store (`ARCHIVE_STORE_KEY`); beide teilen sich dieselbe
 Migrationskette. Migration on-load: fehlende `schema`-Markierung gilt als v1;
@@ -260,6 +266,33 @@ class HealthOMatStore:
 
     def all_entries(self) -> dict:
         return self._data["entries"]
+
+    # ------------------------------------------------------------------
+    # Aktive Sicht (Anzeige/Auswertung, ohne voided Einträge)
+    # ------------------------------------------------------------------
+    def active_entry(self, entry_id: str) -> dict:
+        """Aktive Sicht eines Eintrags als Kopie (ohne voided Einträge).
+
+        Reiner Lesezugriff: `None`/unbekannte Personen liefern ein leeres Dict,
+        der Rohdatensatz wird weder verändert noch angelegt. Die Listen
+        (`drinks`/`readings`/`wellbeing_entries`) enthalten nur aktive Einträge;
+        die Legacy-Spiegel `wellbeing`/`wellbeing_history` werden daraus neu
+        aufgebaut (aktueller Wert = letzter aktiver, Historie = übrige aktive).
+        Alle übrigen Felder (`person`, `total_ml_lifetime`, `inputs`,
+        `archived_counts`, `audit_log`, …) werden unverändert übernommen.
+        """
+        raw = self._data.get("entries", {}).get(entry_id)
+        if not isinstance(raw, dict):
+            return {}
+        return _active_view(raw)
+
+    def active_entries(self) -> dict[str, dict]:
+        """Aktive Sicht aller Personen (`{entry_id: aktive Kopie}`)."""
+        return {
+            entry_id: _active_view(raw)
+            for entry_id, raw in self._data.get("entries", {}).items()
+            if isinstance(raw, dict)
+        }
 
     # ------------------------------------------------------------------
     # Audit-Log (append-only, optional gekappt)
@@ -721,6 +754,30 @@ def _find_by_id(items: Any, item_id: str) -> dict | None:
         if isinstance(item, dict) and item.get("id") == item_id:
             return item
     return None
+
+
+def _active_items(items: Any) -> list[dict]:
+    """Nur aktive (nicht voided) Dict-Einträge einer Store-Liste."""
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and not item.get("voided_at")]
+
+
+def _active_view(entry: dict) -> dict:
+    """HA-freie Kopie eines Eintrags mit ausschließlich aktiven Einträgen.
+
+    Die Listen werden neu angelegt (der Rohdatensatz behält seine Objekte);
+    Element-Dicts werden geteilt, weil alle Aufrufer sie nur lesen. Die
+    Wellbeing-Spiegel werden aus den aktiven Ereignissen neu aufgebaut —
+    dieselbe Semantik wie `_sync_wellbeing_mirrors`.
+    """
+    view = dict(entry)
+    view["drinks"] = _active_items(entry.get("drinks"))
+    view["readings"] = _active_items(entry.get("readings"))
+    if isinstance(entry.get("wellbeing_entries"), list):
+        view["wellbeing_entries"] = _active_items(entry.get("wellbeing_entries"))
+        _sync_wellbeing_mirrors(view)
+    return view
 
 
 def _sync_wellbeing_mirrors(entry: dict) -> None:

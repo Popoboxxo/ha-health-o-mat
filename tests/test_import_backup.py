@@ -567,3 +567,132 @@ def test_import_csv_service_writes_via_runtime_data(tmp_path):
     _run(func(_call({"filename": "drinks.csv", "dataset": "all", "person": "Max"})))
 
     assert len(store.entry("e1")["drinks"]) == 2
+
+
+# ============================================================================
+# M2a: voided Einträge in Export/Import/Backup
+# ============================================================================
+
+
+def test_export_csv_excludes_voided_entries(tmp_path):
+    """[M2a] CSV-Export enthält nur aktive Drinks/Readings (voided fehlt)."""
+    _load_init()  # lädt u. a. das exporter-Modul
+    exporter = sys.modules[f"{_PKG}.exporter"]
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _run(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    _run(store.add_reading("e1", "2026-10-14T09:00:00", 120, 80, 60, "aktiv"))
+    _run(store.add_reading("e1", "2026-10-14T10:00:00", 200, 120, 99, "voided-notiz"))
+    _run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    exporter.dt_util = types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "all"})))
+
+    drinks_csv = next(tmp_path.glob("health_o_mat_drinks_*.csv")).read_text(encoding="utf-8-sig")
+    bp_csv = next(tmp_path.glob("health_o_mat_bloodpressure_*.csv")).read_text(encoding="utf-8-sig")
+
+    assert "Wasser" in drinks_csv
+    assert "Kaffee" not in drinks_csv
+    assert "250" in drinks_csv
+    assert "500" not in drinks_csv
+
+    assert "120;80;60" in bp_csv
+    assert "voided-notiz" not in bp_csv
+    assert ";200;" not in bp_csv
+
+
+def test_export_csv_excludes_voided_entries_from_archive(tmp_path):
+    """[M2a] Auch Archiv-Einträge werden nur aktiv exportiert (defensiv)."""
+    _load_init()
+    exporter = sys.modules[f"{_PKG}.exporter"]
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    archive = _fresh_store()
+    _run(
+        archive.append_archive(
+            "e1",
+            [
+                {"ts": "2025-12-31T10:00:00", "ml": 300, "type": "Saft", "src": "button"},
+                {
+                    "ts": "2025-12-30T10:00:00",
+                    "ml": 700,
+                    "type": "Kaffee",
+                    "src": "button",
+                    "voided_at": "2026-01-01T00:00:00",
+                },
+            ],
+            [],
+        )
+    )
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    exporter.dt_util = types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+
+    _run(
+        exporter.async_export_csv(hass, store, _call({"dataset": "drinks"}), archive_store=archive)
+    )
+
+    content = next(tmp_path.glob("health_o_mat_drinks_*.csv")).read_text(encoding="utf-8-sig")
+    assert "Wasser" in content
+    assert "Saft" in content
+    assert "Kaffee" not in content
+    assert "700" not in content
+
+
+def test_async_import_csv_skips_voided_duplicates(tmp_path):
+    """[M2a] Re-Import lässt einen bewusst gelöschten Eintrag nicht auferstehen."""
+    folder = _import_dir(tmp_path)
+    (folder / "drinks.csv").write_text(_drinks_csv(), encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+    call = _call({"filename": "drinks.csv", "dataset": "drinks"})
+
+    _run(importer.async_import_csv(hass, store, "e1", call))
+    for drink in list(store.entry("e1")["drinks"]):
+        _run(store.void_drink("e1", drink["id"]))
+
+    second = _run(importer.async_import_csv(hass, store, "e1", call))
+
+    assert second["imported"] == 0
+    assert second["skipped"] == 2
+    assert len(store.entry("e1")["drinks"]) == 2
+    assert all(drink["voided_at"] for drink in store.entry("e1")["drinks"])
+
+
+def test_backup_contains_voided_entries_and_audit(tmp_path, monkeypatch):
+    """[M2a] Backup bleibt roh: voided Einträge + Audit-Log sind enthalten."""
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Kaffee", "button"))
+    _run(store.void_drink("e1", store.entry("e1")["drinks"][0]["id"]))
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    entry = document["entries"]["e1"]
+    assert len(entry["drinks"]) == 1
+    assert entry["drinks"][0]["voided_at"] is not None
+    assert [event["action"] for event in entry["audit_log"]] == [
+        "drink_added",
+        "entry_voided",
+    ]
+    assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 0, "voided": 1}

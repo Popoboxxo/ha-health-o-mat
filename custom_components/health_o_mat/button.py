@@ -45,7 +45,9 @@ class HealthOMatButton(HealthOMatEntity, ButtonEntity):
 
     @property
     def _data(self) -> dict:
-        return self._store.all_entries().get(self._entry.entry_id, {})
+        # Lesezugriff auf die aktive Sicht (voided Einträge ausgeblendet);
+        # die Schreibpfade (_book/press) bleiben unverändert.
+        return self._store.active_entry(self._entry.entry_id)
 
     async def _book(self, ml: int, drink_type: str, src: str) -> None:
         await self._store.add_drink(

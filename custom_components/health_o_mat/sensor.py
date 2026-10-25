@@ -60,7 +60,9 @@ class HealthOMatSensor(HealthOMatEntity, SensorEntity):
 
     @property
     def _data(self) -> dict:
-        return self._store.all_entries().get(self._entry.entry_id, {})
+        # Zentrale Lesesicht für alle Sensoren: voided Einträge sind hier
+        # bereits herausgefiltert und die Wellbeing-Spiegel aktiv aufgebaut.
+        return self._store.active_entry(self._entry.entry_id)
 
     def _today_sums(self) -> dict:
         hour = self._entry.options.get("daily_reset_hour", 0)

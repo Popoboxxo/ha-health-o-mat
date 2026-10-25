@@ -35,7 +35,8 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
 
     @property
     def _data(self) -> dict:
-        return self._store.all_entries().get(self._entry.entry_id, {})
+        # Aktive Sicht: voided Wohlbefinden-Meldungen steuern den Zustand nicht.
+        return self._store.active_entry(self._entry.entry_id)
 
     @property
     def current_option(self) -> str | None:

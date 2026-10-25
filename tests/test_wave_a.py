@@ -701,3 +701,80 @@ def test_set_wellbeing_service_multiple_persons_without_selection_raises():
 
     assert "Mehrere Personen" in str(exc.value)
     assert "wellbeing" not in store.entry("e1")
+
+
+# --- M2a: Retention lässt voided Einträge im Haupt-Store ---------------------
+
+
+def test_apply_retention_keeps_voided_entries_in_main_store(monkeypatch):
+    """[M2a] Nur aktive Einträge wandern ins Archiv; voided bleibt im Haupt-Store."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    old_active = {"ts": "2025-12-31T10:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+    old_voided = {
+        "ts": "2025-01-01T10:00:00",
+        "ml": 400,
+        "type": "Wasser",
+        "src": "button",
+        "voided_at": "2025-02-01T00:00:00",
+    }
+    recent = {"ts": "2026-09-30T10:00:00", "ml": 500, "type": "Wasser", "src": "button"}
+    voided_reading = {
+        "ts": "2025-03-01T08:00:00",
+        "sys": 120,
+        "dia": 80,
+        "pulse": 70,
+        "note": "",
+        "src": "button",
+        "voided_at": "2025-04-01T00:00:00",
+    }
+    e = store.entry("e1")
+    e["drinks"] = [old_active, old_voided, recent]
+    e["readings"] = [voided_reading]
+    e["total_ml_lifetime"] = 750
+    archive = _fresh_store()
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})  # Stichtag 2026-04-14
+    hass = _runtime_hass([entry], store=store, archive_store=archive)
+
+    _run(init._apply_retention(hass, entry, store))
+
+    main = store.entry("e1")
+    # Reihenfolge des Rohbestands bleibt erhalten, voided wurde nicht verschoben.
+    assert main["drinks"] == [old_voided, recent]
+    assert main["readings"] == [voided_reading]
+    assert main["total_ml_lifetime"] == 750  # Summe unverändert
+    assert main["archived_counts"] == {"drinks": 1, "readings": 0}
+    archived = archive.all_entries()["e1"]
+    assert archived["drinks"] == [old_active]
+    assert archived["readings"] == []
+
+
+def test_apply_retention_with_only_voided_entries_is_noop(monkeypatch):
+    """[M2a] Ausschließlich voided (alt) → nichts wird archiviert."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    voided = {
+        "ts": "2025-01-01T10:00:00",
+        "ml": 400,
+        "type": "Wasser",
+        "src": "button",
+        "voided_at": "2025-02-01T00:00:00",
+    }
+    e = store.entry("e1")
+    e["drinks"] = [voided]
+    e["total_ml_lifetime"] = 0
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})
+    hass = _runtime_hass([entry], store=store)
+
+    _run(init._apply_retention(hass, entry, store))
+
+    assert store.entry("e1")["drinks"] == [voided]
+    assert store.entry("e1")["archived_counts"] == {"drinks": 0, "readings": 0}
+    # Kein Archiv-Store angelegt (kein Verschieben nötig).
+    assert "archive_store" not in hass.data[_DOMAIN]["shared"]

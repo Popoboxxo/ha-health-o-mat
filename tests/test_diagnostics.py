@@ -113,7 +113,19 @@ def test_redact_contains_only_allowed_fields():
         "sensor.health_o_mat_lifetime_total",
     ]
     assert out["options"]["daily_goal_ml"] == 2000
-    assert out["counters"] == {"drinks": 1, "readings": 1, "wellbeing_history": 1}
+    assert out["counters"] == {
+        "drinks": 1,
+        "drinks_active": 1,
+        "drinks_voided": 0,
+        "readings": 1,
+        "readings_active": 1,
+        "readings_voided": 0,
+        "wellbeing_history": 1,
+        "wellbeing_entries": 2,
+        "wellbeing_active": 2,
+        "wellbeing_voided": 0,
+        "audit_events": 0,
+    }
 
 
 def test_redact_masks_person_name():
@@ -147,7 +159,19 @@ def test_redact_tolerates_missing_store_entry():
     """[REQ-HOM-105] Fehlender Store-Eintrag ⇒ Zähler 0, kein Fehler."""
     out = diagnostics.redact_diagnostics({"integration_version": "0.0.1"})
 
-    assert out["counters"] == {"drinks": 0, "readings": 0, "wellbeing_history": 0}
+    assert out["counters"] == {
+        "drinks": 0,
+        "drinks_active": 0,
+        "drinks_voided": 0,
+        "readings": 0,
+        "readings_active": 0,
+        "readings_voided": 0,
+        "wellbeing_history": 0,
+        "wellbeing_entries": 0,
+        "wellbeing_active": 0,
+        "wellbeing_voided": 0,
+        "audit_events": 0,
+    }
     assert out["store"]["available"] is False
     assert out["options"] == {}
     assert out["entities"] == []
@@ -184,7 +208,9 @@ def test_async_diagnostics_without_store_is_defined():
     out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
 
     assert out["store"]["available"] is False
-    assert out["counters"] == {"drinks": 0, "readings": 0, "wellbeing_history": 0}
+    assert out["counters"]["drinks"] == 0
+    assert out["counters"]["drinks_active"] == 0
+    assert out["counters"]["wellbeing_entries"] == 0
     assert out["entities"] == []
 
 
@@ -235,3 +261,79 @@ def test_manifest_version_is_reported():
         expected = json.load(handle)["version"]
 
     assert diagnostics._integration_version() == expected
+
+
+# ============================================================================
+# M2a: Zähler unterscheiden aktiv/voided (ohne Inhalte zu leaken)
+# ============================================================================
+
+
+def test_counters_split_total_active_voided_and_audit():
+    """[M2a] Zähler weisen gesamt/aktiv/voided sowie Audit-Anzahl aus."""
+    store_entry = {
+        "person": _PERSON,
+        "drinks": [
+            {"ts": "2026-10-14T08:00:00+02:00", "ml": 250, "type": "Kaffee"},
+            {
+                "ts": "2026-10-13T08:00:00+02:00",
+                "ml": 500,
+                "type": "Kaffee",
+                "voided_at": "2026-10-14T09:00:00+02:00",
+            },
+        ],
+        "readings": [
+            {"ts": "2026-10-14T09:00:00+02:00", "sys": 137, "dia": 88, "pulse": 71},
+            {
+                "ts": "2026-10-13T09:00:00+02:00",
+                "sys": 150,
+                "dia": 95,
+                "pulse": 80,
+                "voided_at": "2026-10-14T10:00:00+02:00",
+            },
+        ],
+        "wellbeing_entries": [
+            {"ts": "2026-10-14T10:00:00+02:00", "key": "miserable"},
+            {
+                "ts": "2026-10-13T10:00:00+02:00",
+                "key": "bad",
+                "voided_at": "2026-10-14T11:00:00+02:00",
+            },
+        ],
+        "wellbeing": {"status": "miserable", "ts": "2026-10-14T10:00:00+02:00"},
+        "wellbeing_history": [],
+        "audit_log": [{"action": "drink_added"}, {"action": "entry_voided"}],
+    }
+
+    out = diagnostics.redact_diagnostics({"store_entry": store_entry})
+
+    assert out["counters"] == {
+        "drinks": 2,
+        "drinks_active": 1,
+        "drinks_voided": 1,
+        "readings": 2,
+        "readings_active": 1,
+        "readings_voided": 1,
+        "wellbeing_history": 0,
+        "wellbeing_entries": 2,
+        "wellbeing_active": 1,
+        "wellbeing_voided": 1,
+        "audit_events": 2,
+    }
+    blob = _blob(out)
+    for token in (_PERSON, "2026-10-13T", "2026-10-14T", "250", "500", "137", "150", "miserable"):
+        assert token not in blob, f"geleakt: {token!r}"
+
+
+def test_counters_legacy_wellbeing_without_event_list():
+    """[M2a] Vor-v4-Bestand: Wellbeing-Zähler fallen auf den Legacy-Spiegel zurück."""
+    store_entry = {
+        "wellbeing": {"status": "good", "ts": "2026-10-14T10:00:00+02:00"},
+        "wellbeing_history": [{"ts": "2026-10-13T10:00:00+02:00", "status": "bad"}],
+    }
+
+    out = diagnostics.redact_diagnostics({"store_entry": store_entry})
+
+    assert out["counters"]["wellbeing_entries"] == 2
+    assert out["counters"]["wellbeing_active"] == 2
+    assert out["counters"]["wellbeing_voided"] == 0
+    assert out["counters"]["wellbeing_history"] == 1

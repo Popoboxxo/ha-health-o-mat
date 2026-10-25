@@ -68,6 +68,11 @@ def _make_goal_reached_fixture(options=None, drinks=None, daily_goal_ml=500):
             "test-entry-1": {"drinks": drinks if drinks is not None else []},
         }
     )
+    store.active_entry = MagicMock(
+        side_effect=lambda entry_id: {
+            "test-entry-1": {"drinks": drinks if drinks is not None else []},
+        }.get(entry_id, {})
+    )
 
     entity = binary_sensor_module.GoalReachedEntity(coordinator, entry, store)
     return entity, entry, store
@@ -116,7 +121,9 @@ def _bp_entity(entry, readings):
     """BloodPressureWarningEntity mit fixem Store-Fixture (letzte Messung)."""
     coordinator = MagicMock()
     store = MagicMock()
-    store.all_entries = MagicMock(return_value={entry.entry_id: {"readings": readings}})
+    data = {entry.entry_id: {"readings": readings}}
+    store.all_entries = MagicMock(return_value=data)
+    store.active_entry = MagicMock(side_effect=lambda entry_id: data.get(entry_id, {}))
     return binary_sensor_module.BloodPressureWarningEntity(coordinator, entry, store)
 
 
@@ -229,6 +236,7 @@ def _binary_setup(options: dict) -> set[str]:
     coord = MagicMock()
     store = MagicMock()
     store.all_entries = MagicMock(return_value={_ENTRY_ID: {}})
+    store.active_entry = MagicMock(return_value={})
     hass.data = {
         "health_o_mat": {
             _ENTRY_ID: {"coordinator": coord},
@@ -264,3 +272,61 @@ def test_binary_unique_ids_stable_across_area_toggle():
     assert _GOAL_REACHED_ID in on_ids
     assert _GOAL_REACHED_ID not in off_ids
     assert on_again_ids == on_ids
+
+
+# ============================================================================
+# M2a: voided Einträge lösen keine Zustände aus
+# ============================================================================
+
+
+def test_m2a_goal_reached_ignores_voided_drink():
+    """[M2a] Voided Getränk zählt nicht für das Tagesziel."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.store"]
+    store = _fresh_store(store_module)
+    _run(store.add_drink("e1", "2026-10-15T08:00:00", 250, "Wasser", "button"))
+    _run(store.add_drink("e1", "2026-10-15T09:00:00", 800, "Kaffee", "button"))
+    _run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+
+    entry = _bp_entry("e1")
+    entry.runtime_data = init.HealthOMatData()
+    entry.runtime_data.daily_goal_ml = 500
+    binary_sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+
+    entity = binary_sensor_module.GoalReachedEntity(MagicMock(), entry, store)
+
+    assert entity.is_on is False
+
+
+def test_m2a_bp_warning_ignores_voided_reading():
+    """[M2a] Voided Messung löst keine BP-Warnung aus (aktive bleibt maßgeblich)."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.store"]
+    store = _fresh_store(store_module)
+    _run(store.add_reading("e1", "2026-10-15T08:00:00", 120, 80, 60))
+    _run(store.add_reading("e1", "2026-10-15T09:00:00", 200, 120, 90))
+    _run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+
+    entry = _bp_entry("e1")
+    entry.runtime_data = init.HealthOMatData()
+
+    entity = binary_sensor_module.BloodPressureWarningEntity(MagicMock(), entry, store)
+
+    assert entity.is_on is False
+
+
+def test_m2a_bp_warning_uses_latest_active_reading():
+    """[M2a] Maßgeblich ist die letzte AKTIVE Messung (voided Neue zählt nicht)."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.store"]
+    store = _fresh_store(store_module)
+    _run(store.add_reading("e1", "2026-10-15T08:00:00", 200, 120, 90))
+    _run(store.add_reading("e1", "2026-10-16T08:00:00", 125, 82, 60))
+    _run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+
+    entry = _bp_entry("e1")
+    entry.runtime_data = init.HealthOMatData()
+
+    entity = binary_sensor_module.BloodPressureWarningEntity(MagicMock(), entry, store)
+
+    assert entity.is_on is True

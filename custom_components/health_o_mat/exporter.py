@@ -23,19 +23,20 @@ async def async_export_csv(
     `archive_store` (Retention, REQ-HOM-109) wird — falls vorhanden — mit den
     aktuellen Daten zusammengeführt, damit der Export weiterhin die vollständige
     Historie enthält. Ohne Archiv (Default AUS) bleibt das Verhalten identisch.
+    Exportiert werden ausschließlich **aktive** Einträge: voided (gelöschte)
+    Buchungen/Messungen tauchen in keiner CSV auf (M2a).
     """
     person_filter = (call.data.get("person") or "").strip().lower()
     dataset = call.data.get("dataset", "all")
     now = dt_util.now()
 
-    def _combined(eid: str, data: dict) -> tuple[list, list]:
-        """Getränke/Readings des Haupt-Stores + Archiv je Person."""
-        drinks = list(data.get("drinks", []))
-        readings = list(data.get("readings", []))
-        if archive_store is not None:
-            archived = archive_store.all_entries().get(eid, {})
-            drinks += list(archived.get("drinks", []))
-            readings += list(archived.get("readings", []))
+    def _combined(eid: str) -> tuple[list, list]:
+        """Aktive Getränke/Readings des Haupt-Stores + Archiv je Person."""
+        drinks = list(store.active_drinks(eid))
+        readings = list(store.active_readings(eid))
+        if archive_store is not None and eid in archive_store.all_entries():
+            drinks += list(archive_store.active_drinks(eid))
+            readings += list(archive_store.active_readings(eid))
         return drinks, readings
 
     def _resolve_entry_ids() -> list[str]:
@@ -57,7 +58,7 @@ async def async_export_csv(
         for eid in entry_ids:
             data = store.all_entries()[eid]
             person = data.get("person") or "Person"
-            drinks, readings = _combined(eid, data)
+            drinks, readings = _combined(eid)
             if dataset in ("drinks", "all"):
                 rows = drinks_csv_rows(drinks, person)
                 name = csv_filename("drinks", person, now)

@@ -306,6 +306,11 @@ async def async_import_csv(
     (``add_drink`` / ``add_reading``), danach ``signal_refresh`` und eine
     ``persistent_notification`` mit der Zusammenfassung. Rückgabe ist ein
     strukturiertes Ergebnis (für WS/UI und Tests).
+
+    Die Duplikat-Erkennung arbeitet bewusst gegen die **rohen** Listen
+    (aktive *und* voided Einträge): ein zuvor gelöschter Eintrag darf nicht
+    durch einen Re-Import stillschweigend wieder auferstehen. Importierte
+    Einträge werden über die Store-Pfade angelegt und sind damit aktiv.
     """
     if store is None:
         raise ServiceValidationError("Health-O-Mat-Speicher nicht verfügbar")
@@ -330,6 +335,7 @@ async def async_import_csv(
         raise ServiceValidationError(f"Import-Datei nicht lesbar: {filename}") from err
 
     entry = store.entry(entry_id)
+    # Rohe Listen (inkl. voided) — gelöschte Einträge gelten als Duplikat.
     plan = plan_import(text, dataset, entry.get("drinks", []), entry.get("readings", []))
 
     for drink in plan.drinks:

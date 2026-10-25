@@ -382,7 +382,10 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
     if entry is None:
         return None
     store = _store(hass)
-    data = store.all_entries().get(entry_id, {}) if store is not None else {}
+    # Aktive Sicht: voided Einträge erscheinen weder in today/bp/wellbeing noch
+    # in der Undo-Verfügbarkeit (M2a). Rohdaten bleiben dem Schreibpfad/Backup
+    # vorbehalten.
+    data = store.active_entry(entry_id) if store is not None else {}
 
     options = getattr(entry, "options", None) or {}
     reset_hour = _as_int(options.get("daily_reset_hour"), 0)
@@ -422,6 +425,7 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
         },
         # Additiv: Undo-Verfügbarkeit, damit die UI den Button deaktivieren
         # kann, statt einen Service-/WS-Fehler ("keine Getränke") auszulösen.
+        # `data` ist die aktive Sicht — voided Einträge zählen hier nicht (M2a).
         "undo": {
             "drink": bool(data.get("drinks")),
             "blood_pressure": bool(readings),

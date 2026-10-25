@@ -194,6 +194,18 @@ async def _get_archive_store(hass: HomeAssistant) -> HealthOMatStore:
     return archive
 
 
+def _kept_with_voided(raw_items: object, moved: list) -> list:
+    """Rohliste ohne die ins Archiv wandernden Einträge (voided bleibt erhalten).
+
+    `moved` enthält nur aktive Einträge (partitioniert auf der aktiven Sicht);
+    voided Einträge sind dort nie enthalten und bleiben damit im Haupt-Store.
+    Die Reihenfolge des Rohbestands bleibt unverändert.
+    """
+    items = raw_items if isinstance(raw_items, list) else []
+    moved_ids = {id(item) for item in moved}
+    return [item for item in items if id(item) not in moved_ids]
+
+
 async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -> None:
     """Optionale Retention beim Setup (REQ-HOM-109).
 
@@ -201,16 +213,23 @@ async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -
     nichts wird verschoben und kein Archiv-Store angelegt. Aktiv: Einträge
     älter als `retention_months` wandern on-read ins Archiv; der Lebenszähler
     bleibt unverändert.
+
+    Partitioniert wird ausschließlich auf der **aktiven** Sicht: voided
+    (gelöschte) Einträge werden nie archiviert, sondern bleiben im Haupt-Store
+    — sonst würde ein gelöschter Eintrag im Archiv wieder auftauchen (M2a).
+    `archived_counts` zählt entsprechend nur aktive Verschiebungen.
     """
     months = _retention_months(entry)
     if months <= 0:
         return
     current = store.entry(entry.entry_id)
     cutoff = logic.months_ago(dt_util.now(), months)
-    kept_drinks, moved_drinks = logic.partition_by_cutoff(current.get("drinks", []), cutoff)
-    kept_readings, moved_readings = logic.partition_by_cutoff(current.get("readings", []), cutoff)
+    _, moved_drinks = logic.partition_by_cutoff(store.active_drinks(entry.entry_id), cutoff)
+    _, moved_readings = logic.partition_by_cutoff(store.active_readings(entry.entry_id), cutoff)
     if not moved_drinks and not moved_readings:
         return
+    kept_drinks = _kept_with_voided(current.get("drinks", []), moved_drinks)
+    kept_readings = _kept_with_voided(current.get("readings", []), moved_readings)
     archive = await _get_archive_store(hass)
     await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
     await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)

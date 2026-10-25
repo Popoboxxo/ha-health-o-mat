@@ -181,8 +181,10 @@ def _entry(
 
 
 def _store(data: dict):
+    """Store-Fake: `data` ist bereits die aktive Sicht (wie im Produktionspfad)."""
     store = MagicMock()
     store.all_entries.return_value = data
+    store.active_entry.side_effect = lambda entry_id: data.get(entry_id, {})
     return store
 
 
@@ -190,6 +192,7 @@ def _write_store() -> MagicMock:
     """Store-Fake mit async-Write-Methoden (Aufrufe + Rückgaben injizierbar)."""
     store = MagicMock()
     store.all_entries.return_value = {}
+    store.active_entry.return_value = {}
     store.add_drink = AsyncMock()
     store.add_reading = AsyncMock()
     store.set_wellbeing = AsyncMock()
@@ -3009,3 +3012,130 @@ def test_req_hom_114_panel_data_carries_wellbeing_confirm(monkeypatch, options, 
     assert payload is not None
     assert payload["wellbeing_confirm"] is expected
     assert isinstance(payload["wellbeing_confirm"], bool)
+
+
+# ============================================================================
+# M2a: panel_data zeigt keine voided Einträge
+# ============================================================================
+
+
+def _load_store_module():
+    """Store-Modul im selben Fake-Paket (auch bei früherem Laden wiederverwenden)."""
+    name = f"{_PKG}.store"
+    if name in sys.modules:
+        return sys.modules[name]
+    return _load("store")
+
+
+def _real_store():
+    """HealthOMatStore mit gemocktem HA-Store-Backend (leerer Start)."""
+    store = _load_store_module().HealthOMatStore(MagicMock())
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value=None)
+    store._store.async_save = AsyncMock(return_value=None)
+    asyncio.run(store.async_load())
+    return store
+
+
+def _panel_hass_for_store(store, entry, monkeypatch) -> FakeHass:
+    hass = _write_hass(store, [entry])
+    monkeypatch.setattr(ws_api.er, "async_get", lambda hass: object())
+    monkeypatch.setattr(ws_api.er, "async_entries_for_config_entry", lambda registry, entry_id: [])
+    monkeypatch.setattr(ws_api.dt_util, "now", lambda: NOW)
+    return hass
+
+
+def test_m2a_panel_data_excludes_voided_entries(monkeypatch):
+    """[M2a] Voided Drinks/Readings/Wellbeing fehlen in today/bp/wellbeing."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 900, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    asyncio.run(store.add_reading("e1", "2026-10-15T09:00:00", 120, 80, 60))
+    asyncio.run(store.add_reading("e1", "2026-10-15T10:00:00", 200, 120, 99))
+    asyncio.run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+    asyncio.run(store.set_wellbeing("e1", "good", "2026-10-15T08:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "okay", "2026-10-15T09:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "bad", "2026-10-15T10:00:00"))
+    asyncio.run(store.void_wellbeing("e1", store.entry("e1")["wellbeing_entries"][2]["id"]))
+
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["today"]["ml"] == 300
+    assert payload["today"]["count"] == 1
+    assert payload["today"]["breakdown"] == {"Wasser": 300}
+    assert payload["today"]["yesterday_ml"] == 0
+
+    assert payload["bp"]["sys"] == 120
+    assert payload["bp"]["dia"] == 80
+    assert payload["bp"]["pulse"] == 60
+    entries = payload["bp"]["entries"]
+    assert len(entries) == 1
+    assert entries[0]["id"] == store.entry("e1")["readings"][0]["id"]
+    assert (entries[0]["sys"], entries[0]["dia"], entries[0]["pulse"]) == (120, 80, 60)
+    assert payload["bp"]["avg7"]["sys"] == 120.0
+    assert payload["bp"]["warning"] is False
+
+    assert payload["wellbeing"]["key"] == "okay"
+    assert payload["wellbeing"]["at"] == "2026-10-15T09:00:00"
+    assert [item["key"] for item in payload["wellbeing"]["history"]] == ["good"]
+
+    assert payload["undo"] == {"drink": True, "blood_pressure": True}
+
+
+def test_m2a_panel_data_undo_flags_require_active_entries(monkeypatch):
+    """[M2a] undo-Flags sind nur true, wenn aktive Einträge existieren."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][0]["id"]))
+    asyncio.run(store.add_reading("e1", "2026-10-15T09:00:00", 120, 80, 60))
+    asyncio.run(store.void_reading("e1", store.entry("e1")["readings"][0]["id"]))
+
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["undo"] == {"drink": False, "blood_pressure": False}
+    assert payload["today"]["ml"] == 0
+    assert payload["today"]["count"] == 0
+    assert payload["bp"]["entries"] == []
+    assert payload["bp"]["sys"] is None
+    assert payload["bp"]["category"] is None
+    assert payload["wellbeing"]["key"] is None
+
+
+def test_m2a_panel_data_keeps_contract_keys_with_voided_entries(monkeypatch):
+    """[M2a] Voided ändert nur Werte, nie das Payload-Vertragsgerüst."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 900, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert set(payload) == {
+        "entry_id",
+        "person",
+        "person_slug",
+        "areas",
+        "person_anchor",
+        "goal_ml",
+        "reset_hour",
+        "today",
+        "undo",
+        "bp",
+        "wellbeing",
+        "wellbeing_scale",
+        "quick_drinks",
+        "wellbeing_confirm",
+        "entities",
+    }
+    assert payload["goal_ml"] == 2000
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["today"]["percent"] == 15.0
