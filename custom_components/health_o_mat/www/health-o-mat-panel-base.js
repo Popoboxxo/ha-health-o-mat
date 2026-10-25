@@ -153,6 +153,7 @@ export const SETTINGS_FALLBACKS = {
   dia_threshold: 90,
   retention_months: 0,
   enable_sidebar_panel: false,
+  wellbeing_confirm: false,
   quick_icon: "mdi:cup-water",
 };
 
@@ -368,6 +369,15 @@ export const PANEL_CSS = `
   .wb-btn .lbl { font-size: .72rem; color: var(--secondary-text-color, #727272); text-align: center; }
   .wb-btn.active { border-color: var(--primary-color, #03a9f4);
     background: var(--secondary-background-color, rgba(3,169,244,.1)); }
+  /* Vorgemerkte, noch NICHT übernommene Auswahl (REQ-HOM-114) — bewusst
+     anders als der gespeicherte active-Zustand: gestrichelter Rahmen. */
+  .wb-btn.pending { border-style: dashed; border-width: 2px;
+    border-color: var(--primary-color, #03a9f4);
+    background: var(--secondary-background-color, rgba(3,169,244,.04)); }
+  .wb-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding-top: 8px; }
+  .wb-confirm .wb-pending-hint { flex: 1 1 auto; font-size: .82rem;
+    color: var(--secondary-text-color, #727272); }
   @media (max-width: 400px) { .wb-btn .lbl { display: none; } }
 
   .wb-history { display: flex; flex-direction: column; gap: 4px;

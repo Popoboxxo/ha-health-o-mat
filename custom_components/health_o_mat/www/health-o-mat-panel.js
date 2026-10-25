@@ -65,14 +65,14 @@ import {
   areasForPerson,
   enabledTabs,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.12.0";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.12.0";
+} from "./health-o-mat-panel-base.js?v=0.13.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.13.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
-} from "./health-o-mat-panel-admin.js?v=0.12.0";
+} from "./health-o-mat-panel-admin.js?v=0.13.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
@@ -130,6 +130,9 @@ class HealthOMatPanel extends HTMLElement {
     this._formError = null;
     this._busy = false;
     this._manualBusy = false;
+    /* REQ-HOM-114: vorgemerkte, noch nicht übernommene Wohlbefinden-Auswahl
+     * (`{ entryId, key, score }`) — nur im Bestätigungsmodus befüllt. */
+    this._wbPending = null;
 
     this._unsub = null;
     this._pending = new Set();
@@ -381,6 +384,10 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   async _reloadEntry(entryId) {
+    // Bewusst OHNE `_wbPending`-Clear: ein unbeteiligter Schreibvorgang
+    // (Getränk, Undo, BD) darf eine vorgemerkte Auswahl nicht verwerfen
+    // (REQ-HOM-114). Verworfen wird nur in den expliziten Reset-Pfaden und
+    // nach einer erfolgreichen Übernahme (`_setWellbeing`).
     await this._loadEntry(entryId);
   }
 
@@ -440,6 +447,9 @@ class HealthOMatPanel extends HTMLElement {
   _openPerson(entryId, opts) {
     if (!entryId) return;
     const o = opts || {};
+    // Personenwechsel: eine vorgemerkte Auswahl gehört zur alten Person
+    // (REQ-HOM-114) und darf unter der neuen Person nicht auftauchen.
+    if (this._selectedEntry && this._selectedEntry !== entryId) this._wbPending = null;
     this._selectedEntry = entryId;
     this._view = "detail";
     this._actionError = null;
@@ -455,6 +465,7 @@ class HealthOMatPanel extends HTMLElement {
     const o = opts || {};
     this._view = "overview";
     this._selectedEntry = "";
+    this._wbPending = null;
     this._actionError = null;
     this._formError = null;
     if (!o.silent) this._pushOverviewUrl();
@@ -492,6 +503,7 @@ class HealthOMatPanel extends HTMLElement {
     if (this._manualBusy) return;
     this._manualBusy = true;
     this._actionError = null;
+    this._wbPending = null;
     this._render();
     try {
       try {
@@ -533,6 +545,9 @@ class HealthOMatPanel extends HTMLElement {
     if (!this._isAdmin()) return;
     const persons = this._persons || [];
     if (!persons.length) return;
+    // Admin-Eintritt: eine vorgemerkte Auswahl gehört zur Detailansicht und
+    // darf nach dem Umschalten der Option nicht wieder auftauchen (REQ-HOM-114).
+    this._wbPending = null;
     // Prefer the person currently open in the detail view, then the last
     // settings selection, then the first person.
     const preferred = this._selectedEntry || this._settingsEntry || "";
@@ -718,6 +733,9 @@ class HealthOMatPanel extends HTMLElement {
     const sidebarEl = this.shadowRoot.querySelector('[data-field="enable_sidebar_panel"]');
     const sidebar = !!(sidebarEl && sidebarEl.checked);
 
+    const confirmEl = this.shadowRoot.querySelector('[data-field="wellbeing_confirm"]');
+    const wellbeingConfirm = !!(confirmEl && confirmEl.checked === true);
+
     const areas = this._readAreaCheckboxes();
 
     const wellbeingImages = {};
@@ -768,6 +786,7 @@ class HealthOMatPanel extends HTMLElement {
         dia_threshold: dia,
         retention_months: retention,
         enable_sidebar_panel: sidebar,
+        wellbeing_confirm: wellbeingConfirm,
         areas,
       },
     };
@@ -814,6 +833,9 @@ class HealthOMatPanel extends HTMLElement {
     }
     if (!!current.enable_sidebar_panel !== payload.enable_sidebar_panel) {
       out.enable_sidebar_panel = payload.enable_sidebar_panel;
+    }
+    if (!!current.wellbeing_confirm !== payload.wellbeing_confirm) {
+      out.wellbeing_confirm = payload.wellbeing_confirm;
     }
     if (
       JSON.stringify(normalizeAreas(current.areas)) !== JSON.stringify(normalizeAreas(payload.areas))
@@ -1145,6 +1167,40 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
+  /* ---- Wohlbefinden-Bestätigung (REQ-HOM-114) ------------------------------ */
+
+  /* Bestätigungsmodus je Person. Fehlt der Schlüssel (älteres Backend),
+   * bleibt das bisherige Sofort-Verhalten aktiv. */
+  _wellbeingConfirmEnabled(entryId) {
+    const data = entryId ? this._data[entryId] : null;
+    return !!(data && data.wellbeing_confirm === true);
+  }
+
+  _wbPendingFor(entryId) {
+    const pending = this._wbPending;
+    if (!pending || pending.entryId !== entryId) return null;
+    return pending;
+  }
+
+  /* Merkt eine Auswahl nur vor — gesendet wird sie erst mit „Übernehmen". */
+  _stageWellbeing(entryId, key, score) {
+    if (!entryId || (!key && score == null)) return;
+    this._wbPending = {
+      entryId,
+      key: key == null ? "" : String(key),
+      score: score == null ? null : Number(score),
+    };
+    this._actionError = null;
+    this._formError = null;
+    this._render();
+  }
+
+  async _confirmWellbeing() {
+    const pending = this._wbPendingFor(this._selectedEntry);
+    if (!pending || this._busy) return;
+    await this._setWellbeing(pending.entryId, pending.key || null, pending.score);
+  }
+
   async _setWellbeing(entryId, key, score) {
     if (!entryId || (!key && score == null) || this._busy) return;
     this._busy = true;
@@ -1157,6 +1213,9 @@ class HealthOMatPanel extends HTMLElement {
       else message.score = Number(score);
       await this._ws(message);
       await this._reloadEntry(entryId);
+      // Erst die erfolgreiche Übernahme erledigt die Vormerkung; bei einem
+      // Fehler bleibt sie für den nächsten Versuch stehen (REQ-HOM-114).
+      if (this._wbPendingFor(entryId)) this._wbPending = null;
     } catch (err) {
       this._actionError = errMsg(err);
     } finally {
@@ -1368,7 +1427,14 @@ class HealthOMatPanel extends HTMLElement {
           this._undo(this._selectedEntry);
           break;
         case "wb":
-          this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"));
+          if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
+            this._stageWellbeing(this._selectedEntry, el.getAttribute("data-key"), null);
+          } else {
+            this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"));
+          }
+          break;
+        case "wb-confirm":
+          this._confirmWellbeing();
           break;
         default:
           break;
@@ -1444,6 +1510,10 @@ class HealthOMatPanel extends HTMLElement {
     if (!/^\d+$/.test(raw) || !Number.isInteger(score) || score < 1 || score > scale) {
       this._formError = `Bitte eine ganze Zahl zwischen 1 und ${scale} eingeben.`;
       this._render();
+      return;
+    }
+    if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
+      this._stageWellbeing(this._selectedEntry, null, score);
       return;
     }
     this._setWellbeing(this._selectedEntry, null, score);

@@ -1,23 +1,27 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-21 (Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; zuvor 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
+**Stand:** 2026-10-24 (Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; zuvor 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** neu aufgenommen (Fund F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** neu aufgenommen (Feature, Wohlbefinden-Score & Score-Chart) ·
 **REQ-HOM-113** neu aufgenommen (Feature, Konfigurierbare Health-O-Mat-Karte) ·
+**REQ-HOM-114** neu aufgenommen (Feature, Wohlbefinden-Bestätigung vor Übernahme,
+Branch `feat/wellbeing-confirm`) ·
 Umsetzungsplan in **`plan-funde-risiken.md`** (eigenes Plan-Dokument, Per Planner-Konvention)
 
 **Zwei getrennte Tracks:**
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…113: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…114: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
    Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
    Requirement; am Ende von Kapitel 2 (nach REQ-HOM-111) abgelegt
    (Branch `feat/wellbeing-score`) — sowie **REQ-HOM-113** (Konfigurierbare
-   Karte, Branch `feat/configurable-card`) nach REQ-HOM-112.
+   Karte, Branch `feat/configurable-card`) nach REQ-HOM-112 und
+   **REQ-HOM-114** (Wohlbefinden-Bestätigung vor Übernahme, Branch
+   `feat/wellbeing-confirm`) nach REQ-HOM-113.
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -671,6 +675,123 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     gegenüber dem zuvor dokumentierten Stand stammen aus dem F3-Follow-up
     (Struktur-Pins + Node-Verhaltenstest, siehe Kriterium oben).
 
+#### REQ-HOM-114 — Wohlbefinden-Bestätigung vor Übernahme
+- **Priorität:** P2 · **Aufwand:** M (Backend-Option inklusive striktem
+  WS-Schema, Panel-Admin-Maske und Detail-Tab, Karten-Option inklusive Editor,
+  Unit-/Node-Tests und README)
+- **Status: Erledigt (Branch `feat/wellbeing-confirm`, 2026-10-24)** — im
+  **Working Tree** implementiert und getestet, **noch nicht committet**, kein
+  Release. **Kein Versions-Bump:** `manifest.json` und die `?v=`-Cache-Buster
+  bleiben unverändert; der Release folgt separat.
+- **Anforderung:** Die Wohlbefindens-Meldung kann optional eine **Bestätigung
+  vor der Übernahme** verlangen. Dafür existieren **zwei unabhängige Schalter**
+  mit demselben Namen `wellbeing_confirm` (bool, **Default `false`**). Die
+  Default-Semantik ist bewusst **kein Verhaltenswechsel**: ohne explizite
+  Aktivierung meldet ein Klick/Absenden weiterhin sofort.
+  **Teil A — Panel-/Server-Option pro Config-Entry:** Die Option wird pro
+  Config-Entry in `entry.options` persistiert und ausschließlich über das
+  bestehende WebSocket-Kommando `health_o_mat/set_settings` gelesen/geschrieben
+  (Schlüssel in `SETTINGS_KEYS`/`SETTINGS_SCHEMA`, `build_settings`,
+  `parse_settings_message`; `get_settings` liefert den Wert). Die Validierung ist
+  **strikt bool**: nur echte JSON-Booleans werden akzeptiert; `"true"`,
+  `"false"`, `1` und `0` werden mit `invalid_format` und einer präzisen
+  Feldmeldung (Schlüsselname + „Boolean") abgelehnt, ohne Teil-Update. Die
+  Panel-Admin-Maske bietet eine Checkbox; der Detail-Tab kennt die Option über
+  den `panel_data`-Payload und **merkt eine Auswahl vor**, statt sie sofort zu
+  melden — erst ein expliziter Bestätigungsbutton übernimmt sie. Die Option ist
+  **kein Formularfeld** des Options-Flows und muss dort unverändert erhalten
+  bleiben.
+  **Teil B — Karten-Option:** Die Lovelace-Karte erhält eine **eigene**
+  Konfigurationsoption `wellbeing_confirm` (bool, Default `false`), die der
+  Karten-Editor als Checkbox anbietet. Sie ist **nicht an die Server-Option
+  gekoppelt**: weder aktiviert die Server-Option die Karte, noch umgekehrt; die
+  Karte liest ausschließlich ihre eigene Konfiguration. Bei aktivierter Option
+  wird die gewählte Wohlbefindens-Stufe (Key oder numerischer Score)
+  **vorgemerkt** und als solche markiert („noch nicht gemeldet"); der
+  Bestätigungsbutton erscheint **nur bei aktiver Option und vorhandener
+  Vormerkung** und ruft erst dann `health_o_mat.set_wellbeing` auf.
+  **Vormerkung (Pending):** Eine Vormerkung ist **personenbezogen** und wird bei
+  einem echten Personenwechsel sowie bei einer Neukonfiguration der Karte
+  (`setConfig`) beziehungsweise einem Wechsel zur Übersicht oder einem Reload
+  des Panels **verworfen** — sie darf nie unter einer anderen Person oder mit
+  veralteter Konfiguration übernommen werden. Schlägt die Übernahme fehl, bleibt
+  die Vormerkung für einen erneuten Versuch erhalten. **Nicht-Ziel:** Änderung
+  von `unique_id`s, neue Persistenz von Gesundheitsdaten, neue Entity-Typen.
+- **Akzeptanzkriterien:**
+  - [x] Teil A — **Persistenz und Default:** Ohne Option liefert `get_settings`
+    `false`; eine gesetzte Option kommt als `true` zurück; `set_settings`
+    persistiert echte Booleans über den Options-Pfad und **merged** mit
+    bestehenden Optionen (kein Ersetzen). **Beleg:**
+    `tests/test_ws_api.py::test_req_hom_114_get_settings_wellbeing_confirm_defaults_false`,
+    `::test_req_hom_114_get_settings_returns_configured_wellbeing_confirm`,
+    `::test_req_hom_114_set_settings_accepts_bool_and_persists_options`.
+  - [x] Teil A — **Strikte bool-Validierung:** `"true"`, `"false"`, `1` und `0`
+    werden abgelehnt (`invalid_format`, Feldname und „Boolean" in der Meldung),
+    es wird nichts persistiert; derselbe Vertrag gilt für
+    `parse_settings_message` (Roundtrip `true` → Options → `build_settings`,
+    `"false"` → Feldmeldung). **Beleg:**
+    `::test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm`
+    (parametrisiert über alle vier Unfug-Werte),
+    `::test_req_hom_114_parse_settings_message_roundtrip`,
+    `::test_req_hom_114_parse_settings_message_rejects_string_bool`.
+  - [x] Teil A — **Detail-Tab kennt die Option ohne `get_settings`:** Der
+    `panel_data`-Payload enthält `wellbeing_confirm` als echtes Boolean
+    (`isinstance(..., bool)`), Default `false`, gesetzte Option `true`. **Beleg:**
+    `::test_req_hom_114_panel_data_carries_wellbeing_confirm`.
+  - [x] Teil A — **Admin-Maske:** Checkbox im Wohlbefinden-Bereich
+    (`data-field="wellbeing_confirm"`, Label „Wohlbefinden: Bestätigung vor
+    Übernahme"), Fallback `false` im Basis-Modul, Sammeln und PATCH-Vergleich im
+    Entry-Modul über denselben `set_settings`-Pfad. **Beleg:**
+    `tests/test_panel_js.py::test_req_hom_114_panel_admin_has_wellbeing_confirm_checkbox`.
+  - [x] Teil A — **Detail-Tab merkt vor statt sofort zu melden:** Die
+    vorgemerkte Stufe ist als `pending` markiert, der gespeicherte Zustand bleibt
+    `active`, der Bestätigungsbutton („Übernehmen") erscheint nur mit Vormerkung
+    und nur bei aktiver Option. **Beleg:**
+    `tests/test_panel_js.py::test_req_hom_114_panel_views_show_pending_selection_and_confirm_button`,
+    `::test_req_hom_114_panel_views_confirm_button_only_with_pending`,
+    `::test_req_hom_114_panel_defers_wellbeing_report_until_confirmation`
+    (Kontrollfall `false` meldet sofort; Personenwechsel, Übersicht und Reload
+    verwerfen die Vormerkung).
+  - [x] Teil A — **Options-Flow erhält die Option:** Obwohl
+    `wellbeing_confirm` kein Formularfeld hat, bleibt ein gesetzter Wert nach
+    dem Durchlaufen des Options-Flows in `entry.options` erhalten. **Beleg:**
+    `tests/test_config_flow.py::test_req_hom_114_options_flow_preserves_wellbeing_confirm`.
+  - [x] Teil B — **Karten-Verhalten:** Normalizer-Default `false`, explizit
+    `true`/`false` werden übernommen; bei `true` werden Key- und
+    Score-Auswahl vorgemerkt (keine Service-Aufrufe im Klickpfad), als `pending`
+    markiert und mit Hinweis „noch nicht gemeldet" plus Bestätigungsbutton
+    versehen; erst die Bestätigung meldet. Kontrollfall `false`: die Meldung geht
+    sofort raus (bisheriges Verhalten). **Beleg:**
+    `tests/test_card_js.py::test_req_hom_114_card_defers_wellbeing_report_until_confirmation`,
+    `::test_req_hom_114_card_confirm_button_needs_pending_selection`
+    (Button hängt an Vormerkung **und** Option, nicht am Modus allein).
+  - [x] Teil B — **Pending-Reset und Fehlerfall (Karte):** Personenwechsel und
+    `setConfig` verwerfen die Vormerkung; nach einem Fehler bleibt sie für einen
+    erneuten Versuch erhalten und die Fehlermeldung ist gesetzt. **Beleg:**
+    `::test_req_hom_114_card_defers_wellbeing_report_until_confirmation`
+    (Abschnitte `switched`, `reconfigured`, `failed`).
+  - [x] Teil B — **Editor:** eigener Schalter „Wohlbefinden: Bestätigung vor
+    Übernahme" (`data-key="wellbeing_confirm"`), Default `false`; Einschalten
+    setzt explizit `true`, Ausschalten entfernt den Key; der Schalter ist
+    **nicht** Teil der auf neun Einträge gepinnten `show_*`-Liste. **Beleg:**
+    `::test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox`.
+  - [x] **Unabhängigkeit der beiden Optionen:** Karte und Panel beziehen den
+    Schalter aus **getrennten** Quellen (Karten-Konfiguration vs.
+    `entry.options`/`panel_data`); die jeweiligen Tests setzen bewusst nur eine
+    Quelle und belegen das Verhalten der anderen Seite unabhängig davon
+    (`::test_req_hom_114_card_defers_wellbeing_report_until_confirmation` vs.
+    `tests/test_panel_js.py::test_req_hom_114_panel_defers_wellbeing_report_until_confirmation`).
+  - [x] **Doku:** README beschreibt die Karten-Option (Abschnitt
+    „Karten-Konfiguration", Default `false`, ausdrücklich unabhängig von der
+    Panel-/Server-Option) und die Admin-Option (Abschnitt
+    „Admin-/Settings-Ansicht").
+  - [x] **Unit-Test-Beleg:** `pytest -q` → **812 passed**; `ruff check .` clean.
+  - [x] **E2E-Beleg:** `pytest tests_e2e/ -v` gegen eine reale HA-Instanz
+    (Docker, HA `stable`) → **15 passed**, davon **2 neue** Fälle in
+    `tests_e2e/test_wellbeing_confirm_e2e.py`: Karten-Option (Vormerkung,
+    kein Server-Write vor Bestätigung, Übernahme per Button) und Panel-Admin-
+    Option (Checkbox speichert, Panel meldet erst nach Bestätigung).
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -704,3 +825,5 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-21 | **v0.10.1 — Fix: Wohlbefinden-Verlauf stempelt den abgelösten Status mit seinem eigenen Meldezeitpunkt** (Branch `fix/wellbeing-history-timestamp`): `store.set_wellbeing` archiviert den abgelösten Status jetzt mit `wb["ts"]` (Meldezeitpunkt) statt mit dem Zeitstempel der ablösenden Meldung. Dadurch zeigt die Verlaufsliste im Panel/der Card den Vorgänger nicht mehr fälschlich als „vor 2 min", direkt nachdem ein neuer Zustand gemeldet wurde. Kein Schema-Umbau, keine Migration. Tests: `tests/test_store.py::test_req_hom_112_wellbeing_history_records_replaced_status_with_report_timestamp` (umbenannt/angepasst) sowie `STORE-017`; `pytest -q` → 733 passed; `ruff` clean. Release v0.10.1 (Patch). |
 | 2026-10-23 | **Wellbeing-Ausbau** (Branch `feat/wellbeing-10-scale-images`): Skala auf **1–10** erweitert (bestehende Keys auf 1/3/5/7/9), numerischer Service-/WS-Input (`score`) zusätzlich zum Key, konfigurierbare eigene Bilder je Key (Options-Schritt „Wohlbefinden-Bilder", PNG/JPG/WebP), Wohlbefinden-Zahleneingabe in Card und Panel, Blutdruck-Verlaufsgraph (sys/dia) in Card und Panel sowie Personen-Modus/Filter (`person_mode`, `person_filter`, `default_person`) in der Karte. `pytest -q` → 778 passed. |
 | 2026-10-23 | **v0.12.0 — Undo-/Personenfilter-/Admin-Bild-Fixes** (Branch `fix/undo-person-filter-images-admin`): Undo-Button in Card und Panel wird ohne vorhandene Getränkebuchung deaktiviert (`panel_data.undo.drink`) statt einen Service-/WS-Fehler auszulösen; Personen-Filter im Karten-Editor hat einen expliziten Bearbeitungsmodus („Alle Personen“ abwählen → Einzelauswahl), im Modus `fixed` werden die Filter-Checkboxen ausgeblendet; der Panel-Admin-Dialog bietet jetzt Bildfelder für alle zehn Wellbeing-Keys (`set_settings`/`get_settings` um `wellbeing_images` erweitert, serverseitig normalisiert). `pytest -q` → 787 passed; `ruff` clean. |
+| 2026-10-24 | **Neu angelegt: REQ-HOM-114 — Wohlbefinden-Bestätigung vor Übernahme** (Branch `feat/wellbeing-confirm`) — **erledigt im Working Tree**, noch kein Commit/Release und **kein Versions-Bump**. Zwei **unabhängige** Schalter `wellbeing_confirm` (bool, Default `false` → kein Verhaltenswechsel): **Teil A** als Panel-/Server-Option pro Config-Entry in `entry.options` über `health_o_mat/set_settings` (`SETTINGS_KEYS`/`SETTINGS_SCHEMA`, `build_settings`, `parse_settings_message`; **strikt bool** — `"true"`/`"false"`/`1`/`0` → `invalid_format`, ohne Teil-Update), Checkbox in der Admin-Maske, `panel_data` liefert den Wert als echtes Boolean, Detail-Tab merkt die Auswahl vor (eigene `pending`-Markierung) und meldet erst per Bestätigungsbutton; **Teil B** als eigenständige Karten-Option mit Editor-Checkbox, Vormerkung (Key oder Score) + Bestätigungsbutton, **nicht** an die Server-Option gekoppelt; Vormerkung wird bei Personenwechsel, `setConfig`, Wechsel zur Übersicht und Reload verworfen, bleibt bei einem Fehler für den erneuten Versuch erhalten. **Belege:** `tests/test_ws_api.py` (7 Testfunktionen `test_req_hom_114_*`, u. a. `::test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm`, `::test_req_hom_114_panel_data_carries_wellbeing_confirm`), `tests/test_panel_js.py::test_req_hom_114_panel_admin_has_wellbeing_confirm_checkbox`, `::test_req_hom_114_panel_defers_wellbeing_report_until_confirmation`, `tests/test_card_js.py::test_req_hom_114_card_defers_wellbeing_report_until_confirmation`, `::test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox`, `tests/test_config_flow.py::test_req_hom_114_options_flow_preserves_wellbeing_confirm`; `pytest -q` → **807 passed**, `ruff check .` clean (**Implementierer-Angabe**; die parallel laufende Tester-Verifikation bleibt abzuwarten). README („Karten-Konfiguration" + Admin-Abschnitt) aktualisiert. |
+| 2026-10-25 | **v0.13.0 — Wohlbefinden-Bestätigung vor Übernahme (REQ-HOM-114)** (Branch `feat/wellbeing-confirm`): zwei unabhängige Optionen `wellbeing_confirm` (Default `false`) — pro Person in der Panel-Admin-Maske und als eigene Karten-Option; Auswahl wird vorgemerkt, erst der Bestätigungsbutton meldet. Options-Flow erhält nicht gezeigte Optionen. Unit `812 passed`, E2E `15 passed` (2 neue), ruff check/format clean. Release v0.13.0 (MINOR). |

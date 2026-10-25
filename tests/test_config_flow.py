@@ -321,13 +321,12 @@ def test_options_flow_preserves_other_options_on_submit():
 
     options_flow.async_create_entry.assert_called_once()
     data = options_flow.async_create_entry.call_args[1]["data"]
-    # init-Felder + Quick-Drinks + Lexikon zusammengeführt, fremde Options bleiben unberührt
-    # (fremde Optionen leben im Entry, nicht im Flow — hier wird nur geprüft,
-    #  dass der Flow sie nicht anfasst/verliert)
+    # init-Felder + Quick-Drinks + Lexikon zusammengeführt; fremde Optionen
+    # (z. B. `wellbeing_confirm` aus dem Panel) bleiben erhalten.
     assert data["daily_goal_ml"] == 2500
     assert data["set_lifetime_ml"] == 1000
     assert data["drink_lexicon"] == {"kaffee": ("Kaffee", 250)}
-    assert "some_key" not in data  # Flow schreibt nur seine eigenen Felder
+    assert data["some_key"] == "some_value"  # Flow verliert fremde Optionen nicht
 
 
 # --- Feature 1: Getränke-Lexikon-Schritt (drink_lexicon) ---
@@ -729,3 +728,43 @@ def test_wellbeing_images_schema_has_all_ten_keys():
 
     assert len(defaults) == 10
     assert "wellbeing_image_excellent" in defaults
+
+
+# --- REQ-HOM-114: Panel-Option überlebt den Options-Flow --------------------
+
+
+def test_req_hom_114_options_flow_preserves_wellbeing_confirm():
+    """[REQ-HOM-114] Die Panel-Option `wellbeing_confirm` bleibt beim
+    Options-Flow erhalten, obwohl sie kein Formularfeld hat."""
+    options_flow = config_flow_module.HealthOMatOptionsFlow()
+
+    entry = MagicMock()
+    entry.options = {"wellbeing_confirm": True, "daily_goal_ml": 1800}
+    entry.runtime_data = MagicMock()
+    entry.entry_id = "test-entry-1"
+    entry.data = {"person": "Max"}
+
+    hass = MagicMock()
+    hass.data = {}
+
+    type(options_flow).config_entry = PropertyMock(return_value=entry)
+    type(options_flow).hass = PropertyMock(return_value=hass)
+    options_flow.async_create_entry = MagicMock()
+
+    _async_test(
+        options_flow.async_step_init(
+            {"daily_goal_ml": 2200, "set_lifetime_ml": 0, "person_display": ""}
+        )
+    )
+    quick = {}
+    for i in range(4):
+        quick[f"quick_{i}_label"] = f"Drink {i}"
+        quick[f"quick_{i}_ml"] = 200
+        quick[f"quick_{i}_icon"] = "mdi:cup-water"
+    _async_test(options_flow.async_step_quick_drinks(quick))
+    _async_test(options_flow.async_step_wellbeing_images({}))
+    _async_test(options_flow.async_step_drink_lexicon({"drink_lexicon": "kaffee=Kaffee,250"}))
+
+    data = options_flow.async_create_entry.call_args[1]["data"]
+    assert data["wellbeing_confirm"] is True
+    assert data["daily_goal_ml"] == 2200

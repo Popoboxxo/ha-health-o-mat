@@ -29,7 +29,7 @@ import {
   wellbeingScale,
   wellbeingVisual,
   bpHistoryChartHtml,
-} from "./health-o-mat-panel-base.js?v=0.12.0";
+} from "./health-o-mat-panel-base.js?v=0.13.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -373,12 +373,48 @@ function wellbeingTab(panel, data, entryId) {
   const view = wellbeingView(panel, data);
   const scale = wellbeingScale(data);
   const scoreMax = scale.length || WELLBEING_SCORE_MAX;
+  /* Bestätigungsmodus (REQ-HOM-114): Auswahl erst vormerken, senden erst der
+   * „Übernehmen"-Button. Ohne Pending bleibt alles wie bisher. */
+  const confirm = !!(data && data.wellbeing_confirm === true);
+  const pending = panel._wbPending && panel._wbPending.entryId === entryId
+    ? panel._wbPending
+    : null;
+  const pendingIndex = pending
+    ? pending.key
+      ? scale.findIndex((state) => state.key === pending.key)
+      : Number.isInteger(pending.score)
+        ? pending.score - 1
+        : -1
+    : -1;
+  const pendingState = pendingIndex >= 0 ? scale[pendingIndex] : null;
+  const stagedKey = confirm && pendingState ? pendingState.key : "";
+  const pendingScore =
+    pending && pending.score != null
+      ? pending.score
+      : pendingIndex >= 0
+        ? pendingIndex + 1
+        : null;
   const buttons = scale.map(
-    (s) => `<button class="wb-btn${s.key === view.key ? " active" : ""}" data-action="wb" data-key="${s.key}" type="button"${panel._busy ? " disabled" : ""}>
+    (s) => `<button class="wb-btn${s.key === view.key ? " active" : ""}${
+      s.key === stagedKey ? " pending" : ""
+    }" data-action="wb" data-key="${s.key}" type="button"${panel._busy ? " disabled" : ""}>
         ${wellbeingVisual(s)}
         <span class="lbl">${escapeHtml(s.label)}</span>
       </button>`
   ).join("");
+
+  const pendingLabel = pendingState
+    ? escapeHtml(pendingState.label)
+    : "";
+  const pendingScoreText = pendingScore != null && pendingScore > 0
+    ? ` (${pendingScore} / ${scoreMax})`
+    : "";
+  const confirmRow = confirm && pendingState
+    ? `<div class="wb-confirm">
+        <span class="wb-pending-hint">Ausgewählt: ${pendingLabel}${pendingScoreText} \u2013 noch nicht übernommen</span>
+        <button class="btn" data-action="wb-confirm" type="button"${panel._busy ? " disabled" : ""}>Übernehmen</button>
+      </div>`
+    : "";
 
   const at = view.at ? relativeTime(view.at) : "";
   const scoreText =
@@ -467,6 +503,7 @@ function wellbeingTab(panel, data, entryId) {
   return `<div class="card">
       <div class="muted">Wie geht es dir?</div>
       <div class="wb-row">${buttons}</div>
+      ${confirmRow}
       ${last}
     </div>${scoreForm}${chartHtml}${histHtml}`;
 }

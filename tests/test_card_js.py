@@ -947,6 +947,12 @@ class FakeHTMLElement {
 
 const context = {
   HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail ? init.detail : null;
+    }
+  },
   customElements: { get: () => undefined, define: () => {} },
   window: {},
   document: { createElement: () => ({}), addEventListener: () => {} },
@@ -1085,3 +1091,371 @@ def test_card_person_filter_has_explicit_editing_state():
     assert "_personFilterEditing = false" in toggle
     assert "filterIsAll" in section
     assert "disabled" in section, "die Einzelboxen sind bei 'Alle' nicht gesperrt"
+
+
+# --- REQ-HOM-114: Wohlbefinden-Bestätigung vor Übernahme --------------------
+
+_NODE_CARD_CONFIRM_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    return String(selector).includes("wb-score") ? { value: "7" } : null;
+  }
+  querySelectorAll() { return []; }
+  appendChild(child) { return child; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+  dispatchEvent() { return true; }
+  setAttribute() {}
+  removeAttribute() {}
+}
+
+const context = {
+  HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail ? init.detail : null;
+    }
+  },
+  customElements: { get: () => undefined, define: () => {} },
+  window: {},
+  document: { createElement: () => ({}), addEventListener: () => {} },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  __out: null,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const outPromise = vm.runInContext(
+  `(async () => {
+  function makeCard(confirm) {
+    const card = new HealthOMatCard();
+    card._config = { entry_id: "e1", wellbeing_confirm: confirm };
+    card._data = { person: "Caro", wellbeing: { key: "bad", label: "Schlecht" } };
+    card._activeEntry = "e1";
+    card._render = () => {};
+    card._loadData = () => Promise.resolve();
+    card._calls = [];
+    card._errors = 0;
+    card._hass = {
+      callWS: () => Promise.resolve({}),
+      callService: (domain, service, payload) => {
+        card._calls.push([domain, service, payload]);
+        if (card._failNext) {
+          card._failNext = false;
+          return Promise.reject(new Error("Service nicht erreichbar"));
+        }
+        return Promise.resolve();
+      },
+      states: {},
+    };
+    return card;
+  }
+
+  function clickAction(card, action) {
+    card._onCardClick({
+      target: {
+        closest: () => ({
+          getAttribute: (name) => (name === "data-action" ? action : "good"),
+        }),
+      },
+    });
+  }
+
+  const staged = makeCard(true);
+  clickAction(staged, "wellbeing");
+  const stagedHtml = staged._wellbeingInput();
+
+  const immediate = makeCard(false);
+  clickAction(immediate, "wellbeing");
+
+  const confirmed = makeCard(true);
+  clickAction(confirmed, "wellbeing");
+
+  const score = makeCard(true);
+  clickAction(score, "wellbeing-score");
+
+  const failed = makeCard(true);
+  failed._failNext = true;
+  clickAction(failed, "wellbeing");
+
+  const switched = makeCard(true);
+  clickAction(switched, "wellbeing");
+  switched._onSelectChange({
+    target: { tagName: "SELECT", getAttribute: () => "person", value: "e2" },
+  });
+
+  const reconfigured = makeCard(true);
+  clickAction(reconfigured, "wellbeing");
+  reconfigured.setConfig({ entry_id: "e1", wellbeing_confirm: true });
+
+  __out = {
+    normalizer: {
+      default: normalizeCardConfig({}).wellbeingConfirm,
+      enabled: normalizeCardConfig({ wellbeing_confirm: true }).wellbeingConfirm,
+      disabled: normalizeCardConfig({ wellbeing_confirm: false }).wellbeingConfirm,
+    },
+    staged: {
+      pending: staged._wbPending,
+      calls: staged._calls.slice(),
+      html: stagedHtml,
+    },
+    immediate: { pending: immediate._wbPending, calls: immediate._calls.slice() },
+    score: { pending: score._wbPending, calls: score._calls.slice() },
+    switched: { pending: switched._wbPending },
+    reconfigured: { pending: reconfigured._wbPending },
+  };
+
+  await confirmed._confirmWellbeing();
+  __out.confirmed = { pending: confirmed._wbPending, calls: confirmed._calls };
+
+  await score._confirmWellbeing();
+  __out.score.confirmedCalls = score._calls;
+
+  await failed._confirmWellbeing();
+  __out.failed = { pending: failed._wbPending, error: failed._wbError };
+
+  /* S2: Personenbezug der Vormerkung. */
+  const filtered = makeCard(true);
+  filtered._config = { person_mode: "selector", wellbeing_confirm: true };
+  filtered._activeEntry = "e1";
+  filtered._loadData = HealthOMatCard.prototype._loadData;
+  filtered._hass = {
+    callWS: (msg) =>
+      msg.type === "health_o_mat/list_persons"
+        ? Promise.resolve({ persons: [{ entry_id: "e2", display_name: "Dana" }] })
+        : Promise.resolve({ person: "Dana", wellbeing: { key: "bad", label: "Schlecht" } }),
+    callService: () => Promise.resolve(),
+    states: {},
+  };
+  clickAction(filtered, "wellbeing");
+  const filteredBefore = filtered._wbPending;
+  await filtered._loadData();
+  __out.filtered = {
+    before: filteredBefore,
+    pending: filtered._wbPending,
+    activeEntry: filtered._activeEntry,
+    html: filtered._wellbeingInput(),
+  };
+
+  const mismatched = makeCard(true);
+  clickAction(mismatched, "wellbeing");
+  mismatched._activeEntry = "e2";
+  const mismatchedHtml = mismatched._wellbeingInput();
+  await mismatched._confirmWellbeing();
+  __out.mismatched = {
+    pending: mismatched._wbPending,
+    calls: mismatched._calls.slice(),
+    html: mismatchedHtml,
+  };
+
+  /* S5: Editor-Schalter wirklich ausfuehren statt nur im Quelltext suchen. */
+  const editor = new HealthOMatCardEditor();
+  editor._config = { entry_id: "e1" };
+  editor._render = () => {};
+  const events = [];
+  editor.dispatchEvent = (ev) => {
+    events.push(ev);
+    return true;
+  };
+  editor._toggleFlag("wellbeing_confirm", true);
+  const editorOn = Object.assign({}, editor._config);
+  const eventOn = events.length ? events[events.length - 1].detail.config : null;
+  editor._toggleFlag("wellbeing_confirm", false);
+  const editorOff = Object.assign({}, editor._config);
+  const eventOff = events.length ? events[events.length - 1].detail.config : null;
+  __out.editor = {
+    on: editorOn,
+    off: editorOff,
+    eventOn,
+    eventOff,
+    hasOn: Object.prototype.hasOwnProperty.call(editorOn, "wellbeing_confirm"),
+    hasOff: Object.prototype.hasOwnProperty.call(editorOff, "wellbeing_confirm"),
+  };
+  return __out;
+  })()`,
+  context,
+  { filename: "card-confirm-probe.js" }
+);
+
+process.stdout.write(JSON.stringify(await outPromise));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
+    """[REQ-HOM-114] Karte: Klick/Absenden merkt vor, erst „Übernehmen" meldet.
+
+    Kontrollfall `wellbeing_confirm=false`: die Meldung geht sofort raus.
+    Fehlerfall: die Vormerkung bleibt für einen erneuten Versuch erhalten.
+    """
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_confirm.mjs"
+    runner_path.write_text(_NODE_CARD_CONFIRM_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    out = json.loads(result.stdout)
+
+    assert out["normalizer"] == {"default": False, "enabled": True, "disabled": False}
+
+    staged = out["staged"]
+    assert staged["pending"] == {
+        "entryId": "e1",
+        "kind": "key",
+        "key": "good",
+        "score": None,
+    }, "der Klick merkt die Auswahl nicht inkl. Personenbezug vor"
+    assert staged["calls"] == [], "der Klick meldet trotz Bestätigungsmodus sofort"
+    assert 'data-action="wellbeing-confirm"' in staged["html"], (
+        "der Bestätigungsbutton fehlt bei bestehender Vormerkung"
+    )
+    assert "Übernehmen" in staged["html"]
+    assert "noch nicht gemeldet" in staged["html"]
+    assert re.search(r'class="wb-btn[^"]*pending[^"]*"', staged["html"]), (
+        "die vorgemerkte Stufe ist nicht als `pending` markiert"
+    )
+
+    immediate = out["immediate"]
+    assert len(immediate["calls"]) == 1, "ohne Bestätigungsmodus wird nicht sofort gemeldet"
+    assert immediate["calls"][0][1] == "set_wellbeing"
+    assert immediate["calls"][0][2]["status"] == "good"
+    assert immediate["pending"] is None
+
+    confirmed = out["confirmed"]
+    assert len(confirmed["calls"]) == 1, "der Bestätigungsbutton meldet die Auswahl nicht"
+    assert confirmed["calls"][0][2]["status"] == "good"
+    assert confirmed["pending"] is None
+
+    score = out["score"]
+    assert score["pending"] == {
+        "entryId": "e1",
+        "kind": "score",
+        "key": "",
+        "score": 7,
+    }, "die Zahleneingabe wird nicht vorgemerkt"
+    assert score["calls"] == []
+    assert score["confirmedCalls"][0][2]["score"] == 7
+
+    assert out["switched"]["pending"] is None, "die Vormerkung überlebt den Personenwechsel"
+    assert out["reconfigured"]["pending"] is None, "die Vormerkung überlebt `setConfig`"
+
+    failed = out["failed"]
+    assert failed["pending"] is not None, (
+        "die Vormerkung geht bei einem Fehler verloren (kein erneuter Versuch möglich)"
+    )
+    assert failed["error"]
+
+    # S2: Personenbezug — eine Vormerkung gilt nur fuer die Person, fuer die
+    # sie entstanden ist. Wechselt `_activeEntry` ohne `_onSelectChange`
+    # (Person faellt aus Filter/Liste), wird sie verworfen.
+    filtered = out["filtered"]
+    assert filtered["before"]["entryId"] == "e1"
+    assert filtered["activeEntry"] == "e2"
+    assert filtered["pending"] is None, (
+        "die Vormerkung ueberlebt einen Personenwechsel in `_loadData`"
+    )
+    assert 'data-action="wellbeing-confirm"' not in filtered["html"], (
+        "eine verworfene Vormerkung wird weiterhin als bestaetigbar gerendert"
+    )
+
+    # Ohne `_loadData` (nur `_activeEntry` veraendert) darf eine fremde
+    # Vormerkung weder gerendert noch uebernommen werden.
+    mismatched = out["mismatched"]
+    assert 'data-action="wellbeing-confirm"' not in mismatched["html"]
+    assert "noch nicht gemeldet" not in mismatched["html"]
+    assert mismatched["calls"] == [], "die Bestaetigung meldet eine Vormerkung einer anderen Person"
+
+
+def test_req_hom_114_card_confirm_button_needs_pending_selection():
+    """[REQ-HOM-114] Bestätigungsbutton hängt an einer Vormerkung, nicht am Modus."""
+    text = _card_source()
+    form = _js_method_block(text, "_wellbeingInput")
+    confirm = _js_method_block(text, "_confirmWellbeing")
+    click = _js_method_block(text, "_onCardClick")
+
+    assert "this._wbPending" in form
+    assert "staged" in form and "confirmRow" in form
+    assert 'data-action="wellbeing-confirm"' in form
+    # Nur bei aktiver Option UND vorhandener Vormerkung der aktiven Person.
+    assert "this._wellbeingConfirmEnabled() ? this._wbPendingFor() : null" in form
+    assert "const confirmRow = staged" in form
+    # Erst die Bestätigung ruft die Meldung auf.
+    assert "_reportWellbeing" in confirm and "_reportWellbeingScore" in confirm
+    assert re.search(r'action === "wellbeing-confirm"[\s\S]*?_confirmWellbeing\(\)', click), (
+        "der Klick auf 'Übernehmen' ruft nicht `_confirmWellbeing()` auf"
+    )
+
+
+def test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox():
+    """[REQ-HOM-114] Editor: eigener Schalter mit Default `false`."""
+    text = _card_source()
+    editor = _js_class_block(text, "HealthOMatCardEditor")
+    inputs = _js_method_block(editor, "_inputSection")
+    toggle = _js_method_block(editor, "_toggleFlag")
+
+    assert 'data-key="wellbeing_confirm"' in inputs
+    assert "Wohlbefinden: Bestätigung vor Übernahme" in inputs
+    assert "_effectiveWellbeingConfirm()" in inputs
+    # Eigener Zweig: an setzt explizit `true`, aus entfernt den Key (Default false).
+    assert re.search(r'key === "wellbeing_confirm"', toggle)
+    assert re.search(r"if\s*\(\s*checked\s*\)\s*next\[key\]\s*=\s*true", toggle)
+    assert re.search(r"else\s+delete\s+next\[key\]", toggle)
+    # NICHT in der `show_*`-Liste (die ist auf die neun Schema-Schalter gepinnt).
+    show_keys = re.search(r"CARD_SHOW_KEYS\s*=\s*\[(.*?)\]", text, re.S)
+    assert show_keys is not None
+    assert "wellbeing_confirm" not in show_keys.group(1)
+    assert "wellbeingConfirm: toBool(source.wellbeing_confirm, false)" in text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_114_card_editor_toggle_writes_config(tmp_path):
+    """[REQ-HOM-114] Editor: `_toggleFlag` setzt `true` bzw. löscht den Key."""
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_confirm.mjs"
+    runner_path.write_text(_NODE_CARD_CONFIRM_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    editor = json.loads(result.stdout)["editor"]
+
+    assert editor["hasOn"] is True, "der Schalter setzt `wellbeing_confirm` nicht"
+    assert editor["on"]["wellbeing_confirm"] is True
+    assert editor["eventOn"]["wellbeing_confirm"] is True, (
+        "`config-changed` traegt den neuen Schalter nicht"
+    )
+    assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default ist `false`)"
+    assert editor["eventOff"].get("wellbeing_confirm") is None
