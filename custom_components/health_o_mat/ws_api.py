@@ -37,6 +37,7 @@ from .const import (
     MAX_BP_VALUE,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
+    OPTION_WELLBEING_CONFIRM,
     WELLBEING_IMAGES_OPTION,
     WELLBEING_STATES,
 )
@@ -166,6 +167,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     "quick_drinks",
     "drink_lexicon",
     WELLBEING_IMAGES_OPTION,
+    OPTION_WELLBEING_CONFIRM,
     "sys_threshold",
     "dia_threshold",
     "retention_months",
@@ -190,6 +192,21 @@ def _any_value(value: Any) -> Any:
     Schema-Fehler.
     """
     return value
+
+
+def _strict_bool(value: Any) -> bool:
+    """Strikter Boolean-Validator für Options-Schalter.
+
+    `vol.Boolean()` bzw. `vol.Coerce(bool)` würden `"true"`, `"false"` und
+    `1`/`0` stillschweigend umwandeln. Für Options-Schalter ist das eine
+    stille Verhaltensänderung — deshalb akzeptiert dieser Validator
+    ausschließlich echte JSON-Booleans.
+    """
+    if isinstance(value, bool):
+        return value
+    raise vol.Invalid(
+        f"erwartet true oder false (Boolean), erhalten {type(value).__name__} {value!r}"
+    )
 
 
 # Feldgenaue Validierung eines `set_settings`-Payloads.
@@ -219,6 +236,9 @@ SETTINGS_SCHEMA = vol.Schema(
         # Normalisierung (nur erlaubte Keys/Formate) passiert in
         # `parse_settings_message` über `logic.normalize_wellbeing_images`.
         vol.Optional(WELLBEING_IMAGES_OPTION): dict,
+        # Wohlbefinden-Bestätigung (REQ-HOM-114): STRIKT bool, kein Coerce —
+        # `vol.Boolean()` würde "true"/1 akzeptieren und still umdeuten.
+        vol.Optional(OPTION_WELLBEING_CONFIRM): _strict_bool,
         vol.Optional("sys_threshold"): vol.All(
             vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
         ),
@@ -414,6 +434,10 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
         # Additiv: die konfigurierten Quick-Drinks, damit Karte und Editor die
         # Auswahl kennen, ohne das admin-only `get_settings` aufzurufen.
         "quick_drinks": _quick_drinks(entry),
+        # Additiv (REQ-HOM-114): Bestätigung vor der Übernahme einer
+        # Wohlbefinden-Meldung — der Detail-Tab braucht die Option, ohne das
+        # admin-only `get_settings` aufzurufen.
+        OPTION_WELLBEING_CONFIRM: bool(options.get(OPTION_WELLBEING_CONFIRM, False)),
         "entities": entity_ids_for_entry(hass, entry_id),
     }
 
@@ -1071,6 +1095,7 @@ def build_settings(entry: Any) -> dict[str, Any]:
         WELLBEING_IMAGES_OPTION: logic.normalize_wellbeing_images(
             options.get(WELLBEING_IMAGES_OPTION)
         ),
+        OPTION_WELLBEING_CONFIRM: bool(options.get(OPTION_WELLBEING_CONFIRM, False)),
         "sys_threshold": _option_int(
             entry, "sys_threshold", "sys_threshold", DEFAULT_SYS_THRESHOLD
         ),

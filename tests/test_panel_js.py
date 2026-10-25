@@ -765,6 +765,7 @@ const panel = {
   _tab: "wellbeing",
   _actionError: "",
   _busy: false,
+  _wbPending: spec.pending || null,
   _liveValue: (data, key, fallback) => (key === "wellbeing" ? spec.live_wellbeing : fallback),
   _liveNumber: (data, key, fallback) => (key === "wellbeing_score" ? spec.live_score : fallback),
 };
@@ -1534,3 +1535,487 @@ def test_panel_admin_settings_include_wellbeing_images():
     assert "wb-image-" in admin
     assert "WELLBEING_STATES.map" in admin
     assert "wellbeing_images: wellbeingImages" in entry
+
+
+# --- REQ-HOM-114: Wohlbefinden-Bestätigung vor Übernahme --------------------
+
+_PENDING_HINT = "noch nicht übernommen"
+
+
+def test_req_hom_114_panel_admin_has_wellbeing_confirm_checkbox():
+    """[REQ-HOM-114] Admin-Maske: Checkbox im Wohlbefinden-Bereich."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    base = _panel_base_source()
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert 'data-field="wellbeing_confirm"' in admin
+    assert "Wohlbefinden: Bestätigung vor Übernahme" in admin
+    # Fallback der Anzeige (Default aus) im Basis-Modul.
+    assert re.search(r"wellbeing_confirm:\s*false", base)
+    # Sammeln + PATCH-Vergleich im Entry-Modul (gleicher set_settings-Pfad).
+    assert "wellbeing_confirm: wellbeingConfirm" in entry
+    assert "out.wellbeing_confirm = payload.wellbeing_confirm" in entry
+
+
+def test_req_hom_114_panel_views_show_pending_selection_and_confirm_button(tmp_path):
+    """[REQ-HOM-114] Vorgemerkte Auswahl ist markiert und nur bestätigbar."""
+    views_copy = _prepare_views_copy(tmp_path)
+    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data["wellbeing_confirm"] = True
+    spec = {
+        "entry_id": "entry-1",
+        "display_name": "Alex",
+        "live_wellbeing": "unknown",
+        "live_score": 2,
+        "data": data,
+        "pending": {"entryId": "entry-1", "key": "great", "score": None},
+    }
+
+    html = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_VIEWS_RUNNER,
+            [str(views_copy), json.dumps(spec)],
+            "runner_panel_confirm",
+        )
+    )["html"]
+
+    assert re.search(r'class="wb-btn[^"]*pending[^"]*"[^>]*data-key="great"', html), (
+        "die vorgemerkte Stufe ist nicht als `pending` markiert"
+    )
+    # Gespeicherter Zustand bleibt `active`, die Vormerkung ist eine eigene Klasse.
+    assert re.search(r'class="wb-btn active[^"]*"[^>]*data-key="bad"', html), (
+        "der gespeicherte Zustand ist nicht mehr als `active` markiert"
+    )
+    assert 'data-action="wb-confirm"' in html, "der Bestätigungsbutton fehlt"
+    assert "Übernehmen" in html
+    assert _PENDING_HINT in html
+
+
+def test_req_hom_114_panel_views_confirm_button_only_with_pending(tmp_path):
+    """[REQ-HOM-114] Ohne Vormerkung (bzw. ohne Option) kein Bestätigungsbutton."""
+    views_copy = _prepare_views_copy(tmp_path)
+    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data["wellbeing_confirm"] = True
+    base_spec = {
+        "entry_id": "entry-1",
+        "display_name": "Alex",
+        "live_wellbeing": "unknown",
+        "live_score": 2,
+        "data": data,
+    }
+
+    without_pending = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_VIEWS_RUNNER,
+            [str(views_copy), json.dumps(base_spec)],
+            "runner_panel_no_pending",
+        )
+    )["html"]
+    assert 'data-action="wb-confirm"' not in without_pending
+    assert "pending" not in re.findall(r'class="wb-btn([^"]*)"', without_pending)[0]
+
+    data_disabled = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data_disabled["wellbeing_confirm"] = False
+    spec = dict(base_spec, data=data_disabled, pending={"entryId": "entry-1", "key": "great"})
+
+    disabled = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_VIEWS_RUNNER,
+            [str(views_copy), json.dumps(spec)],
+            "runner_panel_confirm_disabled",
+        )
+    )["html"]
+    assert 'data-action="wb-confirm"' not in disabled, (
+        "der Bestätigungsbutton erscheint trotz deaktivierter Option"
+    )
+    assert not re.search(r'class="wb-btn[^"]*pending[^"]*"[^>]*data-key="great"', disabled)
+
+
+# Node-Runner: laedt die echten Panel-ES-Module (Kopien ohne Cache-Buster) und
+# prueft das KLICKVERHALTEN des Entry-Moduls (kein sofortiger Service-Aufruf).
+_NODE_PANEL_CONFIRM_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() {
+    this._shadow = new FakeShadowRoot();
+    return this._shadow;
+  }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+// Das Modul loggt beim Laden auf stdout — der Runner schreibt JSON dorthin.
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel(confirm) {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "detail";
+  panel._data = { "entry-1": { wellbeing_confirm: confirm } };
+  panel._busy = false;
+  panel._render = () => {};
+  panel._calls = [];
+  panel._setWellbeing = (...args) => { panel._calls.push(args); };
+  return panel;
+}
+
+function clickWb(panel, key) {
+  panel._onClick({
+    target: {
+      closest: () => ({
+        getAttribute: (name) => (name === "data-action" ? "wb" : key),
+      }),
+    },
+  });
+}
+
+const staged = makePanel(true);
+clickWb(staged, "great");
+
+const immediate = makePanel(false);
+clickWb(immediate, "great");
+
+const confirmed = makePanel(true);
+clickWb(confirmed, "good");
+await confirmed._confirmWellbeing();
+
+const switched = makePanel(true);
+clickWb(switched, "good");
+switched._openPerson("entry-2", { silent: true });
+
+const overview = makePanel(true);
+clickWb(overview, "good");
+overview._showOverview({ silent: true });
+
+const reloaded = makePanel(true);
+clickWb(reloaded, "good");
+await reloaded._reloadEntry("entry-1");
+
+process.stdout.write(
+  JSON.stringify({
+    staged: { pending: staged._wbPending, calls: staged._calls },
+    immediate: { pending: immediate._wbPending, calls: immediate._calls },
+    confirmed: { pending: confirmed._wbPending, calls: confirmed._calls },
+    switched: { pending: switched._wbPending },
+    overview: { pending: overview._wbPending },
+    reloaded: { pending: reloaded._wbPending },
+  })
+);
+"""
+
+
+def _prepare_panel_copy(tmp_path) -> Path:
+    """Kopien ALLER Panel-Module ohne `?v=`-Query (Node-ESM-tauglich)."""
+    for name in (
+        "health-o-mat-panel-base.js",
+        "health-o-mat-panel-views.js",
+        "health-o-mat-panel-admin.js",
+        "health-o-mat-panel.js",
+    ):
+        source = (_WWW_DIR / name).read_text(encoding="utf-8")
+        patched = re.sub(r'"(\./health-o-mat-panel[^"]*?\.js)\?v=[^"]+"', r'"\1"', source)
+        (tmp_path / name).write_text(patched, encoding="utf-8")
+    (tmp_path / "package.json").write_text(json.dumps({"type": "module"}), encoding="utf-8")
+    return tmp_path / "health-o-mat-panel.js"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_114_panel_defers_wellbeing_report_until_confirmation(tmp_path):
+    """[REQ-HOM-114] Panel: Klick merkt vor, erst „Übernehmen" meldet.
+
+    Kontrollfall `wellbeing_confirm=false`: der Klick meldet sofort (bisheriges
+    Verhalten). Zusätzlich: Personenwechsel und Übersicht verwerfen die
+    Vormerkung, ein Reload ebenfalls.
+    """
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_CONFIRM_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_confirm_behaviour",
+        )
+    )
+
+    assert out["staged"]["calls"] == [], (
+        "der Klick loest trotz Bestätigungsmodus sofort `_setWellbeing` aus"
+    )
+    assert out["staged"]["pending"] == {"entryId": "entry-1", "key": "great", "score": None}
+
+    assert len(out["immediate"]["calls"]) == 1, (
+        "ohne Bestätigungsmodus wird die Meldung nicht sofort gesendet"
+    )
+    assert out["immediate"]["calls"][0] == ["entry-1", "great"]
+    assert out["immediate"]["pending"] is None
+
+    assert out["confirmed"]["calls"] == [["entry-1", "good", None]], (
+        "der Bestätigungsbutton sendet die vorgemerkte Auswahl nicht"
+    )
+
+    assert out["switched"]["pending"] is None, "die Vormerkung überlebt den Personenwechsel"
+    assert out["overview"]["pending"] is None, "die Vormerkung überlebt den Wechsel zur Übersicht"
+    # S1: `_reloadEntry` ist KEIN Reset-Pfad mehr — ein unbeteiligter Reload
+    # (Getränk/Undo/BD) darf die Vormerkung nicht verwerfen.
+    assert out["reloaded"]["pending"] == {
+        "entryId": "entry-1",
+        "key": "good",
+        "score": None,
+    }, "ein unbeteiligter Reload verwirft die Vormerkung"
+
+
+# --- REQ-HOM-114: Pending-Lifecycle + Admin-Wiring (Verhalten, kein String) ---
+
+_NODE_PANEL_PENDING_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+const SET_WELLBEING = "health_o_mat/set_wellbeing";
+const PANEL_DATA = "health_o_mat/panel_data";
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "detail";
+  panel._tab = "wellbeing";
+  panel._data = {
+    "entry-1": {
+      wellbeing_confirm: true,
+      wellbeing_scale: Array.from({ length: 10 }, (_, i) => ({
+        key: `k${i + 1}`,
+        label: `Stufe ${i + 1}`,
+      })),
+    },
+    "entry-2": { wellbeing_confirm: true },
+  };
+  panel._persons = [
+    { entry_id: "entry-1", display_name: "Alex" },
+    { entry_id: "entry-2", display_name: "Bea" },
+  ];
+  panel._settings = {};
+  panel._quickDraft = [];
+  panel._busy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._failSetWellbeing = false;
+  panel._ws = async (msg) => {
+    panel._messages.push(msg);
+    if (panel._failSetWellbeing && msg.type === SET_WELLBEING) {
+      throw new Error("Server nicht erreichbar");
+    }
+    if (msg.type === PANEL_DATA) return { entities: {} };
+    if (msg.type === "health_o_mat/list_persons") return { persons: panel._persons };
+    if (msg.type === "health_o_mat/get_settings") return { wellbeing_confirm: true };
+    return {};
+  };
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function sentWellbeing(panel) {
+  return panel._messages.filter((msg) => msg.type === SET_WELLBEING);
+}
+
+/* S1: unbeteiligte Schreibvorgaenge duerfen die Vormerkung nicht verwerfen. */
+const drink = makePanel();
+drink._stageWellbeing("entry-1", "k3", null);
+await drink._book("entry-1", 250);
+
+const reload = makePanel();
+reload._stageWellbeing("entry-1", "k3", null);
+await reload._reloadEntry("entry-1");
+
+/* S4a: Zahleneingabe im Bestaetigungsmodus merkt nur vor. */
+const score = makePanel();
+score.shadowRoot._fields["wb-score"] = { value: "7" };
+score._submitWellbeing();
+const scoreStaged = { pending: score._wbPending, sent: sentWellbeing(score).length };
+await score._confirmWellbeing();
+const scoreConfirmed = { pending: score._wbPending, sent: sentWellbeing(score) };
+
+/* S4b: fehlgeschlagene Uebernahme behaelt die Vormerkung. */
+const failed = makePanel();
+failed._stageWellbeing("entry-1", "k3", null);
+failed._failSetWellbeing = true;
+await failed._confirmWellbeing();
+
+/* S4c: erfolgreiche Uebernahme loescht die Vormerkung. */
+const confirmed = makePanel();
+confirmed._stageWellbeing("entry-1", "k3", null);
+await confirmed._confirmWellbeing();
+
+/* G1: Eintritt in die Admin-Einstellungen verwirft die Detail-Vormerkung. */
+const settings = makePanel();
+settings._stageWellbeing("entry-1", "k3", null);
+settings._openSettings();
+
+/* S5: Admin-Formular wirklich auslesen und gegen den Serverstand diffen. */
+const admin = makePanel();
+admin._settings = {
+  "entry-1": {
+    daily_goal_ml: 2000,
+    daily_reset_hour: 2,
+    person_display: "Alex",
+    quick_drinks: [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }],
+    drink_lexicon: "wasser=Wasser,250",
+    wellbeing_images: {},
+    sys_threshold: 140,
+    dia_threshold: 90,
+    retention_months: 12,
+    enable_sidebar_panel: false,
+    wellbeing_confirm: false,
+    areas: { drink: true, bp: true, wellbeing: true },
+  },
+};
+admin._quickDraft = [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }];
+admin.shadowRoot._fields = {
+  daily_goal_ml: { value: "2000" },
+  daily_reset_hour: { value: "2" },
+  person_display: { value: "Alex" },
+  sys_threshold: { value: "140" },
+  dia_threshold: { value: "90" },
+  retention_months: { value: "12" },
+  drink_lexicon: { value: "wasser=Wasser,250" },
+  enable_sidebar_panel: { checked: false },
+  wellbeing_confirm: { checked: true },
+  "area-drink": { checked: true },
+  "area-bp": { checked: true },
+  "area-wellbeing": { checked: true },
+};
+const collected = admin._collectSettingsPayload();
+const changes = admin._changedSettings("entry-1", collected.payload);
+
+process.stdout.write(
+  JSON.stringify({
+    drink: { pending: drink._wbPending, types: drink._messages.map((msg) => msg.type) },
+    reload: { pending: reload._wbPending },
+    scoreStaged,
+    scoreConfirmed,
+    failed: { pending: failed._wbPending, error: failed._actionError },
+    confirmed: { pending: confirmed._wbPending, sent: sentWellbeing(confirmed) },
+    settings: { pending: settings._wbPending },
+    admin: { errors: collected.errors, payload: collected.payload, changes },
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_114_panel_pending_survives_unrelated_writes(tmp_path):
+    """[REQ-HOM-114] S1/S4/G1: Pending nur in Reset-Pfaden bzw. nach Erfolg weg."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_PENDING_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_pending_lifecycle",
+        )
+    )
+
+    # S1: Getraenkebuchung und ein unbeteiligter Reload lassen sie stehen.
+    assert out["drink"]["pending"] == {
+        "entryId": "entry-1",
+        "key": "k3",
+        "score": None,
+    }, "eine Getraenkebuchung verwirft die vorgemerkte Auswahl"
+    assert out["reload"]["pending"] == {
+        "entryId": "entry-1",
+        "key": "k3",
+        "score": None,
+    }, "`_reloadEntry` verwirft die vorgemerkte Auswahl"
+
+    # S4a: Zahleneingabe merkt vor, sendet nichts, Bestaetigung sendet den Score.
+    staged = out["scoreStaged"]
+    assert staged["pending"] == {"entryId": "entry-1", "key": "", "score": 7}, (
+        "die Zahleneingabe wird nicht (mit Personenbezug) vorgemerkt"
+    )
+    assert staged["sent"] == 0, "die Zahleneingabe meldet trotz Bestaetigungsmodus sofort"
+    confirmed_score = out["scoreConfirmed"]
+    assert len(confirmed_score["sent"]) == 1, "die Bestaetigung sendet den Score nicht"
+    assert confirmed_score["sent"][0]["score"] == 7
+    assert "key" not in confirmed_score["sent"][0]
+    assert confirmed_score["pending"] is None
+
+    # S4b: Fehler laesst die Vormerkung stehen.
+    failed = out["failed"]
+    assert failed["pending"] is not None, (
+        "die Vormerkung geht bei einer fehlgeschlagenen Uebernahme verloren"
+    )
+    assert failed["error"], "der Fehler wird nicht gemeldet"
+
+    # S4c: Erfolg loescht die Vormerkung.
+    confirmed = out["confirmed"]
+    assert len(confirmed["sent"]) == 1
+    assert confirmed["sent"][0]["key"] == "k3"
+    assert confirmed["pending"] is None, "die Vormerkung ueberlebt die erfolgreiche Uebernahme"
+
+    # G1: Admin-Einstellungen sind ein Reset-Pfad.
+    assert out["settings"]["pending"] is None, (
+        "eine Detail-Vormerkung ueberlebt den Eintritt in die Admin-Einstellungen"
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_114_panel_admin_payload_carries_wellbeing_confirm(tmp_path):
+    """[REQ-HOM-114] S5: `_collectSettingsPayload`/`_changedSettings` verdrahtet."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_PENDING_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_settings_payload",
+        )
+    )["admin"]
+
+    assert out["errors"] == [], f"das Formular meldet Fehler: {out['errors']}"
+    assert out["payload"]["wellbeing_confirm"] is True, (
+        "die Admin-Checkbox landet nicht im Payload"
+    )
+    assert out["changes"] == {"wellbeing_confirm": True}, (
+        f"das Change-Set traegt den Schalter nicht korrekt: {out['changes']!r}"
+    )

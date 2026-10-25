@@ -460,6 +460,7 @@ Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
 | `show_blood_pressure_input` | bool | `true` (folgt `show_blood_pressure`) | Eingabe Systolisch/Diastolisch/Puls inkl. Notiz. |
 | `show_wellbeing_input` | bool | `true` | Die zehn Wohlbefinden-Buttons. |
 | `show_wellbeing_numeric` | bool | `true` | Zusätzliches Zahlenfeld (1–10) neben den Smileys. |
+| `wellbeing_confirm` | bool | `false` | Wohlbefinden-Auswahl erst nach Klick auf **Übernehmen** melden (unabhängig von der Panel-/Server-Option `wellbeing_confirm`). |
 | `show_blood_pressure_history` | bool | `true` | Blutdruck-Verlaufsgraph (systolisch/diastolisch, letzte 30 Messungen). |
 | `show_undo` | bool | `true` | Undo der letzten Getränkebuchung. |
 | `drinks` | list[str] | alle | Keys der Quick-Drinks aus der Integration (`panel_data.quick_drinks`); unbekannte Keys werden ignoriert, leer/fehlend = alle. |
@@ -594,6 +595,12 @@ eine scrollbare Maske statt drei erzwungener Options-Schritte):
   (sie werden beim Reload entladen); `unique_id` und Historie bleiben
   **unverändert**, ein Wieder-Einschalten erzeugt dieselbe `entity_id` wieder.
   Fehlt die Auswahl (Alt-Entry), sind alle Bereiche aktiv
+- ✅ **Wohlbefinden: Bestätigung vor Übernahme** (`wellbeing_confirm`, Default
+  aus) — pro Person in der Panel-Admin-Ansicht (Karte „Wohlbefinden") pflegbar;
+  gespeichert wird sie über denselben Einstellungs-Pfad wie die übrigen
+  Optionen. Aktiv merkt sich ein Klick auf eine Stufe nur die Auswahl;
+  gesendet wird sie erst mit **Übernehmen**. Die Karte hat dafür einen eigenen,
+  unabhängigen Schalter gleichen Namens
 - 📌 **Sidebar-Panel-Schalter** (Opt-in)
 - 📄 **CSV-Export** direkt aus dem Panel anstoßen
   (`drinks` / `blood_pressure` / `all`, geschrieben nach

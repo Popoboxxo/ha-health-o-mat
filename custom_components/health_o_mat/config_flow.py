@@ -270,7 +270,11 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                     errors={"base": "invalid_lexicon_format"},
                     description_placeholders={"detail": str(err)},
                 )
-            merged = dict(self._pending)
+            # Bestehende Optionen übernehmen: der Options-Flow zeigt nicht jede
+            # Option als Feld (z. B. `wellbeing_confirm` aus dem Panel). Ein
+            # reiner `_pending`-Dict würde sie beim Speichern verlieren.
+            merged = dict(self.config_entry.options)
+            merged.update(self._pending)
             merged["drink_lexicon"] = lexicon
             return self.async_create_entry(title="", data=merged)
 

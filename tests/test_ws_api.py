@@ -617,6 +617,7 @@ _PANEL_TOP_LEVEL_KEYS = {
     "wellbeing",
     "wellbeing_scale",
     "quick_drinks",
+    "wellbeing_confirm",
     "entities",
 }
 
@@ -1668,6 +1669,7 @@ SETTINGS_DEFAULTS = {
     "dia_threshold": 90,
     "retention_months": 0,
     "enable_sidebar_panel": False,
+    "wellbeing_confirm": False,
 }
 
 
@@ -1744,6 +1746,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "dia_threshold": 85,
                 "retention_months": 6,
                 "enable_sidebar_panel": True,
+                "wellbeing_confirm": False,
                 "areas": {"drink": True, "bp": True, "wellbeing": True},
             },
         )
@@ -2857,3 +2860,154 @@ def test_parse_settings_message_rejects_non_object_wellbeing_images():
     assert updates == {}
     assert error is not None
     assert "wellbeing_images" in error
+
+
+# --- REQ-HOM-114: Wohlbefinden-Bestätigung vor Übernahme --------------------
+
+
+def test_req_hom_114_get_settings_wellbeing_confirm_defaults_false():
+    """[REQ-HOM-114] Ohne Option liefert `get_settings` den Default `false`."""
+    entry = _entry("e1")
+
+    result = ws_api.build_settings(entry)
+
+    assert result[ws_api.OPTION_WELLBEING_CONFIRM] is False
+
+
+def test_req_hom_114_get_settings_returns_configured_wellbeing_confirm():
+    """[REQ-HOM-114] Eine gesetzte Option kommt als `true` zurück."""
+    entry = _entry("e1", options={"wellbeing_confirm": True})
+
+    assert ws_api.build_settings(entry)["wellbeing_confirm"] is True
+
+
+def test_req_hom_114_set_settings_accepts_bool_and_persists_options():
+    """[REQ-HOM-114] `set_settings` persistiert echte Booleans via Options-Pfad."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", wellbeing_confirm=True),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]
+    assert stored["wellbeing_confirm"] is True
+    # Bestehende Optionen bleiben erhalten (Merge, kein Ersetzen).
+    assert stored["daily_goal_ml"] == 2000
+    assert connection.results[0][1]["wellbeing_confirm"] is True
+
+
+@pytest.mark.parametrize("value", ["true", "false", 1, 0])
+def test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm(value):
+    """[REQ-HOM-114] Nur echte JSON-Booleans: Strings und Zahlen werden abgelehnt."""
+    entry = _entry("e1")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", wellbeing_confirm=value
+            ),
+        )
+    )
+
+    assert connection.results == []
+    assert hass.config_entries.updates == []
+    code, message = connection.errors[0][1], connection.errors[0][2]
+    assert code == "invalid_format"
+    assert "wellbeing_confirm" in message
+    assert "Boolean" in message
+
+
+@pytest.mark.parametrize(
+    "mixed",
+    [
+        {"daily_goal_ml": 2500, "wellbeing_confirm": "true"},
+        # Zweiter Fall deckt den echten Teil-Update-Pfad ab: `drink_lexicon`
+        # wird VOR dem Skalar-Schema übernommen — bei einem Schema-Fehler darf
+        # es trotzdem nicht in den Updates landen.
+        {
+            "daily_goal_ml": 2500,
+            "drink_lexicon": "wasser=Wasser,250",
+            "wellbeing_confirm": "true",
+        },
+    ],
+)
+def test_req_hom_114_parse_settings_message_rejects_mixed_partial_update(mixed):
+    """[REQ-HOM-114] Ein ungültiger Schalter verwirft den GANZEN Payload.
+
+    Sonst würde ein gemischtes `set_settings` die gültigen Felder
+    stillschweigend persistieren, obwohl der Aufruf als Ganzes fehlschlägt.
+    """
+
+    updates, error = ws_api.parse_settings_message(mixed)
+    assert updates == {}
+    assert error is not None
+    assert "wellbeing_confirm" in error
+
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", **mixed),
+        )
+    )
+
+    assert connection.results == []
+    assert hass.config_entries.updates == [], "es wurde ein Teil-Update persistiert"
+    assert connection.errors[0][1] == "invalid_format"
+    assert "wellbeing_confirm" in connection.errors[0][2]
+
+
+def test_req_hom_114_parse_settings_message_roundtrip():
+    """[REQ-HOM-114] `parse_settings_message` → Options → `build_settings`."""
+    updates, error = ws_api.parse_settings_message({"wellbeing_confirm": True})
+
+    assert error is None
+    assert updates == {"wellbeing_confirm": True}
+
+    entry = _entry("e1", options=updates)
+    assert ws_api.build_settings(entry)["wellbeing_confirm"] is True
+
+
+def test_req_hom_114_parse_settings_message_rejects_string_bool():
+    """[REQ-HOM-114] `"false"` ist kein Boolean — präzise Feldmeldung."""
+    updates, error = ws_api.parse_settings_message({"wellbeing_confirm": "false"})
+
+    assert updates == {}
+    assert error is not None
+    assert "wellbeing_confirm" in error
+    assert "Boolean" in error
+
+
+@pytest.mark.parametrize(
+    ("options", "expected"),
+    [
+        ({}, False),
+        ({"wellbeing_confirm": False}, False),
+        ({"wellbeing_confirm": True}, True),
+    ],
+)
+def test_req_hom_114_panel_data_carries_wellbeing_confirm(monkeypatch, options, expected):
+    """[REQ-HOM-114] Der Detail-Tab kennt die Option ohne `get_settings`."""
+    entry = _entry("e1", options=options)
+    hass = _panel_hass({}, entry, [], monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload is not None
+    assert payload["wellbeing_confirm"] is expected
+    assert isinstance(payload["wellbeing_confirm"], bool)

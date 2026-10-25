@@ -135,3 +135,7 @@ WELLBEING_STATES: list[dict] = [
 
 # Options-Schlüssel für eigene PNG/JPG-Bilder je Wellbeing-Key.
 WELLBEING_IMAGES_OPTION = "wellbeing_images"
+
+# Options-Schlüssel (REQ-HOM-114): Wohlbefinden-Auswahl erst nach Bestätigung
+# übernehmen. Default aus = bisheriges Sofort-Verhalten.
+OPTION_WELLBEING_CONFIRM = "wellbeing_confirm"

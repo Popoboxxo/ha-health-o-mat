@@ -85,6 +85,10 @@ function settingsForm(panel, settings, entryId, loadError) {
   const areas = normalizeAreas(s.areas);
   const images =
     s.wellbeing_images && typeof s.wellbeing_images === "object" ? s.wellbeing_images : {};
+  const confirmWellbeing =
+    s.wellbeing_confirm == null
+      ? SETTINGS_FALLBACKS.wellbeing_confirm
+      : s.wellbeing_confirm === true;
 
   const banner = loadError
     ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(loadError)}</div>`
@@ -137,6 +141,10 @@ function settingsForm(panel, settings, entryId, loadError) {
           <code>/local/...</code>-Pfad, HTTP(S)-URL oder PNG/JPEG/WebP-Data-URI.
           Leer = Emoji.
         </div>
+        <label class="check">
+          <input type="checkbox" data-field="wellbeing_confirm"${confirmWellbeing ? " checked" : ""} />
+          <span>Wohlbefinden: Bestätigung vor Übernahme</span>
+        </label>
         <div class="settings-grid">
           ${WELLBEING_STATES.map(
             (state) => `<label class="field">${escapeHtml(state.emoji)} ${escapeHtml(state.label)}

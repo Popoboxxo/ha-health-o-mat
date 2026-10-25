@@ -27,6 +27,7 @@
  *   show_blood_pressure_input: true
  *   show_wellbeing_input: true
  *   show_wellbeing_numeric: true  # numeric 1..10 input next to the emojis
+ *   wellbeing_confirm: false      # card asks for confirmation before reporting
  *   show_undo: true
  *   # Person binding
  *   person_mode: selector|fixed   # default: fixed with entry_id, else selector
@@ -318,6 +319,16 @@ const CARD_CSS = `
     background: var(--primary-color, #03a9f4);
     color: var(--text-primary-color, #fff);
   }
+  /* Vorgemerkte, noch nicht gemeldete Auswahl (REQ-HOM-114): bewusst anders
+   * als der gespeicherte active-Zustand — gestrichelter Primärrahmen. */
+  .wb-actions button.pending {
+    outline: 2px dashed var(--primary-color, #03a9f4); outline-offset: 1px;
+    border-color: var(--primary-color, #03a9f4);
+  }
+  .wb-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .wb-confirm .wb-pending-hint {
+    flex: 1 1 auto; font-size: .82rem; color: var(--secondary-text-color, #727272);
+  }
   @media (max-width: 380px) { .wb-actions button .ml { display: none; } }
   .editor { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
   .editor label { font-size: .85rem; color: var(--secondary-text-color, #727272); }
@@ -460,6 +471,10 @@ function normalizeCardConfig(raw) {
     manualAmounts: normalizeAmountList(source.manual_amounts),
     allowCustomAmount: toBool(source.allow_custom_amount, true),
     quickDrinks: normalizeLegacyQuickDrinks(source.quick_drinks),
+    /* REQ-HOM-114: bewusst NICHT in `CARD_SHOW_KEYS` (das sind die reinen
+     * `show_*`-Schalter mit Default `true`) — dieser Schalter ist Default
+     * `false` und unabhängig von der Panel-/Server-Option. */
+    wellbeingConfirm: toBool(source.wellbeing_confirm, false),
   };
 }
 
@@ -778,6 +793,9 @@ class HealthOMatCard extends HTMLElement {
     this._bpError = "";
     this._wbError = "";
     this._wbScoreDraft = "";
+    /* REQ-HOM-114: vorgemerkte, noch nicht gemeldete Wohlbefinden-Auswahl
+     * (`{kind: "key"|"score", key, score}`) — nur bei `wellbeing_confirm`. */
+    this._wbPending = null;
     /* Fehler einer AKTION (buchen/undo) — eigener Kanal, damit er auch
      * sichtbar bleibt, wenn Daten bereits geladen sind (`_error` ist fuer
      * Ladefehler reserviert). */
@@ -815,6 +833,7 @@ class HealthOMatCard extends HTMLElement {
     this._bpError = "";
     this._wbError = "";
     this._wbScoreDraft = "";
+    this._wbPending = null;
     this._actionError = "";
     this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     this._amountDraft = "";
@@ -923,6 +942,10 @@ class HealthOMatCard extends HTMLElement {
         } else {
           entryId = allowed[0].entry_id;
         }
+        /* Wechselt die aktive Person ohne `_onSelectChange` (Person faellt
+         * aus Filter/Liste), gehoert die Vormerkung zur alten Person und muss
+         * verworfen werden (REQ-HOM-114). */
+        if (entryId !== this._activeEntry) this._wbPending = null;
         this._activeEntry = entryId;
       } else {
         this._persons = null;
@@ -1131,6 +1154,54 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
+  /* ---- Wohlbefinden-Bestätigung (REQ-HOM-114) ------------------------------ */
+
+  /* Bestätigungsmodus der Karte: unabhängig von der Panel-/Server-Option. */
+  _wellbeingConfirmEnabled() {
+    return this._configNorm().wellbeingConfirm === true;
+  }
+
+  /* Merkt die Auswahl nur vor — gemeldet wird sie erst mit „Übernehmen". */
+  _stageWellbeing(key, score) {
+    this._wbPending = {
+      /* Personenbezug: die Karte darf eine Vormerkung nur unter der Person
+       * anzeigen/übernehmen, für die sie entstanden ist (REQ-HOM-114). */
+      entryId: this._activeEntry || "",
+      kind: score == null ? "key" : "score",
+      key: key == null ? "" : String(key),
+      score: score == null ? null : Number(score),
+    };
+    this._wbError = "";
+    this._render();
+  }
+
+  /* Nur eine Vormerkung der aktuell gewählten Person gilt (REQ-HOM-114). */
+  _wbPendingFor() {
+    const pending = this._wbPending;
+    if (!pending || pending.entryId !== this._activeEntry) return null;
+    return pending;
+  }
+
+  /* Zahlen-Eingabe: dieselbe Validierung wie `_reportWellbeingScore`, aber
+   * ohne Service-Aufruf (Bestätigungsmodus). */
+  _stageWellbeingScore(rawScore) {
+    const value = toNumber(rawScore, NaN);
+    const max = this._wellbeingScale().length;
+    if (!Number.isInteger(value) || value < 1 || value > max) {
+      this._wbError = `Bitte eine ganze Zahl zwischen 1 und ${max} eingeben.`;
+      this._render();
+      return;
+    }
+    this._stageWellbeing("", value);
+  }
+
+  async _confirmWellbeing() {
+    const pending = this._wbPendingFor();
+    if (!pending || this._busyWb) return;
+    if (pending.kind === "score") await this._reportWellbeingScore(pending.score);
+    else await this._reportWellbeing(pending.key);
+  }
+
   async _reportWellbeing(key) {
     if (!this._hass || this._busyWb) return;
     const status = key == null ? "" : String(key);
@@ -1145,6 +1216,8 @@ class HealthOMatCard extends HTMLElement {
           person: this._servicePerson(),
         })
       );
+      // Erfolgreich gemeldet: eine vorgemerkte Auswahl ist erledigt.
+      this._wbPending = null;
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1175,6 +1248,7 @@ class HealthOMatCard extends HTMLElement {
         })
       );
       this._wbScoreDraft = "";
+      this._wbPending = null;
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1302,9 +1376,19 @@ class HealthOMatCard extends HTMLElement {
     } else if (action === "save-bp") {
       this._saveBp();
     } else if (action === "wellbeing") {
-      this._reportWellbeing(target.getAttribute("data-key"));
+      if (this._wellbeingConfirmEnabled()) {
+        this._stageWellbeing(target.getAttribute("data-key"), null);
+      } else {
+        this._reportWellbeing(target.getAttribute("data-key"));
+      }
     } else if (action === "wellbeing-score") {
-      this._reportWellbeingScore(this._readInput("wb-score"));
+      if (this._wellbeingConfirmEnabled()) {
+        this._stageWellbeingScore(this._readInput("wb-score"));
+      } else {
+        this._reportWellbeingScore(this._readInput("wb-score"));
+      }
+    } else if (action === "wellbeing-confirm") {
+      this._confirmWellbeing();
     } else if (action === "undo") {
       this._undo();
     } else if (action === "retry") {
@@ -1328,6 +1412,7 @@ class HealthOMatCard extends HTMLElement {
       this._amountError = "";
       this._wbError = "";
       this._wbScoreDraft = "";
+      this._wbPending = null;
       this._actionError = "";
       this._activeEntry = nextEntry;
     }
@@ -1786,9 +1871,29 @@ class HealthOMatCard extends HTMLElement {
     const active = this._wellbeingCurrentKey();
     const busy = this._busyWb === true;
     const max = scale.length || WELLBEING_SCALE.length;
+    /* Bestätigungsmodus (REQ-HOM-114): die vorgemerkte Auswahl wird nur
+     * markiert und erst mit „Übernehmen" gemeldet — und nur, wenn sie zur
+     * aktuell gewählten Person gehört. */
+    const pending = this._wellbeingConfirmEnabled() ? this._wbPendingFor() : null;
+    const pendingIndex = pending
+      ? pending.kind === "score"
+        ? Number.isInteger(pending.score)
+          ? pending.score - 1
+          : -1
+        : scale.findIndex((state) => state.key === pending.key)
+      : -1;
+    const staged = pendingIndex >= 0 ? scale[pendingIndex] : null;
+    const stagedKey = staged ? staged.key : "";
+    const pendingScore = pending
+      ? pending.kind === "score"
+        ? pending.score
+        : pendingIndex + 1
+      : null;
     const buttons = scale
       .map(
-        (state) => `<button class="wb-btn${state.key === active ? " active" : ""}"
+        (state) => `<button class="wb-btn${state.key === active ? " active" : ""}${
+          state.key === stagedKey ? " pending" : ""
+        }"
             data-action="wellbeing" data-key="${escapeHtml(state.key)}"
             aria-label="Wohlbefinden melden: ${escapeHtml(state.label)}"
             aria-pressed="${state.key === active ? "true" : "false"}"${
@@ -1799,6 +1904,16 @@ class HealthOMatCard extends HTMLElement {
           </button>`
       )
       .join("");
+    const confirmRow = staged
+      ? `<div class="wb-confirm">
+          <span class="wb-pending-hint">Ausgewählt: ${escapeHtml(staged.label)}${
+            pendingScore != null && pendingScore > 0 ? ` (${pendingScore} / ${max})` : ""
+          } \u2013 noch nicht gemeldet</span>
+          <button data-action="wellbeing-confirm" aria-label="Wohlbefinden-Auswahl übernehmen"${
+            busy ? " disabled" : ""
+          }><span>Übernehmen</span></button>
+        </div>`
+      : "";
     const numeric = this._flags().show_wellbeing_numeric
       ? `<div class="custom-amount">
           <input type="number" inputmode="numeric" min="1" max="${max}" step="1"
@@ -1817,7 +1932,7 @@ class HealthOMatCard extends HTMLElement {
     const status = busy
       ? `<div class="msg" role="status" aria-live="polite">Melde\u2026</div>`
       : "";
-    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${numeric}${status}${error}</div>`;
+    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
   }
 
   _undoAction() {
@@ -2039,6 +2154,14 @@ class HealthOMatCardEditor extends HTMLElement {
 
   _toggleFlag(key, checked) {
     const next = Object.assign({}, this._config);
+    if (key === "wellbeing_confirm") {
+      /* Default ist `false` (anders als die `show_*`-Schalter): an muss
+       * explizit gesetzt werden, aus entfernt den Key wieder. */
+      if (checked) next[key] = true;
+      else delete next[key];
+      this._setConfig(next, true);
+      return;
+    }
     if (key === "allow_custom_amount") {
       if (checked) delete next[key];
       else next[key] = false;
@@ -2183,6 +2306,11 @@ class HealthOMatCardEditor extends HTMLElement {
       : true;
   }
 
+  /* REQ-HOM-114: eigener Default (`false`) — `_effectiveFlag` liefert `true`. */
+  _effectiveWellbeingConfirm() {
+    return toBool(this._config.wellbeing_confirm, false);
+  }
+
   _selectedDrinkKeys() {
     const allKeys = this._drinkList.map((drink) => drink.key);
     const configured = normalizeDrinkKeys(this._config.drinks);
@@ -2242,6 +2370,10 @@ class HealthOMatCardEditor extends HTMLElement {
       ${this._checkbox("show_blood_pressure_input", "Blutdruck eingeben")}
       ${this._checkbox("show_wellbeing_input", "Wohlbefinden melden")}
       ${this._checkbox("show_wellbeing_numeric", "Wohlbefinden auch als Zahl (1–10)")}
+      <label class="editor-check">
+        <input type="checkbox" data-key="wellbeing_confirm"${this._effectiveWellbeingConfirm() ? " checked" : ""} />
+        <span>Wohlbefinden: Bestätigung vor Übernahme</span>
+      </label>
       ${this._checkbox("show_undo", "Letzte Buchung rückgängig")}
     </div>`;
   }
