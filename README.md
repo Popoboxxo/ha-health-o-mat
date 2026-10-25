@@ -650,6 +650,13 @@ Abgedeckt (`tests_e2e/test_panel_deeplink_e2e.py`, REQ-HOM-012):
 - Unbekannter/ungültiger Parameter → sichere Übersicht, kein Fehlerzustand
 - Ein per Feature-Toggle abgeschalteter Bereich blendet seinen Tab aus
 
+Zusätzlich (`tests_e2e/test_wellbeing_confirm_e2e.py`, REQ-HOM-114):
+
+- Karten-Option `wellbeing_confirm`: Klick merkt die Stufe nur vor, der
+  Bestätigungsbutton erscheint, erst dessen Klick schreibt den Wert
+- Panel-Admin-Option pro Person: Checkbox speichert, der Detail-Tab meldet erst
+  nach dem Bestätigungsbutton
+
 **Nicht Teil der Unit-Suite:** `pytest` im Repo-Root sammelt weiterhin nur
 `tests/` ein. Die Browser-Suite hat eine eigene Konfiguration
 (`tests_e2e/pytest.ini`) und läuft nur bei explizitem Aufruf.

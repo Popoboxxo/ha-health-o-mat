@@ -785,9 +785,12 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     „Karten-Konfiguration", Default `false`, ausdrücklich unabhängig von der
     Panel-/Server-Option) und die Admin-Option (Abschnitt
     „Admin-/Settings-Ansicht").
-  - [x] Unit-Test-Beleg: `pytest -q` → **807 passed**; `ruff check .` clean —
-    **Implementierer-Angabe** aus dem Working Tree; die parallel laufende
-    Verifikation durch den Tester bleibt abzuwarten.
+  - [x] **Unit-Test-Beleg:** `pytest -q` → **812 passed**; `ruff check .` clean.
+  - [x] **E2E-Beleg:** `pytest tests_e2e/ -v` gegen eine reale HA-Instanz
+    (Docker, HA `stable`) → **15 passed**, davon **2 neue** Fälle in
+    `tests_e2e/test_wellbeing_confirm_e2e.py`: Karten-Option (Vormerkung,
+    kein Server-Write vor Bestätigung, Übernahme per Button) und Panel-Admin-
+    Option (Checkbox speichert, Panel meldet erst nach Bestätigung).
 
 ---
 
