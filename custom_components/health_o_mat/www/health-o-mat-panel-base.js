@@ -94,6 +94,9 @@ export const WS = {
   undoLast: "health_o_mat/undo_last",
   saveMeasurement: "health_o_mat/save_measurement",
   setWellbeing: "health_o_mat/set_wellbeing",
+  listHistory: "health_o_mat/list_history",
+  voidEntry: "health_o_mat/void_entry",
+  restoreEntry: "health_o_mat/restore_entry",
   getUiSettings: "health_o_mat/get_ui_settings",
   setUiSettings: "health_o_mat/set_ui_settings",
   // Admin-only (server-gated; see "Admin surface" above).
@@ -103,6 +106,8 @@ export const WS = {
   startPersonFlow: "health_o_mat/start_person_flow",
   deletePerson: "health_o_mat/delete_person",
   backup: "health_o_mat/backup",
+  restoreBackup: "health_o_mat/restore_backup",
+  listImportFiles: "health_o_mat/list_import_files",
 };
 
 /* Feature areas per person (mirrors areas.py). A missing key means "enabled". */
@@ -120,6 +125,37 @@ export const TABS = [
   { key: "bp", label: "Blutdruck", area: "bp" },
   { key: "wellbeing", label: "Wohlbefinden", area: "wellbeing" },
 ];
+
+/* Detail-Tab -> kanonisches Korrektur-Ziel der History-API. */
+export const TAB_HISTORY_KIND = {
+  drink: "drinks",
+  bp: "blood_pressure",
+  wellbeing: "wellbeing",
+};
+
+/* Korrektur-Ziel -> Anzeige-Label (Filter/Statustexte). */
+export const HISTORY_KIND_LABELS = {
+  drinks: "Getränke",
+  blood_pressure: "Blutdruck",
+  wellbeing: "Wohlbefinden",
+};
+
+/* Maximal gerenderte Einträge je Verlauf (die API liefert bereits neueste
+ * zuerst; der Deckel hält die Liste mobil kurz). */
+export const HISTORY_LIMIT = 50;
+
+/* Restore-Verwaltung (REQ-HOM-116 UI): Datensätze und Bestätigungswort
+ * spiegeln `restore.DATASETS`/`restore.REPLACE_CONFIRM`. */
+export const RESTORE_DATASETS = [
+  { value: "drinks", label: "Getränke" },
+  { value: "blood_pressure", label: "Blutdruck" },
+  { value: "wellbeing", label: "Wohlbefinden" },
+];
+export const RESTORE_MODES = [
+  { value: "merge", label: "Zusammenführen" },
+  { value: "replace", label: "Ersetzen" },
+];
+export const RESTORE_CONFIRM_WORD = "REPLACE";
 
 /* Admin settings form. Structural limits mirror the backend schema so obvious
  * mistakes are caught before a round-trip; they are NOT a security boundary —
@@ -373,7 +409,7 @@ export const PANEL_CSS = `
   .wb-btn:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
   .wb-btn .emoji { font-size: 1.9rem; line-height: 1; }
   .wb-btn .wb-img { width: 2.1rem; height: 2.1rem; object-fit: cover; border-radius: 50%; }
-  .wb-hist .wb-img, .tile-row .wb-img { width: 1.4rem; height: 1.4rem; object-fit: cover; border-radius: 50%; }
+  .history-item .wb-img, .tile-row .wb-img { width: 1.4rem; height: 1.4rem; object-fit: cover; border-radius: 50%; }
   .wb-btn .lbl { font-size: .72rem; color: var(--secondary-text-color, #727272); text-align: center; }
   .wb-btn.active { border-color: var(--primary-color, #03a9f4);
     background: var(--secondary-background-color, rgba(3,169,244,.1)); }
@@ -388,18 +424,45 @@ export const PANEL_CSS = `
     color: var(--secondary-text-color, #727272); }
   @media (max-width: 400px) { .wb-btn .lbl { display: none; } }
 
-  .wb-history { display: flex; flex-direction: column; gap: 4px;
-    list-style: none; margin: 0; padding: 0; }
-  .wb-hist { display: flex; align-items: center; gap: 8px; min-width: 0;
-    font-size: .82rem; color: var(--primary-text-color, #212121);
-    padding: 4px 0; border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
-  .wb-hist:last-child { border-bottom: none; }
-  .wb-hist .emoji { font-size: 1.2rem; line-height: 1; flex: none; }
-  .wb-hist-label { flex: 1 1 auto; min-width: 0; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; }
-  .wb-hist-time { flex: none; font-size: .72rem; color: var(--secondary-text-color, #727272); }
-  .wb-hist-score { flex: none; font-weight: 600; font-size: .78rem;
-    color: var(--primary-color, #03a9f4); white-space: nowrap; }
+  /* --- Verlauf / Korrekturen (REQ-HOM-115) ------------------------------- */
+  .history-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .history-head .muted { margin-left: auto; }
+  .history-filter { display: flex; flex-wrap: wrap; gap: 8px; }
+  .history-filter .chip {
+    font: inherit; cursor: pointer; min-height: 44px; padding: 8px 12px;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2)); border-radius: 999px;
+    background: transparent; color: var(--primary-text-color, #212121);
+  }
+  .history-filter .chip.active {
+    border-color: var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4);
+    background: var(--secondary-background-color, rgba(3,169,244,.1)); font-weight: 600;
+  }
+  .history-filter .chip:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+  .history-list { list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; }
+  .history-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    min-width: 0; padding: 8px 0;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
+  .history-item:last-child { border-bottom: none; }
+  .history-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    min-width: 0; flex: 1 1 220px; font-size: .85rem; }
+  .history-main .emoji { font-size: 1.2rem; line-height: 1; flex: none; }
+  .history-time { flex: none; font-size: .72rem;
+    color: var(--secondary-text-color, #727272); }
+  .history-text { min-width: 0; overflow-wrap: anywhere; }
+  .history-item.voided .history-time, .history-item.voided .history-text {
+    text-decoration: line-through; opacity: .7; }
+  .history-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .history-actions .btn { min-height: 44px; padding: 8px 12px; font-size: .8rem; }
+  .history-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    font-size: .8rem; }
+  .history-confirm .btn { min-height: 44px; padding: 8px 12px; font-size: .8rem; }
+  .history-status.ok { color: var(--success-color, #43a047); }
+  @media (max-width: 400px) {
+    .history-item { align-items: flex-start; }
+    .history-actions { margin-left: 0; width: 100%; }
+    .history-actions .btn { flex: 1 1 auto; }
+  }
 
   /* --- Blutdruck-Verlauf ------------------------------------------------- */
   .bp-chart { width: 100%; }
@@ -474,6 +537,26 @@ export const PANEL_CSS = `
     background: var(--secondary-background-color, rgba(0,0,0,.02));
   }
   .person-manage .kv { align-items: center; }
+
+  /* --- Restore-Verwaltung (REQ-HOM-116 UI) ------------------------------- */
+  .restore-row { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 600px) {
+    .restore-row { grid-template-columns: 1fr auto; align-items: end; }
+  }
+  .restore-datasets { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .restore-advanced { border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+    border-radius: 12px; padding: 8px 12px; }
+  .restore-advanced summary { cursor: pointer; min-height: 44px; display: flex;
+    align-items: center; font-size: .88rem; font-weight: 600; }
+  .restore-advanced .field { margin-top: 8px; }
+  .restore-advanced textarea { min-height: 96px; }
+  .restore-result { display: flex; flex-direction: column; gap: 6px;
+    border-radius: 12px; padding: 10px 12px;
+    background: var(--secondary-background-color, rgba(0,0,0,.04)); }
+  .restore-result.ok { border-left: 4px solid var(--success-color, #43a047); }
+  .restore-result.err { border-left: 4px solid var(--error-color, #db4437); }
+  .restore-result ul { margin: 0; padding-left: 18px; font-size: .82rem; }
+  .restore-result li { overflow-wrap: anywhere; }
 `;
 
 /* --- pure helpers --------------------------------------------------------- */

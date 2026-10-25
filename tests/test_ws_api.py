@@ -791,6 +791,7 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_START_PERSON_FLOW,
     ws_api.COMMAND_DELETE_PERSON,
     ws_api.COMMAND_BACKUP,
+    ws_api.COMMAND_LIST_IMPORT_FILES,
     ws_api.COMMAND_RESTORE_BACKUP,
 )
 
@@ -2666,6 +2667,7 @@ def test_admin_only_commands_are_marked():
         ws_api.COMMAND_DELETE_PERSON,
         ws_api.COMMAND_BACKUP,
         ws_api.COMMAND_RESTORE_BACKUP,
+        ws_api.COMMAND_LIST_IMPORT_FILES,
     }
     for command in (
         ws_api.COMMAND_BOOK_DRINK,
@@ -3785,3 +3787,65 @@ def test_req_hom_120_ws_without_ts_keeps_now(monkeypatch):
     )
 
     assert store.add_drink.await_args.args[1] == NOW.isoformat()
+
+
+# --- M3b: list_import_files (Admin-Restore-UI, REQ-HOM-116) -----------------
+
+
+def _import_dir(tmp_path):
+    folder = tmp_path / "health_o_mat_import"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def test_list_import_files_lists_only_regular_files_sorted(tmp_path):
+    """[M3b] Nur reguläre Dateien, sortiert, keine Verzeichnisse/Symlinks."""
+    folder = _import_dir(tmp_path)
+    (folder / "zeta.json").write_text("{}", encoding="utf-8")
+    (folder / "Alpha.json").write_text("{}", encoding="utf-8")
+    (folder / "beta.json").write_text("{}", encoding="utf-8")
+    (folder / "unterordner").mkdir()
+    (folder / ".versteckt.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "aussen.json"
+    outside.write_text("{}", encoding="utf-8")
+    (folder / "symlink.json").symlink_to(outside)
+
+    files = ws_api._list_import_files(str(tmp_path))
+
+    assert files == ["Alpha.json", "beta.json", "zeta.json"]
+
+
+def test_list_import_files_missing_folder_is_empty(tmp_path):
+    """[M3b] Ein fehlender Import-Ordner ist kein Fehler."""
+    assert ws_api._list_import_files(str(tmp_path)) == []
+
+
+def test_list_import_files_ws_command_is_admin_only_and_returns_names(tmp_path):
+    """[M3b] WS-Kommando ist admin-only und liefert ausschließlich Basisnamen."""
+    folder = _import_dir(tmp_path)
+    (folder / "backup.json").write_text("{}", encoding="utf-8")
+
+    hass = FakeHass()
+    hass.config = SimpleNamespace(config_dir=str(tmp_path))
+    connection = FakeConnection(is_admin=True)
+
+    asyncio.run(ws_api.websocket_list_import_files(hass, connection, {"id": 7}))
+
+    assert connection.errors == []
+    assert connection.results == [(7, {"files": ["backup.json"]})]
+    assert ws_api.COMMAND_LIST_IMPORT_FILES in ws_api.ADMIN_ONLY_COMMANDS
+
+
+def test_list_import_files_ws_command_rejects_non_admin(tmp_path):
+    """[M3b] Nicht-Admins erhalten keine Dateiliste (Server-Gate, nicht nur UI)."""
+    folder = _import_dir(tmp_path)
+    (folder / "backup.json").write_text("{}", encoding="utf-8")
+
+    hass = FakeHass()
+    hass.config = SimpleNamespace(config_dir=str(tmp_path))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(ws_api.websocket_list_import_files(hass, connection, {"id": 8}))
+
+    assert connection.results == []
+    assert connection.errors

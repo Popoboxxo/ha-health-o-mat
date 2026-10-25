@@ -31,7 +31,16 @@ _CARD_JS = os.path.join(
 )
 
 # Erlaubte WS-Kommandos der eingebetteten Karte (nur lesend, kein Admin).
-_ALLOWED_WS_COMMANDS = {"list_persons", "panel_data", "subscribe"}
+_ALLOWED_WS_COMMANDS = {
+    "list_persons",
+    "panel_data",
+    "subscribe",
+    # REQ-HOM-115: Verlauf lesen und einzelne Einträge korrigieren (kein
+    # Admin-Vorgang, dieselbe API wie im Panel).
+    "list_history",
+    "void_entry",
+    "restore_entry",
+}
 
 # Admin-/Settings-Kommandos, die NIE in der Karte auftauchen dürfen.
 _FORBIDDEN_WS_COMMANDS = {
@@ -43,6 +52,8 @@ _FORBIDDEN_WS_COMMANDS = {
     "backup",
     "set_ui_settings",
     "get_ui_settings",
+    "restore_backup",
+    "list_import_files",
 }
 
 # Die sieben WHO-Blutdruck-Kategorien (logic.bp_category).
@@ -1687,3 +1698,272 @@ def test_req_hom_120_card_time_label_relative_then_absolute():
     # Beide Anzeigepfade (BD, Wohlbefinden) nutzen den Helfer.
     assert "_timeLabel(bp.at)" in text
     assert "_timeLabel(wb.at)" in text
+
+
+# --- M3b: Undo für alle Typen + optionaler Verlauf --------------------------
+
+
+def test_card_show_history_defaults_to_false_and_is_not_a_show_key():
+    """[M3b] `show_history` ist Default AUS und unabhängig von CARD_SHOW_KEYS."""
+    text = _card_source()
+    normalizer = _js_function_block(text, "normalizeCardConfig")
+    keys = re.search(r"CARD_SHOW_KEYS\s*=\s*\[(.*?)\]", text, re.S)
+    assert keys is not None
+    assert "show_history" not in keys.group(1), "show_history darf nicht in CARD_SHOW_KEYS stehen"
+    assert re.search(r"showHistory:\s*toBool\(\s*source\.show_history\s*,\s*false\s*\)", normalizer)
+
+    editor = _js_class_block(text, "HealthOMatCardEditor")
+    inputs = _js_method_block(editor, "_inputSection")
+    assert 'data-key="show_history"' in inputs
+    assert "Verlauf anzeigen (letzte 5)" in inputs
+    assert 'key === "show_history"' in _js_method_block(editor, "_toggleFlag")
+
+
+def test_card_undo_and_history_use_the_expected_commands():
+    """[M3b] Card: kind-basiertes Undo, list_history mit include_voided."""
+    text = _card_source()
+    undo = _js_method_block(text, "_undo")
+    load = _js_method_block(text, "_loadHistory")
+
+    assert "remove_last_entry" in undo
+    assert "kind: undoKind" in undo
+    assert '"blood_pressure"' in undo and '"wellbeing"' in undo
+    assert "list_history" in load
+    assert "include_voided: true" in load, (
+        "die Karte kann gelöschte Einträge nicht wiederherstellen"
+    )
+    assert "history-void-confirm" in _js_method_block(text, "_historyBlock")
+    assert "Wirklich löschen?" in _js_method_block(text, "_historyBlock")
+    assert "history-restore" in _js_method_block(text, "_historyBlock")
+
+
+_NODE_CARD_HISTORY_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+  setAttribute() {}
+  removeAttribute() {}
+  dispatchEvent() { return true; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) { this.type = type; this.detail = init && init.detail; }
+  },
+  customElements: { get: () => undefined, define: () => {} },
+  window: {},
+  document: { createElement: () => ({}), addEventListener: () => {} },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  __out: null,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const promise = vm.runInContext(
+  `(async () => {
+  function makeCard() {
+    const card = new HealthOMatCard();
+    card._config = { entry_id: "e1", show_history: true };
+    card._activeEntry = "e1";
+    card._data = {
+      person: "Caro",
+      person_anchor: "caro",
+      undo: { drink: true, blood_pressure: true },
+      wellbeing: { key: "good", at: "2026-10-19T18:00:00+02:00" },
+      areas: { drink: true, bp: true, wellbeing: true },
+      wellbeing_scale: [
+        { key: "bad", label: "Schlecht" },
+        { key: "good", label: "Gut" },
+      ],
+    };
+    card._render = () => {};
+    card._loads = 0;
+    card._loadData = () => { card._loads += 1; return Promise.resolve(); };
+    card._calls = [];
+    card._wsCalls = [];
+    card._payloads = {
+      drinks: Array.from({ length: 7 }, (_, i) => ({
+        id: "d" + i,
+        ts: "2026-10-19T0" + (i % 9) + ":00:00+02:00",
+        ml: 200,
+        type: "Wasser",
+        voided_at: i === 1 ? "2026-10-19T10:00:00+02:00" : null,
+      })),
+      blood_pressure: [{ id: "b1", ts: "2026-10-19T07:00:00+02:00", sys: 120, dia: 80 }],
+      wellbeing: [{ id: "w1", ts: "2026-10-19T18:00:00+02:00", key: "good" }],
+    };
+    card._hass = {
+      callService: (domain, service, payload) => {
+        card._calls.push([domain, service, payload]);
+        return Promise.resolve();
+      },
+      callWS: (msg) => {
+        card._wsCalls.push(msg);
+        if (msg.type === "health_o_mat/list_history") {
+          return Promise.resolve({ kind: msg.kind, entries: card._payloads[msg.kind] || [] });
+        }
+        return Promise.resolve({});
+      },
+      states: {},
+    };
+    return card;
+  }
+
+  const history = makeCard();
+  await history._loadHistory();
+  const loaded = {
+    calls: history._wsCalls.slice(),
+    drinks: history._history.drinks.entries.length,
+    voidedVisible: history._history.drinks.entries.some((entry) => entry.voided_at),
+  };
+
+  const blockCard = makeCard();
+  blockCard._history = {
+    drinks: {
+      entries: blockCard._payloads.drinks.slice(0, 2),
+      loading: false,
+      loaded: true,
+      error: "",
+    },
+  };
+  const blockHtml = blockCard._historyBlock("drinks");
+  blockCard._beginHistoryVoid("drinks", "d0");
+  const confirmHtml = blockCard._historyBlock("drinks");
+
+  const voided = makeCard();
+  await voided._setHistoryEntryVoided("drinks", "d0", false);
+  const voidResult = {
+    call: voided._wsCalls[0],
+    loads: voided._loads,
+    confirm: voided._historyConfirm,
+  };
+
+  const restored = makeCard();
+  await restored._setHistoryEntryVoided("drinks", "d1", true);
+  const restoreResult = { call: restored._wsCalls[0], loads: restored._loads };
+
+  const undoBp = makeCard();
+  undoBp._history.blood_pressure = { entries: [{ id: "b1" }], loading: false, loaded: true };
+  await undoBp._undo("blood_pressure");
+
+  const undoWb = makeCard();
+  undoWb._history.wellbeing = { entries: [{ id: "w1" }], loading: false, loaded: true };
+  await undoWb._undo("wellbeing");
+
+  const editor = new HealthOMatCardEditor();
+  editor._config = { entry_id: "e1" };
+  editor._render = () => {};
+  const events = [];
+  editor.dispatchEvent = (event) => { events.push(event); return true; };
+  editor._toggleFlag("show_history", true);
+  const on = Object.assign({}, editor._config);
+  const eventOn = events[events.length - 1].detail.config;
+  editor._toggleFlag("show_history", false);
+  const off = Object.assign({}, editor._config);
+
+  __out = {
+    normalizer: {
+      default: normalizeCardConfig({}).showHistory,
+      enabled: normalizeCardConfig({ show_history: true }).showHistory,
+    },
+    loaded,
+    blockHtml,
+    confirmHtml,
+    htmlWithoutHistory: (() => {
+      const plain = makeCard();
+      plain._config = { entry_id: "e1" };
+      return plain._historyBlock("drinks");
+    })(),
+    voidResult,
+    restoreResult,
+    undoBp: undoBp._calls,
+    undoWb: undoWb._calls,
+    editor: {
+      on,
+      off,
+      eventOn,
+      hasOn: Object.prototype.hasOwnProperty.call(on, "show_history"),
+      hasOff: Object.prototype.hasOwnProperty.call(off, "show_history"),
+    },
+  };
+  return __out;
+  })()`,
+  context,
+  { filename: "card-history-probe.js" }
+);
+process.stdout.write(JSON.stringify(await promise));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_card_history_and_undo_for_all_kinds(tmp_path):
+    """[M3b] History lädt inkl. gelöschter Einträge, Void/Restore + Undo BP/WB."""
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_history.mjs"
+    runner_path.write_text(_NODE_CARD_HISTORY_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    out = json.loads(result.stdout)
+
+    assert out["normalizer"] == {"default": False, "enabled": True}
+    loaded = out["loaded"]
+    assert [call["kind"] for call in loaded["calls"]] == [
+        "drinks",
+        "blood_pressure",
+        "wellbeing",
+    ]
+    assert all(call["include_voided"] is True for call in loaded["calls"])
+    assert loaded["drinks"] == 5, "die Karte zeigt nicht maximal 5 Einträge"
+    assert loaded["voidedVisible"] is True, "gelöschte Einträge fehlen im Kartenverlauf"
+
+    assert 'data-history="drinks"' in out["blockHtml"]
+    assert "Wasser" in out["blockHtml"] and "gelöscht" in out["blockHtml"]
+    assert 'data-action="history-restore"' in out["blockHtml"]
+    assert 'data-action="history-void"' in out["blockHtml"]
+    assert "Wirklich löschen?" in out["confirmHtml"]
+    assert 'data-action="history-void-confirm"' in out["confirmHtml"]
+    assert out["htmlWithoutHistory"] == "", "show_history=false rendert dennoch einen Verlauf"
+
+    assert out["voidResult"]["call"]["type"] == "health_o_mat/void_entry"
+    assert out["voidResult"]["call"]["item_id"] == "d0"
+    assert out["voidResult"]["loads"] == 1
+    assert out["voidResult"]["confirm"] is None
+    assert out["restoreResult"]["call"]["type"] == "health_o_mat/restore_entry"
+    assert out["restoreResult"]["call"]["item_id"] == "d1"
+
+    assert out["undoBp"] == [
+        ["health_o_mat", "remove_last_entry", {"person": "caro", "kind": "blood_pressure"}]
+    ]
+    assert out["undoWb"] == [
+        ["health_o_mat", "remove_last_entry", {"person": "caro", "kind": "wellbeing"}]
+    ]
+
+    editor = out["editor"]
+    assert editor["hasOn"] is True and editor["on"]["show_history"] is True
+    assert editor["eventOn"].get("show_history") is True
+    assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default false)"

@@ -766,6 +766,16 @@ const panel = {
   _actionError: "",
   _busy: false,
   _wbPending: spec.pending || null,
+  _history: spec.history || {},
+  _historyFilter: spec.historyFilter || {},
+  _historyConfirm: spec.historyConfirm || null,
+  _historyStatus: spec.historyStatus || null,
+  _historyBusy: false,
+  _canUndo: (entryId, kind) => {
+    const flags = spec.canUndo || {};
+    return Object.prototype.hasOwnProperty.call(flags, kind) ? flags[kind] : true;
+  },
+  _isWarning: () => false,
   _liveValue: (data, key, fallback) => (key === "wellbeing" ? spec.live_wellbeing : fallback),
   _liveNumber: (data, key, fallback) => (key === "wellbeing_score" ? spec.live_score : fallback),
 };
@@ -1402,117 +1412,158 @@ def test_req_hom_112_card_falls_back_to_snapshot_label_and_emoji(tmp_path):
 # --- Wohlbefinden-Verlauf unter dem Chart (Plan §6 / Decision E6) -----------
 
 
-def _wellbeing_history_css(text: str) -> str:
-    """CSS-Regeln der Verlaufsliste (`.wb-history` / `.wb-hist…`)."""
-    return "\n".join(re.findall(r"\.wb-hi(?:story|st)[^{]*\{[^}]*\}", text))
+def test_panel_wellbeing_history_uses_the_history_api_only():
+    """[REQ-HOM-115] WB-Verlauf kommt aus `historySection` — keine Dopplung.
 
-
-def test_panel_wellbeing_history_lists_time_emoji_label_and_score():
-    """[REQ-HOM-112] Die Verlaufsliste unter dem Chart zeigt alle vier Felder.
-
-    Die Liste bleibt reine Anzeige: kein rohes JSON, alle Texte escaped.
+    Die bisherige Liste aus `wellbeing.history` ist ersetzt: der Tab rendert
+    die API-Liste (eine Quelle), `wellbeing.history` speist nur den Chart.
     """
     views = _panel_views_source()
     body = _js_function_block(views, "wellbeingTab")
 
-    # Letzte 20 Eintraege aus `wellbeing.history`, als Liste unter dem Chart.
-    assert "slice(-20)" in body
-    # Neueste Meldung oben; der Chart bleibt unveraendert chronologisch.
-    assert re.search(r"slice\(-20\)\s*\.reverse\(\)", body), (
-        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
+    assert 'historySection(panel, entryId, "wellbeing")' in body, (
+        "der Wohlbefinden-Tab rendert die History-API-Liste nicht"
     )
-    assert 'class="wb-history"' in body
-    assert 'class="wb-hist-label"' in body
-    assert 'class="wb-hist-score"' in body
-    # Zeitpunkt (relativ frisch / absolut älter), Emoji, Label und Score …
-    assert "entryTime(entry.ts)" in body
-    assert "wellbeingScore(entry)" in body
-    assert "scoreMax" in body and "WELLBEING_SCORE_MAX" in body
-    assert "entry.emoji" in body and "entry.label" in body
-    # … alle Texte escaped, kein JSON-Dump.
-    for value in ("entryLabel", "entryAt"):
-        assert f"escapeHtml({value}" in body, f"{value} wird nicht escaped"
-    assert "wellbeingVisual(entryVisual)" in body, (
-        "Emoji/Bild wird nicht ueber wellbeingVisual gerendert"
+    assert 'class="wb-history"' not in views, (
+        "die alte WB-Verlaufsliste wird weiterhin gerendert (Dopplung)"
     )
-    assert "JSON.stringify" not in body, "die Historie wird als rohes JSON gerendert"
+    assert "histHtml" not in body, "die alte Verlaufsliste ist nicht entfernt"
 
-    # Reihenfolge: Chart zuerst, Liste darunter.
-    assert "${chartHtml}${histHtml}" in views, "die Verlaufsliste steht nicht unter dem Score-Chart"
+    history = _js_function_block(views, "historySection")
+    assert "slice(0, HISTORY_LIMIT)" in history, "die Liste ist nicht auf 50 gedeckelt"
+    assert 'data-action="history-filter"' in history
+    assert "aria-pressed" in history
+    assert 'class="history-list"' in history
+    assert 'class="history-item' in views, "die Verlaufszeile fehlt"
+    assert 'data-action="history-void"' in views
+    assert 'data-action="history-restore"' in views
+    assert "Wirklich löschen?" in views
+    assert "gelöscht" in views
+    # Kein rohes JSON in der Liste.
+    assert "JSON.stringify" not in history
 
 
-def test_panel_wellbeing_history_css_is_mobile_readable():
-    """Die Verlaufsliste hat eigenes CSS (Zeile, Label, Zeit, Score)."""
-    css = _wellbeing_history_css(_panel_base_source())
+def test_panel_history_css_is_mobile_readable():
+    """[REQ-HOM-115] Verlauf: Liste, Zeit/Text/Status und <400 px ohne Überlauf."""
+    css = _panel_base_source()
 
-    assert css, "CSS fuer die Verlaufsliste fehlt im Basis-Modul"
-    for selector in (".wb-hist-label", ".wb-hist-time", ".wb-hist-score"):
-        assert selector in css, f"{selector} fehlt im CSS der Verlaufsliste"
+    for selector in (
+        ".history-list",
+        ".history-item",
+        ".history-time",
+        ".history-text",
+        ".history-actions",
+        ".history-confirm",
+        "@media (max-width: 400px)",
+    ):
+        assert selector in css, f"{selector} fehlt im CSS des Verlaufs"
+    assert "text-decoration: line-through" in css, "gelöschte Einträge sind nicht markiert"
+    assert "overflow-wrap: anywhere" in css, "lange Texte können überlaufen"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
-def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
-    """[REQ-HOM-112] Gerenderte Verlaufsliste: Emoji, Label, Zeit und Score.
+def test_panel_history_renders_kinds_filter_and_inline_confirm(tmp_path):
+    """[REQ-HOM-115] Gerenderte API-Liste: drei Typen, Filter, Confirm, Escaping.
 
-    Enthaelt zusaetzlich einen HOSTILE Eintrag (`<img …>`/`<b>` in Label und
-    Emoji): er muss escaped im Output landen, nicht als Markup.
+    Feeds come exclusively from `_history` (the list_history shape), including
+    a hostile label and a voided entry.
     """
     views_copy = _prepare_views_copy(tmp_path)
-    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
-    data["wellbeing"]["history"].append(
-        {
-            "ts": "2026-10-19T09:30:00+02:00",
-            "key": "great",
-            "label": "<img src=x onerror=alert(1)>",
-            "emoji": "<b>",
-            "score": 5,
+    entry = "entry-1"
+    history = {
+        entry: {
+            "drinks": {
+                "entries": [
+                    {
+                        "id": "d1",
+                        "ts": "2026-10-19T09:30:00+02:00",
+                        "ml": 250,
+                        "type": "Kaffee",
+                        "src": "panel",
+                        "voided_at": None,
+                    },
+                ],
+                "includeVoided": False,
+            },
+            "blood_pressure": {
+                "entries": [
+                    {
+                        "id": "b1",
+                        "ts": "2026-10-19T08:00:00+02:00",
+                        "sys": 120,
+                        "dia": 80,
+                        "pulse": 62,
+                        "note": "morgens",
+                        "voided_at": None,
+                    },
+                ],
+                "includeVoided": False,
+            },
+            "wellbeing": {
+                "entries": [
+                    {
+                        "id": "w1",
+                        "ts": "2026-10-19T09:30:00+02:00",
+                        "key": "great",
+                        "label": "<img src=x onerror=alert(1)>",
+                        "voided_at": None,
+                    },
+                    {
+                        "id": "w0",
+                        "ts": "2026-10-19T08:00:00+02:00",
+                        "key": "bad",
+                        "voided_at": "2026-10-19T10:00:00+02:00",
+                    },
+                ],
+                "includeVoided": True,
+            },
         }
-    )
-    spec = {
-        "entry_id": "entry-1",
-        "display_name": "Alex",
-        "live_wellbeing": "unknown",
-        "live_score": 4,
-        "data": data,
     }
+    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data["wellbeing"]["history"] = []  # Chart darf die Liste NICHT speisen.
 
-    out = json.loads(
-        _run_node(
-            tmp_path,
-            _NODE_VIEWS_RUNNER,
-            [str(views_copy), json.dumps(spec)],
-            "runner_panel_history",
-        )
-    )
-    html = out["html"]
+    def render(tab, confirm=None):
+        spec = {
+            "entry_id": entry,
+            "display_name": "Alex",
+            "live_wellbeing": "unknown",
+            "live_score": 4,
+            "data": data,
+            "history": history,
+            "historyConfirm": confirm,
+            "canUndo": {"blood_pressure": True, "wellbeing": True},
+        }
+        # Der Runner waehlt den Tab ueber `panel._tab`; hier direkt setzen.
+        runner = _NODE_VIEWS_RUNNER.replace('_tab: "wellbeing"', f'_tab: "{tab}"')
+        path = tmp_path / f"runner_{tab}.mjs"
+        path.write_text(runner, encoding="utf-8")
+        return json.loads(
+            _run_node(tmp_path, path.read_text(), [str(views_copy), json.dumps(spec)], f"r_{tab}")
+        )["html"]
 
-    match = re.search(r'<ul class="wb-history">(.*?)</ul>', html, re.S)
-    assert match is not None, "die Verlaufsliste fehlt im gerenderten Tab"
-    history_html = match.group(1)
+    drinks = render("drink")
+    assert 'data-history="drinks"' in drinks
+    assert "250 ml" in drinks and "Kaffee" in drinks and "Panel" in drinks
+    assert 'data-action="history-void"' in drinks
+    assert 'aria-pressed="true"' in drinks
 
-    # Der Historieneintrag traegt Label, Emoji, relativen Zeitpunkt und Score.
-    assert "Sehr schlecht" in history_html
-    assert "\U0001f635" in history_html
-    assert "1 / 10" in history_html
-    assert re.search(r"vor \d+ |gerade eben|\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}", history_html), (
-        f"der Zeitpunkt der Verlaufsliste fehlt: {history_html}"
-    )
-    # Der aktuelle Live-Wert (4) gehoert NICHT in die Verlaufsliste.
-    assert "4 / 10" not in history_html
-    # Kein rohes JSON.
-    assert '{"' not in history_html
+    bp = render("bp")
+    assert "120/80" in bp and "62 bpm" in bp and "morgens" in bp
+    assert 'data-action="undo" data-kind="blood_pressure"' in bp
 
-    # Hostile Felder sind escaped — kein Markup aus Nutzerdaten.
-    assert "&lt;img src=x onerror=alert(1)&gt;" in history_html, (
-        f"das hostile Label ist nicht escaped: {history_html}"
-    )
-    assert "&lt;b&gt;" in history_html, f"das hostile Emoji ist nicht escaped: {history_html}"
-    assert "<img src=x" not in history_html
-    assert "<b>" not in history_html
-    # Neueste Meldung oben: der 09:30-Eintrag steht vor dem 08:00-Eintrag.
-    assert history_html.index("&lt;img src=x") < history_html.index("Sehr schlecht"), (
-        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
-    )
+    wb = render("wellbeing")
+    assert 'data-history="wellbeing"' in wb
+    assert "9 / 10" in wb
+    assert "gelöscht" in wb, "gelöschter Eintrag ist nicht markiert"
+    assert 'data-action="history-restore"' in wb
+    assert "&lt;img src=x onerror=alert(1)&gt;" in wb, "hostiles Label ist nicht escaped"
+    assert "<img src=x" not in wb
+    assert 'class="wb-history"' not in wb, "die alte WB-Liste ist wieder da"
+
+    confirm = render("drink", {"entryId": entry, "kind": "drinks", "id": "d1"})
+    assert "Wirklich löschen?" in confirm
+    assert 'data-action="history-void-confirm"' in confirm
+    assert 'data-action="history-void-cancel"' in confirm
 
 
 def test_panel_undo_is_disabled_without_drinks():
@@ -2364,3 +2415,470 @@ def test_req_hom_120_panel_entry_time_is_relative_then_absolute():
     assert "24 * 60 * 60 * 1000" in body
     assert re.search(r"pad\(date\.getDate\(\)\)", body)
     assert "entryTime(" in _panel_views_source()
+
+
+# --- REQ-HOM-115: Panel-Verlauf + Korrekturen (Verhalten) -------------------
+
+_NODE_PANEL_HISTORY_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+const ENTRY = "entry-1";
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = ENTRY;
+  panel._view = "detail";
+  panel._tab = "drink";
+  panel._persons = [{ entry_id: ENTRY, display_name: "Alex", person_slug: "alex" }];
+  panel._data = {
+    [ENTRY]: {
+      areas: { drink: true, bp: true, wellbeing: true },
+      undo: { drink: true, blood_pressure: true },
+      wellbeing: { key: "good", at: "2026-10-19T18:00:00+02:00" },
+    },
+  };
+  panel._busy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._failVoid = false;
+  panel._payloads = {
+    drinks: [
+      { id: "d1", ts: "2026-10-19T09:30:00+02:00", ml: 250, type: "Kaffee" },
+      { id: "d0", ts: "2026-10-19T08:00:00+02:00", ml: 200, type: "Wasser",
+        voided_at: "2026-10-19T10:00:00+02:00" },
+    ],
+    blood_pressure: [{ id: "b1", ts: "2026-10-19T07:00:00+02:00", sys: 120, dia: 80 }],
+    wellbeing: [{ id: "w1", ts: "2026-10-19T18:00:00+02:00", key: "good" }],
+  };
+  panel._ws = async (msg) => {
+    panel._messages.push(msg);
+    if (msg.type === "health_o_mat/panel_data") return panel._data[msg.entry_id];
+    if (msg.type === "health_o_mat/list_history") {
+      const includeVoided = msg.include_voided === true;
+      const all = panel._payloads[msg.kind] || [];
+      return { kind: msg.kind, entries: includeVoided ? all : all.filter((e) => !e.voided_at) };
+    }
+    if (msg.type === "health_o_mat/void_entry" && panel._failVoid) {
+      throw new Error("Server nicht erreichbar");
+    }
+    return { ok: true };
+  };
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function typesOf(panel) { return panel._messages.map((msg) => msg.type); }
+function lastOf(panel, type) {
+  const hits = panel._messages.filter((msg) => msg.type === type);
+  return hits.length ? hits[hits.length - 1] : null;
+}
+
+/* Öffnen lädt alle drei Verläufe; Default = nur aktive. */
+const opened = makePanel();
+await opened._openPerson(ENTRY, { silent: true });
+const openedState = {
+  types: typesOf(opened).filter((type) => type === "health_o_mat/list_history"),
+  includes: opened._messages
+    .filter((msg) => msg.type === "health_o_mat/list_history")
+    .map((msg) => msg.include_voided),
+  drinks: opened._history[ENTRY].drinks.entries.length,
+  loaded: opened._history[ENTRY].drinks.loaded,
+  canUndoDrinks: opened._canUndo(ENTRY, "drinks"),
+};
+
+/* Filter „Auch gelöscht" lädt mit include_voided neu. */
+const filtered = makePanel();
+await filtered._openPerson(ENTRY, { silent: true });
+filtered._messages = [];
+filtered._setHistoryFilter("drinks", true);
+await new Promise((resolve) => setTimeout(resolve, 0));
+const filterResult = {
+  includeVoided: filtered._history[ENTRY].drinks.includeVoided,
+  flag: filtered._historyFilter.drinks,
+  message: lastOf(filtered, "health_o_mat/list_history"),
+  entries: filtered._history[ENTRY].drinks.entries.length,
+};
+
+/* Inline-Bestätigung: erst der zweite Klick voidet (kein window.confirm). */
+const voided = makePanel();
+await voided._openPerson(ENTRY, { silent: true });
+voided._messages = [];
+voided._beginHistoryVoid(ENTRY, "drinks", "d1");
+const beforeConfirm = { confirm: voided._historyConfirm, sent: typesOf(voided) };
+await voided._confirmHistoryVoid(ENTRY, "drinks", "d1");
+const afterVoid = {
+  confirm: voided._historyConfirm,
+  status: voided._historyStatus,
+  voidMsg: lastOf(voided, "health_o_mat/void_entry"),
+  reloaded: typesOf(voided).includes("health_o_mat/panel_data"),
+  historyReloaded: typesOf(voided).filter((t) => t === "health_o_mat/list_history").length,
+};
+
+/* Wiederherstellen ruft restore_entry und aktualisiert. */
+const restored = makePanel();
+await restored._openPerson(ENTRY, { silent: true });
+restored._messages = [];
+await restored._setEntryVoided(ENTRY, "drinks", "d0", true);
+const restoreResult = {
+  msg: lastOf(restored, "health_o_mat/restore_entry"),
+  status: restored._historyStatus,
+};
+
+/* Fehlerpfad: Banner-Status statt Exception. */
+const failed = makePanel();
+failed._failVoid = true;
+await failed._openPerson(ENTRY, { silent: true });
+await failed._setEntryVoided(ENTRY, "drinks", "d1", false);
+const failedResult = {
+  status: failed._historyStatus,
+  sent: lastOf(failed, "health_o_mat/void_entry"),
+};
+
+/* Undo für BD/WB mit passendem kind. */
+const undone = makePanel();
+await undone._openPerson(ENTRY, { silent: true });
+undone._messages = [];
+await undone._undo(ENTRY, "blood_pressure");
+const undoBp = lastOf(undone, "health_o_mat/undo_last");
+undone._messages = [];
+await undone._undo(ENTRY, "wellbeing");
+const undoWb = lastOf(undone, "health_o_mat/undo_last");
+
+process.stdout.write(JSON.stringify({
+  opened: openedState,
+  filter: filterResult,
+  beforeConfirm,
+  afterVoid,
+  restore: restoreResult,
+  failed: failedResult,
+  undoBp,
+  undoWb,
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_115_panel_history_flow(tmp_path):
+    """[REQ-HOM-115] Laden/Filter/Void/Restore/Undo/Fehler ohne window.confirm."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_HISTORY_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_history",
+        )
+    )
+
+    opened = out["opened"]
+    assert sorted(opened["types"]) == [
+        "health_o_mat/list_history",
+        "health_o_mat/list_history",
+        "health_o_mat/list_history",
+    ], "beim Öffnen werden nicht alle drei Verläufe geladen"
+    assert opened["includes"] == [False, False, False], "Default ist nicht 'nur aktive'"
+    assert opened["drinks"] == 1 and opened["loaded"] is True
+    assert opened["canUndoDrinks"] is True
+
+    filtered = out["filter"]
+    assert filtered["flag"] is True and filtered["includeVoided"] is True
+    assert filtered["message"]["include_voided"] is True, "Filter lädt nicht neu"
+    assert filtered["entries"] == 2, "gelöschte Einträge fehlen nach dem Filterwechsel"
+
+    assert out["beforeConfirm"]["confirm"] == {
+        "entryId": "entry-1",
+        "kind": "drinks",
+        "id": "d1",
+    }
+    assert out["beforeConfirm"]["sent"] == [], "der erste Klick löscht sofort"
+    after = out["afterVoid"]
+    assert after["voidMsg"]["item_id"] == "d1"
+    assert after["confirm"] is None
+    assert after["status"]["ok"] is True and "gelöscht" in after["status"]["text"]
+    assert after["reloaded"] is True, "panel_data wird nach Void nicht neu geladen"
+    assert after["historyReloaded"] == 1, "der Verlauf wird nach Void nicht neu geladen"
+
+    assert out["restore"]["msg"]["item_id"] == "d0"
+    assert "wiederhergestellt" in out["restore"]["status"]["text"]
+
+    assert out["failed"]["sent"]["item_id"] == "d1", "void_entry wurde nicht versucht"
+    assert out["failed"]["status"]["ok"] is False
+    assert "Server nicht erreichbar" in out["failed"]["status"]["text"]
+
+    assert out["undoBp"]["kind"] == "blood_pressure"
+    assert out["undoWb"]["kind"] == "wellbeing"
+
+
+# --- REQ-HOM-116: Admin-Restore (Verhalten) ---------------------------------
+
+_NODE_PANEL_RESTORE_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+const admin = await import(pathToFileURL(process.argv[3]).href);
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._view = "settings";
+  panel._settingsEntry = "entry-1";
+  panel._selectedEntry = "entry-1";
+  panel._persons = [{ entry_id: "entry-1", display_name: "Alex" }];
+  panel._data = { "entry-1": { areas: {} } };
+  panel._settings = {};
+  panel._quickDraft = [];
+  panel._adminBusy = false;
+  panel._settingsBusy = false;
+  panel._deleteBusy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._failRestore = false;
+  panel._ws = async (msg) => {
+    panel._messages.push(msg);
+    if (panel._failRestore && msg.type === "health_o_mat/restore_backup") {
+      throw new Error("Backup kaputt");
+    }
+    if (msg.type === "health_o_mat/list_import_files") {
+      return { files: ["b_backup.json", "a_backup.json"] };
+    }
+    if (msg.type === "health_o_mat/list_persons") return { persons: panel._persons };
+    if (msg.type === "health_o_mat/panel_data") return panel._data[msg.entry_id];
+    if (msg.type === "health_o_mat/get_settings") return { daily_goal_ml: 2000 };
+    if (msg.type === "health_o_mat/restore_backup") {
+      return {
+        plan: {
+          mode: msg.mode,
+          persons: { alex: "entry-1" },
+          totals: { added: 3, skipped: 1, conflicts: 0, errors: 0 },
+          counts: {},
+          actions: [{ target: "entry-1", dataset: "drinks", op: "add", id: "d9" }],
+          actions_truncated: false,
+          errors: [],
+          warnings: ["Zeitzone fehlt"],
+          has_changes: true,
+        },
+        applied: !msg.dry_run,
+        dry_run: !!msg.dry_run,
+        backup_path: msg.dry_run ? null : "/config/health_o_mat_backup/pre.json",
+      };
+    }
+    return {};
+  };
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function setRestoreFields(panel, overrides) {
+  const values = Object.assign({
+    "restore-filename": { value: "a_backup.json" },
+    "restore-mode": { value: "merge" },
+    "restore-dataset-drinks": { checked: true },
+    "restore-dataset-blood_pressure": { checked: true },
+    "restore-dataset-wellbeing": { checked: false },
+    "restore-from": { value: "2026-10-01T00:00" },
+    "restore-to": { value: "2026-10-20T23:59" },
+    "restore-person-map": { value: '{"alex": "entry-1"}' },
+    "restore-confirm": { value: "" },
+  }, overrides || {});
+  panel.shadowRoot._fields = values;
+}
+
+/* Dateiliste laden (Admin-Kommando). */
+const files = makePanel();
+await files._loadRestoreFiles();
+const fileResult = {
+  files: files._restoreFiles.slice(),
+  draft: files._restoreDraft.filename,
+  message: files._messages.find((msg) => msg.type === "health_o_mat/list_import_files"),
+};
+
+/* Dry-Run: vollständiger Payload (Teil-Datensätze, Zeitraum, Mapping). */
+const dry = makePanel();
+await dry._loadRestoreFiles();
+setRestoreFields(dry);
+await dry._runRestore(true);
+const dryMsg = dry._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").pop();
+const dryResult = {
+  msg: dryMsg,
+  result: dry._restoreResult && dry._restoreResult.dryRun,
+  html: admin.restoreResultHtml(dry),
+};
+
+/* Replace ohne "REPLACE" wird lokal abgelehnt. */
+const blocked = makePanel();
+await blocked._loadRestoreFiles();
+setRestoreFields(blocked, { "restore-mode": { value: "replace" } });
+await blocked._runRestore(false);
+const blockedResult = {
+  error: blocked._restoreError,
+  sent: blocked._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").length,
+};
+
+/* Replace mit Bestätigung + Apply: Personen/Settings/Entries neu laden. */
+const applied = makePanel();
+await applied._loadRestoreFiles();
+setRestoreFields(applied, {
+  "restore-mode": { value: "replace" },
+  "restore-confirm": { value: "REPLACE" },
+});
+await applied._runRestore(false);
+const appliedMsg = applied._messages
+  .filter((msg) => msg.type === "health_o_mat/restore_backup")
+  .pop();
+const appliedResult = {
+  msg: appliedMsg,
+  reloads: applied._messages.map((msg) => msg.type).filter((type) =>
+    type === "health_o_mat/list_persons" ||
+    type === "health_o_mat/panel_data" ||
+    type === "health_o_mat/get_settings"),
+  html: admin.restoreResultHtml(applied),
+  confirm: applied._restoreDraft.confirm,
+};
+
+/* Fehlerpfad: Banner statt Crash. */
+const failed = makePanel();
+failed._failRestore = true;
+await failed._loadRestoreFiles();
+setRestoreFields(failed);
+await failed._runRestore(true);
+const failedResult = { error: failed._restoreError, busy: failed._restoreBusy };
+
+/* Karte: Dateiauswahl + Ergebnis-Rendering. */
+const card = makePanel();
+await card._loadRestoreFiles();
+card._restoreResult = {
+  dryRun: true,
+  data: {
+    plan: {
+      mode: "merge",
+      persons: { alex: "entry-1" },
+      totals: { added: 3, skipped: 1, conflicts: 2, errors: 0 },
+      actions: [{ target: "entry-1", dataset: "drinks", op: "add" }],
+      actions_truncated: true,
+      warnings: ["Warnung A"],
+      has_changes: true,
+    },
+    applied: false,
+    dry_run: true,
+  },
+};
+const cardHtml = admin.restoreCard(card);
+
+process.stdout.write(JSON.stringify({
+  files: fileResult,
+  dry: dryResult,
+  blocked: blockedResult,
+  applied: appliedResult,
+  failed: failedResult,
+  cardHtml,
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_116_panel_restore_flow(tmp_path):
+    """[REQ-HOM-116] Dateiliste, Dry-Run-Payload, Replace-Gate, Ergebnis, Fehler."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    admin_copy = tmp_path / "health-o-mat-panel-admin.js"
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_RESTORE_RUNNER,
+            [str(panel_copy), str(admin_copy)],
+            "runner_panel_restore",
+        )
+    )
+
+    files = out["files"]
+    assert files["files"] == ["b_backup.json", "a_backup.json"]
+    assert files["draft"] == "b_backup.json", "die erste Datei wird nicht vorausgewählt"
+    assert files["message"]["type"] == "health_o_mat/list_import_files"
+
+    dry = out["dry"]
+    msg = dry["msg"]
+    assert msg["dry_run"] is True
+    assert msg["filename"] == "a_backup.json"
+    assert msg["mode"] == "merge"
+    assert msg["datasets"] == ["drinks", "blood_pressure"]
+    assert msg["from"] == "2026-10-01T00:00"
+    assert msg["to"] == "2026-10-20T23:59"
+    assert msg["person_map"] == {"alex": "entry-1"}
+    assert "confirm" not in msg
+    assert dry["result"] is True
+    assert "Dry-Run" in dry["html"]
+    assert "3 hinzugefügt" in dry["html"] and "0 Konflikte" in dry["html"]
+    assert "Alex" in dry["html"], "Personen-Mapping wird nicht aufgelöst"
+    assert "Warnung" in dry["html"] and "Aktionen" in dry["html"]
+    assert "Änderungen würden übernommen" in dry["html"]
+
+    blocked = out["blocked"]
+    assert blocked["sent"] == 0, "Replace ohne Bestätigung wird trotzdem gesendet"
+    assert "REPLACE" in blocked["error"]
+
+    applied = out["applied"]
+    assert applied["msg"]["mode"] == "replace"
+    assert applied["msg"]["confirm"] == "REPLACE"
+    assert applied["msg"]["dry_run"] is False
+    assert applied["confirm"] == "", "die Bestätigung wird nach dem Apply nicht geleert"
+    assert "health_o_mat/list_persons" in applied["reloads"]
+    assert "health_o_mat/panel_data" in applied["reloads"]
+    assert "health_o_mat/get_settings" in applied["reloads"]
+    assert "Wiederhergestellt" in applied["html"]
+    assert "Sicherheitsbackup" in applied["html"]
+
+    assert "Backup kaputt" in out["failed"]["error"]
+    assert out["failed"]["busy"] is False
+
+    card_html = out["cardHtml"]
+    assert 'data-action="restore-dry-run"' in card_html
+    assert 'data-action="restore-apply"' in card_html
+    assert 'data-action="restore-files-refresh"' in card_html
+    assert "<option" in card_html and "a_backup.json" in card_html
+    assert "3 hinzugefügt" in card_html
+    assert "gekürzt" in card_html
+    assert "Warnung A" in card_html

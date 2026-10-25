@@ -14,6 +14,8 @@ import {
   WELLBEING_STATES,
   WELLBEING_SCORE_MAX,
   PACE_INFO,
+  HISTORY_LIMIT,
+  HISTORY_KIND_LABELS,
   escapeHtml,
   toNumber,
   clamp,
@@ -183,6 +185,215 @@ function tsFieldHtml(panel, field) {
     </div>`;
 }
 
+/* ---- Verlauf / Korrekturen (REQ-HOM-115) --------------------------------- */
+
+const DRINK_SOURCE_LABELS = {
+  panel: "Panel",
+  card: "Karte",
+  service: "Service",
+  csv: "Import",
+  import: "Import",
+  automation: "Automation",
+};
+
+function sourceLabel(value) {
+  const raw = String(value == null ? "" : value);
+  return DRINK_SOURCE_LABELS[raw.toLowerCase()] || raw;
+}
+
+/* Eintrag eines Verlaufs als eine Zeile; reine Anzeige, alles escaped. */
+function historyEntryView(panel, entryId, entry) {
+  const when = entry && entry.ts ? entryTime(entry.ts) : "";
+  const voided = !!(entry && entry.voided_at);
+  return { when, voided };
+}
+
+function drinkHistoryText(entry) {
+  const parts = [];
+  const ml = toNumber(entry.ml, NaN);
+  if (Number.isFinite(ml)) parts.push(fmtMl(ml));
+  const type = String(entry.type == null ? "" : entry.type).trim();
+  if (type) parts.push(type);
+  const src = sourceLabel(entry.src);
+  if (src) parts.push(src);
+  return parts.join(" \u00B7 ");
+}
+
+function bpHistoryText(entry) {
+  const sys = toNumber(entry.sys, NaN);
+  const dia = toNumber(entry.dia, NaN);
+  const pulse = toNumber(entry.pulse, NaN);
+  const parts = [];
+  if (Number.isFinite(sys) && Number.isFinite(dia)) {
+    parts.push(`${Math.round(sys)}/${Math.round(dia)}`);
+  }
+  if (Number.isFinite(pulse)) parts.push(`${Math.round(pulse)} bpm`);
+  const note = String(entry.note == null ? "" : entry.note).trim();
+  if (note) parts.push(note);
+  return parts.join(" \u00B7 ");
+}
+
+/* Wohlbefinden-Verlaufseintrag: die History-API liefert nur den Key; Label,
+ * Emoji/Bild und Score kommen aus der serverseitigen Skala der Person. */
+function wellbeingHistoryView(panel, entryId, entry) {
+  const scale = wellbeingScale(panel._data && panel._data[entryId]);
+  const key = String(entry && entry.key ? entry.key : "").toLowerCase();
+  const index = scale.findIndex((state) => state.key === key);
+  const known = index >= 0 ? scale[index] : null;
+  const score = entry && entry.score != null ? wellbeingScore(entry) : index >= 0 ? index + 1 : null;
+  return {
+    emoji: (entry && entry.emoji) || (known && known.emoji) || "\u{1F642}",
+    image: (entry && entry.image) || (known && known.image) || "",
+    label: (entry && entry.label) || (known && known.label) || "Keine Angabe",
+    score,
+    scoreMax: scale.length || WELLBEING_SCORE_MAX,
+  };
+}
+
+function historyItemHtml(panel, entryId, kind, entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const id = entry.id == null ? "" : String(entry.id);
+  const { when, voided } = historyEntryView(panel, entryId, entry);
+  const confirm = panel._historyConfirm;
+  const awaiting =
+    !!confirm && confirm.entryId === entryId && confirm.kind === kind && confirm.id === id;
+
+  let body = "";
+  if (kind === "drinks") {
+    body = `<span class="history-text">${escapeHtml(drinkHistoryText(entry))}</span>`;
+  } else if (kind === "blood_pressure") {
+    body = `<span class="history-text">${escapeHtml(bpHistoryText(entry))}</span>`;
+  } else {
+    const view = wellbeingHistoryView(panel, entryId, entry);
+    body =
+      `${wellbeingVisual({ emoji: view.emoji, image: view.image })}` +
+      `<span class="history-text">${escapeHtml(view.label)}${
+        view.score != null ? ` \u00B7 ${view.score} / ${view.scoreMax}` : ""
+      }</span>`;
+  }
+
+  const status = voided
+    ? `<span class="status bad" title="Eintrag ist gelöscht (wiederherstellbar)">gelöscht</span>`
+    : "";
+  const whenText = when || "ohne Zeitangabe";
+
+  let actions = "";
+  if (!id) {
+    // Altbestand ohne Eintrags-ID: anzeigen, aber nicht korrigierbar.
+    actions = "";
+  } else if (awaiting) {
+    actions = `<div class="history-confirm" role="group" aria-label="Eintrag löschen bestätigen">
+        <span>Wirklich löschen?</span>
+        <button class="btn" data-action="history-void-confirm" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button"${
+          panel._historyBusy ? " disabled" : ""
+        }>Löschen</button>
+        <button class="btn ghost" data-action="history-void-cancel" type="button">Abbrechen</button>
+      </div>`;
+  } else if (voided) {
+    actions = `<div class="history-actions">
+        <button class="btn ghost" data-action="history-restore" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button" aria-label="Eintrag vom ${escapeHtml(
+          whenText
+        )} wiederherstellen"${panel._historyBusy ? " disabled" : ""}>Wiederherstellen</button>
+      </div>`;
+  } else {
+    actions = `<div class="history-actions">
+        <button class="btn ghost" data-action="history-void" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button" aria-label="Eintrag vom ${escapeHtml(
+          whenText
+        )} löschen"${panel._historyBusy ? " disabled" : ""}>Löschen</button>
+      </div>`;
+  }
+
+  return `<li class="history-item${voided ? " voided" : ""}" data-history-id="${escapeHtml(id)}">
+      <div class="history-main">
+        <span class="history-time">${escapeHtml(whenText)}</span>
+        ${body}
+        ${status}
+      </div>
+      ${actions}
+    </li>`;
+}
+
+/* Verlaufsliste eines Tabs inkl. Filter und Inline-Bestätigung. Die Daten
+ * kommen ausschließlich aus `health_o_mat/list_history` (kein Zweitweg). */
+export function historySection(panel, entryId, kind) {
+  if (!entryId) return "";
+  const state =
+    (panel._history &&
+      panel._history[entryId] &&
+      panel._history[entryId][kind]) ||
+    null;
+  const includeVoided = !!(state && state.includeVoided);
+  const entries = state && Array.isArray(state.entries)
+    ? state.entries.slice(0, HISTORY_LIMIT)
+    : [];
+  const label = HISTORY_KIND_LABELS[kind] || "Verlauf";
+  const status = panel._historyStatus && panel._historyStatus.kind === kind
+    ? panel._historyStatus
+    : null;
+  const error = state && state.error ? String(state.error) : "";
+  const loading = !!(state && state.loading);
+
+  const count = `${entries.length} ${entries.length === 1 ? "Eintrag" : "Einträge"}`;
+  const filter = `<div class="history-filter" role="group" aria-label="${escapeHtml(
+    label
+  )}-Verlauf filtern">
+      <button class="chip${includeVoided ? "" : " active"}" data-action="history-filter"
+        data-kind="${escapeHtml(kind)}" data-voided="0" type="button"
+        aria-pressed="${includeVoided ? "false" : "true"}">Nur aktive</button>
+      <button class="chip${includeVoided ? " active" : ""}" data-action="history-filter"
+        data-kind="${escapeHtml(kind)}" data-voided="1" type="button"
+        aria-pressed="${includeVoided ? "true" : "false"}">Auch gelöscht</button>
+    </div>`;
+
+  const notice = status
+    ? `<div class="settings-status ${status.ok ? "ok" : "err"}" role="status">${escapeHtml(
+        status.text
+      )}</div>`
+    : "";
+  const errorHtml = error
+    ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(error)}</div>`
+    : "";
+  const list = loading
+    ? messageHtml("Lade Verlauf\u2026", false)
+    : entries.length
+      ? `<ul class="history-list">${entries
+          .map((entry) => historyItemHtml(panel, entryId, kind, entry))
+          .join("")}</ul>`
+      : `<div class="muted">Keine Einträge${includeVoided ? "" : " (nur aktive)"}.</div>`;
+
+  return `<div class="card" data-history="${escapeHtml(kind)}">
+      <div class="history-head">
+        <div class="card-title">Verlauf</div>
+        <span class="muted">${escapeHtml(count)}</span>
+      </div>
+      ${filter}
+      ${notice}
+      ${errorHtml}
+      ${list}
+    </div>`;
+}
+
+/* Undo nur anbieten, wenn die Person aktive Einträge hat (der Entry-Modul-
+ * Helper kennt History- und panel_data-Fallback). */
+function undoButtonHtml(panel, entryId, kind, label) {
+  const available =
+    typeof panel._canUndo === "function" ? panel._canUndo(entryId, kind) : false;
+  if (!available) return "";
+  return `<div class="actions">
+      <button class="btn ghost" data-action="undo" data-kind="${escapeHtml(
+        kind
+      )}" type="button" aria-label="${escapeHtml(label)}"${
+        panel._busy ? " disabled" : ""
+      }>\u21A9 Undo</button>
+    </div>`;
+}
+
 /* ---- Tab: Trinken (4.2) -------------------------------------------------- */
 
 function drinkTab(panel, data, entryId) {
@@ -243,7 +454,8 @@ function drinkTab(panel, data, entryId) {
       ${formError}
       ${undo}
     </div>
-    ${breakdown(panel, data)}`;
+    ${breakdown(panel, data)}
+    ${historySection(panel, entryId, "drinks")}`;
 }
 
 function breakdown(panel, data) {
@@ -332,7 +544,17 @@ function bpTab(panel, data, entryId) {
       ${formError}
     </form>`;
 
-  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${bpHistoryChartHtml(bp.entries, { title: "Verlauf systolisch/diastolisch" })}`;
+  const undo = undoButtonHtml(
+    panel,
+    entryId,
+    "blood_pressure",
+    "Letzte Blutdruckmessung rückgängig machen"
+  );
+
+  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${undo}${bpHistoryChartHtml(
+    bp.entries,
+    { title: "Verlauf systolisch/diastolisch" }
+  )}${historySection(panel, entryId, "blood_pressure")}`;
 }
 
 /* ---- Tab: Wohlbefinden (4.4) --------------------------------------------- */
@@ -463,43 +685,19 @@ function wellbeingTab(panel, data, entryId) {
       ${scoreFormError}
     </form>`;
 
-  /* Verlaufsliste UNTER dem Chart: pro Eintrag Zeitpunkt (relativ), Emoji,
-   * Label und Score ("3 / 5"). Reine Anzeige aus `wellbeing.history` (letzte
-   * 20) — kein rohes JSON, alle Texte escaped. Neueste Meldung OBEN
-   * (`slice(-20).reverse()`), der Chart bleibt unveraendert chronologisch.
-   * Unbekannte Keys/Felder fallen defensiv auf die kanonische Skala bzw.
-   * einen neutralen Text zurueck. */
+  /* Einzige Verlaufsquelle ist die History-API (`historySection`, REQ-HOM-115)
+   * — `wellbeing.history` speist nur noch den Score-Chart, damit die Liste
+   * nicht doppelt gerendert wird. */
   const history = Array.isArray(data.wellbeing && data.wellbeing.history)
     ? data.wellbeing.history
     : [];
-  const histItems = history
-    .slice(-20)
-    .reverse()
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return "";
-      const entryKey = String(entry.key || "").toLowerCase();
-      const knownState = scale.find((state) => state.key === entryKey);
-      const entryAt = entry.ts ? entryTime(entry.ts) : "";
-      const entryLabel = entry.label || (knownState && knownState.label) || "Keine Angabe";
-      const entryVisual = {
-        emoji: entry.emoji || (knownState && knownState.emoji) || "\u{1F642}",
-        image: entry.image || (knownState && knownState.image) || "",
-      };
-      const entryScore = wellbeingScore(entry);
-      return `<li class="wb-hist">
-          ${wellbeingVisual(entryVisual)}
-          <span class="wb-hist-label">${escapeHtml(entryLabel)}</span>
-          <span class="wb-hist-time">${escapeHtml(entryAt || "ohne Zeitangabe")}</span>
-          ${entryScore != null ? `<span class="wb-hist-score">${entryScore} / ${scoreMax}</span>` : ""}
-        </li>`;
-    })
-    .join("");
-  const histHtml = histItems
-    ? `<div class="card">
-        <div class="muted">Verlauf</div>
-        <ul class="wb-history">${histItems}</ul>
-      </div>`
-    : "";
+
+  const undo = undoButtonHtml(
+    panel,
+    entryId,
+    "wellbeing",
+    "Letzte Wohlbefinden-Meldung rückgängig machen"
+  );
 
   /* Score-Chart (REQ-HOM-112): Linienchart des Verlaufs, Y-Achse 1…N,
    * aktueller Wert hervorgehoben. Leerer Verlauf -> Hinweis statt Chart.
@@ -530,5 +728,6 @@ function wellbeingTab(panel, data, entryId) {
       <div class="wb-row">${buttons}</div>
       ${confirmRow}
       ${last}
-    </div>${scoreForm}${chartHtml}${histHtml}`;
+      ${undo}
+    </div>${scoreForm}${chartHtml}${historySection(panel, entryId, "wellbeing")}`;
 }

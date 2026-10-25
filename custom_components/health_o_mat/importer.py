@@ -87,6 +87,38 @@ def safe_import_path(config_dir: str, filename: str) -> str:
     return candidate
 
 
+def list_import_files(config_dir: str) -> list[str]:
+    """Dateinamen im privaten Import-Ordner (nur reguläre Dateien, sortiert).
+
+    Liefert ausschließlich Basisnamen — niemals Pfade. Verzeichnisse,
+    Symlinks und alles, was ``safe_import_path`` ablehnen würde, bleibt außen
+    vor (kein Traversal, kein Escape aus ``health_o_mat_import/``). Ein
+    fehlender Ordner ist kein Fehler, sondern eine leere Liste.
+    """
+    base = os.path.realpath(os.path.join(config_dir, IMPORT_DIR_NAME))
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    files: list[str] = []
+    for name in names:
+        if name.startswith("."):
+            continue
+        try:
+            path = safe_import_path(config_dir, name)
+        except ValueError:
+            continue
+        if os.path.islink(os.path.join(base, name)):
+            continue
+        try:
+            if not os.path.isfile(path):
+                continue
+        except OSError:  # pragma: no cover - nur bei Race mit dem Dateisystem
+            continue
+        files.append(name)
+    return sorted(files, key=lambda value: (value.lower(), value))
+
+
 def _norm_ts(raw: object) -> str | None:
     """ISO-Zeitstempel normalisieren (``datetime.isoformat()``); None bei Murks."""
     if not isinstance(raw, str):

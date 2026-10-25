@@ -281,6 +281,25 @@ const CARD_CSS = `
   }
   .msg button { margin-top: 10px; flex: none; min-height: 40px; }
   .block { display: flex; flex-direction: column; gap: 10px; }
+  .history-list { list-style: none; margin: 0; padding: 0; display: flex;
+    flex-direction: column; gap: 4px; }
+  .history-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    min-width: 0; padding: 4px 0; font-size: .8rem;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
+  .history-item:last-child { border-bottom: none; }
+  .history-time { flex: none; font-size: .72rem; color: var(--secondary-text-color, #727272); }
+  .history-text { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+  .history-status { flex: none; font-size: .72rem; font-weight: 600;
+    color: var(--error-color, #db4437); }
+  .history-item.voided .history-time, .history-item.voided .history-text {
+    text-decoration: line-through; opacity: .7; }
+  .history-item button { flex: none; min-height: 36px; padding: 6px 10px; font-size: .75rem; }
+  .history-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    flex-basis: 100%; font-size: .78rem; }
+  @media (max-width: 400px) {
+    .history-item button { flex: 1 1 auto; }
+    .history-confirm { width: 100%; }
+  }
   .form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .form .field { flex: 1 1 84px; min-width: 72px; }
   .form > button { flex: 0 0 auto; min-width: 104px; min-height: 48px; flex-direction: row; }
@@ -478,6 +497,9 @@ function normalizeCardConfig(raw) {
      * `show_*`-Schalter mit Default `true`) — dieser Schalter ist Default
      * `false` und unabhängig von der Panel-/Server-Option. */
     wellbeingConfirm: toBool(source.wellbeing_confirm, false),
+    /* Verlauf der letzten 5 Einträge — Default `false` und bewusst NICHT in
+     * `CARD_SHOW_KEYS` (die sind reine `show_*`-Schalter mit Default `true`). */
+    showHistory: toBool(source.show_history, false),
   };
 }
 
@@ -813,6 +835,13 @@ class HealthOMatCard extends HTMLElement {
     /* Getippte eigene Menge: ueberlebt einen fehlgeschlagenen Submit
      * (Validierung oder Service-Fehler) und wird nach Erfolg geleert. */
     this._amountDraft = "";
+    /* Verlauf (REQ-HOM-115): kind -> { entries, error, loading }. Die Liste
+     * kommt ausschließlich aus `health_o_mat/list_history` und ist nur bei
+     * `show_history` sichtbar. */
+    this._history = {};
+    this._historyBusy = false;
+    this._historyConfirm = null; // { kind, id }
+    this._undoBusyKind = "";
     this._renderScheduled = false;
     this._listenersAttached = false;
     this._onCardClick = this._onCardClick.bind(this);
@@ -844,6 +873,10 @@ class HealthOMatCard extends HTMLElement {
     this._actionError = "";
     this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     this._amountDraft = "";
+    this._history = {};
+    this._historyBusy = false;
+    this._historyConfirm = null;
+    this._undoBusyKind = "";
     this._activeEntry = activeEntryId(config, "");
     this._render();
     if (this._hass) this._loadData();
@@ -863,6 +896,7 @@ class HealthOMatCard extends HTMLElement {
     if (flags.show_blood_pressure_input) size += 2; // Formular + Notiz
     if (flags.show_wellbeing_input) size += 3; // 10 Buttons + Zahleneingabe
     if (flags.show_undo) size += 1;
+    if (this._configNorm().showHistory) size += 2; // optionale Verlaufslisten
     return Math.max(1, size);
   }
 
@@ -952,7 +986,11 @@ class HealthOMatCard extends HTMLElement {
         /* Wechselt die aktive Person ohne `_onSelectChange` (Person faellt
          * aus Filter/Liste), gehoert die Vormerkung zur alten Person und muss
          * verworfen werden (REQ-HOM-114). */
-        if (entryId !== this._activeEntry) this._wbPending = null;
+        if (entryId !== this._activeEntry) {
+          this._wbPending = null;
+          this._history = {};
+          this._historyConfirm = null;
+        }
         this._activeEntry = entryId;
       } else {
         this._persons = null;
@@ -963,6 +1001,7 @@ class HealthOMatCard extends HTMLElement {
       });
       this._data = data || null;
       this._error = this._data ? null : "Keine Daten für diese Person.";
+      if (this._data && this._configNorm().showHistory) await this._loadHistory();
       /* Ein erfolgreicher stiller Reload (nach einer Aktion) beendet den
        * Fehlerzustand: eine alte Aktions-Meldung darf nicht stehen bleiben. */
       if (silent && this._data) this._actionError = "";
@@ -1345,16 +1384,21 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
-  async _undo() {
-    if (!this._hass || this._busyMl != null) return;
-    if (this._data && this._data.undo && this._data.undo.drink === false) return;
+  async _undo(kind = "drinks") {
+    const undoKind = kind === "blood_pressure" || kind === "wellbeing" ? kind : "drinks";
+    if (!this._hass || this._busyMl != null || this._undoBusyKind) return;
+    if (undoKind === "drinks" && this._data && this._data.undo && this._data.undo.drink === false) {
+      return;
+    }
+    if (undoKind !== "drinks" && !this._historyAvailable(undoKind)) return;
     this._actionError = "";
-    this._busyMl = -1;
+    this._undoBusyKind = undoKind;
     this._render();
     try {
       await Promise.resolve(
         this._hass.callService("health_o_mat", "remove_last_entry", {
           person: this._servicePerson(),
+          kind: undoKind,
         })
       );
       this._actionError = "";
@@ -1363,9 +1407,175 @@ class HealthOMatCard extends HTMLElement {
       this._actionError = (err && err.message) ? err.message : String(err);
       this._render();
     } finally {
-      this._busyMl = null;
+      this._undoBusyKind = "";
       this._render();
     }
+  }
+
+  /* ---- Verlauf (REQ-HOM-115) --------------------------------------------- */
+
+  _historyState(kind) {
+    if (!this._history[kind]) {
+      this._history[kind] = { entries: [], error: "", loading: false, loaded: false };
+    }
+    return this._history[kind];
+  }
+
+  /* Kompakter Verlauf: IMMER inklusive gelöschter Einträge, damit
+   * „Wiederherstellen" in der Karte erreichbar bleibt. */
+  async _loadHistory() {
+    if (!this._hass || !this._activeEntry || !this._configNorm().showHistory) return;
+    const entryId = this._activeEntry;
+    const kinds = ["drinks", "blood_pressure", "wellbeing"];
+    await Promise.all(
+      kinds.map(async (kind) => {
+        const state = this._historyState(kind);
+        state.loading = true;
+        state.error = "";
+        try {
+          const res = await this._hass.callWS({
+            type: "health_o_mat/list_history",
+            entry_id: entryId,
+            kind,
+            include_voided: true,
+          });
+          // Personenwechsel während des Loads: die Antwort gehört zur alten
+          // Person und darf die neue Liste nicht überschreiben.
+          if (this._activeEntry !== entryId) return;
+          state.entries = res && Array.isArray(res.entries) ? res.entries.slice(0, 5) : [];
+          state.loaded = true;
+        } catch (err) {
+          if (this._activeEntry !== entryId) return;
+          state.error = (err && err.message) ? err.message : String(err);
+          state.loaded = true;
+        } finally {
+          if (this._activeEntry === entryId) state.loading = false;
+        }
+      })
+    );
+    if (this._activeEntry !== entryId) return;
+    this._render();
+  }
+
+  /* Aktive Einträge vorhanden? Vor dem ersten History-Load dient der
+   * `panel_data`-Fallback (Getränke/BD) bzw. der letzte WB-Block. */
+  _historyAvailable(kind) {
+    const state = this._history[kind];
+    if (state && state.loaded && !state.loading) {
+      return state.entries.some((entry) => entry && !entry.voided_at);
+    }
+    if (kind === "drinks") return !(this._data && this._data.undo) || this._data.undo.drink !== false;
+    if (kind === "blood_pressure") {
+      return !(this._data && this._data.undo) || this._data.undo.blood_pressure !== false;
+    }
+    return !!(this._data && this._data.wellbeing && (this._data.wellbeing.at || this._data.wellbeing.key));
+  }
+
+  _historyConfirmFor(kind, id) {
+    const confirm = this._historyConfirm;
+    return !!confirm && confirm.kind === kind && confirm.id === String(id);
+  }
+
+  _beginHistoryVoid(kind, id) {
+    this._historyConfirm = { kind, id: String(id) };
+    this._render();
+  }
+
+  async _setHistoryEntryVoided(kind, id, restore) {
+    if (!this._hass || !this._activeEntry || this._historyBusy) return;
+    this._historyBusy = true;
+    this._historyConfirm = null;
+    this._actionError = "";
+    this._render();
+    try {
+      await this._hass.callWS({
+        type: restore ? "health_o_mat/restore_entry" : "health_o_mat/void_entry",
+        entry_id: this._activeEntry,
+        kind,
+        item_id: String(id),
+      });
+      await this._loadData(true);
+    } catch (err) {
+      this._actionError = (err && err.message) ? err.message : String(err);
+    } finally {
+      this._historyBusy = false;
+      this._render();
+    }
+  }
+
+  _historyItemText(kind, entry) {
+    if (!entry || typeof entry !== "object") return "";
+    if (kind === "drinks") {
+      const parts = [];
+      if (Number.isFinite(toNumber(entry.ml, NaN))) parts.push(`${Math.round(toNumber(entry.ml, 0))} ml`);
+      if (entry.type) parts.push(String(entry.type));
+      if (entry.src) parts.push(String(entry.src));
+      return parts.join(" \u00B7 ");
+    }
+    if (kind === "blood_pressure") {
+      const parts = [];
+      const sys = toNumber(entry.sys, NaN);
+      const dia = toNumber(entry.dia, NaN);
+      if (Number.isFinite(sys) && Number.isFinite(dia)) parts.push(`${Math.round(sys)}/${Math.round(dia)}`);
+      if (Number.isFinite(toNumber(entry.pulse, NaN))) parts.push(`${Math.round(toNumber(entry.pulse, 0))} bpm`);
+      if (entry.note) parts.push(String(entry.note));
+      return parts.join(" \u00B7 ");
+    }
+    const scale = this._wellbeingScale();
+    const key = String(entry.key || "").toLowerCase();
+    const index = scale.findIndex((state) => state.key === key);
+    const known = index >= 0 ? scale[index] : null;
+    const label = entry.label || (known && known.label) || "Keine Angabe";
+    const score = index >= 0 ? index + 1 : null;
+    return score != null && known ? `${label} \u00B7 ${score} / ${scale.length}` : label;
+  }
+
+  _historyBlock(kind) {
+    if (!this._configNorm().showHistory) return "";
+    const state = this._history[kind];
+    const entries = state && Array.isArray(state.entries) ? state.entries.slice(0, 5) : [];
+    const loading = !!(state && state.loading);
+    const error = state && state.error
+      ? `<div class="form-error" role="alert">${escapeHtml(state.error)}</div>`
+      : "";
+    const items = entries
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return "";
+        const id = entry.id == null ? "" : String(entry.id);
+        const voided = !!entry.voided_at;
+        const when = entry.ts ? this._timeLabel(entry.ts) : "";
+        const awaiting = this._historyConfirmFor(kind, id);
+        const action = !id
+          ? ""
+          : awaiting
+          ? `<div class="history-confirm" role="group" aria-label="Eintrag löschen bestätigen">
+              <span>Wirklich löschen?</span>
+              <button data-action="history-void-confirm" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="Löschen bestätigen">Löschen</button>
+              <button class="ghost" data-action="history-void-cancel" aria-label="Löschen abbrechen">Abbrechen</button>
+            </div>`
+          : voided
+            ? `<button class="ghost" data-action="history-restore" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="Eintrag wiederherstellen">Wiederherstellen</button>`
+            : `<button class="ghost" data-action="history-void" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="Eintrag löschen">Löschen</button>`;
+        return `<li class="history-item${voided ? " voided" : ""}">
+            <span class="history-time">${escapeHtml(when || "ohne Zeitangabe")}</span>
+            <span class="history-text">${escapeHtml(this._historyItemText(kind, entry))}</span>
+            ${voided ? `<span class="history-status">gelöscht</span>` : ""}
+            ${action}
+          </li>`;
+      })
+      .join("");
+    const body = loading
+      ? `<div class="msg">Lade Verlauf\u2026</div>`
+      : items
+        ? `<ul class="history-list">${items}</ul>`
+        : `<div class="msg">Keine Einträge.</div>`;
+    return `<div class="block history-block" data-history="${escapeHtml(kind)}">
+        <div class="sub">Verlauf (letzte 5)</div>
+        ${error}${body}
+      </div>`;
   }
 
   /* Getraenke-Quellen in Vorrang-Reihenfolge:
@@ -1480,7 +1690,27 @@ class HealthOMatCard extends HTMLElement {
     } else if (action === "wellbeing-confirm") {
       this._confirmWellbeing();
     } else if (action === "undo") {
-      this._undo();
+      this._undo(target.getAttribute("data-kind") || "drinks");
+    } else if (action === "history-void") {
+      this._beginHistoryVoid(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || ""
+      );
+    } else if (action === "history-void-confirm") {
+      this._setHistoryEntryVoided(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || "",
+        false
+      );
+    } else if (action === "history-void-cancel") {
+      this._historyConfirm = null;
+      this._render();
+    } else if (action === "history-restore") {
+      this._setHistoryEntryVoided(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || "",
+        true
+      );
     } else if (action === "retry") {
       this._loadData();
     }
@@ -1505,6 +1735,10 @@ class HealthOMatCard extends HTMLElement {
       this._wbPending = null;
       this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
       this._actionError = "";
+      this._history = {};
+      this._historyBusy = false;
+      this._historyConfirm = null;
+      this._undoBusyKind = "";
       this._activeEntry = nextEntry;
     }
     // Personenliste NICHT verwerfen: sie ist noch gueltig, das Dropdown bleibt
@@ -1629,9 +1863,19 @@ class HealthOMatCard extends HTMLElement {
     if (areas.wellbeing && flags.show_wellbeing_input) {
       parts.push(this._wellbeingInput());
     }
+    if (areas.bp && flags.show_undo) {
+      parts.push(this._undoAction("blood_pressure"));
+    }
+    if (areas.wellbeing && flags.show_undo) {
+      parts.push(this._undoAction("wellbeing"));
+    }
     if (areas.drink && flags.show_undo) {
       parts.push(this._undoAction());
     }
+    // Optionaler Verlauf (Default aus): kein Block, keine Layout-Sprünge.
+    if (areas.drink) parts.push(this._historyBlock("drinks"));
+    if (areas.bp) parts.push(this._historyBlock("blood_pressure"));
+    if (areas.wellbeing) parts.push(this._historyBlock("wellbeing"));
     return parts.length
       ? parts.join("")
       : this._message("Keine Blöcke aktiviert — Karten-Konfiguration prüfen.", false);
@@ -2027,17 +2271,27 @@ class HealthOMatCard extends HTMLElement {
     return `<div class="block">${this._tsFieldHtml("wb-ts")}<div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
   }
 
-  _undoAction() {
-    const busy = this._busyMl != null;
-    const canUndo = !(this._data && this._data.undo) || this._data.undo.drink !== false;
-    const disabled = busy || !canUndo ? " disabled" : "";
+  _undoAction(kind = "drinks") {
+    const busy = this._busyMl != null || !!this._undoBusyKind;
+    const canUndo = this._historyAvailable(kind);
+    // Getränke bleiben als deaktivierter Button sichtbar (bisheriges Layout);
+    // BD/WB erscheinen nur, wenn wirklich aktive Einträge existieren.
+    if (!canUndo && kind !== "drinks") return "";
+    const label =
+      kind === "blood_pressure"
+        ? "Letzte Blutdruckmessung rückgängig machen"
+        : kind === "wellbeing"
+          ? "Letzte Wohlbefinden-Meldung rückgängig machen"
+          : "Letzte Getränkebuchung rückgängig machen";
     const title = canUndo
       ? ""
       : ' title="Keine Getränkebuchung zum Rückgängigmachen vorhanden"';
+    const kindAttr = kind === "drinks" ? "" : ` data-kind="${escapeHtml(kind)}"`;
+    const text = kind === "blood_pressure" ? "Undo BD" : kind === "wellbeing" ? "Undo WB" : "Undo";
     return `<div class="actions">
-      <button class="ghost" data-action="undo" aria-label="Letzte Getränkebuchung rückgängig machen"${
+      <button class="ghost" data-action="undo"${kindAttr} aria-label="${escapeHtml(label)}"${
         canUndo ? "" : ' aria-disabled="true"'
-      }${title}${disabled}><span aria-hidden="true">\u21A9</span><span class="ml">Undo</span></button>
+      }${title}${busy || !canUndo ? " disabled" : ""}><span aria-hidden="true">\u21A9</span><span class="ml">${text}</span></button>
     </div>`;
   }
 
@@ -2260,7 +2514,7 @@ class HealthOMatCardEditor extends HTMLElement {
 
   _toggleFlag(key, checked) {
     const next = Object.assign({}, this._config);
-    if (key === "wellbeing_confirm") {
+    if (key === "wellbeing_confirm" || key === "show_history") {
       /* Default ist `false` (anders als die `show_*`-Schalter): an muss
        * explizit gesetzt werden, aus entfernt den Key wieder. */
       if (checked) next[key] = true;
@@ -2481,6 +2735,10 @@ class HealthOMatCardEditor extends HTMLElement {
         <span>Wohlbefinden: Bestätigung vor Übernahme</span>
       </label>
       ${this._checkbox("show_undo", "Letzte Buchung rückgängig")}
+      <label class="editor-check">
+        <input type="checkbox" data-key="show_history"${toBool(this._config.show_history, false) ? " checked" : ""} />
+        <span>Verlauf anzeigen (letzte 5)</span>
+      </label>
     </div>`;
   }
 

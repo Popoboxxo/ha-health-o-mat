@@ -17,6 +17,9 @@ import {
   SETTINGS_LIMITS,
   SETTINGS_FALLBACKS,
   EXPORT_DATASETS,
+  RESTORE_DATASETS,
+  RESTORE_MODES,
+  RESTORE_CONFIRM_WORD,
   WELLBEING_STATES,
   escapeHtml,
   attrValue,
@@ -232,6 +235,8 @@ function settingsForm(panel, settings, entryId, loadError) {
         <div data-export-result>${exportResultHtml(panel)}</div>
       </div>
 
+      ${restoreCard(panel)}
+
       <div data-settings-status>${settingsStatusHtml(panel)}</div>
 
       <div class="settings-actions">
@@ -366,4 +371,300 @@ export function adminStatusHtml(panel) {
   const status = panel._adminStatus;
   if (!status) return "";
   return `<div class="settings-status ${status.ok ? "ok" : "err"}" role="status">${escapeHtml(status.text)}</div>`;
+}
+
+/* ---- Restore-Verwaltung (REQ-HOM-116 UI) --------------------------------- */
+
+function restoreFieldValue(value) {
+  return value == null ? "" : String(value);
+}
+
+function restoreFileOptions(panel) {
+  const files = Array.isArray(panel._restoreFiles) ? panel._restoreFiles : [];
+  const current = String((panel._restoreDraft && panel._restoreDraft.filename) || "");
+  if (!files.length) {
+    return `<option value="">— keine Backup-Datei vorhanden —</option>`;
+  }
+  return files
+    .map(
+      (name) =>
+        `<option value="${escapeHtml(name)}"${name === current ? " selected" : ""}>${escapeHtml(
+          name
+        )}</option>`
+    )
+    .join("");
+}
+
+/* Payload aus dem Draft bauen — dieselben Felder wie `restore_backup`
+ * (keine zweite Semantik). Gibt `{ ok, payload }` oder `{ ok: false, error }`. */
+export function collectRestorePayload(panel) {
+  const draft = panel._restoreDraft || {};
+  const filename = String(draft.filename == null ? "" : draft.filename).trim();
+  if (!filename) {
+    return { ok: false, error: "Bitte eine Backup-Datei auswählen." };
+  }
+  const mode = draft.mode === "replace" ? "replace" : "merge";
+
+  const allowed = RESTORE_DATASETS.map((dataset) => dataset.value);
+  const selected = allowed.filter((value) => {
+    const flags = draft.datasets || {};
+    return flags[value] !== false;
+  });
+  if (!selected.length) {
+    return { ok: false, error: "Bitte mindestens einen Datensatz auswählen." };
+  }
+
+  const from = String(draft.from == null ? "" : draft.from).trim();
+  const to = String(draft.to == null ? "" : draft.to).trim();
+  for (const [label, value] of [
+    ["Von", from],
+    ["Bis", to],
+  ]) {
+    if (value && !Number.isFinite(Date.parse(value))) {
+      return { ok: false, error: `Zeitraum: „${label}“ ist kein gültiger Zeitpunkt.` };
+    }
+  }
+  if (from && to && Date.parse(to) < Date.parse(from)) {
+    return { ok: false, error: "Zeitraum: „Bis“ liegt vor „Von“." };
+  }
+
+  const personMapRaw = String(draft.personMap == null ? "" : draft.personMap).trim();
+  let personMap = null;
+  if (personMapRaw) {
+    try {
+      personMap = JSON.parse(personMapRaw);
+    } catch (_e) {
+      return { ok: false, error: "Personen-Mapping: kein gültiges JSON." };
+    }
+    if (!personMap || typeof personMap !== "object" || Array.isArray(personMap)) {
+      return {
+        ok: false,
+        error: "Personen-Mapping: JSON-Objekt {Quelle: Ziel-Entry-ID} erwartet.",
+      };
+    }
+  }
+
+  const confirm = String(draft.confirm == null ? "" : draft.confirm).trim();
+  if (mode === "replace" && confirm !== RESTORE_CONFIRM_WORD) {
+    return {
+      ok: false,
+      error: `Zum Ersetzen muss die Bestätigung „${RESTORE_CONFIRM_WORD}“ eingegeben werden.`,
+    };
+  }
+
+  const payload = { filename, mode };
+  // Alle Datensätze = Default des Backends; nur eine Teilmenge wird gesendet.
+  if (selected.length < allowed.length) payload.datasets = selected;
+  if (from) payload.from = from;
+  if (to) payload.to = to;
+  if (personMap) payload.person_map = personMap;
+  if (mode === "replace") payload.confirm = RESTORE_CONFIRM_WORD;
+  return { ok: true, payload };
+}
+
+export function restoreCard(panel) {
+  const draft = panel._restoreDraft || {};
+  const files = Array.isArray(panel._restoreFiles) ? panel._restoreFiles : [];
+  const busy = !!(panel._restoreBusy || panel._restoreFilesBusy);
+  const disabled = busy ? " disabled" : "";
+  const datasets = draft.datasets || {};
+  const mode = draft.mode === "replace" ? "replace" : "merge";
+  const advanced = !!draft.advanced || !!(draft.personMap || draft.from || draft.to);
+
+  const datasetChecks = RESTORE_DATASETS.map(
+    (dataset) => `<label class="check">
+        <input type="checkbox" data-field="restore-dataset-${escapeHtml(dataset.value)}"${
+          datasets[dataset.value] !== false ? " checked" : ""
+        }${disabled} />
+        <span>${escapeHtml(dataset.label)}</span>
+      </label>`
+  ).join("");
+
+  const modeOptions = RESTORE_MODES.map(
+    (item) =>
+      `<option value="${escapeHtml(item.value)}"${item.value === mode ? " selected" : ""}>${escapeHtml(
+        item.label
+      )}</option>`
+  ).join("");
+
+  const filesError = panel._restoreFilesError
+    ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(panel._restoreFilesError)}</div>`
+    : "";
+  const error = panel._restoreError
+    ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(panel._restoreError)}</div>`
+    : "";
+  const busyText = panel._restoreFilesBusy
+    ? "Lade Dateiliste…"
+    : panel._restoreBusy
+      ? "Restore läuft…"
+      : "";
+  const busyHtml = busyText
+    ? `<div class="settings-status ok" role="status">${escapeHtml(busyText)}</div>`
+    : "";
+
+  const confirmRow =
+    mode === "replace"
+      ? `<label class="field">Bestätigung (${escapeHtml(RESTORE_CONFIRM_WORD)} eingeben)
+          <input type="text" data-field="restore-confirm" autocomplete="off"
+            autocapitalize="characters" spellcheck="false"
+            value="${attrValue(draft.confirm || "")}"${disabled} />
+        </label>`
+      : "";
+
+  const fileHint = files.length
+    ? `<div class="hint">${files.length} Datei${files.length === 1 ? "" : "en"} in <code>/config/health_o_mat_import/</code>.</div>`
+    : `<div class="hint">Lege JSON-Backups unter <code>/config/health_o_mat_import/</code> ab und aktualisiere die Liste.</div>`;
+
+  return `<div class="card" data-restore-card>
+      <div class="card-title">Wiederherstellen</div>
+      <div class="hint">Spielt ein JSON-Backup kontrolliert ein. Ein Dry-Run zeigt die Auswirkungen, ohne zu schreiben.</div>
+      <div class="restore-row">
+        <label class="field">Backup-Datei
+          <select data-field="restore-filename"${disabled}>${restoreFileOptions(panel)}</select>
+        </label>
+        <button class="btn ghost" type="button" data-action="restore-files-refresh"${
+          panel._restoreFilesBusy ? " disabled" : ""
+        }>\u21BB Dateien aktualisieren</button>
+      </div>
+      ${fileHint}
+      ${filesError}
+      <label class="field">Modus
+        <select data-field="restore-mode"${disabled}>${modeOptions}</select>
+      </label>
+      <div class="restore-datasets">${datasetChecks}</div>
+      <div class="settings-grid">
+        <label class="field">Von (optional)
+          <input type="datetime-local" data-field="restore-from"
+            value="${attrValue(restoreFieldValue(draft.from))}"${disabled} />
+        </label>
+        <label class="field">Bis (optional)
+          <input type="datetime-local" data-field="restore-to"
+            value="${attrValue(restoreFieldValue(draft.to))}"${disabled} />
+        </label>
+      </div>
+      <details class="restore-advanced" data-restore-advanced${advanced ? " open" : ""}>
+        <summary>Erweitert: Personen-Mapping</summary>
+        <div class="hint">JSON-Objekt <code>{Quelle: Ziel-Entry-ID}</code>, z. B.
+          <code>{"anna": "abc123"}</code>. Leer = automatische Zuordnung.</div>
+        <label class="field">Personen-Mapping (JSON)
+          <textarea data-field="restore-person-map" spellcheck="false"
+            autocomplete="off" placeholder='{"quelle": "ziel-entry-id"}'${disabled}>${escapeHtml(
+              restoreFieldValue(draft.personMap)
+            )}</textarea>
+        </label>
+      </details>
+      ${confirmRow}
+      ${busyHtml}
+      ${error}
+      <div class="settings-actions">
+        <button class="btn ghost" type="button" data-action="restore-dry-run"${
+          busy || !files.length ? " disabled" : ""
+        }>Dry-Run</button>
+        <button class="btn" type="button" data-action="restore-apply"${
+          busy || !files.length ? " disabled" : ""
+        }>Wiederherstellen</button>
+      </div>
+      ${restoreResultHtml(panel)}
+    </div>`;
+}
+
+function restorePersonLabel(panel, entryId) {
+  const id = String(entryId == null ? "" : entryId);
+  const hit = (panel._persons || []).find((person) => person.entry_id === id);
+  return hit ? hit.display_name : id;
+}
+
+function restoreTotals(panel) {
+  const result = panel._restoreResult;
+  if (!result || !result.data) return null;
+  const data = result.data;
+  const plan = data.plan && typeof data.plan === "object" ? data.plan : {};
+  const source = plan.totals || data.totals || null;
+  if (source && typeof source === "object") {
+    return {
+      added: Number(source.added) || 0,
+      skipped: Number(source.skipped) || 0,
+      conflicts: Number(source.conflicts) || 0,
+      errors: Number(source.errors) || 0,
+    };
+  }
+  return { added: 0, skipped: 0, conflicts: 0, errors: 0 };
+}
+
+export function restoreResultHtml(panel) {
+  const result = panel._restoreResult;
+  if (!result || !result.data) return "";
+  const data = result.data;
+  const plan = data.plan && typeof data.plan === "object" ? data.plan : {};
+  const totals = restoreTotals(panel);
+  if (!totals) return "";
+  const counts = `${totals.added} hinzugefügt, ${totals.skipped} übersprungen, ${
+    totals.conflicts
+  } Konflikte, ${totals.errors} Fehler`;
+  const changes = plan.has_changes === true || data.applied === true;
+  const mode = String(data.mode || plan.mode || "merge");
+  const headline = result.dryRun
+    ? `Dry-Run (${mode === "replace" ? "Ersetzen" : "Zusammenführen"}): ${counts}.`
+    : `Wiederhergestellt (${mode === "replace" ? "Ersetzen" : "Zusammenführen"}): ${counts}.`;
+  const changeText = result.dryRun
+    ? changes
+      ? "Änderungen würden übernommen."
+      : "Keine Änderungen — es würde nichts geschrieben."
+    : changes
+      ? "Änderungen wurden übernommen."
+      : "Keine Änderungen übernommen.";
+
+  const persons = plan.persons && typeof plan.persons === "object" ? plan.persons : {};
+  const personRows = Object.keys(persons)
+    .map(
+      (source) =>
+        `<li><code>${escapeHtml(source)}</code> \u2192 ${escapeHtml(
+          restorePersonLabel(panel, persons[source])
+        )}</li>`
+    )
+    .join("");
+  const personsHtml = personRows
+    ? `<div class="muted">Personen</div><ul>${personRows}</ul>`
+    : "";
+
+  const warnings = Array.isArray(plan.warnings) ? plan.warnings : data.warnings;
+  const warningRows = (Array.isArray(warnings) ? warnings : [])
+    .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+    .join("");
+  const warningsHtml = warningRows
+    ? `<div class="muted">Warnungen</div><ul>${warningRows}</ul>`
+    : "";
+
+  const actions = Array.isArray(plan.actions) ? plan.actions.slice(0, 10) : [];
+  const actionRows = actions
+    .map((action) => {
+      const target = restorePersonLabel(panel, action && action.target);
+      const dataset = action && action.dataset ? String(action.dataset) : "?";
+      const op = action && action.op ? String(action.op) : "?";
+      const extra =
+        action && action.op === "replace"
+          ? ` (${Number(action.removed) || 0} ersetzt, ${Number(action.added) || 0} neu)`
+          : "";
+      return `<li>${escapeHtml(`${dataset}: ${op} \u00B7 ${target}${extra}`)}</li>`;
+    })
+    .join("");
+  const truncated = plan.actions_truncated
+    ? `<li class="muted">… weitere Aktionen ausgeblendet.</li>`
+    : "";
+  const actionsHtml = actionRows
+    ? `<div class="muted">Aktionen${plan.actions_truncated ? " (gekürzt)" : ""}</div><ul>${actionRows}${truncated}</ul>`
+    : "";
+
+  const backup = data.backup_path
+    ? `<div class="muted">Sicherheitsbackup: <code>${escapeHtml(data.backup_path)}</code></div>`
+    : "";
+
+  return `<div class="restore-result ok" role="status" data-restore-result>
+      <strong>${escapeHtml(headline)}</strong>
+      <div>${escapeHtml(changeText)}</div>
+      ${backup}
+      ${personsHtml}
+      ${warningsHtml}
+      ${actionsHtml}
+    </div>`;
 }

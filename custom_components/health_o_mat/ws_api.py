@@ -45,6 +45,7 @@ from .const import (
 )
 from .entity import effective_person, signal_refresh
 from .frontend import shared_data
+from .importer import list_import_files as _list_import_files
 from .panel import OPTION_ENABLE_SIDEBAR_PANEL
 from .ui_store import HealthOMatUiStore
 
@@ -110,6 +111,7 @@ COMMAND_START_PERSON_FLOW = "health_o_mat/start_person_flow"
 COMMAND_DELETE_PERSON = "health_o_mat/delete_person"
 COMMAND_BACKUP = "health_o_mat/backup"
 COMMAND_RESTORE_BACKUP = "health_o_mat/restore_backup"
+COMMAND_LIST_IMPORT_FILES = "health_o_mat/list_import_files"
 
 # Admin-only (Konzept §8.4, Entscheidung 4): Settings lesen/schreiben und
 # Export sind Verwaltungsvorgänge. Die Alltags-Schreibkommandos
@@ -124,6 +126,7 @@ ADMIN_ONLY_COMMANDS: frozenset[str] = frozenset(
         COMMAND_DELETE_PERSON,
         COMMAND_BACKUP,
         COMMAND_RESTORE_BACKUP,
+        COMMAND_LIST_IMPORT_FILES,
     }
 )
 
@@ -911,6 +914,7 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
             {vol.Required("entry_id"): str, vol.Required("confirm"): str},
         ),
         (COMMAND_BACKUP, websocket_backup, {}),
+        (COMMAND_LIST_IMPORT_FILES, websocket_list_import_files, {}),
         (
             COMMAND_RESTORE_BACKUP,
             websocket_restore_backup,
@@ -1618,6 +1622,20 @@ async def websocket_backup(hass: HomeAssistant, connection: Any, msg: dict[str, 
         connection.send_error(msg["id"], ERR_BACKUP_FAILED, str(err))
         return
     connection.send_result(msg["id"], {"ok": True})
+
+
+async def websocket_list_import_files(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/list_import_files` → Dateien im privaten Import-Ordner.
+
+    Nur Admin (Restore-Verwaltung). Geliefert werden ausschließlich Basisnamen
+    regulärer Dateien; Pfade, Traversal und Symlinks bleiben außen vor.
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    connection.send_result(msg["id"], {"files": _list_import_files(hass.config.config_dir)})
 
 
 async def websocket_restore_backup(
