@@ -326,3 +326,59 @@ def test_m3e_defaults_step_has_description_in_all_translations() -> None:
     for path in (_MASTER, *_TRANSLATIONS.values()):
         description = _load(path)["options"]["step"]["defaults"]["description"]
         assert description and str(description).strip(), f"{path}: defaults.description fehlt"
+
+
+# --- Placeholder-Hygiene (0.14.1) ------------------------------------------
+
+_PLACEHOLDER = re.compile(r"\{[^}]*\}")
+_VALID_PLACEHOLDER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _flatten_strings(node: object, prefix: str = "") -> dict[str, str]:
+    """Alle String-Blätter als ``pfad -> wert`` (nur Strings)."""
+    out: dict[str, str] = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, str):
+                out[child] = value
+            elif isinstance(value, dict):
+                out.update(_flatten_strings(value, child))
+    return out
+
+
+def _placeholders(value: str) -> set[str]:
+    """Menge der `{...}`-Inhalte (auch ungültige, z. B. ``{Quelle: …}``)."""
+    return {match.group(0)[1:-1] for match in _PLACEHOLDER.finditer(value)}
+
+
+def test_all_translation_placeholders_are_valid_identifiers() -> None:
+    """HA erlaubt in Übersetzungen nur `{identifier}`-Platzhalter.
+
+    Fängt insbesondere versehentliche Doku-Klammern wie `{Quelle: Ziel-ID}` ab,
+    die HA als Platzhalter interpretiert und die Validierung brechen lässt.
+    """
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        for key, value in _flatten_strings(_load(path)).items():
+            for placeholder in _placeholders(value):
+                assert _VALID_PLACEHOLDER.fullmatch(placeholder), (
+                    f"{path}: ungültiger Platzhalter {{{placeholder}}} bei {key!r}"
+                )
+
+
+def test_translation_placeholders_match_across_languages() -> None:
+    """Lokalisierte Strings müssen dieselben Platzhalter wie der Master nutzen.
+
+    HA validiert die Platzhalter der Übersetzung gegen den englischen Master;
+    eine Abweichung (z. B. `{Quelle}` vs. `{source}`) erzeugt Laufzeitfehler.
+    """
+    master = _flatten_strings(_load(_MASTER))
+    for lang, path in _TRANSLATIONS.items():
+        other = _flatten_strings(_load(path))
+        for key, value in other.items():
+            expected = _placeholders(master.get(key, ""))
+            actual = _placeholders(value)
+            assert actual == expected, (
+                f"translations/{lang}.json: Platzhalter bei {key!r} weichen ab: "
+                f"{sorted(actual)} != {sorted(expected)}"
+            )

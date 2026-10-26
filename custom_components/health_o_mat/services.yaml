@@ -280,8 +280,8 @@ restore_backup:
     person_map:
       name: Personen-Zuordnung
       description: >-
-        Zuordnung {Quelle: Ziel-Entry-ID}. Nötig, wenn die Person im Ziel nicht
-        über den Namen eindeutig gefunden wird. Personen werden nie
+        Zuordnung von Quelle zu Ziel-Entry-ID. Nötig, wenn die Person im Ziel
+        nicht über den Namen eindeutig gefunden wird. Personen werden nie
         automatisch angelegt.
     dry_run:
       name: Probelauf
