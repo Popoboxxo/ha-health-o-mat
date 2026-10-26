@@ -183,7 +183,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | button | `report_very_bad` … `report_excellent` | Melden: … / Report: … | Wohlbefinden (zehn Stufen) |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
-| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
+| number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*`, `wellbeing_input` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe, Wohlbefinden-Zahl | Runtime-Einstellungen und Scores |
 
 ### Entities im Detail
 
@@ -325,7 +325,8 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   `history_json` (letzte 10 Meldungen), `score` und `scale_max` (10).
   Service-Aufrufe nutzen die Roh-Keys
   (`very_bad`, `awful`, `bad`, `poor`, `okay`, `mixed`, `good`, `very_good`,
-  `great`, `excellent`) oder `score: 1…10`.
+  `great`, `excellent`) oder `score: 1…10`. Für die direkte Zahleneingabe
+  ohne UI gibt es zusätzlich `number.…_wellbeing_input` (1–10).
 
 **Text: Freitext-Buchung**
 
@@ -354,6 +355,10 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   Warnschwellen für den Blutdruck-Warn-Binary-Sensor.
 - `number.…_new_reading_systolic` / `_diastolic` / `_pulse` — Eingabefelder
   für die nächste Blutdruckmessung (mit `save_measurement`-Button übernehmen).
+- `number.…_wellbeing_input` — Wohlbefinden als Zahl **1–10** (1 = sehr
+  schlecht … 10 = ausgezeichnet). Eine Eingabe meldet denselben Status wie
+  Select und Melden-Buttons, sodass Verlauf und `wellbeing_score` konsistent
+  bleiben.
 
 Die beiden Mengen-Entities melden die Einheit **mL** — die HA-kanonische
 Schreibweise, konsistent zu den Volumen-Sensoren (`device_class: volume`).

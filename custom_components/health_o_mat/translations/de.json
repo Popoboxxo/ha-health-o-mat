@@ -288,6 +288,9 @@
       },
       "input_pulse": {
         "name": "Neue Messung: Puls"
+      },
+      "wellbeing_input": {
+        "name": "Wohlbefinden-Eingabe"
       }
     }
   },

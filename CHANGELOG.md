@@ -5,6 +5,17 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.15.0] — 2026-10-26
+
+### Added
+
+- **Wellbeing number input:** new `number.…_wellbeing_input` entity (1–10,
+  step 1) that reports the same status as the wellbeing select and the report
+  buttons, so the history and `wellbeing_score` stay consistent when the value
+  is entered numerically.
+
+[0.15.0]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.14.1...v0.15.0
+
 ## [0.14.1] — 2026-10-26
 
 ### Fixed

@@ -11,6 +11,7 @@
 Korrigierbarkeit/Verlauf/Void-Restore/Audit-Log (115), Backup-Restore inkl. Teil-Restore
 und Dry-Run (116), UI-Internationalisierung de/en (117), Erinnerungen/Wochenbericht/
 Blueprints (118), Onboarding-/Options-Wizard (119), unbegrenztes Rückdatieren (120) ·
+**REQ-HOM-121** erledigt und mit **Release 0.15.0 veröffentlicht (2026-10-26)** (Wohlbefinden-Zahleneingabe als Number-Entity, Branch `feat/wellbeing-number-entity`) ·
 Belege: **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
 `ruff check .` + `ruff format --check .` clean ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
@@ -1140,6 +1141,36 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
+#### REQ-HOM-121 — Wohlbefinden-Zahleneingabe als Number-Entity
+- **Priorität:** P2 · **Aufwand:** S
+- **Status: Erledigt (Branch `feat/wellbeing-number-entity`, 2026-10-26)** —
+  umgesetzt und getestet; **Release 0.15.0 veröffentlicht (2026-10-26)**.
+- **Anforderung:** Das Wohlbefinden lässt sich nicht nur über den Select
+  (Status-Dropdown) und die Melden-Buttons setzen, sondern auch über eine
+  **Number-Entity mit der Score-Skala 1 … N** (N = Anzahl der
+  `WELLBEING_STATES`). Die Eingabe bildet den Score über
+  `logic.wellbeing_key_for_score` auf den Status-Key ab und meldet ihn über
+  denselben Store-Pfad wie Select/Buttons — Verlauf, Score-Sensor und
+  Wellbeing-Chronologie bleiben damit konsistent. Die Entity folgt dem
+  `areas`-Schalter `wellbeing` (kein Entity bei deaktiviertem Bereich).
+- **Akzeptanzkriterien:**
+  - [x] Number-Entity `number.…_wellbeing_input` mit `min=1`, `max=N`,
+    `step=1`, `mode=BOX`; `native_value` ist der aktuelle Score (bzw.
+    `unknown` ohne Meldung). **Beleg:**
+    `tests/test_number.py::test_wellbeing_input_native_value_maps_status_to_score`,
+    `::test_wellbeing_input_native_value_is_none_without_status`,
+    `::test_wellbeing_input_attributes_and_translation_key`.
+  - [x] Eine Eingabe meldet den zugehörigen Status über `store.set_wellbeing`
+    (inkl. Audit-Limit); ungültige Scores werden ignoriert. **Beleg:**
+    `tests/test_number.py::test_wellbeing_input_apply_maps_score_to_status_and_reports`,
+    `::test_wellbeing_input_apply_ignores_invalid_score`.
+  - [x] Bereichs-Filter: `wellbeing: false` erzeugt keine Number-Entity;
+    bestehende Entries ohne `areas` behalten sie. **Beleg:**
+    `tests/test_number.py::test_number_setup_wellbeing_disabled_creates_no_wellbeing_number`,
+    `::test_number_setup_old_entry_without_options_has_all_areas`.
+  - [x] de/en-Übersetzungen (Name „Wohlbefinden-Eingabe" / „Wellbeing input")
+    und README/Entity-Tabelle aktualisiert.
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -1179,4 +1210,5 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-26 | **REQ-HOM-115…120 umgesetzt (Branch `feat/ux-p1`, Release 0.14.0 veröffentlicht (2026-10-26)):** Void/Restore + Audit-Log (Store v4, Cap Default 1000/`0` = unbegrenzt, kein Hard-Delete in der UI, History-API/-UI, Undo für alle Typen) (115); Backup-Restore mit Merge/Replace, Teil-Restore nach Person/Datensatz/Zeitraum, Dry-Run, Personen-Mapping und Pre-Restore-Backup, Backup v2 inkl. Archiv, Admin-Service/WS/UI (116); HA-native UI-i18n de/en über `common`-Translations mit Loader, Fallback und Laufzeit-Sprachwechsel (117); Reminder/Scheduler mit Quiet Hours und Dedup, `notify.*`-Fallback, Wochenbericht nur als Notification, drei Blueprints, Options-Schritt (118); Options-Wizard mit Menü, optionalen/überspringbaren Schritten, Defaults, Zusammenfassung und Merge-Erhalt (119); unbegrenztes Rückdatieren über `ts` getrennt von `created_at`, Wellbeing-Chronologie, Panel-/Karten-Zeitfelder, Undo = zuletzt erfasst (120). **Belege:** 1159 Unit-Tests, 18 E2E-Tests (realer HA-Docker-Stack, inkl. `test_history_e2e.py` und `test_i18n_e2e.py`), `ruff check .` + `ruff format --check .` clean. |
 | 2026-10-26 | **Code-Review-Fixes vor dem 0.14.0-Release (Branch `feat/ux-p1`):** B-1 many-to-one Replace aggregiert Quellrecords pro Ziel/Datensatz, dedupliziert und leert den Scope einmal (Drinks/Readings/Wellbeing/Archiv; Dry-Run == Apply); B-2 Archiv-Store wird beim Setup unabhängig von `retention_months` geladen (nur bei vorhandener Datei) und beim Restore on demand; S-1 naive Restore-Zeitfenster gelten als lokale HA-Zeitzone (UI sendet UTC-ISO); S-2 Dedup normalisiert auf UTC; S-3 `notify.*` mit `blocking=True` + persistent-Fallback bei Handler-Fehlern; S-4 `set_lifetime_ml` nur bei expliziter Änderung (Dirty-Tracking, Wizard-Save nach Buchungen sicher); S-5 Retention schreibt erst Archiv, dann Haupt-Store (Rollback bei Fehler); S-6 Replace validiert Records wie Merge; S-9 Audit-Details ohne Gesundheitswerte (nur `src`/`reason`); S-11 Restore-Liste/Pfad-Whitelist um `health_o_mat_export/*.json` erweitert; S-13 partielles `areas`-Update reaktiviert keine deaktivierten Bereiche; S-14 Export-/Backup-Services admin-gated; N-1 E2E-Docstrings korrigiert; N-7 Replace-Dry-Run ohne `REPLACE`-Bestätigung. **Belege:** `pytest -q` → **1159 passed**, `ruff check .` + `ruff format --check .` clean (kein Live-E2E, Stack gestoppt). |
 | 2026-10-26 | **v0.14.0 veröffentlicht** (PR #44, Merge-Commit `618bda8`, Tag `v0.14.0`): Release-Dreiklang abgeschlossen; Tag ↔ `manifest.version` 0.14.0 synchron, alle `?v=`-Cache-Buster auf 0.14.0. CI auf dem Branch-Head: lint, tests, validate (hassfest/HACS) und E2E grün; 1159 Unit-Tests, 18 E2E-Tests, ruff clean. Release-Notes (de/en) unter `docs/RELEASE-NOTES-0.14.0.md`, GitHub-Release: <https://github.com/Popoboxxo/ha-health-o-mat/releases/tag/v0.14.0>. Feature-Branch `feat/ux-p1` bleibt erhalten; HACS-Update-Test und Alt-Entity-Cleanup auf der Dev-Instanz stehen als Betriebs-Follow-up aus. |
+| 2026-10-26 | **Neu angelegt: REQ-HOM-121 — Wohlbefinden-Zahleneingabe als Number-Entity** (Branch `feat/wellbeing-number-entity`) — **erledigt und mit Release 0.15.0 veröffentlicht (2026-10-26)**. Neue Number-Entity `number.…_wellbeing_input` (1…10, `step=1`, `mode=BOX`) als UI-loser Gegenpart zu Select und Melden-Buttons: `native_value` liefert den aktuellen Score, eine Eingabe wird über `logic.wellbeing_key_for_score` auf den Status-Key abgebildet und über `store.set_wellbeing` (inkl. Audit-Limit) gemeldet. Bereichs-Filter `wellbeing: false` erzeugt keine Entity; de/en-Übersetzungen und README ergänzt. **Belege:** `tests/test_number.py` (Wellbeing-Input-Fälle + Bereichs-Filter), `pytest -q` → **1167 passed**, `ruff check .` + `ruff format --check .` clean. **Release:** v0.15.0 veröffentlicht (MINOR, keine Migration; Release-Notes: `docs/RELEASE-NOTES-0.15.0.md`). |
 | 2026-10-26 | **v0.14.1 — Übersetzungs-Platzhalter-Fix + Dev-Instanz-Upgrade-Test:** Auf `ha-test` (HA 2026.9.1) wurde **HACS 2.0.5 temporär installiert**, `Popoboxxo/ha-health-o-mat` als Custom-Repository (`integration`) registriert und der echte **HACS-Install/Update-Pfad** getestet: Installation **v0.14.0** (HACS `installed_version=v0.14.0`, `pending_upgrade=true`) → Update **v0.14.1** (`pending_upgrade=false`), jeweils mit Neustart/Verifikation; danach HACS + GitHub-Token wieder entfernt. Zusätzlich Upgrade **0.10.2 → 0.14.0** per `bin/sync`: Store-Schema **v3 → v4** migriert (17 Einträge, keine Datenverluste), 4 Config-Entries geladen, **172 Entities** vollständig vorhanden, **keine verwaisten Entities/Devices** (Registry vs. States und Device-Registry geprüft); HACS-Test-Entities nach Entfernen ebenfalls bereinigt. Im Setup-Log fiel ein HA-Übersetzungsfehler auf: `restore_backup.fields.person_map.description` enthielt `{Quelle: Ziel-Entry-ID}` bzw. `{source: target entry ID}` und wurde als ungültiger Platzhalter validiert. **Fix:** Beschreibungen in `services.yaml`, `strings.json`, `de.json`, `en.json` ohne Platzhalter-Klammern; neue Tests für gültige Platzhalter und sprachübergreifende Platzhalter-Parität. **Belege:** `pytest -q` → **1161 passed**, `ruff check .` + `ruff format --check .` clean; Dev-Instanz nach Sync auf 0.14.1 ohne den Übersetzungsfehler. Patch-Release v0.14.1 (keine Migration, keine Entity-Änderungen). |

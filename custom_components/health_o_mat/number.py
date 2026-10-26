@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.util import dt as dt_util
 
-from . import areas
+from . import areas, logic
 from .const import (
     DEFAULT_CUSTOM_AMOUNT_ML,
     DOMAIN,
     MAX_AMOUNT_ML,
+    WELLBEING_STATES,
 )
 from .entity import HealthOMatEntity, signal_refresh
 
@@ -42,6 +44,8 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
                 ),
             ]
         )
+    if active[areas.AREA_WELLBEING]:
+        entities.append(WellbeingInputNumber(coord, entry, store))
     async_add_entities(entities)
 
 
@@ -191,4 +195,41 @@ class InputNumber(HealthOMatNumber):
     async def _apply(self, value: float) -> None:
         await self._store.set_inputs(
             self._entry.entry_id, self._input_key, int(value) if value else None
+        )
+
+
+class WellbeingInputNumber(HealthOMatNumber):
+    """Zahlen-Eingabe für das Wohlbefinden (1 … N).
+
+    Spiegel zum Select und zu den Melden-Buttons: Der eingegebene Score wird
+    über `logic.wellbeing_key_for_score` auf den Status-Key abgebildet und
+    über denselben Store-Pfad gemeldet. So bleiben Verlauf, Score-Sensor und
+    Wellbeing-Chronologie konsistent, egal ob per Dropdown, Button oder Zahl
+    gemeldet wird.
+    """
+
+    _attr_translation_key = "wellbeing_input"
+    _attr_icon = "mdi:emoticon-outline"
+    _attr_native_min_value = 1
+    _attr_native_step_value = 1
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, "number_wellbeing_input")
+        self._store = store
+        self._attr_native_max_value = len(WELLBEING_STATES)
+
+    @property
+    def native_value(self) -> int | None:
+        wb = self._store.active_entry(self._entry.entry_id).get("wellbeing") or {}
+        return logic.wellbeing_score(wb.get("status"))
+
+    async def _apply(self, value: float) -> None:
+        status = logic.wellbeing_key_for_score(value)
+        if status is None:
+            return
+        await self._store.set_wellbeing(
+            self._entry.entry_id,
+            status,
+            dt_util.now().isoformat(),
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
         )

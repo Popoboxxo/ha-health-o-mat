@@ -71,20 +71,20 @@ import {
   t,
   setUiTranslator,
   setUiLanguage,
-} from "./health-o-mat-panel-base.js?v=0.14.1";
+} from "./health-o-mat-panel-base.js?v=0.15.0";
 import {
   loadUiTranslations,
   t as uiTranslate,
   currentLanguage as uiCurrentLanguage,
-} from "./health-o-mat-i18n.js?v=0.14.1";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.14.1";
+} from "./health-o-mat-i18n.js?v=0.15.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.15.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
   collectRestorePayload,
-} from "./health-o-mat-panel-admin.js?v=0.14.1";
+} from "./health-o-mat-panel-admin.js?v=0.15.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
