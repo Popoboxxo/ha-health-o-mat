@@ -1,6 +1,6 @@
 # Umsetzungsplan UX-P1 — Release 0.14.0
 
-**Status:** Umgesetzt (Branch `feat/ux-p1`, 2026-10-26) · **Release:** `0.14.0` vorbereitet
+**Status:** Umgesetzt (Branch `feat/ux-p1`, 2026-10-26) · **Release:** `0.14.0` veröffentlicht (2026-10-26)
 **Scope:** P1-Punkte **1, 2, 4, 5, 6, 7** aus dem Usability-Check
 **Nicht in Scope:** P1-Punkt 3 (Mehrbenutzer/Datenschutz/ACL) — siehe §12
 **Release-Schnitt:** **ein** Release `0.14.0` (Entscheidung des Users)

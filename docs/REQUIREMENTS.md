@@ -1,17 +1,17 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-26 (UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`
+**Stand:** 2026-10-26 (UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
 **REQ-HOM-113** erledigt (Feature, Konfigurierbare Health-O-Mat-Karte) ·
 **REQ-HOM-114** erledigt (Wohlbefinden-Bestätigung vor Übernahme) ·
 **REQ-HOM-115…120 umgesetzt** (UX-P1, P1, Branch `feat/ux-p1`, 2026-10-26;
-**Release 0.14.0 ausstehend** — Version-Bump/Tag/GitHub-Release):
+**Release 0.14.0 veröffentlicht (2026-10-26)** — Version-Bump/Tag/GitHub-Release):
 Korrigierbarkeit/Verlauf/Void-Restore/Audit-Log (115), Backup-Restore inkl. Teil-Restore
 und Dry-Run (116), UI-Internationalisierung de/en (117), Erinnerungen/Wochenbericht/
 Blueprints (118), Onboarding-/Options-Wizard (119), unbegrenztes Rückdatieren (120) ·
-Belege: **1120 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
+Belege: **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
 `ruff check .` + `ruff format --check .` clean ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 **`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
@@ -804,7 +804,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 #### REQ-HOM-115 — Korrigierbarkeit: Verlauf, Void/Restore, Audit-Log
 - **Priorität:** P1 · **Aufwand:** L (6–8 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS1
 - **Anforderung:** Getränke, Blutdruck und Wohlbefinden sind nachträglich
   korrigierbar: je Datentyp gibt es einen **Verlauf** (aktiv/gelöscht), **Löschen
@@ -872,13 +872,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `::test_panel_history_css_is_mobile_readable`,
     `tests/test_card_js.py::test_card_history_and_undo_for_all_kinds`,
     `tests_e2e/test_history_e2e.py::test_req_hom_115_120_panel_backdates_then_voids_and_restores`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
 #### REQ-HOM-116 — Backup-Restore inkl. Teil-Restore und Dry-Run
 - **Priorität:** P1 · **Aufwand:** L (5–7 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS2
 - **Anforderung:** Backups lassen sich validiert und kontrolliert zurückspielen —
   **Merge (Default) und Replace**, zusätzlich **Teil-Restore** nach Person,
@@ -937,13 +937,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `tests/test_ws_api.py::test_restore_backup_dry_run_returns_plan`,
     `::test_restore_backup_error_is_structured`,
     `tests/test_panel_js.py::test_req_hom_116_panel_restore_flow`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
 #### REQ-HOM-117 — UI-Internationalisierung de/en über HA-Translations
 - **Priorität:** P1 · **Aufwand:** L (4–6 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS3
 - **Anforderung:** Panel, Karte und Editor folgen der HA-Sprache — **nur
   HA-nativ de/en**, kein eigenes i18n-Framework. Die UI-Texte liegen als flache
@@ -975,13 +975,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   - [x] Sprachwechsel zur Laufzeit wird ohne Reload sichtbar (Neu-Rendern) —
     `tests/test_panel_js.py::test_req_hom_117_panel_translations_load_fallback_and_language_switch`,
     `tests/test_card_js.py::test_req_hom_117_card_inline_translations_and_language_switch`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack, inkl. `test_i18n_e2e.py` in en-US).
 
 #### REQ-HOM-118 — Erinnerungen, Wochenbericht und Blueprints
 - **Priorität:** P1 · **Aufwand:** M–L (5–7 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS4
 - **Anforderung:** Die Integration erinnert aktiv und liefert einen
   Wochenbericht. **Eingebaute Reminder** laufen über einen beliebigen
@@ -1034,13 +1034,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `tests/test_reminders.py::test_send_notification_prefers_configured_notify_service`,
     `::test_send_notification_falls_back_to_persistent`,
     `::test_send_notification_empty_service_uses_persistent`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
 #### REQ-HOM-119 — Onboarding/Options-Wizard mit optionalen Schritten
 - **Priorität:** P1 · **Aufwand:** M (3–4 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS5
 - **Anforderung:** Der Options-Flow wird ein **Menü mit optionalen Schritten**
   (Grundlagen · Getränke · Wohlbefinden · Benachrichtigungen · Zusammenfassung).
@@ -1080,13 +1080,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `::test_m3e_skip_documented_for_optional_sections`,
     `::test_m3e_summary_documents_changes_placeholder`,
     `::test_m3e_defaults_step_has_description_in_all_translations`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
 #### REQ-HOM-120 — Rückdatierte Einträge (unbegrenzt)
 - **Priorität:** P1 · **Aufwand:** M (3–4 Tage)
 - **Status: Erledigt (Branch `feat/ux-p1`, 2026-10-26)** — umgesetzt und getestet;
-  **Release 0.14.0 ausstehend** (Version-Bump/Tag/GitHub-Release).
+  **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release).
 - **Plan:** `docs/PLAN-UX-P1.md`, WS6
 - **Anforderung:** Getränke, Blutdruck und Wohlbefinden lassen sich mit
   **beliebig weit zurückliegendem Datum/Zeitpunkt** erfassen — **keine
@@ -1137,7 +1137,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     `tests/test_card_js.py::test_req_hom_120_card_renders_ts_fields_in_all_three_blocks`,
     `::test_req_hom_120_card_payloads_carry_ts`,
     `tests_e2e/test_history_e2e.py::test_req_hom_115_120_panel_backdates_then_voids_and_restores`.
-  - **Beleg:** Unit **1120 passed**, `ruff check .` + `ruff format --check .` clean;
+  - **Beleg:** Unit **1159 passed**, `ruff check .` + `ruff format --check .` clean;
     E2E **18 passed** (realer HA-Docker-Stack).
 
 ---
@@ -1176,5 +1176,6 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-24 | **Neu angelegt: REQ-HOM-114 — Wohlbefinden-Bestätigung vor Übernahme** (Branch `feat/wellbeing-confirm`) — **erledigt im Working Tree**, noch kein Commit/Release und **kein Versions-Bump**. Zwei **unabhängige** Schalter `wellbeing_confirm` (bool, Default `false` → kein Verhaltenswechsel): **Teil A** als Panel-/Server-Option pro Config-Entry in `entry.options` über `health_o_mat/set_settings` (`SETTINGS_KEYS`/`SETTINGS_SCHEMA`, `build_settings`, `parse_settings_message`; **strikt bool** — `"true"`/`"false"`/`1`/`0` → `invalid_format`, ohne Teil-Update), Checkbox in der Admin-Maske, `panel_data` liefert den Wert als echtes Boolean, Detail-Tab merkt die Auswahl vor (eigene `pending`-Markierung) und meldet erst per Bestätigungsbutton; **Teil B** als eigenständige Karten-Option mit Editor-Checkbox, Vormerkung (Key oder Score) + Bestätigungsbutton, **nicht** an die Server-Option gekoppelt; Vormerkung wird bei Personenwechsel, `setConfig`, Wechsel zur Übersicht und Reload verworfen, bleibt bei einem Fehler für den erneuten Versuch erhalten. **Belege:** `tests/test_ws_api.py` (7 Testfunktionen `test_req_hom_114_*`, u. a. `::test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm`, `::test_req_hom_114_panel_data_carries_wellbeing_confirm`), `tests/test_panel_js.py::test_req_hom_114_panel_admin_has_wellbeing_confirm_checkbox`, `::test_req_hom_114_panel_defers_wellbeing_report_until_confirmation`, `tests/test_card_js.py::test_req_hom_114_card_defers_wellbeing_report_until_confirmation`, `::test_req_hom_114_card_editor_has_wellbeing_confirm_checkbox`, `tests/test_config_flow.py::test_req_hom_114_options_flow_preserves_wellbeing_confirm`; `pytest -q` → **807 passed**, `ruff check .` clean (**Implementierer-Angabe**; die parallel laufende Tester-Verifikation bleibt abzuwarten). README („Karten-Konfiguration" + Admin-Abschnitt) aktualisiert. |
 | 2026-10-25 | **v0.13.0 — Wohlbefinden-Bestätigung vor Übernahme (REQ-HOM-114)** (Branch `feat/wellbeing-confirm`): zwei unabhängige Optionen `wellbeing_confirm` (Default `false`) — pro Person in der Panel-Admin-Maske und als eigene Karten-Option; Auswahl wird vorgemerkt, erst der Bestätigungsbutton meldet. Options-Flow erhält nicht gezeigte Optionen. Unit `812 passed`, E2E `15 passed` (2 neue), ruff check/format clean. Release v0.13.0 (MINOR). |
 | 2026-10-25 | **Neu aufgenommen: REQ-HOM-115…120 — UX-P1 / Release 0.14.0** (Branch `feat/ux-p1`): sechs P1-Anforderungen aus `docs/PLAN-UX-P1.md` (WS1–WS6) in Kapitel 2 nach REQ-HOM-114 eingetragen, **Status: Offen — geplant für 0.14.0**, Akzeptanzkriterien als offene Checkboxen. Inhalt: **115** Korrigierbarkeit (Verlauf, Void/Restore, Audit-Log; kein Hard-Delete in der UI; Audit-Cap Default 1000 Ereignisse/Person, Admin `0` = unbegrenzt), **116** Backup-Restore (Merge/Replace + Teil-Restore nach Person/Datensatz/Zeitraum, Dry-Run, Pre-Restore-Backup, Personen-Mapping), **117** UI-i18n **nur HA-nativ de/en** über `common`-Translations/`frontend/get_translations` (Entity-/Service-Translations unverändert), **118** Reminder (`notify.*` + persistenter Fallback), Wochenbericht **nur als Notification** (Markdown, keine Datei) und Blueprints, **119** Options-Wizard mit optionalen Schritten/Defaults und Zusammenfassung ohne Datenverluste, **120** unbegrenzt rückdatierte Einträge (keine Zukunft, `created_at` vs. `ts`, Undo = zuletzt erfasst). Keine bestehenden REQ-IDs umnummeriert; Umsetzung/Belege stehen aus. |
-| 2026-10-26 | **REQ-HOM-115…120 umgesetzt (Branch `feat/ux-p1`, Release 0.14.0 ausstehend):** Void/Restore + Audit-Log (Store v4, Cap Default 1000/`0` = unbegrenzt, kein Hard-Delete in der UI, History-API/-UI, Undo für alle Typen) (115); Backup-Restore mit Merge/Replace, Teil-Restore nach Person/Datensatz/Zeitraum, Dry-Run, Personen-Mapping und Pre-Restore-Backup, Backup v2 inkl. Archiv, Admin-Service/WS/UI (116); HA-native UI-i18n de/en über `common`-Translations mit Loader, Fallback und Laufzeit-Sprachwechsel (117); Reminder/Scheduler mit Quiet Hours und Dedup, `notify.*`-Fallback, Wochenbericht nur als Notification, drei Blueprints, Options-Schritt (118); Options-Wizard mit Menü, optionalen/überspringbaren Schritten, Defaults, Zusammenfassung und Merge-Erhalt (119); unbegrenztes Rückdatieren über `ts` getrennt von `created_at`, Wellbeing-Chronologie, Panel-/Karten-Zeitfelder, Undo = zuletzt erfasst (120). **Belege:** 1120 Unit-Tests, 18 E2E-Tests (realer HA-Docker-Stack, inkl. `test_history_e2e.py` und `test_i18n_e2e.py`), `ruff check .` + `ruff format --check .` clean. |
-| 2026-10-26 | **Code-Review-Fixes vor dem 0.14.0-Release (Branch `feat/ux-p1`):** B-1 many-to-one Replace aggregiert Quellrecords pro Ziel/Datensatz, dedupliziert und leert den Scope einmal (Drinks/Readings/Wellbeing/Archiv; Dry-Run == Apply); B-2 Archiv-Store wird beim Setup unabhängig von `retention_months` geladen (nur bei vorhandener Datei) und beim Restore on demand; S-1 naive Restore-Zeitfenster gelten als lokale HA-Zeitzone (UI sendet UTC-ISO); S-2 Dedup normalisiert auf UTC; S-3 `notify.*` mit `blocking=True` + persistent-Fallback bei Handler-Fehlern; S-4 `set_lifetime_ml` nur bei expliziter Änderung (Dirty-Tracking, Wizard-Save nach Buchungen sicher); S-5 Retention schreibt erst Archiv, dann Haupt-Store (Rollback bei Fehler); S-6 Replace validiert Records wie Merge; S-9 Audit-Details ohne Gesundheitswerte (nur `src`/`reason`); S-11 Restore-Liste/Pfad-Whitelist um `health_o_mat_export/*.json` erweitert; S-13 partielles `areas`-Update reaktiviert keine deaktivierten Bereiche; S-14 Export-/Backup-Services admin-gated; N-1 E2E-Docstrings korrigiert; N-7 Replace-Dry-Run ohne `REPLACE`-Bestätigung. **Belege:** `pytest -q` → **1154 passed**, `ruff check .` + `ruff format --check .` clean (kein Live-E2E, Stack gestoppt). |
+| 2026-10-26 | **REQ-HOM-115…120 umgesetzt (Branch `feat/ux-p1`, Release 0.14.0 veröffentlicht (2026-10-26)):** Void/Restore + Audit-Log (Store v4, Cap Default 1000/`0` = unbegrenzt, kein Hard-Delete in der UI, History-API/-UI, Undo für alle Typen) (115); Backup-Restore mit Merge/Replace, Teil-Restore nach Person/Datensatz/Zeitraum, Dry-Run, Personen-Mapping und Pre-Restore-Backup, Backup v2 inkl. Archiv, Admin-Service/WS/UI (116); HA-native UI-i18n de/en über `common`-Translations mit Loader, Fallback und Laufzeit-Sprachwechsel (117); Reminder/Scheduler mit Quiet Hours und Dedup, `notify.*`-Fallback, Wochenbericht nur als Notification, drei Blueprints, Options-Schritt (118); Options-Wizard mit Menü, optionalen/überspringbaren Schritten, Defaults, Zusammenfassung und Merge-Erhalt (119); unbegrenztes Rückdatieren über `ts` getrennt von `created_at`, Wellbeing-Chronologie, Panel-/Karten-Zeitfelder, Undo = zuletzt erfasst (120). **Belege:** 1159 Unit-Tests, 18 E2E-Tests (realer HA-Docker-Stack, inkl. `test_history_e2e.py` und `test_i18n_e2e.py`), `ruff check .` + `ruff format --check .` clean. |
+| 2026-10-26 | **Code-Review-Fixes vor dem 0.14.0-Release (Branch `feat/ux-p1`):** B-1 many-to-one Replace aggregiert Quellrecords pro Ziel/Datensatz, dedupliziert und leert den Scope einmal (Drinks/Readings/Wellbeing/Archiv; Dry-Run == Apply); B-2 Archiv-Store wird beim Setup unabhängig von `retention_months` geladen (nur bei vorhandener Datei) und beim Restore on demand; S-1 naive Restore-Zeitfenster gelten als lokale HA-Zeitzone (UI sendet UTC-ISO); S-2 Dedup normalisiert auf UTC; S-3 `notify.*` mit `blocking=True` + persistent-Fallback bei Handler-Fehlern; S-4 `set_lifetime_ml` nur bei expliziter Änderung (Dirty-Tracking, Wizard-Save nach Buchungen sicher); S-5 Retention schreibt erst Archiv, dann Haupt-Store (Rollback bei Fehler); S-6 Replace validiert Records wie Merge; S-9 Audit-Details ohne Gesundheitswerte (nur `src`/`reason`); S-11 Restore-Liste/Pfad-Whitelist um `health_o_mat_export/*.json` erweitert; S-13 partielles `areas`-Update reaktiviert keine deaktivierten Bereiche; S-14 Export-/Backup-Services admin-gated; N-1 E2E-Docstrings korrigiert; N-7 Replace-Dry-Run ohne `REPLACE`-Bestätigung. **Belege:** `pytest -q` → **1159 passed**, `ruff check .` + `ruff format --check .` clean (kein Live-E2E, Stack gestoppt). |
+| 2026-10-26 | **v0.14.0 veröffentlicht** (PR #44, Merge-Commit `618bda8`, Tag `v0.14.0`): Release-Dreiklang abgeschlossen; Tag ↔ `manifest.version` 0.14.0 synchron, alle `?v=`-Cache-Buster auf 0.14.0. CI auf dem Branch-Head: lint, tests, validate (hassfest/HACS) und E2E grün; 1159 Unit-Tests, 18 E2E-Tests, ruff clean. Release-Notes (de/en) unter `docs/RELEASE-NOTES-0.14.0.md`, GitHub-Release: <https://github.com/Popoboxxo/ha-health-o-mat/releases/tag/v0.14.0>. Feature-Branch `feat/ux-p1` bleibt erhalten; HACS-Update-Test und Alt-Entity-Cleanup auf der Dev-Instanz stehen als Betriebs-Follow-up aus. |

@@ -9,6 +9,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 
 > ⚠️ Keine medizinische Beratung — Klassifikationen/Warnungen dienen nur der Orientierung.
 
+> 📝 Änderungen: [CHANGELOG.md](CHANGELOG.md) · Releases:
+> [GitHub Releases](https://github.com/Popoboxxo/ha-health-o-mat/releases)
+
 ## Features
 
 - 💧 **Getränke-Tracking**: „Wie viel habe ich heute getrunken?" — sauberer mL-Sensor,
