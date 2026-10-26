@@ -6,9 +6,9 @@ are vanilla web components, so a real browser against a real HA instance is
 the only way to verify that `hass.language` actually switches the rendered
 labels.
 
-`logged_in_page` runs with `locale=de-DE` (the existing German assertions stay
-stable); `english_page` opens a second context with `locale=en-US` and is used
-here. Server-side data labels (person names, configured quick-drink labels)
+`logged_in_page` runs with `locale=en-US` (the same context as
+`english_page`); `english_page` makes that explicit for this i18n coverage.
+Server-side data labels (person names, configured quick-drink labels)
 remain user data and are intentionally not asserted.
 """
 

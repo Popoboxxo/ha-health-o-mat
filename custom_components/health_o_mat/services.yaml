@@ -166,7 +166,9 @@ restore_entry:
 
 export_csv:
   name: CSV-Export
-  description: Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
+  description: >-
+    Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
+    Nur für Administratoren.
   fields:
     person:
       name: Person
@@ -218,18 +220,22 @@ backup:
   name: Backup
   description: >-
     Sichert alle Personen und Datensätze als JSON nach /config/health_o_mat_export/.
+    Nur für Administratoren.
 
 restore_backup:
   name: Backup wiederherstellen
   description: >-
-    Spielt ein JSON-Backup aus /config/health_o_mat_import/ kontrolliert zurück
+    Spielt ein JSON-Backup aus /config/health_o_mat_import/ oder
+    /config/health_o_mat_export/ kontrolliert zurück
     (Merge oder Replace, optional nur bestimmte Personen/Datensätze/Zeiträume).
     Vor jedem echten Restore wird ein Sicherheitsbackup im Export-Ordner
     angelegt. Nur für Administratoren.
   fields:
     filename:
       name: Dateiname
-      description: Dateiname innerhalb von /config/health_o_mat_import/.
+      description: >-
+        Dateiname in /config/health_o_mat_import/ oder
+        /config/health_o_mat_export/.
       example: "health_o_mat_backup_20261014-120000.json"
       required: true
     mode:

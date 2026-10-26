@@ -1495,7 +1495,13 @@ async def websocket_set_settings(hass: HomeAssistant, connection: Any, msg: dict
     if error is not None:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, error)
         return
-    merged = {**(getattr(entry, "options", None) or {}), **updates}
+    current_options = getattr(entry, "options", None) or {}
+    if "areas" in updates:
+        # S-13: partielle `areas`-Updates mit den aktuell aktiven Werten merken,
+        # sonst würde ein fehlender Unterschlüssel als "aktiv" gelten und einen
+        # zuvor deaktivierten Bereich wieder einschalten.
+        updates["areas"] = {**active_areas(current_options), **updates["areas"]}
+    merged = {**current_options, **updates}
     hass.config_entries.async_update_entry(entry, options=merged)
     connection.send_result(msg["id"], build_settings(entry))
 
@@ -1627,10 +1633,12 @@ async def websocket_backup(hass: HomeAssistant, connection: Any, msg: dict[str, 
 async def websocket_list_import_files(
     hass: HomeAssistant, connection: Any, msg: dict[str, Any]
 ) -> None:
-    """`health_o_mat/list_import_files` → Dateien im privaten Import-Ordner.
+    """`health_o_mat/list_import_files` → JSON-Backups in Import-/Export-Ordner.
 
     Nur Admin (Restore-Verwaltung). Geliefert werden ausschließlich Basisnamen
-    regulärer Dateien; Pfade, Traversal und Symlinks bleiben außen vor.
+    regulärer ``.json``-Dateien; Pfade, Traversal, Unterordner und Symlinks
+    bleiben außen vor. Der Export-Ordner macht Backup-/Pre-Restore-Dateien in
+    der Restore-UI sichtbar (S-11).
     """
     if not is_admin_connection(connection):
         _send_unauthorized(connection, msg)

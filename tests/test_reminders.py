@@ -700,3 +700,25 @@ async def _async_noop(*args, **kwargs):
 
 async def _async_noop_true(*args, **kwargs):
     return True
+
+
+# --- Review-Fix S-3 ---------------------------------------------------------
+
+
+def test_send_notification_awaits_handler_and_falls_back_on_async_error():
+    """[S-3] `blocking=True` lässt Handler-Fehler ankommen → persistent-Fallback."""
+    hass = _hass(notify={"mobile_app_phone"})
+    calls: list[tuple[str, str, bool]] = []
+
+    async def _call(domain, service, data, blocking=False):
+        calls.append((domain, service, blocking))
+        if domain == "notify":
+            raise RuntimeError("Handy offline")
+
+    hass.services.async_call = _call
+
+    used = _run(reminders.async_send_notification(hass, "mobile_app_phone", "T", "M"))
+
+    assert used is False
+    assert calls[0] == ("notify", "mobile_app_phone", True)
+    assert calls[-1][0] == "persistent_notification"

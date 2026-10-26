@@ -837,6 +837,41 @@ def test_apply_retention_keeps_only_kept_lists_and_lifetime_unchanged(mock_store
     assert entry["archived_counts"] == {"drinks": 1, "readings": 1}
 
 
+def test_apply_retention_rolls_back_in_memory_on_save_failure(mock_store_fixture):
+    """[S-5] Save-Fehler lässt den RAM-Stand unverändert (kein stiller Verlust)."""
+    store, backend = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry = store.entry("person-1")
+    old_drink = {"ts": "2025-01-01T00:00:00", "ml": 250, "type": "water", "src": "button"}
+    new_drink = {"ts": "2026-09-01T00:00:00", "ml": 500, "type": "water", "src": "button"}
+    old_reading = {"ts": "2025-01-01T00:00:00", "sys": 120, "dia": 80}
+    entry["drinks"] = [old_drink, new_drink]
+    entry["readings"] = [old_reading]
+    entry["archived_counts"] = {"drinks": 3, "readings": 2}
+    before = copy.deepcopy(entry)
+
+    backend.async_save = AsyncMock(side_effect=RuntimeError("save failed"))
+    with pytest.raises(RuntimeError, match="save failed"):
+        _async_test(store.apply_retention("person-1", [new_drink], []))
+
+    # Unveränderte Listen UND unveränderte Zähler (kein gekürzter RAM-Stand).
+    assert store.raw_data()["entries"]["person-1"] == before
+    assert store.raw_data()["entries"]["person-1"]["drinks"] == [old_drink, new_drink]
+    assert store.raw_data()["entries"]["person-1"]["archived_counts"] == {
+        "drinks": 3,
+        "readings": 2,
+    }
+
+    # Ein erneuter Versuch ist nach dem Rollback wieder möglich.
+    backend.async_save = AsyncMock()
+    _async_test(store.apply_retention("person-1", [new_drink], []))
+    current = store.raw_data()["entries"]["person-1"]
+    assert current["drinks"] == [new_drink]
+    assert current["readings"] == []
+    assert current["archived_counts"] == {"drinks": 4, "readings": 3}
+
+
 def test_append_archive_extends_archive_store(mock_store_fixture):
     """[N-2] append_archive hängt verschobene Einträge an (separater Store)."""
     archive, _ = mock_store_fixture
@@ -1311,7 +1346,7 @@ def test_audit_log_records_add_void_restore(mock_store_fixture):
     assert all(event["target_id"] == drink["id"] for event in audit)
     assert all(event["actor"] == "user-1" for event in audit)
     # Nur Metadaten — keine vollständigen Gesundheitsdaten
-    assert audit[0]["details"] == {"ml": 250}
+    assert audit[0]["details"] == {"src": "button"}
     assert audit[1]["details"] == {"reason": "Tippfehler"}
     assert audit[2]["details"] == {}
     assert isinstance(audit[0]["ts"], str)
@@ -1349,7 +1384,7 @@ def test_audit_log_covers_reading_and_wellbeing(mock_store_fixture):
         "wellbeing",
     ]
     assert audit[0]["details"] == {"src": "button"}
-    assert audit[1]["details"] == {"key": "good"}
+    assert audit[1]["details"] == {}
 
 
 def test_audit_log_cap_prunes_oldest_with_summary(mock_store_fixture):
@@ -1415,7 +1450,7 @@ def test_audit_log_cap_one_keeps_newest_event(mock_store_fixture):
     audit = store.entry("e1")["audit_log"]
     assert len(audit) == 1
     assert audit[0]["action"] == "drink_added"
-    assert audit[0]["details"] == {"ml": 500}
+    assert audit[0]["details"] == {"src": "button"}
 
 
 def test_audit_log_default_cap_from_const(mock_store_fixture):
@@ -1780,3 +1815,24 @@ def test_req_hom_120_legacy_mirrors_follow_chronology_after_rebuild(mock_store_f
 
     assert entry["wellbeing"] == {"status": "great", "ts": "2026-10-14T10:00:00+02:00"}
     assert [item["status"] for item in entry["wellbeing_history"]] == ["bad", "good"]
+
+
+# --- Review-Fix S-9 ---------------------------------------------------------
+
+
+def test_audit_details_store_metadata_only(mock_store_fixture):
+    """[S-9] Audit-Details enthalten keine Gesundheitswerte (nur Metadaten)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button"))
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T11:00:00Z"))
+
+    by_action = {event["action"]: event for event in store.entry("e1")["audit_log"]}
+    assert by_action["drink_added"]["details"] == {"src": "button"}
+    assert by_action["wellbeing_added"]["details"] == {}
+    for event in by_action.values():
+        assert "ml" not in event["details"]
+        assert "key" not in event["details"]
+        assert "sys" not in event["details"]
+        assert "dia" not in event["details"]

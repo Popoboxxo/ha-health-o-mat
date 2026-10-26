@@ -478,6 +478,7 @@ data: { person: "Caro", kind: "drinks", id: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f6
 action: health_o_mat.restore_entry
 data: { person: "Caro", kind: "drinks", id: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60" }
 
+# nur Admin
 action: health_o_mat.export_csv
 data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all
 
@@ -541,14 +542,17 @@ Zeiträume) nach `/config/health_o_mat_export/` mit Zeitstempel-Dateinamen
 das **Retention-Archiv**, die Schema-Stufe, Personen-Namen und Zähler
 (gesamt/aktiv/gelöscht). **v1-Backups bleiben lesbar** und werden beim Restore
 migriert; neuere/unbekannte Versionen werden mit klarer Meldung abgelehnt.
+Der Service ist **nur für HA-Administratoren** verfügbar.
 
 ### Restore (Backup zurückspielen)
 
 Der Restore ist **verfügbar** und bewusst kontrolliert:
 
-1. Backup-Datei nach `/config/health_o_mat_import/` kopieren (kein
-   Browser-Upload; nur dieses Verzeichnis).
-2. **Dry-Run** ausführen — er plant nur und schreibt nichts.
+1. Backup-Datei nach `/config/health_o_mat_import/` kopieren oder eine
+   bereits geschriebene Backup-/Pre-Restore-Datei aus
+   `/config/health_o_mat_export/` verwenden (kein Browser-Upload).
+2. **Dry-Run** ausführen — er plant nur und schreibt nichts (auch für Replace
+   ohne Bestätigung).
 3. Bei Bedarf **Merge** (Default) oder **Replace** wählen und anwenden.
 
 ```yaml
@@ -575,7 +579,10 @@ data:
 
 - **Teil-Restore:** `persons` (Quell-Slug, Quell-Entry-ID oder Ziel-Entry-ID),
   `datasets` (`drinks` / `blood_pressure` / `wellbeing`), `from`/`to` (ISO,
-  inklusiv auf `ts`).
+  inklusiv auf `ts`; naive Werte gelten als lokale HA-Zeitzone).
+- **Mehrere Quellen → ein Ziel:** `person_map` darf mehrere Backup-Personen
+  auf denselben Ziel-Entry abbilden. Replace sammelt dann alle Quell-Records,
+  dedupliziert sie und leert den Ziel-Scope genau einmal (kein Datenverlust).
 - **Personen-Mapping:** `person_map: {<Quelle>: <Ziel-Entry-ID>}`. Unbekannte
   Personen werden **nie automatisch angelegt** — ohne eindeutige Zuordnung
   bricht der Restore mit einer Meldung ab.

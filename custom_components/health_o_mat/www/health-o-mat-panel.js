@@ -1397,7 +1397,7 @@ class HealthOMatPanel extends HTMLElement {
   async _runRestore(dryRun) {
     if (!this._isAdmin() || this._restoreBusy) return;
     this._syncRestoreDraftFromDom();
-    const collected = collectRestorePayload(this);
+    const collected = collectRestorePayload(this, { dryRun: !!dryRun });
     this._restoreError = null;
     if (!collected.ok) {
       this._restoreError = collected.error;

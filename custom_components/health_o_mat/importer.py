@@ -24,6 +24,7 @@ from datetime import datetime
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
+from .backup import BACKUP_DIR_NAME
 from .const import DEFAULT_AUDIT_LIMIT, MAX_AMOUNT_ML, NO_TYPE_LABEL
 from .entity import signal_refresh
 from .store import HealthOMatStore
@@ -31,6 +32,10 @@ from .store import HealthOMatStore
 _LOGGER = logging.getLogger(__name__)
 
 IMPORT_DIR_NAME = "health_o_mat_import"
+# Restore-Backups dürfen aus Import- UND Export-Ordner gelesen werden: die
+# Integration schreibt Backup/Pre-Restore dorthin, die Restore-UI muss sie
+# also auch wieder anbieten. Beide Ordner sind privat (nie /config/www).
+RESTORE_DIR_NAMES: tuple[str, ...] = (IMPORT_DIR_NAME, BACKUP_DIR_NAME)
 
 # Kopfzeilen-Erkennung (tolerant: fehlender/abweichender Header wird toleriert).
 _HEADER_FIRST = {"datum", "date", "zeitstempel", "timestamp", "zeit", "person"}
@@ -88,35 +93,90 @@ def safe_import_path(config_dir: str, filename: str) -> str:
 
 
 def list_import_files(config_dir: str) -> list[str]:
-    """Dateinamen im privaten Import-Ordner (nur reguläre Dateien, sortiert).
+    """JSON-Backup-Dateinamen aus Import- UND Export-Ordner (sortiert).
 
     Liefert ausschließlich Basisnamen — niemals Pfade. Verzeichnisse,
-    Symlinks und alles, was ``safe_import_path`` ablehnen würde, bleibt außen
-    vor (kein Traversal, kein Escape aus ``health_o_mat_import/``). Ein
-    fehlender Ordner ist kein Fehler, sondern eine leere Liste.
+    Symlinks, versteckte Dateien und Nicht-``.json``-Dateien bleiben außen vor
+    (kein Traversal, kein Escape). Ein fehlender Ordner ist kein Fehler,
+    sondern eine leere Liste. Der Export-Ordner enthält Backup- und
+    Pre-Restore-Dateien, damit sie in der Restore-UI sichtbar sind.
     """
-    base = os.path.realpath(os.path.join(config_dir, IMPORT_DIR_NAME))
-    try:
-        names = os.listdir(base)
-    except OSError:
-        return []
-    files: list[str] = []
-    for name in names:
-        if name.startswith("."):
-            continue
+    files: set[str] = set()
+    for dir_name in RESTORE_DIR_NAMES:
+        base = os.path.realpath(os.path.join(config_dir, dir_name))
         try:
-            path = safe_import_path(config_dir, name)
-        except ValueError:
+            names = os.listdir(base)
+        except OSError:
             continue
-        if os.path.islink(os.path.join(base, name)):
-            continue
-        try:
-            if not os.path.isfile(path):
+        for name in names:
+            if name.startswith(".") or not name.lower().endswith(".json"):
                 continue
+            try:
+                path = safe_restore_path(config_dir, name)
+            except ValueError:
+                continue
+            if os.path.islink(os.path.join(base, name)):
+                continue
+            try:
+                if not os.path.isfile(path):
+                    continue
+            except OSError:  # pragma: no cover - nur bei Race mit dem Dateisystem
+                continue
+            files.add(name)
+    return sorted(files, key=lambda value: (value.lower(), value))
+
+
+def _restore_candidate(config_dir: str, dir_name: str, name: str) -> str:
+    """Kandidatenpfad in einem erlaubten Ordner (realpath, Whitelist)."""
+    base = os.path.realpath(os.path.join(config_dir, dir_name))
+    candidate = os.path.realpath(os.path.join(base, name))
+    if candidate == base:
+        raise ValueError("Ungültiger Dateiname")
+    try:
+        contained = os.path.commonpath([base, candidate]) == base
+    except ValueError:  # unterschiedliche Laufwerke (Windows)
+        contained = False
+    if not contained:
+        raise ValueError("Pfad verlässt das Backup-Verzeichnis")
+    return candidate
+
+
+def safe_restore_path(config_dir: str, filename: str) -> str:
+    """Löst einen Restore-Dateinamen auf (Import- oder Export-Ordner).
+
+    Nur relative Basisnamen mit ``.json``-Endung sind erlaubt; absolute Pfade,
+    Traversal, Symlinks und Nicht-JSON-Dateien werden abgelehnt. Existiert die
+    Datei in beiden Ordnern, gewinnt der Import-Ordner (bestehendes Verhalten).
+    Ist sie in keinem Ordner vorhanden, wird der Import-Pfad zurückgegeben,
+    damit der Aufrufer einen klaren ``FileNotFoundError`` melden kann.
+
+    Raises:
+        ValueError: wenn der Name/das Ziel die Whitelist verletzt.
+    """
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("Dateiname fehlt")
+    name = filename.strip()
+    if "\x00" in name:
+        raise ValueError("Ungültiger Dateiname")
+    if name.startswith(("/", "\\")) or _DRIVE_RE.match(name):
+        raise ValueError("Absoluter Pfad ist nicht erlaubt")
+    if "/" in name or "\\" in name or name != os.path.basename(name):
+        raise ValueError("Unterordner sind nicht erlaubt")
+    if not name.lower().endswith(".json"):
+        raise ValueError("Nur JSON-Backups können wiederhergestellt werden")
+
+    candidates: list[str] = []
+    for dir_name in RESTORE_DIR_NAMES:
+        candidate = _restore_candidate(config_dir, dir_name, name)
+        if os.path.islink(os.path.join(config_dir, dir_name, name)):
+            raise ValueError("Symbolische Links sind nicht erlaubt")
+        candidates.append(candidate)
+        try:
+            if os.path.isfile(candidate):
+                return candidate
         except OSError:  # pragma: no cover - nur bei Race mit dem Dateisystem
             continue
-        files.append(name)
-    return sorted(files, key=lambda value: (value.lower(), value))
+    return candidates[0]
 
 
 def _norm_ts(raw: object) -> str | None:

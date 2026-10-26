@@ -386,7 +386,7 @@
     },
     "export_csv": {
       "name": "CSV export",
-      "description": "Exports data as Excel-friendly CSV to /config/health_o_mat_export/."
+      "description": "Exports data as Excel-friendly CSV to /config/health_o_mat_export/. Administrators only."
     },
     "import_csv": {
       "name": "CSV import",
@@ -408,15 +408,15 @@
     },
     "backup": {
       "name": "Backup",
-      "description": "Writes a JSON backup of all persons and datasets to /config/health_o_mat_export/."
+      "description": "Writes a JSON backup of all persons and datasets to /config/health_o_mat_export/. Administrators only."
     },
     "restore_backup": {
       "name": "Restore backup",
-      "description": "Restores a JSON backup from /config/health_o_mat_import/ (merge or replace, optionally limited to persons, datasets and a time range). A safety backup is written before any change. Administrators only.",
+      "description": "Restores a JSON backup from /config/health_o_mat_import/ or /config/health_o_mat_export/ (merge or replace, optionally limited to persons, datasets and a time range). A safety backup is written before any change. Administrators only.",
       "fields": {
         "filename": {
           "name": "File name",
-          "description": "File name inside /config/health_o_mat_import/."
+          "description": "File name inside /config/health_o_mat_import/ or /config/health_o_mat_export/ (JSON files only)."
         },
         "mode": {
           "name": "Mode",
@@ -668,9 +668,9 @@
     "ui_admin_restore_file": "Backup file",
     "ui_admin_no_backup_file": "— no backup file available —",
     "ui_admin_refresh_files": "Refresh files",
-    "ui_admin_files_count_one": "{count} file in /config/health_o_mat_import/.",
-    "ui_admin_files_count_other": "{count} files in /config/health_o_mat_import/.",
-    "ui_admin_files_hint": "Place JSON backups under /config/health_o_mat_import/ and refresh the list.",
+    "ui_admin_files_count_one": "{count} file in the backup folders.",
+    "ui_admin_files_count_other": "{count} files in the backup folders.",
+    "ui_admin_files_hint": "Backups and pre-restore files from /config/health_o_mat_import/ and /config/health_o_mat_export/ appear here.",
     "ui_admin_mode": "Mode",
     "ui_admin_from": "From (optional)",
     "ui_admin_to": "To (optional)",

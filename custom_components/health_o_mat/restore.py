@@ -9,7 +9,10 @@ Vertrag in Kurzform:
 
 - ``merge`` (Default): Backup-Einträge ergänzen, Duplikate werden übersprungen.
 - ``replace``: gewählter Scope (Personen/Datasets/Zeitraum) wird vorher geleert.
-- Filter: ``persons``, ``datasets``, ``from``/``to`` (inklusiv auf ``ts``).
+  Mehrere Quellen dürfen auf dasselbe Ziel zeigen (many-to-one): ihre Records
+  werden gesammelt, dedupliziert und der Ziel-Scope genau einmal geleert.
+- Filter: ``persons``, ``datasets``, ``from``/``to`` (inklusiv auf ``ts``;
+  naive Zeitstempel gelten als lokale HA-Zeitzone).
 - ``person_map``: ``{source_slug|source_entry_id: target_entry_id}`` — ohne
   Mapping wird über den Personen-Slug (case-insensitive, exakt eine Übereinstimmung)
   zugeordnet. Personen werden NIE automatisch neu angelegt.
@@ -42,10 +45,11 @@ from .backup import (
 )
 from .const import DEFAULT_AUDIT_LIMIT, DOMAIN, STORE_SCHEMA_VERSION
 from .entity import signal_refresh
-from .importer import safe_import_path
+from .importer import safe_restore_path
 from .store import (
     HealthOMatStore,
     append_audit_event_to_entry,
+    async_load_archive_store,
     migrate_store_data,
     prune_audit_log,
     sync_wellbeing_mirrors,
@@ -231,18 +235,29 @@ def _new_counts() -> dict[str, int]:
     return {"added": 0, "skipped": 0, "conflicts": 0, "errors": 0}
 
 
+def _local_timezone() -> Any:
+    """Lokale HA-Zeitzone, defensiv (Fakes/Tests ohne ``DEFAULT_TIME_ZONE``)."""
+    return getattr(dt_util, "DEFAULT_TIME_ZONE", None)
+
+
 def _iso(value: Any) -> str | None:
-    """Robuste ISO-Normalisierung für Dedup-Schlüssel."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.strip()).isoformat()
-    except ValueError:
-        return None
+    """Dedup-Schlüssel: Zeitpunkt auf **UTC normalisiert**.
+
+    Derselbe Instant in unterschiedlicher Repräsentation (``Z`` vs. Offset)
+    ergibt so denselben Schlüssel — sonst würden Einträge doppelt gezählt.
+    """
+    normalized = _ts_dt(value)
+    return normalized.isoformat() if normalized is not None else None
 
 
 def _ts_dt(value: Any) -> datetime | None:
-    """ISO-Zeitstempel als vergleichbares ``datetime`` (naiv = UTC)."""
+    """ISO-Zeitstempel als vergleichbares ``datetime`` (UTC, naiv).
+
+    Naive Werte (z. B. rohe ``datetime-local``-Eingaben der Admin-UI) werden
+    als **lokale HA-Zeitzone** interpretiert — nicht als UTC. Sonst verschiebt
+    sich der Restore-Zeitraum um den Zonen-Offset und ein Replace kann
+    Einträge außerhalb des gewählten Fensters löschen.
+    """
     if isinstance(value, datetime):
         parsed = value
     elif isinstance(value, str):
@@ -254,6 +269,13 @@ def _ts_dt(value: Any) -> datetime | None:
         return None
     if parsed.tzinfo is not None:
         return parsed.astimezone(UTC).replace(tzinfo=None)
+    tz = _local_timezone()
+    if tz is not None:
+        try:
+            return parsed.replace(tzinfo=tz).astimezone(UTC).replace(tzinfo=None)
+        except (TypeError, ValueError, AttributeError, OSError):
+            # Defensive: unbrauchbare Fake-Zeitzone → wie bisher naiv weiter.
+            pass
     return parsed
 
 
@@ -336,6 +358,45 @@ def _collect_ids(entries: dict) -> set[str]:
                 if isinstance(item, dict) and item.get("id"):
                     used.add(str(item["id"]))
     return used
+
+
+def _prepare_records(
+    records: list[dict],
+    dataset: str,
+    used_ids: set[str],
+    counts: dict[str, int],
+    warnings: list[str],
+    seen: set,
+) -> tuple[list[dict], int]:
+    """Validieren, deduplizieren und für den Store vorbereiten (Merge/Replace).
+
+    Beide Modi nutzen dieselbe Prüfung: ein Record ohne gültigen Dedup-Schlüssel
+    (z. B. ``ml: "abc"``) wird verworfen und als Fehler gezählt — Replace darf
+    ungültige Backup-Records nicht ungeprüft einfügen. ``seen`` wird in-place
+    erweitert und liefert die Rückgabe ``(prepared_records, active_ml)``.
+    """
+    prepared_records: list[dict] = []
+    active_ml = 0
+    for record in records:
+        key = _dedup_key(dataset, record)
+        if key is None:
+            counts["errors"] += 1
+            warnings.append(f"{dataset}: Eintrag ohne gültigen Schlüssel")
+            continue
+        if key in seen:
+            counts["skipped"] += 1
+            continue
+        seen.add(key)
+        prepared = _normalize_record(copy.deepcopy(record))
+        record_id = str(prepared.get("id"))
+        if record_id in used_ids:
+            prepared["id"] = str(uuid.uuid4())
+            counts["conflicts"] += 1
+        used_ids.add(str(prepared["id"]))
+        prepared_records.append(prepared)
+        if dataset == "drinks" and _is_active(prepared):
+            active_ml += _ml(prepared)
+    return prepared_records, active_ml
 
 
 def _normalize_datasets(datasets: Any) -> tuple[str, ...] | None:
@@ -532,6 +593,12 @@ def plan_restore(
     # im Haupt- oder Archiv-Store liegt, darf nicht in den anderen Store
     # dupliziert werden (sonst zählt Export/Lifetime ihn doppelt).
     merge_seen: dict[tuple[str, str], set] = {}
+    # Replace wird pro Ziel/Datensatz aggregiert (B-1): mehrere Quellen können
+    # auf dasselbe Ziel zeigen (many-to-one). Der Scope darf dann nur EINMAL
+    # geleert werden — sonst überschreibt die letzte Quelle die vorherigen.
+    replace_records: dict[tuple[str, str], list[dict]] = {}
+    replace_archive: dict[tuple[str, str], list[dict]] = {}
+    replace_sources: dict[tuple[str, str], list[str]] = {}
 
     for source_id, target in selected:
         sources_per_target[target] = sources_per_target.get(target, 0) + 1
@@ -543,7 +610,7 @@ def plan_restore(
         elif target not in backup_lifetime:
             backup_lifetime[target] = None
 
-        target_entry = plan.target_entries.setdefault(target, {})
+        plan.target_entries.setdefault(target, {})
         plan.counts.setdefault(target, {dataset: _new_counts() for dataset in chosen})
 
         if restore_audit:
@@ -571,7 +638,21 @@ def plan_restore(
                     counts["errors"] += 1
                     plan.warnings.append(f"{dataset}: ungültiger Eintrag in Quelle {source_id}")
 
+            archive_records: list[dict] = []
+            if dataset != "wellbeing" and plan.target_archive_entries is not None:
+                archive_source_entry = (normalized.get("archive_entries") or {}).get(
+                    source_id
+                ) or {}
+                archive_source = archive_source_entry.get(list_name)
+                archive_source = archive_source if isinstance(archive_source, list) else []
+                archive_records = [
+                    record
+                    for record in archive_source
+                    if isinstance(record, dict) and _in_range(record, start, end)
+                ]
+
             if normalized_mode == "merge":
+                target_entry = plan.target_entries[target]
                 existing = target_entry.setdefault(list_name, [])
                 if not isinstance(existing, list):
                     existing = []
@@ -592,22 +673,10 @@ def plan_restore(
                                 if isinstance(item, dict)
                             }
                     merge_seen[seen_key] = seen
-                for record in records:
-                    key = _dedup_key(dataset, record)
-                    if key is None:
-                        counts["errors"] += 1
-                        plan.warnings.append(f"{dataset}: Eintrag ohne gültigen Schlüssel")
-                        continue
-                    if key in seen:
-                        counts["skipped"] += 1
-                        continue
-                    prepared = _normalize_record(copy.deepcopy(record))
-                    record_id = str(prepared.get("id"))
-                    if record_id in used_ids:
-                        prepared["id"] = str(uuid.uuid4())
-                        counts["conflicts"] += 1
-                    used_ids.add(str(prepared["id"]))
-                    seen.add(key)
+                prepared_records, added_ml = _prepare_records(
+                    records, dataset, used_ids, counts, plan.warnings, seen
+                )
+                for prepared in prepared_records:
                     existing.append(prepared)
                     counts["added"] += 1
                     changed_targets.add(target)
@@ -621,99 +690,26 @@ def plan_restore(
                             "ts": prepared.get("ts"),
                         }
                     )
-                    if dataset == "drinks" and _is_active(prepared):
-                        lifetime_add[target] = lifetime_add.get(target, 0) + _ml(prepared)
-                    if dataset == "wellbeing":
-                        wellbeing_touched.add(target)
-            else:  # replace
-                existing = target_entry.setdefault(list_name, [])
-                if not isinstance(existing, list):
-                    existing = []
-                    target_entry[list_name] = existing
-                kept: list[dict] = []
-                removed = 0
-                removed_ml = 0
-                for item in existing:
-                    if isinstance(item, dict) and _in_range(item, start, end):
-                        removed += 1
-                        if item.get("id"):
-                            used_ids.discard(str(item["id"]))
-                        if dataset == "drinks" and _is_active(item):
-                            removed_ml += _ml(item)
-                    else:
-                        kept.append(item)
-                target_entry[list_name] = kept
-                inserted = 0
-                added_ml = 0
-                for record in records:
-                    prepared = _normalize_record(copy.deepcopy(record))
-                    record_id = str(prepared.get("id"))
-                    if record_id in used_ids:
-                        prepared["id"] = str(uuid.uuid4())
-                        counts["conflicts"] += 1
-                    used_ids.add(str(prepared["id"]))
-                    kept.append(prepared)
-                    inserted += 1
-                    if dataset == "drinks" and _is_active(prepared):
-                        added_ml += _ml(prepared)
-                counts["added"] += inserted
-                if removed or inserted:
-                    changed_targets.add(target)
-                if dataset == "drinks":
-                    lifetime_removed[target] = lifetime_removed.get(target, 0) + removed_ml
-                    lifetime_added[target] = lifetime_added.get(target, 0) + added_ml
+                if dataset == "drinks" and added_ml:
+                    lifetime_add[target] = lifetime_add.get(target, 0) + added_ml
                 if dataset == "wellbeing":
                     wellbeing_touched.add(target)
-                plan.actions.append(
-                    {
-                        "target": target,
-                        "source": source_id,
-                        "dataset": dataset,
-                        "op": "replace",
-                        "removed": removed,
-                        "added": inserted,
-                        "from": start.isoformat() if start else None,
-                        "to": end.isoformat() if end else None,
-                    }
-                )
 
-            # Archiv nur für Getränke/Messungen; Wellbeing hat kein Archiv.
-            if dataset == "wellbeing" or plan.target_archive_entries is None:
-                continue
-            archive_entry = plan.target_archive_entries.setdefault(
-                target, {"drinks": [], "readings": []}
-            )
-            archive_records = (normalized.get("archive_entries") or {}).get(source_id) or {}
-            archive_source = archive_records.get(list_name)
-            archive_source = archive_source if isinstance(archive_source, list) else []
-            archive_records = [
-                record
-                for record in archive_source
-                if isinstance(record, dict) and _in_range(record, start, end)
-            ]
-            archive_existing = archive_entry.setdefault(list_name, [])
-            if not isinstance(archive_existing, list):
-                archive_existing = []
-                archive_entry[list_name] = archive_existing
-            if normalized_mode == "merge":
+                # Archiv nur für Getränke/Messungen; Wellbeing hat kein Archiv.
+                if dataset == "wellbeing" or plan.target_archive_entries is None:
+                    continue
+                archive_entry = plan.target_archive_entries.setdefault(
+                    target, {"drinks": [], "readings": []}
+                )
+                archive_existing = archive_entry.setdefault(list_name, [])
+                if not isinstance(archive_existing, list):
+                    archive_existing = []
+                    archive_entry[list_name] = archive_existing
                 seen = merge_seen.setdefault((target, dataset), set())
-                for record in archive_records:
-                    key = _dedup_key(dataset, record)
-                    if key is None:
-                        counts["errors"] += 1
-                        plan.warnings.append(f"{dataset}: Archiveintrag ohne gültigen Schlüssel")
-                        continue
-                    if key in seen:
-                        counts["skipped"] += 1
-                        continue
-                    prepared = _normalize_record(copy.deepcopy(record))
-                    prepared["id"] = str(prepared.get("id"))
-                    record_id = str(prepared.get("id"))
-                    if record_id in used_ids:
-                        prepared["id"] = str(uuid.uuid4())
-                        counts["conflicts"] += 1
-                    used_ids.add(str(prepared["id"]))
-                    seen.add(key)
+                prepared_archive, archive_ml = _prepare_records(
+                    archive_records, dataset, used_ids, counts, plan.warnings, seen
+                )
+                for prepared in prepared_archive:
                     archive_existing.append(prepared)
                     counts["added"] += 1
                     plan.archive_changed = True
@@ -729,55 +725,116 @@ def plan_restore(
                             "ts": prepared.get("ts"),
                         }
                     )
-                    if dataset == "drinks" and _is_active(prepared):
-                        lifetime_add[target] = lifetime_add.get(target, 0) + _ml(prepared)
-            else:
-                kept_archive: list[dict] = []
-                removed_archive = 0
-                removed_archive_ml = 0
-                for item in archive_existing:
-                    if isinstance(item, dict) and _in_range(item, start, end):
-                        removed_archive += 1
-                        if item.get("id"):
-                            used_ids.discard(str(item["id"]))
-                        if dataset == "drinks" and _is_active(item):
-                            removed_archive_ml += _ml(item)
-                    else:
-                        kept_archive.append(item)
-                archive_entry[list_name] = kept_archive
-                inserted_archive = 0
-                added_archive_ml = 0
-                for record in archive_records:
-                    prepared = _normalize_record(copy.deepcopy(record))
-                    record_id = str(prepared.get("id"))
-                    if record_id in used_ids:
-                        prepared["id"] = str(uuid.uuid4())
-                        counts["conflicts"] += 1
-                    used_ids.add(str(prepared["id"]))
-                    kept_archive.append(prepared)
-                    inserted_archive += 1
-                    if dataset == "drinks" and _is_active(prepared):
-                        added_archive_ml += _ml(prepared)
-                if removed_archive or inserted_archive:
-                    plan.archive_changed = True
-                    changed_targets.add(target)
-                if dataset == "drinks":
-                    lifetime_removed[target] = lifetime_removed.get(target, 0) + removed_archive_ml
-                    lifetime_added[target] = lifetime_added.get(target, 0) + added_archive_ml
-                counts["added"] += inserted_archive
-                plan.actions.append(
-                    {
-                        "target": target,
-                        "source": source_id,
-                        "dataset": dataset,
-                        "op": "replace",
-                        "archive": True,
-                        "removed": removed_archive,
-                        "added": inserted_archive,
-                        "from": start.isoformat() if start else None,
-                        "to": end.isoformat() if end else None,
-                    }
-                )
+                if dataset == "drinks" and archive_ml:
+                    lifetime_add[target] = lifetime_add.get(target, 0) + archive_ml
+            else:  # replace — nur sammeln, Ausführung nach allen Quellen
+                replace_records.setdefault((target, dataset), []).extend(records)
+                sources = replace_sources.setdefault((target, dataset), [])
+                if source_id not in sources:
+                    sources.append(source_id)
+                if dataset != "wellbeing" and plan.target_archive_entries is not None:
+                    replace_archive.setdefault((target, dataset), []).extend(archive_records)
+
+    if normalized_mode == "replace":
+        for (target, dataset), records in replace_records.items():
+            counts = plan.counts[target][dataset]
+            target_entry = plan.target_entries.setdefault(target, {})
+            list_name = DATASET_LIST[dataset]
+            existing = target_entry.get(list_name)
+            if not isinstance(existing, list):
+                existing = []
+                target_entry[list_name] = existing
+            kept: list[dict] = []
+            removed = 0
+            removed_ml = 0
+            for item in existing:
+                if isinstance(item, dict) and _in_range(item, start, end):
+                    removed += 1
+                    if item.get("id"):
+                        used_ids.discard(str(item["id"]))
+                    if dataset == "drinks" and _is_active(item):
+                        removed_ml += _ml(item)
+                else:
+                    kept.append(item)
+            prepared_records, added_ml = _prepare_records(
+                records, dataset, used_ids, counts, plan.warnings, set()
+            )
+            kept.extend(prepared_records)
+            target_entry[list_name] = kept
+            counts["added"] += len(prepared_records)
+            if removed or prepared_records:
+                changed_targets.add(target)
+            if dataset == "drinks":
+                lifetime_removed[target] = lifetime_removed.get(target, 0) + removed_ml
+                lifetime_added[target] = lifetime_added.get(target, 0) + added_ml
+            if dataset == "wellbeing":
+                wellbeing_touched.add(target)
+            sources = replace_sources.get((target, dataset), [])
+            plan.actions.append(
+                {
+                    "target": target,
+                    "source": sources[0] if len(sources) == 1 else ", ".join(sources),
+                    "sources": list(sources),
+                    "dataset": dataset,
+                    "op": "replace",
+                    "removed": removed,
+                    "added": len(prepared_records),
+                    "from": start.isoformat() if start else None,
+                    "to": end.isoformat() if end else None,
+                }
+            )
+
+        for (target, dataset), records in replace_archive.items():
+            if plan.target_archive_entries is None:
+                continue
+            counts = plan.counts[target][dataset]
+            list_name = DATASET_LIST[dataset]
+            archive_entry = plan.target_archive_entries.setdefault(
+                target, {"drinks": [], "readings": []}
+            )
+            archive_existing = archive_entry.get(list_name)
+            if not isinstance(archive_existing, list):
+                archive_existing = []
+                archive_entry[list_name] = archive_existing
+            kept_archive: list[dict] = []
+            removed_archive = 0
+            removed_archive_ml = 0
+            for item in archive_existing:
+                if isinstance(item, dict) and _in_range(item, start, end):
+                    removed_archive += 1
+                    if item.get("id"):
+                        used_ids.discard(str(item["id"]))
+                    if dataset == "drinks" and _is_active(item):
+                        removed_archive_ml += _ml(item)
+                else:
+                    kept_archive.append(item)
+            prepared_archive, added_archive_ml = _prepare_records(
+                records, dataset, used_ids, counts, plan.warnings, set()
+            )
+            kept_archive.extend(prepared_archive)
+            archive_entry[list_name] = kept_archive
+            if removed_archive or prepared_archive:
+                plan.archive_changed = True
+                changed_targets.add(target)
+            if dataset == "drinks":
+                lifetime_removed[target] = lifetime_removed.get(target, 0) + removed_archive_ml
+                lifetime_added[target] = lifetime_added.get(target, 0) + added_archive_ml
+            counts["added"] += len(prepared_archive)
+            sources = replace_sources.get((target, dataset), [])
+            plan.actions.append(
+                {
+                    "target": target,
+                    "source": sources[0] if len(sources) == 1 else ", ".join(sources),
+                    "sources": list(sources),
+                    "dataset": dataset,
+                    "op": "replace",
+                    "archive": True,
+                    "removed": removed_archive,
+                    "added": len(prepared_archive),
+                    "from": start.isoformat() if start else None,
+                    "to": end.isoformat() if end else None,
+                }
+            )
 
     # Wellbeing-Spiegel aus den Ereignissen neu bauen (Store-Logik, kein Duplikat).
     for target in wellbeing_touched:
@@ -966,7 +1023,7 @@ async def async_restore_from_file(
         raise RestoreError("Health-O-Mat-Speicher nicht verfügbar")
     filename = str(data.get("filename") or "").strip()
     try:
-        path = safe_import_path(hass.config.config_dir, filename)
+        path = safe_restore_path(hass.config.config_dir, filename)
     except ValueError as err:
         raise RestoreError(str(err)) from err
 
@@ -984,8 +1041,11 @@ async def async_restore_from_file(
     mode = str(data.get("mode") or "merge").strip().lower()
     if mode not in RESTORE_MODES:
         raise RestoreError(f"Unbekannter Modus {mode!r} — erlaubt: {', '.join(RESTORE_MODES)}")
+    dry_run = bool(data.get("dry_run", False))
     confirm = str(data.get("confirm") or "")
-    if mode == "replace" and confirm != REPLACE_CONFIRM:
+    # N-7: Nur der echte Replace-Lauf braucht die Bestätigung — ein Dry-Run
+    # darf die Auswirkungen immer anzeigen.
+    if mode == "replace" and not dry_run and confirm != REPLACE_CONFIRM:
         raise RestoreError(f"Replace erfordert die Bestätigung '{REPLACE_CONFIRM}'")
 
     person_map = data.get("person_map")
@@ -1009,7 +1069,6 @@ async def async_restore_from_file(
     if plan.errors:
         raise RestoreError("; ".join(plan.errors))
 
-    dry_run = bool(data.get("dry_run", False))
     if dry_run:
         return {
             "plan": plan.as_dict(),
@@ -1046,4 +1105,9 @@ async def async_restore_command(
     shared = hass.data.get(DOMAIN, {}).get("shared", {})
     store = shared.get("store")
     archive_store = shared.get("archive_store")
+    if store is not None and archive_store is None:
+        # B-2: Das Archiv darf nicht unsichtbar sein, nur weil Retention beim
+        # Setup AUS war. Bei Bedarf laden (leerer Bestand, kein Schreiben);
+        # so deckt ein Restore mit `archive_entries` auch das Archiv ab.
+        archive_store = await async_load_archive_store(hass, create=True)
     return await async_restore_from_file(hass, store, archive_store, data, actor=actor)

@@ -483,8 +483,11 @@ function restoreFileOptions(panel) {
 }
 
 /* Payload aus dem Draft bauen — dieselben Felder wie `restore_backup`
- * (keine zweite Semantik). Gibt `{ ok, payload }` oder `{ ok: false, error }`. */
-export function collectRestorePayload(panel) {
+ * (keine zweite Semantik). Gibt `{ ok, payload }` oder `{ ok: false, error }`.
+ * `options.dryRun` erlaubt einen Replace-Dry-Run ohne REPLACE-Bestätigung
+ * (N-7); nur der echte Apply-Lauf verlangt sie. */
+export function collectRestorePayload(panel, options) {
+  const dryRun = !!(options && options.dryRun);
   const draft = panel._restoreDraft || {};
   const filename = String(draft.filename == null ? "" : draft.filename).trim();
   if (!filename) {
@@ -548,7 +551,7 @@ export function collectRestorePayload(panel) {
   }
 
   const confirm = String(draft.confirm == null ? "" : draft.confirm).trim();
-  if (mode === "replace" && confirm !== RESTORE_CONFIRM_WORD) {
+  if (mode === "replace" && !dryRun && confirm !== RESTORE_CONFIRM_WORD) {
     return {
       ok: false,
       error: t(
@@ -562,10 +565,14 @@ export function collectRestorePayload(panel) {
   const payload = { filename, mode };
   // Alle Datensätze = Default des Backends; nur eine Teilmenge wird gesendet.
   if (selected.length < allowed.length) payload.datasets = selected;
-  if (from) payload.from = from;
-  if (to) payload.to = to;
+  // S-1: `datetime-local` ist lokale Browserzeit ohne Zone — als UTC-ISO
+  // senden, damit der Server den Zeitraum eindeutig interpretiert.
+  if (from) payload.from = new Date(from).toISOString();
+  if (to) payload.to = new Date(to).toISOString();
   if (personMap) payload.person_map = personMap;
-  if (mode === "replace") payload.confirm = RESTORE_CONFIRM_WORD;
+  if (mode === "replace" && confirm === RESTORE_CONFIRM_WORD) {
+    payload.confirm = RESTORE_CONFIRM_WORD;
+  }
   return { ok: true, payload };
 }
 
@@ -625,19 +632,19 @@ export function restoreCard(panel) {
   const fileHint = files.length
     ? `<div class="hint">${escapeHtml(
         files.length === 1
-          ? t("ui_admin_files_count_one", "{count} Datei in /config/health_o_mat_import/.", {
+          ? t("ui_admin_files_count_one", "{count} Datei in den Backup-Ordnern.", {
               count: files.length,
             })
           : t(
               "ui_admin_files_count_other",
-              "{count} Dateien in /config/health_o_mat_import/.",
+              "{count} Dateien in den Backup-Ordnern.",
               { count: files.length }
             )
       )}</div>`
     : `<div class="hint">${escapeHtml(
         t(
           "ui_admin_files_hint",
-          "Lege JSON-Backups unter /config/health_o_mat_import/ ab und aktualisiere die Liste."
+          "Backups und Sicherheitsbackups aus /config/health_o_mat_import/ und /config/health_o_mat_export/ erscheinen hier."
         )
       )}</div>`;
 

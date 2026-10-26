@@ -3849,3 +3849,30 @@ def test_list_import_files_ws_command_rejects_non_admin(tmp_path):
 
     assert connection.results == []
     assert connection.errors
+
+
+# --- Review-Fix S-13 --------------------------------------------------------
+
+
+def test_set_settings_partial_areas_keeps_disabled_keys():
+    """[S-13] Partielles `areas`-Update reaktiviert keine bestehenden False-Werte."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000, "areas": {"wellbeing": False}})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                areas={"drink": False},
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]["areas"]
+    assert stored == {"drink": False, "bp": True, "wellbeing": False}
+    assert connection.results[0][1]["areas"] == stored

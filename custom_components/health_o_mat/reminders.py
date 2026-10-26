@@ -794,11 +794,13 @@ async def async_send_notification(
     if name:
         try:
             if hass.services.has_service(_NOTIFY_DOMAIN, name):
+                # S-3: blockierend aufrufen, damit Zustellfehler des Handlers
+                # hier ankommen und der persistent-Fallback wirklich greift.
                 await hass.services.async_call(
                     _NOTIFY_DOMAIN,
                     name,
                     {"title": title, "message": message},
-                    blocking=False,
+                    blocking=True,
                 )
                 return True
             _LOGGER.warning(

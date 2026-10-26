@@ -15,7 +15,6 @@ from homeassistant.util import dt as dt_util
 
 from . import areas, logic
 from .const import (
-    ARCHIVE_STORE_KEY,
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
     DEFAULT_QUICK_DRINKS,
@@ -37,7 +36,7 @@ from .reminders import (
     weekly_report_title,
 )
 from .statistics import async_migrate_legacy_volume_statistics
-from .store import HealthOMatStore
+from .store import HealthOMatStore, async_load_archive_store
 from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +85,10 @@ class HealthOMatData:
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
         self.areas: dict[str, bool] = dict(areas.DEFAULT_AREAS)
+        # S-4: zuletzt gesehener `set_lifetime_ml`-Optionswert. Nur eine
+        # explizite Änderung darf den Lebenszähler setzen — sonst würde jede
+        # Options-Änderung (z. B. Tagesziel) den gewachsenen Zähler zurücksetzen.
+        self.lifetime_setting_seen: int | None = None
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -132,6 +135,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     lifetime_start = entry.data.get("lifetime_start_ml")
     if lifetime_start:
         await store.set_lifetime_start(entry.entry_id, int(lifetime_start))
+
+    # B-2: Archiv-Store immer laden, wenn die Datei existiert — unabhängig von
+    # `retention_months`. Sonst fehlt das Archiv nach einem Neustart mit
+    # Retention AUS in Backup/Export/Restore (Lifetime wäre inkonsistent).
+    await async_load_archive_store(hass, create=False)
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -201,12 +209,9 @@ def _retention_months(entry) -> int:
 
 async def _get_archive_store(hass: HomeAssistant) -> HealthOMatStore:
     """Archiv-Store einmalig anlegen/laden (Shared-Bereich)."""
-    shared: dict = hass.data[DOMAIN].setdefault("shared", {})
-    archive = shared.get("archive_store")
-    if archive is None:
-        archive = HealthOMatStore(hass, storage_key=ARCHIVE_STORE_KEY)
-        await archive.async_load()
-        shared["archive_store"] = archive
+    archive = await async_load_archive_store(hass, create=True)
+    if archive is None:  # pragma: no cover - create=True liefert immer einen Store
+        raise RuntimeError("Archiv-Speicher nicht verfügbar")
     return archive
 
 
@@ -247,8 +252,29 @@ async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -
     kept_drinks = _kept_with_voided(current.get("drinks", []), moved_drinks)
     kept_readings = _kept_with_voided(current.get("readings", []), moved_readings)
     archive = await _get_archive_store(hass)
-    await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
-    await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)
+    # S-5: Erst das Archiv schreiben, dann im Haupt-Store entfernen. Schlägt
+    # der Archiv-Save fehl, bleibt der Haupt-Store unverändert (kein Daten-
+    # verlust); schlägt danach der Haupt-Save fehl, wird das Archiv zurück-
+    # gerollt.
+    previous_archive = archive.raw_entries_copy()
+    try:
+        await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)
+    except Exception:
+        # In-Memory-Stand des Archivs zurücksetzen (der Save ist fehlgeschlagen;
+        # ein erneuter Versuch darf keine Duplikate sehen).
+        try:
+            await archive.async_set_entries(previous_archive)
+        except Exception:  # noqa: BLE001 - Rollback ist best effort
+            _LOGGER.exception("Health-O-Mat: Archiv-Rollback nach Save-Fehler fehlgeschlagen")
+        raise
+    try:
+        await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
+    except Exception:
+        try:
+            await archive.async_set_entries(previous_archive)
+        except Exception:  # noqa: BLE001 - Rollback ist best effort
+            _LOGGER.exception("Health-O-Mat: Archiv-Rollback nach Retention-Fehler fehlgeschlagen")
+        raise
     signal_refresh(hass, entry.entry_id)
 
 
@@ -285,6 +311,13 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
+    # S-4: Optionswert nur als "zuletzt gesehen" merken, nicht anwenden. Ein
+    # späterer Options-Save ohne explizite Änderung darf den Zähler nicht
+    # zurücksetzen; nur `_options_updated` wendet eine echte Änderung an.
+    try:
+        rt.lifetime_setting_seen = int(opts.get("set_lifetime_ml") or 0)
+    except (TypeError, ValueError):
+        rt.lifetime_setting_seen = 0
     # `set_lifetime_ml` wird bewusst NICHT hier (Setup/Reload) angewandt: der
     # Options-Wert bleibt dauerhaft gespeichert, ein Reload (z. B. ausgelöst
     # durch eine Bereichs-Umschaltung) würde den gewachsenen Lebenszähler sonst
@@ -323,9 +356,14 @@ async def _options_updated(hass, entry) -> None:
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
 
     wanted = int(opts.get("set_lifetime_ml") or 0)
-    current = int(store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0))
-    if wanted and wanted != current:
+    seen = getattr(rt, "lifetime_setting_seen", None)
+    if seen is None:
+        # Erster Lauf ohne Setup-Spiegel: den aktuellen Optionswert nur merken,
+        # nicht anwenden (kein Rücksetzen eines bereits gewachsenen Zählers).
+        seen = wanted
+    if wanted and wanted != seen:
         await store.set_lifetime_start(entry.entry_id, wanted)
+    rt.lifetime_setting_seen = wanted
     # Retention nach Options-Änderung anwenden (idempotent, No-op wenn AUS).
     await _apply_retention(hass, entry, store)
     # Opt-in-Sidebar-Panel: Option enable/disable → Panel registrieren/entfernen.
@@ -652,11 +690,16 @@ def _register_services(hass: HomeAssistant) -> None:
         await _set_entry_state(hass, call, restore=True)
 
     async def export_csv(call: ServiceCall) -> None:
+        """CSV-Export (Admin-only, wie das WS-Pendant)."""
+        await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
+        # B-2: Archiv on demand laden (create=False) — der Shared-Eintrag kann
+        # fehlen, wenn die Archiv-Datei erst nach dem Setup entstanden ist.
+        archive_store = await async_load_archive_store(hass, create=False)
         from .exporter import async_export_csv
 
-        await async_export_csv(hass, store, call, archive_store=shared.get("archive_store"))
+        await async_export_csv(hass, store, call, archive_store=archive_store)
 
     async def import_csv(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
@@ -673,11 +716,15 @@ def _register_services(hass: HomeAssistant) -> None:
         )
 
     async def backup(call: ServiceCall) -> None:
+        """JSON-Backup schreiben (Admin-only, wie das WS-Pendant)."""
+        await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
+        # B-2: wie export_csv — Archiv on demand nachladen, nie still weglassen.
+        archive_store = await async_load_archive_store(hass, create=False)
         from .backup import async_backup
 
-        await async_backup(hass, store, shared.get("archive_store"))
+        await async_backup(hass, store, archive_store)
 
     async def restore_backup(call: ServiceCall) -> None:
         """Backup kontrolliert zurückspielen (Admin-only, optional Dry-Run)."""

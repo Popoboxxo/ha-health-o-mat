@@ -88,9 +88,9 @@ wellbeing_entries: [
   Kompatibilitäts-Spiegel erhalten (für ältere Leser/Tests), sind aber nicht
   mehr die Quelle.
 - **Aktueller Wohlbefindenswert** = letzter nicht-voided Eintrag.
-- **Audit-Log** ist append-only. `details` enthält **keine** vollen
-  Gesundheitswerte (die stehen im voided Eintrag selbst), sondern nur
-  Metadaten (z. B. `{"ml": 250}` oder `{"key": "good"}`).
+- **Audit-Log** ist append-only. `details` enthält **keine** Gesundheitswerte
+  (weder Mengen noch Wohlbefindens-Status), sondern nur Metadaten
+  (z. B. `{"src": "button"}`, `{"reason": "Tippfehler"}`).
 - **Actor** = `user_id` der WS-Verbindung bzw. `context.user_id` des Service-
   Aufrufs; bei Automationen `null`.
 - **Retention** archiviert weiterhin aktive Einträge; voided Einträge bleiben

@@ -161,11 +161,13 @@ def _login(page, base_url: str, credentials: tuple[str, str]) -> None:
 
 @pytest.fixture
 def logged_in_page(page, hass_base_url, hass_credentials, hass_bearer_token):
-    """A Playwright page already authenticated against the instance (de-DE).
+    """A Playwright page already authenticated against the instance (en-US).
 
-    `hass_bearer_token` is not used directly here — depending on it only forces
-    onboarding to have finished before the browser ever loads the page (the
-    token itself is used by tests that talk to the REST/WS API).
+    The default context uses `locale=en-US`; `hass.language` is `en` on the
+    E2E instance, so panel/card labels are English. The bearer token is not
+    used directly here — depending on it only forces onboarding to have
+    finished before the browser ever loads the page (the token itself is used
+    by tests that talk to the REST/WS API).
     """
     _login(page, hass_base_url, hass_credentials)
     return page

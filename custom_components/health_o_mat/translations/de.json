@@ -386,7 +386,7 @@
     },
     "export_csv": {
       "name": "CSV-Export",
-      "description": "Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/."
+      "description": "Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/. Nur für Administratoren."
     },
     "import_csv": {
       "name": "CSV-Import",
@@ -408,15 +408,15 @@
     },
     "backup": {
       "name": "Backup",
-      "description": "Schreibt ein JSON-Backup aller Personen und Datensätze nach /config/health_o_mat_export/."
+      "description": "Schreibt ein JSON-Backup aller Personen und Datensätze nach /config/health_o_mat_export/. Nur für Administratoren."
     },
     "restore_backup": {
       "name": "Backup wiederherstellen",
-      "description": "Spielt ein JSON-Backup aus /config/health_o_mat_import/ zurück (Zusammenführen oder Ersetzen, optional nur bestimmte Personen, Datensätze und Zeiträume). Vor jeder Änderung wird ein Sicherheitsbackup geschrieben. Nur für Administratoren.",
+      "description": "Spielt ein JSON-Backup aus /config/health_o_mat_import/ oder /config/health_o_mat_export/ zurück (Zusammenführen oder Ersetzen, optional nur bestimmte Personen, Datensätze und Zeiträume). Vor jeder Änderung wird ein Sicherheitsbackup geschrieben. Nur für Administratoren.",
       "fields": {
         "filename": {
           "name": "Dateiname",
-          "description": "Dateiname innerhalb von /config/health_o_mat_import/."
+          "description": "Dateiname in /config/health_o_mat_import/ oder /config/health_o_mat_export/ (nur .json-Dateien)."
         },
         "mode": {
           "name": "Modus",
@@ -668,9 +668,9 @@
     "ui_admin_restore_file": "Backup-Datei",
     "ui_admin_no_backup_file": "— keine Backup-Datei vorhanden —",
     "ui_admin_refresh_files": "Dateien aktualisieren",
-    "ui_admin_files_count_one": "{count} Datei in /config/health_o_mat_import/.",
-    "ui_admin_files_count_other": "{count} Dateien in /config/health_o_mat_import/.",
-    "ui_admin_files_hint": "Lege JSON-Backups unter /config/health_o_mat_import/ ab und aktualisiere die Liste.",
+    "ui_admin_files_count_one": "{count} Datei in den Backup-Ordnern.",
+    "ui_admin_files_count_other": "{count} Dateien in den Backup-Ordnern.",
+    "ui_admin_files_hint": "Backups und Sicherheitsbackups aus /config/health_o_mat_import/ und /config/health_o_mat_export/ erscheinen hier.",
     "ui_admin_mode": "Modus",
     "ui_admin_from": "Von (optional)",
     "ui_admin_to": "Bis (optional)",

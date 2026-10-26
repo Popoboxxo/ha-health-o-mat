@@ -1203,3 +1203,130 @@ def test_weekly_report_service_without_store_raises():
 
     with pytest.raises(init.ServiceValidationError):
         _run(func(_call({})))
+
+
+# --- Review-Fixes B-2/S-5/S-14 ----------------------------------------------
+
+
+def _archive_storage_file(tmp_path):
+    storage = tmp_path / ".storage"
+    storage.mkdir(parents=True, exist_ok=True)
+    path = storage / "health_o_mat_archive"
+    path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def test_archive_store_not_loaded_when_file_missing(tmp_path, monkeypatch):
+    """[B-2] Kein Archiv-Store/keine Datei nur durch Lesen anlegen."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.init.store"]
+    created: list[str | None] = []
+
+    class _Archive:
+        def __init__(self, hass_, storage_key=None):
+            created.append(storage_key)
+
+    monkeypatch.setattr(store_module, "HealthOMatStore", _Archive)
+    hass = _runtime_hass([])
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+
+    assert _run(init.async_load_archive_store(hass, create=False)) is None
+    assert created == []
+    assert "archive_store" not in hass.data[_DOMAIN]["shared"]
+    assert not (tmp_path / ".storage").exists()
+
+
+def test_archive_store_loaded_at_setup_like_read_when_file_exists(tmp_path, monkeypatch):
+    """[B-2] Existiert die Archiv-Datei, wird sie unabhängig von Retention geladen."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.init.store"]
+    _archive_storage_file(tmp_path)
+    loaded: list[str] = []
+
+    class _Archive:
+        def __init__(self, hass_, storage_key=None):
+            self.storage_key = storage_key
+            self._data = {"schema": 4, "entries": {"e1": {"drinks": [{"ml": 500}]}}}
+
+        async def async_load(self):
+            loaded.append("load")
+
+        def raw_data(self):
+            return self._data
+
+    monkeypatch.setattr(store_module, "HealthOMatStore", _Archive)
+    hass = _runtime_hass([])
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+
+    archive = _run(init.async_load_archive_store(hass, create=False))
+
+    assert isinstance(archive, _Archive)
+    assert loaded == ["load"]
+    assert archive.storage_key == "health_o_mat_archive"
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    # Backup/Export sehen das Archiv damit auch bei Retention AUS.
+    assert archive.raw_data()["entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_apply_retention_archive_save_failure_keeps_main_store(monkeypatch):
+    """[S-5] Archiv-Save-Fehler → Haupt-Store bleibt unverändert."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    old_drink = {"ts": "2025-12-31T10:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+    recent_drink = {"ts": "2026-09-30T10:00:00", "ml": 500, "type": "Wasser", "src": "button"}
+    e = store.entry("e1")
+    e["drinks"] = [old_drink, recent_drink]
+    e["total_ml_lifetime"] = 750
+    archive = _fresh_store()
+    archive._store.async_save = AsyncMock(side_effect=RuntimeError("archiv kaputt"))
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})
+    hass = _runtime_hass([entry], store=store, archive_store=archive)
+
+    with pytest.raises(RuntimeError):
+        _run(init._apply_retention(hass, entry, store))
+
+    assert store.entry("e1")["drinks"] == [old_drink, recent_drink]
+    assert store.entry("e1")["total_ml_lifetime"] == 750
+    assert store.entry("e1")["archived_counts"] == {"drinks": 0, "readings": 0}
+
+
+@pytest.mark.parametrize("service", ["export_csv", "backup"])
+def test_export_and_backup_services_reject_non_admin(service):
+    """[S-14] Export/Backup-Services sind admin-gated wie das WS-Pendant."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.auth = MagicMock()
+    hass.auth.async_get_user = AsyncMock(return_value=types.SimpleNamespace(is_admin=False))
+    init._register_services(hass)
+    _schema, func = hass.services.registered[service]
+    call = _call({})
+    call.context.user_id = "user-1"
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(call))
+
+    assert "Administratoren" in str(exc.value)
+
+
+@pytest.mark.parametrize("service", ["export_csv", "backup"])
+def test_export_and_backup_services_allow_automation(service, monkeypatch):
+    """[S-14] Automationen ohne User-ID bleiben erlaubt (kein Login)."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    init._register_services(hass)
+    _schema, func = hass.services.registered[service]
+    called = AsyncMock(return_value=None)
+    lazy_name = "async_export_csv" if service == "export_csv" else "async_backup"
+    lazy_module = importlib.import_module(
+        f"{_PKG}.init.{'exporter' if service == 'export_csv' else 'backup'}"
+    )
+    monkeypatch.setattr(lazy_module, lazy_name, called)
+    call = _call({})
+    call.context.user_id = None
+
+    _run(func(call))
+
+    called.assert_awaited_once()

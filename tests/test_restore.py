@@ -927,3 +927,440 @@ def test_parse_v2_without_schema_treats_entries_as_legacy():
 
     assert parsed["schema"] == const_module.STORE_SCHEMA_VERSION
     assert parsed["entries"]["src"]["wellbeing_entries"][0]["key"] == "good"
+
+
+# ============================================================================
+# Review-Fixes B-1/S-1/S-2/S-6/N-7
+# ============================================================================
+
+
+def test_replace_many_to_one_aggregates_drinks():
+    """[B-1] many-to-one Replace verliert keine Quelle und leert den Scope einmal."""
+    backup = _doc(
+        {
+            "src-a": _entry("Max", drinks=[_drink("2026-10-14T08:00:00", 250)], total=250),
+            "src-b": _entry("Max", drinks=[_drink("2026-10-14T09:00:00", 500)], total=500),
+        }
+    )
+    current = _current_entries(
+        ("t1", _entry("Max", drinks=[_drink("2026-10-13T08:00:00", 900)], total=900))
+    )
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        person_map={"src-a": "t1", "src-b": "t1"},
+    )
+
+    assert plan.errors == []
+    assert [item["ml"] for item in plan.target_entries["t1"]["drinks"]] == [250, 500]
+    assert plan.counts["t1"]["drinks"]["added"] == 2
+    # Full-Scope + mehrere Quellen → Delta statt Setzen (kein Doppelzählen).
+    assert plan.target_entries["t1"]["total_ml_lifetime"] == 750
+    assert any("mehrere Quellen" in warning for warning in plan.warnings)
+
+
+def test_replace_many_to_one_aggregates_readings_and_wellbeing():
+    """[B-1] Aggregation gilt auch für Messungen und Wohlbefinden."""
+    backup = _doc(
+        {
+            "src-a": _entry(
+                "Max",
+                readings=[_reading("2026-10-14T08:00:00", 120, 80)],
+                wellbeing=[_wellbeing("2026-10-14T08:30:00", "good")],
+            ),
+            "src-b": _entry(
+                "Max",
+                readings=[_reading("2026-10-14T09:00:00", 130, 85)],
+                wellbeing=[_wellbeing("2026-10-14T09:30:00", "bad")],
+            ),
+        }
+    )
+    current = _current_entries(
+        (
+            "t1",
+            _entry(
+                "Max",
+                readings=[_reading("2026-10-13T08:00:00", 110, 70)],
+                wellbeing=[_wellbeing("2026-10-13T08:30:00", "okay")],
+            ),
+        )
+    )
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        person_map={"src-a": "t1", "src-b": "t1"},
+    )
+
+    assert [(r["sys"], r["dia"]) for r in plan.target_entries["t1"]["readings"]] == [
+        (120, 80),
+        (130, 85),
+    ]
+    assert [w["key"] for w in plan.target_entries["t1"]["wellbeing_entries"]] == [
+        "good",
+        "bad",
+    ]
+    assert plan.counts["t1"]["blood_pressure"]["added"] == 2
+    assert plan.counts["t1"]["wellbeing"]["added"] == 2
+
+
+def test_replace_many_to_one_aggregates_archive():
+    """[B-1] Auch Archiv-Records beider Quellen bleiben erhalten."""
+    backup = _doc(
+        {"src-a": _entry("Max"), "src-b": _entry("Max")},
+        archive={
+            "src-a": {"drinks": [_drink("2025-01-01T08:00:00", 500)], "readings": []},
+            "src-b": {"drinks": [_drink("2025-02-01T08:00:00", 300)], "readings": []},
+        },
+    )
+    current = _current_entries(("t1", _entry("Max")))
+    archive_current = {"t1": {"drinks": [_drink("2024-01-01T08:00:00", 100)], "readings": []}}
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        person_map={"src-a": "t1", "src-b": "t1"},
+        current_archive_entries=archive_current,
+    )
+
+    assert sorted(item["ml"] for item in plan.target_archive_entries["t1"]["drinks"]) == [300, 500]
+    assert plan.archive_changed is True
+
+
+def test_replace_many_to_one_removes_in_window_archive_once():
+    """[B-1] many-to-one Replace leert den Archiv-Scope genau einmal (kein Doppel-Remove)."""
+    backup = _doc(
+        {"src-a": _entry("Max"), "src-b": _entry("Max")},
+        archive={
+            "src-a": {"drinks": [_drink("2025-01-01T08:00:00", 500)], "readings": []},
+            "src-b": {"drinks": [_drink("2025-02-01T08:00:00", 300)], "readings": []},
+        },
+    )
+    current = _current_entries(("t1", _entry("Max", total=500)))
+    archive_current = {
+        "t1": {
+            "drinks": [
+                _drink("2025-01-15T08:00:00", 400),
+                _drink("2024-06-01T08:00:00", 100),
+            ],
+            "readings": [],
+        }
+    }
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        person_map={"src-a": "t1", "src-b": "t1"},
+        from_ts="2025-01-01",
+        to_ts="2025-12-31T23:59:59",
+        current_archive_entries=archive_current,
+    )
+
+    archive_actions = [
+        action for action in plan.actions if action.get("archive") and action["dataset"] == "drinks"
+    ]
+    assert len(archive_actions) == 1
+    assert archive_actions[0]["removed"] == 1
+    assert archive_actions[0]["added"] == 2
+    assert archive_actions[0]["sources"] == ["src-a", "src-b"]
+    # Der im Zeitraum liegende Alt-Record ist weg, der außerhalb bleibt erhalten,
+    # beide Quellen sind aggregiert (kein Datenverlust).
+    assert sorted(item["ml"] for item in plan.target_archive_entries["t1"]["drinks"]) == [
+        100,
+        300,
+        500,
+    ]
+    # Lebenszähler: 500 (Bestand) − 400 (entfernter Archiv-Record) + 800 (Quellen).
+    assert plan.target_entries["t1"]["total_ml_lifetime"] == 900
+
+
+def test_replace_many_to_one_archive_dry_run_matches_apply(tmp_path, monkeypatch):
+    """[B-1] Archiv-Scope: Dry-Run und Apply liefern dasselbe Ergebnis."""
+    archive_current = {
+        "t1": {
+            "drinks": [
+                _drink("2025-01-15T08:00:00", 400),
+                _drink("2024-06-01T08:00:00", 100),
+            ],
+            "readings": [],
+        }
+    }
+    hass, store, archive = _apply_setup(
+        tmp_path,
+        monkeypatch,
+        {"t1": _entry("Max", total=500)},
+        archive_current,
+    )
+    filename = _write_import_file(
+        tmp_path,
+        _doc(
+            {"src-a": _entry("Max"), "src-b": _entry("Max")},
+            archive={
+                "src-a": {"drinks": [_drink("2025-01-01T08:00:00", 500)], "readings": []},
+                "src-b": {"drinks": [_drink("2025-02-01T08:00:00", 300)], "readings": []},
+            },
+        ),
+    )
+    data = {
+        "filename": filename,
+        "mode": "replace",
+        "person_map": {"src-a": "t1", "src-b": "t1"},
+        "from": "2025-01-01",
+        "to": "2025-12-31T23:59:59",
+    }
+
+    dry = _run(restore.async_restore_from_file(hass, store, archive, {**data, "dry_run": True}))
+    applied = _run(
+        restore.async_restore_from_file(hass, store, archive, {**data, "confirm": "REPLACE"})
+    )
+
+    assert dry["plan"]["totals"] == applied["totals"]
+    assert sorted(item["ml"] for item in archive.entry("t1")["drinks"]) == [100, 300, 500]
+    assert store.entry("t1")["total_ml_lifetime"] == 900
+
+
+def test_replace_many_to_one_dry_run_matches_apply(tmp_path, monkeypatch):
+    """[B-1] Dry-Run-Counts und Apply-Ergebnis sind identisch (kein Datenverlust)."""
+    hass, store, _archive = _apply_setup(
+        tmp_path,
+        monkeypatch,
+        {
+            "t1": _entry(
+                "Max",
+                drinks=[_drink("2026-10-13T08:00:00", 900)],
+                total=900,
+            )
+        },
+    )
+    filename = _write_import_file(
+        tmp_path,
+        _doc(
+            {
+                "src-a": _entry("Max", drinks=[_drink("2026-10-14T08:00:00", 250)], total=250),
+                "src-b": _entry("Max", drinks=[_drink("2026-10-14T09:00:00", 500)], total=500),
+            }
+        ),
+    )
+    data = {
+        "filename": filename,
+        "mode": "replace",
+        "person_map": {"src-a": "t1", "src-b": "t1"},
+    }
+
+    dry = _run(restore.async_restore_from_file(hass, store, None, {**data, "dry_run": True}))
+    applied = _run(
+        restore.async_restore_from_file(hass, store, None, {**data, "confirm": "REPLACE"})
+    )
+
+    assert dry["plan"]["totals"] == applied["totals"]
+    assert dry["plan"]["totals"]["added"] == 2
+    assert [item["ml"] for item in store.entry("t1")["drinks"]] == [250, 500]
+
+
+def test_replace_dry_run_allowed_without_confirm(tmp_path, monkeypatch):
+    """[N-7] Nur der Apply-Lauf verlangt REPLACE — der Dry-Run nie."""
+    hass, store, _archive = _apply_setup(tmp_path, monkeypatch, {"t1": _entry("Max")})
+    filename = _write_import_file(
+        tmp_path,
+        _doc({"src": _entry("Max", drinks=[_drink("2026-10-14T08:00:00", 250)])}),
+    )
+
+    result = _run(
+        restore.async_restore_from_file(
+            hass, store, None, {"filename": filename, "mode": "replace", "dry_run": True}
+        )
+    )
+
+    assert result["dry_run"] is True
+    assert result["plan"]["mode"] == "replace"
+    assert store.entry("t1")["drinks"] == []
+    with pytest.raises(restore.RestoreError):
+        _run(
+            restore.async_restore_from_file(
+                hass, store, None, {"filename": filename, "mode": "replace"}
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("zone", "outside", "inside"),
+    [
+        # Europe/Berlin (+02:00 im Oktober): 00:00 lokal = 22:00 UTC am Vortag.
+        ("Europe/Berlin", "2026-10-14T21:30:00+00:00", "2026-10-14T22:30:00+00:00"),
+        # America/New_York (-04:00): 00:00 lokal = 04:00 UTC.
+        ("America/New_York", "2026-10-15T03:00:00+00:00", "2026-10-15T05:00:00+00:00"),
+    ],
+)
+def test_naive_time_bounds_use_local_timezone(monkeypatch, zone, outside, inside):
+    """[S-1] Naive from/to-Werte gelten als lokale HA-Zeitzone (nicht UTC)."""
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr(
+        restore,
+        "dt_util",
+        types.SimpleNamespace(DEFAULT_TIME_ZONE=ZoneInfo(zone)),
+    )
+    backup = _doc(
+        {
+            "src": _entry(
+                "Max",
+                drinks=[
+                    _drink(outside, 100),
+                    _drink(inside, 200),
+                ],
+            )
+        }
+    )
+    current = _current_entries(("t1", _entry("Max")))
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        from_ts="2026-10-15T00:00:00",
+        to_ts="2026-10-15T23:59:59",
+    )
+
+    assert [item["ml"] for item in plan.target_entries["t1"]["drinks"]] == [200]
+
+
+def test_replace_time_boundary_keeps_records_outside_local_window(monkeypatch):
+    """[S-1] Replace löscht nichts außerhalb des (lokal interpretierten) Fensters."""
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr(
+        restore,
+        "dt_util",
+        types.SimpleNamespace(DEFAULT_TIME_ZONE=ZoneInfo("Europe/Berlin")),
+    )
+    kept = _drink("2026-10-14T21:30:00+00:00", 400)  # 23:30 lokal am 14.
+    inside = _drink("2026-10-14T22:30:00+00:00", 300)  # 00:30 lokal am 15.
+    backup = _doc({"src": _entry("Max", drinks=[_drink("2026-10-15T12:00:00+00:00", 250)])})
+    current = _current_entries(("t1", _entry("Max", drinks=[kept, inside], total=700)))
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        from_ts="2026-10-15T00:00:00",
+        to_ts="2026-10-15T23:59:59",
+    )
+
+    assert [item["ml"] for item in plan.target_entries["t1"]["drinks"]] == [400, 250]
+
+
+def test_dedup_treats_same_instant_as_duplicate():
+    """[S-2] Offset vs. Z desselben Instants ergibt denselben Dedup-Schlüssel."""
+    existing = _drink("2026-10-14T08:00:00Z", 250, "Wasser")
+    backup = _doc(
+        {
+            "src": _entry(
+                "Max",
+                drinks=[_drink("2026-10-14T10:00:00+02:00", 250, "Wasser")],
+            )
+        }
+    )
+    current = _current_entries(("t1", _entry("Max", drinks=[existing])))
+
+    plan = restore.plan_restore(backup, current)
+
+    assert plan.counts["t1"]["drinks"]["skipped"] == 1
+    assert plan.counts["t1"]["drinks"]["added"] == 0
+
+
+def test_replace_dedupes_same_instant_across_sources():
+    """[S-2] Auch im aggregierten Replace wird derselbe Instant nur einmal übernommen."""
+    backup = _doc(
+        {
+            "src-a": _entry("Max", drinks=[_drink("2026-10-14T08:00:00Z", 250, "Wasser")]),
+            "src-b": _entry("Max", drinks=[_drink("2026-10-14T10:00:00+02:00", 250, "Wasser")]),
+        }
+    )
+    current = _current_entries(("t1", _entry("Max")))
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        mode="replace",
+        person_map={"src-a": "t1", "src-b": "t1"},
+    )
+
+    assert plan.counts["t1"]["drinks"]["added"] == 1
+    assert plan.counts["t1"]["drinks"]["skipped"] == 1
+    assert len(plan.target_entries["t1"]["drinks"]) == 1
+
+
+def test_replace_skips_invalid_records_like_merge():
+    """[S-6] Replace validiert Backup-Records (kein `ml: "abc"` im Store)."""
+    invalid = _drink("2026-10-14T08:00:00", 250)
+    invalid["ml"] = "abc"
+    backup = _doc({"src": _entry("Max", drinks=[invalid])})
+    current = _current_entries(
+        ("t1", _entry("Max", drinks=[_drink("2026-10-13T08:00:00", 100)], total=100))
+    )
+
+    plan = restore.plan_restore(backup, current, mode="replace")
+
+    assert plan.target_entries["t1"]["drinks"] == []
+    assert plan.counts["t1"]["drinks"]["errors"] == 1
+    assert plan.counts["t1"]["drinks"]["added"] == 0
+
+
+def test_restore_command_loads_archive_store_on_demand(tmp_path, monkeypatch):
+    """[B-2] Restore lädt den Archiv-Store bei Bedarf (kein stilles Ignorieren)."""
+    store = _fresh_store({"t1": _entry("Max")})
+    archive = _fresh_store({})
+    created: list[str | None] = []
+
+    def _make_archive(hass_, storage_key=None):
+        created.append(storage_key)
+        return archive
+
+    monkeypatch.setattr(store_module, "HealthOMatStore", _make_archive)
+    hass = _hass(tmp_path, store)
+    filename = _write_import_file(
+        tmp_path,
+        _doc(
+            {"src": _entry("Max", drinks=[_drink("2026-10-14T08:00:00", 250)])},
+            archive={"src": {"drinks": [_drink("2025-01-01T08:00:00", 500)], "readings": []}},
+        ),
+    )
+
+    result = _run(
+        restore.async_restore_command(hass, {"filename": filename, "dry_run": True}, actor=None)
+    )
+
+    assert created == ["health_o_mat_archive"]
+    assert result["plan"]["totals"]["added"] == 2
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+
+
+def test_restore_command_on_demand_archive_is_written(tmp_path, monkeypatch):
+    """[B-2] On-demand geladener Archiv-Store wird beim Restore mitgeschrieben."""
+    store = _fresh_store({"t1": _entry("Max")})
+    archive = _fresh_store({})
+
+    monkeypatch.setattr(
+        store_module,
+        "HealthOMatStore",
+        lambda hass_, storage_key=None: archive,
+    )
+    hass = _hass(tmp_path, store)
+    filename = _write_import_file(
+        tmp_path,
+        _doc(
+            {"src": _entry("Max", drinks=[_drink("2026-10-14T08:00:00", 250)])},
+            archive={"src": {"drinks": [_drink("2025-01-01T08:00:00", 500)], "readings": []}},
+        ),
+    )
+
+    _run(restore.async_restore_command(hass, {"filename": filename}, actor=None))
+
+    assert store.entry("t1")["drinks"][0]["ml"] == 250
+    assert archive.entry("t1")["drinks"][0]["ml"] == 500
+    assert store.entry("t1")["total_ml_lifetime"] == 750

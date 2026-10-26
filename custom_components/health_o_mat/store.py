@@ -43,7 +43,9 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    ARCHIVE_STORE_KEY,
     DEFAULT_AUDIT_LIMIT,
+    DOMAIN,
     MAIN_STORE_KEY,
     STORE_SCHEMA_VERSION,
     STORE_VERSION,
@@ -237,7 +239,10 @@ class HealthOMatStore:
 
     async def _handle_invalid_schema(self) -> None:
         """Store-Datei mit falschem Schema sichern + Notification (Executor-Job)."""
-        _LOGGER.error("Health-O-Mat-Store ohne 'entries'-Schema — Backup + leerer Start")
+        _LOGGER.error(
+            "Health-O-Mat-Store '%s' ohne 'entries'-Schema — Backup + leerer Start",
+            self._storage_key,
+        )
         src = self._hass.config.path(".storage", self._storage_key)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         dst = f"{src}.invalid-schema-{stamp}"
@@ -250,7 +255,8 @@ class HealthOMatStore:
 
         backed_up = await self._hass.async_add_executor_job(_backup)
         message = (
-            "Der Health-O-Mat-Speicher hat ein unerwartetes Format.\n"
+            f"Der Health-O-Mat-Speicher '{self._storage_key}' hat ein "
+            "unerwartetes Format.\n"
             + (
                 f"Die Originaldatei wurde gesichert nach:\n{dst}\n"
                 if backed_up
@@ -326,7 +332,7 @@ class HealthOMatStore:
     ) -> None:
         """Ein Audit-Ereignis anhängen und den Cap anwenden.
 
-        `details` trägt nur Metadaten (z. B. `{"ml": 250}`), nie vollständige
+        `details` trägt nur Metadaten (z. B. `{"src": "button"}`), nie
         Gesundheitswerte — die stehen im Eintrag selbst.
         """
         append_audit_event_to_entry(
@@ -410,7 +416,7 @@ class HealthOMatStore:
             "drinks",
             drink["id"],
             actor,
-            {"ml": drink["ml"]},
+            {"src": drink["src"]},
             audit_limit,
         )
         await self._async_save()
@@ -677,7 +683,7 @@ class HealthOMatStore:
             "wellbeing",
             event["id"],
             actor,
-            {"key": status},
+            {},
             audit_limit,
         )
         await self._async_save()
@@ -777,8 +783,14 @@ class HealthOMatStore:
         `total_ml_lifetime` bleibt UNVERÄNDERT — Archivieren ist ein reines
         Verschieben der Historie, keine Summenkorrektur. Die Zahl der
         verschobenen Einträge wird in `archived_counts` mitgeführt.
+
+        Schlägt der Save fehl, wird der Entry in-memory auf den Stand vor der
+        Mutation zurückgesetzt (S-5): sonst würde der nächste erfolgreiche Save
+        den gekürzten RAM-Stand persistieren und die verschobenen Einträge
+        wären weg.
         """
         e = self.entry(entry_id)
+        previous = copy.deepcopy(e)
         moved_drinks = len(e.get("drinks", [])) - len(kept_drinks)
         moved_readings = len(e.get("readings", [])) - len(kept_readings)
         e["drinks"] = list(kept_drinks)
@@ -786,7 +798,11 @@ class HealthOMatStore:
         counts = e.setdefault("archived_counts", {"drinks": 0, "readings": 0})
         counts["drinks"] = int(counts.get("drinks", 0)) + moved_drinks
         counts["readings"] = int(counts.get("readings", 0)) + moved_readings
-        await self._async_save()
+        try:
+            await self._async_save()
+        except Exception:
+            self._data["entries"][entry_id] = previous
+            raise
 
     async def append_archive(self, entry_id: str, drinks: list, readings: list) -> None:
         """Verschiebt Einträge in den Archiv-Store (nur anhängen)."""
@@ -826,6 +842,49 @@ class HealthOMatStore:
 
     async def _async_save(self) -> None:
         await self._store.async_save(self._data)
+
+
+def archive_store_file_exists(hass: HomeAssistant) -> bool:
+    """True, wenn die Archiv-Store-Datei existiert.
+
+    Reines Lesen: eine fehlende Datei wird hier NICHT angelegt (kein leerer
+    Archiv-Store nur durch einen Blick auf das Dateisystem).
+    """
+    try:
+        path = hass.config.path(".storage", ARCHIVE_STORE_KEY)
+        try:
+            path = os.fspath(path)
+        except TypeError:
+            return False
+        if not isinstance(path, (str, bytes)):
+            # Fakes/MagicMocks im Test: keine echte Datei prüfbar.
+            return False
+        return os.path.isfile(path)
+    except (AttributeError, TypeError, ValueError, OSError):
+        return False
+
+
+async def async_load_archive_store(
+    hass: HomeAssistant, *, create: bool = False
+) -> HealthOMatStore | None:
+    """Archiv-Store aus ``hass.data[DOMAIN]["shared"]`` holen, sonst laden.
+
+    ``create=False`` lädt nur, wenn die Storage-Datei bereits existiert —
+    damit ist das Archiv nach einem Neustart auch dann in Backup/Export/
+    Restore sichtbar, wenn Retention gerade AUS ist (B-2), ohne eine leere
+    Datei anzulegen. ``create=True`` lädt on demand (Restore) und legt bei
+    Bedarf einen leeren In-Memory-Store an, der erst beim Schreiben persistiert.
+    """
+    shared: dict = hass.data.setdefault(DOMAIN, {}).setdefault("shared", {})
+    archive = shared.get("archive_store")
+    if archive is not None:
+        return archive
+    if not create and not archive_store_file_exists(hass):
+        return None
+    archive = HealthOMatStore(hass, storage_key=ARCHIVE_STORE_KEY)
+    await archive.async_load()
+    shared["archive_store"] = archive
+    return archive
 
 
 def prune_audit_log(audit: list[dict], audit_limit: int) -> None:

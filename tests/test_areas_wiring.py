@@ -200,3 +200,56 @@ def test_unload_reapplies_panel_layer_excluding_entry(monkeypatch):
     _run(init.async_unload_entry(hass, entry))
 
     layer.assert_awaited_once_with(hass, exclude_entry_id="e1")
+
+
+# --- Review-Fix S-4 ---------------------------------------------------------
+
+
+def _lifetime_setup(monkeypatch, options, lifetime):
+    init = _load_init()
+    monkeypatch.setattr(init, "_async_apply_panel_layer", AsyncMock())
+    monkeypatch.setattr(init, "async_setup_reminders", AsyncMock())
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.set_lifetime_start("e1", lifetime))
+    entry = _cfg_entry(options=options)
+    entry.runtime_data = init.HealthOMatData()
+    hass = _hass(store, entry)
+    init._apply_options(hass, entry)
+    return init, store, entry, hass
+
+
+def test_options_updated_goal_change_does_not_reset_lifetime(monkeypatch):
+    """[S-4] Tagesziel ändern lässt den gewachsenen Lebenszähler unverändert."""
+    init, store, entry, hass = _lifetime_setup(
+        monkeypatch, {"daily_goal_ml": 2500, "set_lifetime_ml": 1000}, 1000
+    )
+
+    entry.options = {"daily_goal_ml": 3000, "set_lifetime_ml": 1000}
+    _run(init._options_updated(hass, entry))
+
+    assert store.all_entries()["e1"]["total_ml_lifetime"] == 1000
+
+
+def test_options_updated_wizard_save_after_bookings_keeps_lifetime(monkeypatch):
+    """[S-4] Wizard-Save mit altem Formular-Default setzt den Zähler nicht zurück."""
+    init, store, entry, hass = _lifetime_setup(
+        monkeypatch, {"daily_goal_ml": 2000, "set_lifetime_ml": 500}, 750
+    )
+
+    entry.options = {"daily_goal_ml": 2500, "set_lifetime_ml": 500}
+    _run(init._options_updated(hass, entry))
+
+    assert store.all_entries()["e1"]["total_ml_lifetime"] == 750
+
+
+def test_options_updated_explicit_lifetime_change_applies(monkeypatch):
+    """[S-4] Eine echte Änderung des Lebenszähler-Feldes wird weiterhin angewandt."""
+    init, store, entry, hass = _lifetime_setup(
+        monkeypatch, {"daily_goal_ml": 2000, "set_lifetime_ml": 1000}, 1000
+    )
+
+    entry.options = {"daily_goal_ml": 2000, "set_lifetime_ml": 900}
+    _run(init._options_updated(hass, entry))
+
+    assert store.all_entries()["e1"]["total_ml_lifetime"] == 900

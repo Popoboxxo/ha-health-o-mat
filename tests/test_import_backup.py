@@ -577,7 +577,7 @@ def test_import_csv_service_writes_via_runtime_data(tmp_path):
 def test_export_csv_excludes_voided_entries(tmp_path):
     """[M2a] CSV-Export enthält nur aktive Drinks/Readings (voided fehlt)."""
     _load_init()  # lädt u. a. das exporter-Modul
-    exporter = sys.modules[f"{_PKG}.exporter"]
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
     store = _fresh_store()
     _run(store.set_person("e1", "Max"))
     _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
@@ -611,7 +611,7 @@ def test_export_csv_excludes_voided_entries(tmp_path):
 def test_export_csv_excludes_voided_entries_from_archive(tmp_path):
     """[M2a] Auch Archiv-Einträge werden nur aktiv exportiert (defensiv)."""
     _load_init()
-    exporter = sys.modules[f"{_PKG}.exporter"]
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
     store = _fresh_store()
     _run(store.set_person("e1", "Max"))
     _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
@@ -782,8 +782,153 @@ def test_backup_service_passes_archive_store():
     lazy_backup = importlib.import_module(f"{_PKG}.init.backup")
     lazy_backup.async_backup = _fake_backup
     try:
-        _run(func(_call({})))
+        call = _call({})
+        call.context.user_id = None  # Automation/Skript → Admin-Gate lässt durch
+        _run(func(call))
     finally:
         lazy_backup.async_backup = original
 
     assert calls == [(store, archive)]
+
+
+def _on_demand_archive(tmp_path, monkeypatch, init, archive):
+    """Shared ohne archive_store; Archiv-Datei existiert → Laden on demand."""
+    store_mod = importlib.import_module(f"{_PKG}.init.store")
+    monkeypatch.setattr(store_mod, "HealthOMatStore", lambda hass_, storage_key=None: archive)
+    storage_dir = tmp_path / ".storage"
+    storage_dir.mkdir(exist_ok=True)
+    (storage_dir / const_module.ARCHIVE_STORE_KEY).write_text("{}", encoding="utf-8")
+    hass = _import_hass(tmp_path)
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    return hass
+
+
+def test_backup_service_loads_archive_on_demand(tmp_path, monkeypatch):
+    """[B-2] Fehlender Shared-Store wird bei vorhandener Archiv-Datei nachgeladen."""
+    init = _load_init()
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    archive = _fresh_store()
+    _run(archive.append_archive("e1", [{"ml": 500, "ts": "2025-01-01T08:00:00"}], []))
+    # On-demand-Laden darf den vorhandenen Archiv-Inhalt nicht verlieren.
+    archive._store.async_load = AsyncMock(return_value=archive.raw_data())
+    hass = _on_demand_archive(tmp_path, monkeypatch, init, archive)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    backup_mod = importlib.import_module(f"{_PKG}.init.backup")
+    monkeypatch.setattr(
+        backup_mod,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0)),
+    )
+    _schema, func = hass.services.registered["backup"]
+
+    call = _call({})
+    call.context.user_id = None
+    _run(func(call))
+
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    path = next((tmp_path / "health_o_mat_export").glob("health_o_mat_backup_*.json"))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_export_csv_service_loads_archive_on_demand(tmp_path, monkeypatch):
+    """[B-2] CSV-Export enthält das on-demand geladene Archiv."""
+    init = _load_init()
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    archive = _fresh_store()
+    _run(
+        archive.append_archive(
+            "e1", [{"ts": "2025-01-01T08:00:00", "ml": 500, "type": "Saft", "src": "button"}], []
+        )
+    )
+    # On-demand-Laden darf den vorhandenen Archiv-Inhalt nicht verlieren.
+    archive._store.async_load = AsyncMock(return_value=archive.raw_data())
+    hass = _on_demand_archive(tmp_path, monkeypatch, init, archive)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    monkeypatch.setattr(
+        exporter, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    _schema, func = hass.services.registered["export_csv"]
+
+    call = _call({"dataset": "drinks"})
+    call.context.user_id = None
+    _run(func(call))
+
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    content = next((tmp_path / "health_o_mat_export").glob("health_o_mat_drinks_*.csv")).read_text(
+        encoding="utf-8-sig"
+    )
+    assert "Wasser" in content
+    assert "Saft" in content
+
+
+# ============================================================================
+# Review-Fix S-11: Backup-/Pre-Restore-Dateien im Restore-Pfad
+# ============================================================================
+
+
+def test_list_import_files_includes_export_dir_json_only(tmp_path):
+    """[S-11] Export-Ordner (Backups/Pre-Restore) ist in der Restore-Liste sichtbar."""
+    import_dir = tmp_path / importer.IMPORT_DIR_NAME
+    export_dir = tmp_path / "health_o_mat_export"
+    import_dir.mkdir()
+    export_dir.mkdir()
+    (import_dir / "manual.json").write_text("{}", encoding="utf-8")
+    (export_dir / "health_o_mat_backup_1.json").write_text("{}", encoding="utf-8")
+    (export_dir / "health_o_mat_pre_restore_1.json").write_text("{}", encoding="utf-8")
+    (export_dir / "drinks_export.csv").write_text("a;b", encoding="utf-8")
+    (export_dir / ".hidden.json").write_text("{}", encoding="utf-8")
+
+    files = importer.list_import_files(str(tmp_path))
+
+    assert files == [
+        "health_o_mat_backup_1.json",
+        "health_o_mat_pre_restore_1.json",
+        "manual.json",
+    ]
+
+
+def test_safe_restore_path_accepts_import_and_export(tmp_path):
+    """[S-11] Whitelist erlaubt nur JSON in Import-/Export-Ordner."""
+    (tmp_path / importer.IMPORT_DIR_NAME).mkdir()
+    export_dir = tmp_path / "health_o_mat_export"
+    export_dir.mkdir()
+    created = export_dir / "backup.json"
+    created.write_text("{}", encoding="utf-8")
+
+    path = importer.safe_restore_path(str(tmp_path), "backup.json")
+
+    assert os.path.realpath(path) == os.path.realpath(created)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["/etc/passwd", "../secret.json", "unterordner/backup.json", "backup.csv", "   "],
+)
+def test_safe_restore_path_rejects_invalid_names(tmp_path, filename):
+    """[S-11] Absolute Pfade, Traversal, Unterordner und Nicht-JSON sind tabu."""
+    with pytest.raises(ValueError):
+        importer.safe_restore_path(str(tmp_path), filename)
+
+
+def test_safe_restore_path_rejects_symlink(tmp_path):
+    """[S-11] Symlinks werden auch im Export-Ordner abgelehnt."""
+    export_dir = tmp_path / "health_o_mat_export"
+    export_dir.mkdir()
+    outside = tmp_path / "aussen.json"
+    outside.write_text("{}", encoding="utf-8")
+    link = export_dir / "link.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks auf diesem System nicht verfügbar")
+
+    with pytest.raises(ValueError):
+        importer.safe_restore_path(str(tmp_path), "link.json")

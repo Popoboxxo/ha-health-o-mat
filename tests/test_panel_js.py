@@ -2751,9 +2751,12 @@ const dryResult = {
   msg: dryMsg,
   result: dry._restoreResult && dry._restoreResult.dryRun,
   html: admin.restoreResultHtml(dry),
+  // S-1: datetime-local → UTC-ISO (browser-lokal, daher im Runner berechnet)
+  expectedFrom: new Date("2026-10-01T00:00").toISOString(),
+  expectedTo: new Date("2026-10-20T23:59").toISOString(),
 };
 
-/* Replace ohne "REPLACE" wird lokal abgelehnt. */
+/* Replace ohne "REPLACE" wird beim Apply lokal abgelehnt. */
 const blocked = makePanel();
 await blocked._loadRestoreFiles();
 setRestoreFields(blocked, { "restore-mode": { value: "replace" } });
@@ -2761,6 +2764,16 @@ await blocked._runRestore(false);
 const blockedResult = {
   error: blocked._restoreError,
   sent: blocked._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").length,
+};
+
+/* N-7: Replace-Dry-Run ist OHNE Bestätigung erlaubt. */
+const dryReplace = makePanel();
+await dryReplace._loadRestoreFiles();
+setRestoreFields(dryReplace, { "restore-mode": { value: "replace" } });
+await dryReplace._runRestore(true);
+const dryReplaceResult = {
+  error: dryReplace._restoreError,
+  msg: dryReplace._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").pop(),
 };
 
 /* Replace mit Bestätigung + Apply: Personen/Settings/Entries neu laden. */
@@ -2817,6 +2830,7 @@ process.stdout.write(JSON.stringify({
   files: fileResult,
   dry: dryResult,
   blocked: blockedResult,
+  dryReplace: dryReplaceResult,
   applied: appliedResult,
   failed: failedResult,
   cardHtml,
@@ -2849,8 +2863,10 @@ def test_req_hom_116_panel_restore_flow(tmp_path):
     assert msg["filename"] == "a_backup.json"
     assert msg["mode"] == "merge"
     assert msg["datasets"] == ["drinks", "blood_pressure"]
-    assert msg["from"] == "2026-10-01T00:00"
-    assert msg["to"] == "2026-10-20T23:59"
+    # S-1: `datetime-local` wird als UTC-ISO gesendet (Browser-lokale Zeit).
+    assert msg["from"] == dry["expectedFrom"]
+    assert msg["to"] == dry["expectedTo"]
+    assert msg["from"].endswith("Z") and msg["to"].endswith("Z")
     assert msg["person_map"] == {"alex": "entry-1"}
     assert "confirm" not in msg
     assert dry["result"] is True
@@ -2863,6 +2879,13 @@ def test_req_hom_116_panel_restore_flow(tmp_path):
     blocked = out["blocked"]
     assert blocked["sent"] == 0, "Replace ohne Bestätigung wird trotzdem gesendet"
     assert "REPLACE" in blocked["error"]
+
+    # N-7: Dry-Run ist ohne Bestätigung möglich und sendet kein `confirm`.
+    dry_replace = out["dryReplace"]
+    assert dry_replace["error"] is None
+    assert dry_replace["msg"]["mode"] == "replace"
+    assert dry_replace["msg"]["dry_run"] is True
+    assert "confirm" not in dry_replace["msg"]
 
     applied = out["applied"]
     assert applied["msg"]["mode"] == "replace"
