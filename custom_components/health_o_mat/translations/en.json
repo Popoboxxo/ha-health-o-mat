@@ -288,6 +288,9 @@
       },
       "input_pulse": {
         "name": "New reading: pulse"
+      },
+      "wellbeing_input": {
+        "name": "Wellbeing input"
       }
     }
   },

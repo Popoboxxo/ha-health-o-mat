@@ -9,7 +9,7 @@ import importlib.util
 import os
 import sys
 import types
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -227,6 +227,7 @@ _BP_NUMBER_KEYS = {
     "number_input_dia",
     "number_input_pulse",
 }
+_WELLBEING_NUMBER_KEYS = {"number_wellbeing_input"}
 
 
 def _number_setup(options: dict) -> set[str]:
@@ -259,20 +260,27 @@ def _ids(keys: set[str]) -> set[str]:
 def test_number_setup_old_entry_without_options_has_all_areas():
     """[REQ-HOM-009] Alt-Entry ohne areas-Option = alle Bereiche aktiv."""
     keys = _number_setup({})
-    assert keys == _ids(_DRINK_NUMBER_KEYS | _BP_NUMBER_KEYS)
+    assert keys == _ids(_DRINK_NUMBER_KEYS | _BP_NUMBER_KEYS | _WELLBEING_NUMBER_KEYS)
 
 
-def test_number_setup_drink_disabled_keeps_bp():
-    """[REQ-HOM-009] drink AUS → keine Drink-Numbers; BP bleibt."""
+def test_number_setup_drink_disabled_keeps_bp_and_wellbeing():
+    """[REQ-HOM-009] drink AUS → keine Drink-Numbers; BP und Wellbeing bleiben."""
     keys = _number_setup({"areas": {"drink": False}})
-    assert keys == _ids(_BP_NUMBER_KEYS)
+    assert keys == _ids(_BP_NUMBER_KEYS | _WELLBEING_NUMBER_KEYS)
     assert keys.isdisjoint(_ids(_DRINK_NUMBER_KEYS))
 
 
 def test_number_setup_only_drink_when_bp_disabled():
-    """[REQ-HOM-009] bp AUS → nur Drink-Numbers (wellbeing hat keine Numbers)."""
+    """[REQ-HOM-009] bp AUS → Drink- und Wellbeing-Numbers bleiben."""
     keys = _number_setup({"areas": {"bp": False}})
-    assert keys == _ids(_DRINK_NUMBER_KEYS)
+    assert keys == _ids(_DRINK_NUMBER_KEYS | _WELLBEING_NUMBER_KEYS)
+
+
+def test_number_setup_wellbeing_disabled_creates_no_wellbeing_number():
+    """[REQ-HOM-009] wellbeing AUS → keine Wellbeing-Eingabe."""
+    keys = _number_setup({"areas": {"wellbeing": False}})
+    assert keys == _ids(_DRINK_NUMBER_KEYS | _BP_NUMBER_KEYS)
+    assert keys.isdisjoint(_ids(_WELLBEING_NUMBER_KEYS))
 
 
 def test_number_unique_ids_stable_across_area_toggle():
@@ -285,3 +293,67 @@ def test_number_unique_ids_stable_across_area_toggle():
     assert drink_ids <= on_keys
     assert drink_ids.isdisjoint(off_keys)
     assert on_again_keys == on_keys
+
+
+# --- Wellbeing-Eingabe (number.*_wellbeing_input) ---------------------------
+
+_WELLBEING_ENTRY_ID = "test-entry-wellbeing"
+
+
+def _make_wellbeing_input_number(status: str | None = "good"):
+    entry = MagicMock()
+    entry.entry_id = _WELLBEING_ENTRY_ID
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+
+    store = MagicMock()
+    store.active_entry.return_value = {"wellbeing": {"status": status}}
+    store.set_wellbeing = AsyncMock()
+
+    entity = number_module.WellbeingInputNumber(MagicMock(), entry, store)
+    entity.hass = MagicMock()
+    entity.hass.data = {}
+    return entity, entry, store
+
+
+def test_wellbeing_input_native_value_maps_status_to_score():
+    entity, _, _ = _make_wellbeing_input_number("good")
+
+    assert entity.native_value == 7
+
+
+def test_wellbeing_input_native_value_is_none_without_status():
+    entity, _, _ = _make_wellbeing_input_number(None)
+
+    assert entity.native_value is None
+
+
+def test_wellbeing_input_apply_maps_score_to_status_and_reports():
+    entity, entry, store = _make_wellbeing_input_number()
+
+    _async_test(entity._apply(10))
+
+    store.set_wellbeing.assert_awaited_once()
+    args = store.set_wellbeing.call_args.args
+    assert args[0] == _WELLBEING_ENTRY_ID
+    assert args[1] == "excellent"
+    assert store.set_wellbeing.call_args.kwargs["audit_limit"] is not None
+
+
+def test_wellbeing_input_apply_ignores_invalid_score():
+    entity, _, store = _make_wellbeing_input_number()
+
+    _async_test(entity._apply(11))
+
+    store.set_wellbeing.assert_not_awaited()
+
+
+def test_wellbeing_input_attributes_and_translation_key():
+    entity, _, _ = _make_wellbeing_input_number("very_bad")
+
+    assert entity._attr_translation_key == "wellbeing_input"
+    assert entity._attr_icon == "mdi:emoticon-outline"
+    assert entity._attr_native_min_value == 1
+    assert entity._attr_native_max_value == 10
+    assert entity._attr_native_step_value == 1
+    assert entity.native_value == 1
