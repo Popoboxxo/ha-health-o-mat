@@ -10,8 +10,19 @@ MODEL = "Health-O-Mat"
 STORE_VERSION = 1
 # Schema-Stufe des Store-Inhalts (steuert die Migrationskette in store.py);
 # v1 = Ursprungsschema, v2 = +inputs (BP-Eingaben) je Person,
-# v3 = +archived_counts (Retention/Archiv-Kennzahlen, REQ-HOM-109) je Person
-STORE_SCHEMA_VERSION = 3
+# v3 = +archived_counts (Retention/Archiv-Kennzahlen, REQ-HOM-109) je Person,
+# v4 = +id/created_at/voided_* je Eintrag, +wellbeing_entries, +audit_log
+#      (Korrigierbarkeit/Audit, REQ-HOM-115)
+STORE_SCHEMA_VERSION = 4
+
+# Audit-Log: Default-Cap an Ereignissen je Person (0 = unbegrenzt).
+DEFAULT_AUDIT_LIMIT = 1000
+# Obergrenze des Audit-Caps (Admin-Feld/Settings-Schema). Höhere Werte werden
+# auf diesen Wert begrenzt, damit ein Zahlendreher das Log nicht unbegrenzt
+# wachsen lässt (0 bleibt der explizite "unbegrenzt"-Wert).
+MAX_AUDIT_LIMIT = 1_000_000
+# Options-Schlüssel für den Audit-Cap (Admin-Maske via ws_api set_settings).
+AUDIT_LIMIT_OPTION = "audit_limit"
 
 # HA-Store-Keys: Haupt-Store (Historie) und separater Archiv-Store (Retention).
 MAIN_STORE_KEY = "health_o_mat"
@@ -139,3 +150,16 @@ WELLBEING_IMAGES_OPTION = "wellbeing_images"
 # Options-Schlüssel (REQ-HOM-114): Wohlbefinden-Auswahl erst nach Bestätigung
 # übernehmen. Default aus = bisheriges Sofort-Verhalten.
 OPTION_WELLBEING_CONFIRM = "wellbeing_confirm"
+
+# --- Benachrichtigungen (REQ-HOM-118) ---------------------------------------
+# Options-Schlüssel der genesteten Erinnerungs-/Berichtsstrukturen. Beide
+# Defaults sind AUS: bestehende Installationen ändern ihr Verhalten nicht.
+OPTION_REMINDERS = "reminders"
+OPTION_WEEKLY_REPORT = "weekly_report"
+
+DEFAULT_REMINDER_TIME = "20:00"
+DEFAULT_WEEKLY_REPORT_TIME = "18:00"
+# Default für "seit X Stunden nichts getrunken" (0 = Bedingung aus).
+DEFAULT_REMINDER_NO_DRINK_HOURS = 3
+# Fällige Erinnerungs-Arten in stabiler Reihenfolge (Notification-Reihenfolge).
+REMINDER_KINDS: tuple[str, ...] = ("drink_goal", "no_drink", "bp", "wellbeing")

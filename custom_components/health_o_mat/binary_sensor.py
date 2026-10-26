@@ -33,7 +33,8 @@ class HealthOMatBinary(HealthOMatEntity, BinarySensorEntity):
 
     @property
     def _data(self) -> dict:
-        return self._store.all_entries().get(self._entry.entry_id, {})
+        # Aktive Sicht: voided Getränke/Messungen zählen nicht (M2a).
+        return self._store.active_entry(self._entry.entry_id)
 
     def _today_ml(self) -> int:
         hour = self._entry.options.get("daily_reset_hour", 0)

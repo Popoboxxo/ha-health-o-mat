@@ -99,7 +99,7 @@ def test_req_hom_114_card_stages_until_confirmed(
     assert card.locator(".wb-btn[data-key='good'].pending").count() == 1, (
         "the staged selection must be marked as pending"
     )
-    assert "noch nicht gemeldet" in card.locator(".wb-confirm").inner_text()
+    assert "not reported yet" in card.locator(".wb-confirm").inner_text()
 
     time.sleep(1.2)
     payload = _panel_data(hass_base_url, hass_bearer_token, entry_id)
@@ -135,9 +135,9 @@ def test_req_hom_114_panel_admin_option_controls_confirmation(
 
         checkbox.check()
         panel.locator("[data-save-button]").click()
-        panel.locator(".settings-status.ok", has_text="Einstellungen gespeichert.").wait_for(
-            state="visible", timeout=CARD_TIMEOUT
-        )
+        # Language-agnostic: the status text follows hass.language (en on this
+        # instance); the authoritative check is the get_settings round-trip below.
+        panel.locator(".settings-status.ok").wait_for(state="visible", timeout=CARD_TIMEOUT)
 
         settings = _ws_command(
             hass_base_url,

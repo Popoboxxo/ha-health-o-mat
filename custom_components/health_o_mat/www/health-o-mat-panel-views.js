@@ -14,11 +14,15 @@ import {
   WELLBEING_STATES,
   WELLBEING_SCORE_MAX,
   PACE_INFO,
+  HISTORY_LIMIT,
+  HISTORY_KIND_LABELS,
+  HISTORY_KIND_KEYS,
   escapeHtml,
   toNumber,
   clamp,
   fmtMl,
-  relativeTime,
+  localDateTimeValue,
+  entryTime,
   ringHtml,
   categoryInfo,
   messageHtml,
@@ -29,7 +33,8 @@ import {
   wellbeingScale,
   wellbeingVisual,
   bpHistoryChartHtml,
-} from "./health-o-mat-panel-base.js?v=0.13.0";
+  t,
+} from "./health-o-mat-panel-base.js?v=0.14.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -47,7 +52,7 @@ export function renderTile(panel, person) {
   if (!data) {
     const note = error
       ? `<div class="tile-row muted">${escapeHtml(error)}</div>`
-      : `<div class="tile-row muted">Lade\u2026</div>`;
+      : `<div class="tile-row muted">${escapeHtml(t("ui_common_loading", "Lade\u2026"))}</div>`;
     return `<div class="tile loading">
         <div class="tile-head"><span class="dot"></span><span class="tile-name">${escapeHtml(person.display_name)}</span></div>
         ${note}
@@ -71,16 +76,18 @@ export function renderTile(panel, person) {
   const pulse = panel._liveNumber(data, "bp_pulse", toNumber(bp.pulse, NaN));
   const bpText = Number.isFinite(sys) && Number.isFinite(dia)
     ? `${Math.round(sys)}/${Math.round(dia)}${Number.isFinite(pulse) ? ` \u00B7 ${Math.round(pulse)}` : ""}`
-    : "keine Messung";
+    : t("ui_panel_no_measurement", "keine Messung");
 
   const wb = data.wellbeing || {};
   const wbState = wellbeingView(panel, data);
-  const wbAt = wb.at ? relativeTime(wb.at) : "";
+  const wbAt = wb.at ? entryTime(wb.at) : "";
 
   const rest = goal > 0 ? Math.max(0, Math.round(goal - ml)) : null;
   const sub = goal > 0
-    ? `Ziel ${fmtMl(goal)}${rest ? ` \u00B7 Rest ${fmtMl(rest)}` : ""}`
-    : "Kein Tagesziel gesetzt";
+    ? `${t("ui_panel_tile_goal", "Ziel {ml}", { ml: fmtMl(goal) })}${
+        rest ? ` \u00B7 ${t("ui_panel_tile_rest", "Rest {ml}", { ml: fmtMl(rest) })}` : ""
+      }`
+    : t("ui_panel_no_goal", "Kein Tagesziel gesetzt");
 
   const drinkSection = areas.drink
     ? `<div class="tile-main">
@@ -102,7 +109,9 @@ export function renderTile(panel, person) {
       <div class="tile-head">
         <span class="dot"></span>
         <span class="tile-name">${escapeHtml(person.display_name)}</span>
-        ${warn ? `<span class="status bad" title="Blutdruck oberhalb der Schwellen">\u26A0\uFE0F</span>` : ""}
+        ${warn ? `<span class="status bad" title="${escapeHtml(
+          t("ui_panel_bp_threshold_title", "Blutdruck oberhalb der Schwellen")
+        )}">\u26A0\uFE0F</span>` : ""}
       </div>
       ${drinkSection}
       ${bpRow}
@@ -139,7 +148,7 @@ export function renderDetail(panel) {
   if (!data) {
     const inner = error
       ? messageHtml(error, true)
-      : messageHtml("Lade Daten\u2026", false);
+      : messageHtml(t("ui_panel_loading_data", "Lade Daten\u2026"), false);
     return `${head}${tabBar}${inner}`;
   }
 
@@ -151,14 +160,292 @@ export function renderDetail(panel) {
   if (activeTab === "bp") content = bpTab(panel, data, entryId);
   else if (activeTab === "wellbeing") content = wellbeingTab(panel, data, entryId);
   else if (activeTab === "drink") content = drinkTab(panel, data, entryId);
-  else content = messageHtml("Für diese Person ist kein Bereich aktiv.", false);
+  else {
+    content = messageHtml(
+      t("ui_panel_no_area", "Für diese Person ist kein Bereich aktiv."),
+      false
+    );
+  }
 
   return `${head}${tabBar}<div class="views">${alert}${content}</div>`;
 }
 
 function tabButton(activeTab, tab) {
   const active = activeTab === tab.key ? " active" : "";
-  return `<button class="tab${active}" data-action="tab" data-tab="${tab.key}" type="button" role="tab" aria-selected="${active ? "true" : "false"}">${escapeHtml(tab.label)}</button>`;
+  return `<button class="tab${active}" data-action="tab" data-tab="${tab.key}" type="button" role="tab" aria-selected="${active ? "true" : "false"}">${escapeHtml(
+    t(tab.labelKey, tab.label)
+  )}</button>`;
+}
+
+/* ---- Rückdatierung (REQ-HOM-120) ----------------------------------------- */
+
+/* `datetime-local`-Feld + Schnellwahl „Jetzt"/„Gestern". Der Entwurf des
+ * Panels (`_tsDraft`) überlebt Re-Renders; ohne Entwurf startet das Feld auf
+ * "jetzt". Ein leeres Feld bedeutet beim Senden ebenfalls "jetzt". */
+function tsFieldHtml(panel, field) {
+  const draft = panel && panel._tsDraft ? panel._tsDraft[field] : "";
+  // Empty = "now" at submit time. A pre-filled value would go stale while the
+  // panel stays open (and would silently backdate later reports).
+  const value = draft || "";
+  const prefix = field.replace(/-ts$/, "");
+  const disabled = panel && panel._busy ? " disabled" : "";
+  return `<div class="ts-row">
+      <label class="field">${escapeHtml(t("ui_panel_ts_label", "Zeitpunkt (leer = jetzt)"))}
+        <input type="datetime-local" data-field="${field}" value="${escapeHtml(value)}"
+          placeholder="${escapeHtml(t("ui_panel_ts_placeholder", "leer = jetzt"))}" />
+      </label>
+      <div class="ts-quick">
+        <button class="btn ghost" data-action="${prefix}-ts-now" type="button"${disabled}>${escapeHtml(
+          t("ui_panel_ts_now", "Jetzt")
+        )}</button>
+        <button class="btn ghost" data-action="${prefix}-ts-yesterday" type="button"${disabled}>${escapeHtml(
+          t("ui_panel_ts_yesterday", "Gestern")
+        )}</button>
+      </div>
+    </div>`;
+}
+
+/* ---- Verlauf / Korrekturen (REQ-HOM-115) --------------------------------- */
+
+const DRINK_SOURCE_LABELS = {
+  panel: "Panel",
+  card: "Karte",
+  service: "Service",
+  csv: "Import",
+  import: "Import",
+  automation: "Automation",
+};
+
+const DRINK_SOURCE_KEYS = {
+  panel: "ui_common_source_panel",
+  card: "ui_common_source_card",
+  service: "ui_common_source_service",
+  csv: "ui_common_source_import",
+  import: "ui_common_source_import",
+  automation: "ui_common_source_automation",
+};
+
+function sourceLabel(value) {
+  const raw = String(value == null ? "" : value);
+  const key = DRINK_SOURCE_KEYS[raw.toLowerCase()];
+  return key ? t(key, DRINK_SOURCE_LABELS[raw.toLowerCase()] || raw) : raw;
+}
+
+/* Eintrag eines Verlaufs als eine Zeile; reine Anzeige, alles escaped. */
+function historyEntryView(panel, entryId, entry) {
+  const when = entry && entry.ts ? entryTime(entry.ts) : "";
+  const voided = !!(entry && entry.voided_at);
+  return { when, voided };
+}
+
+function drinkHistoryText(entry) {
+  const parts = [];
+  const ml = toNumber(entry.ml, NaN);
+  if (Number.isFinite(ml)) parts.push(fmtMl(ml));
+  const type = String(entry.type == null ? "" : entry.type).trim();
+  if (type) parts.push(type);
+  const src = sourceLabel(entry.src);
+  if (src) parts.push(src);
+  return parts.join(" \u00B7 ");
+}
+
+function bpHistoryText(entry) {
+  const sys = toNumber(entry.sys, NaN);
+  const dia = toNumber(entry.dia, NaN);
+  const pulse = toNumber(entry.pulse, NaN);
+  const parts = [];
+  if (Number.isFinite(sys) && Number.isFinite(dia)) {
+    parts.push(`${Math.round(sys)}/${Math.round(dia)}`);
+  }
+  if (Number.isFinite(pulse)) parts.push(`${Math.round(pulse)} bpm`);
+  const note = String(entry.note == null ? "" : entry.note).trim();
+  if (note) parts.push(note);
+  return parts.join(" \u00B7 ");
+}
+
+/* Wohlbefinden-Verlaufseintrag: die History-API liefert nur den Key; Label,
+ * Emoji/Bild und Score kommen aus der serverseitigen Skala der Person. */
+function wellbeingHistoryView(panel, entryId, entry) {
+  const scale = wellbeingScale(panel._data && panel._data[entryId]);
+  const key = String(entry && entry.key ? entry.key : "").toLowerCase();
+  const index = scale.findIndex((state) => state.key === key);
+  const known = index >= 0 ? scale[index] : null;
+  const score = entry && entry.score != null ? wellbeingScore(entry) : index >= 0 ? index + 1 : null;
+  return {
+    emoji: (entry && entry.emoji) || (known && known.emoji) || "\u{1F642}",
+    image: (entry && entry.image) || (known && known.image) || "",
+    label:
+      (entry && entry.key ? t(`ui_common_wb_${String(entry.key).toLowerCase()}`, "") : "") ||
+      (entry && entry.label) ||
+      (known && known.label) ||
+      t("ui_common_unknown", "Keine Angabe"),
+    score,
+    scoreMax: scale.length || WELLBEING_SCORE_MAX,
+  };
+}
+
+function historyItemHtml(panel, entryId, kind, entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const id = entry.id == null ? "" : String(entry.id);
+  const { when, voided } = historyEntryView(panel, entryId, entry);
+  const confirm = panel._historyConfirm;
+  const awaiting =
+    !!confirm && confirm.entryId === entryId && confirm.kind === kind && confirm.id === id;
+
+  let body = "";
+  if (kind === "drinks") {
+    body = `<span class="history-text">${escapeHtml(drinkHistoryText(entry))}</span>`;
+  } else if (kind === "blood_pressure") {
+    body = `<span class="history-text">${escapeHtml(bpHistoryText(entry))}</span>`;
+  } else {
+    const view = wellbeingHistoryView(panel, entryId, entry);
+    body =
+      `${wellbeingVisual({ emoji: view.emoji, image: view.image })}` +
+      `<span class="history-text">${escapeHtml(view.label)}${
+        view.score != null ? ` \u00B7 ${view.score} / ${view.scoreMax}` : ""
+      }</span>`;
+  }
+
+  const status = voided
+    ? `<span class="status bad" title="${escapeHtml(
+        t("ui_panel_voided_title", "Eintrag ist gelöscht (wiederherstellbar)")
+      )}">${escapeHtml(t("ui_panel_voided", "gelöscht"))}</span>`
+    : "";
+  const whenText = when || t("ui_common_no_time", "ohne Zeitangabe");
+
+  let actions = "";
+  if (!id) {
+    // Altbestand ohne Eintrags-ID: anzeigen, aber nicht korrigierbar.
+    actions = "";
+  } else if (awaiting) {
+    actions = `<div class="history-confirm" role="group" aria-label="${escapeHtml(
+      t("ui_panel_void_confirm_aria", "Eintrag löschen bestätigen")
+    )}">
+        <span>${escapeHtml(t("ui_panel_void_really", "Wirklich löschen?"))}</span>
+        <button class="btn" data-action="history-void-confirm" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button"${
+          panel._historyBusy ? " disabled" : ""
+        }>${escapeHtml(t("ui_common_delete", "Löschen"))}</button>
+        <button class="btn ghost" data-action="history-void-cancel" type="button">${escapeHtml(
+          t("ui_common_cancel", "Abbrechen")
+        )}</button>
+      </div>`;
+  } else if (voided) {
+    actions = `<div class="history-actions">
+        <button class="btn ghost" data-action="history-restore" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button" aria-label="${escapeHtml(
+          t("ui_panel_restore_aria", "Eintrag vom {when} wiederherstellen", { when: whenText })
+        )}"${panel._historyBusy ? " disabled" : ""}>${escapeHtml(
+          t("ui_common_restore", "Wiederherstellen")
+        )}</button>
+      </div>`;
+  } else {
+    actions = `<div class="history-actions">
+        <button class="btn ghost" data-action="history-void" data-kind="${escapeHtml(
+          kind
+        )}" data-id="${escapeHtml(id)}" type="button" aria-label="${escapeHtml(
+          t("ui_panel_void_aria", "Eintrag vom {when} löschen", { when: whenText })
+        )}"${panel._historyBusy ? " disabled" : ""}>${escapeHtml(
+          t("ui_common_delete", "Löschen")
+        )}</button>
+      </div>`;
+  }
+
+  return `<li class="history-item${voided ? " voided" : ""}" data-history-id="${escapeHtml(id)}">
+      <div class="history-main">
+        <span class="history-time">${escapeHtml(whenText)}</span>
+        ${body}
+        ${status}
+      </div>
+      ${actions}
+    </li>`;
+}
+
+/* Verlaufsliste eines Tabs inkl. Filter und Inline-Bestätigung. Die Daten
+ * kommen ausschließlich aus `health_o_mat/list_history` (kein Zweitweg). */
+export function historySection(panel, entryId, kind) {
+  if (!entryId) return "";
+  const state =
+    (panel._history &&
+      panel._history[entryId] &&
+      panel._history[entryId][kind]) ||
+    null;
+  const includeVoided = !!(state && state.includeVoided);
+  const entries = state && Array.isArray(state.entries)
+    ? state.entries.slice(0, HISTORY_LIMIT)
+    : [];
+  const label = t(HISTORY_KIND_KEYS[kind] || "", HISTORY_KIND_LABELS[kind] || "Verlauf");
+  const status = panel._historyStatus && panel._historyStatus.kind === kind
+    ? panel._historyStatus
+    : null;
+  const error = state && state.error ? String(state.error) : "";
+  const loading = !!(state && state.loading);
+
+  const count = entries.length === 1
+    ? t("ui_panel_history_count_one", "{count} Eintrag", { count: entries.length })
+    : t("ui_panel_history_count_other", "{count} Einträge", { count: entries.length });
+  const filter = `<div class="history-filter" role="group" aria-label="${escapeHtml(
+    t("ui_panel_history_filter_aria", "{label}-Verlauf filtern", { label })
+  )}">
+      <button class="chip${includeVoided ? "" : " active"}" data-action="history-filter"
+        data-kind="${escapeHtml(kind)}" data-voided="0" type="button"
+        aria-pressed="${includeVoided ? "false" : "true"}">${escapeHtml(
+          t("ui_panel_history_filter_active", "Nur aktive")
+        )}</button>
+      <button class="chip${includeVoided ? " active" : ""}" data-action="history-filter"
+        data-kind="${escapeHtml(kind)}" data-voided="1" type="button"
+        aria-pressed="${includeVoided ? "true" : "false"}">${escapeHtml(
+          t("ui_panel_history_filter_all", "Auch gelöscht")
+        )}</button>
+    </div>`;
+
+  const notice = status
+    ? `<div class="settings-status ${status.ok ? "ok" : "err"}" role="status">${escapeHtml(
+        status.text
+      )}</div>`
+    : "";
+  const errorHtml = error
+    ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(error)}</div>`
+    : "";
+  const list = loading
+    ? messageHtml(t("ui_panel_history_loading", "Lade Verlauf\u2026"), false)
+    : entries.length
+      ? `<ul class="history-list">${entries
+          .map((entry) => historyItemHtml(panel, entryId, kind, entry))
+          .join("")}</ul>`
+      : `<div class="muted">${escapeHtml(
+          includeVoided
+            ? t("ui_panel_history_empty", "Keine Einträge")
+            : t("ui_panel_history_empty_active", "Keine Einträge (nur aktive)")
+        )}</div>`;
+
+  return `<div class="card" data-history="${escapeHtml(kind)}">
+      <div class="history-head">
+        <div class="card-title">${escapeHtml(t("ui_panel_history_title", "Verlauf"))}</div>
+        <span class="muted">${escapeHtml(count)}</span>
+      </div>
+      ${filter}
+      ${notice}
+      ${errorHtml}
+      ${list}
+    </div>`;
+}
+
+/* Undo nur anbieten, wenn die Person aktive Einträge hat (der Entry-Modul-
+ * Helper kennt History- und panel_data-Fallback). */
+function undoButtonHtml(panel, entryId, kind, label) {
+  const available =
+    typeof panel._canUndo === "function" ? panel._canUndo(entryId, kind) : false;
+  if (!available) return "";
+  return `<div class="actions">
+      <button class="btn ghost" data-action="undo" data-kind="${escapeHtml(
+        kind
+      )}" type="button" aria-label="${escapeHtml(label)}"${
+        panel._busy ? " disabled" : ""
+      }>\u21A9 ${escapeHtml(t("ui_common_undo", "Undo"))}</button>
+    </div>`;
 }
 
 /* ---- Tab: Trinken (4.2) -------------------------------------------------- */
@@ -180,15 +467,17 @@ function drinkTab(panel, data, entryId) {
   const paceInfo = pace ? PACE_INFO[pace] : null;
 
   const stats = `<div class="tile-stats">
-      <div class="kv"><span class="k">Heute</span><span class="v">${fmtMl(ml)} / ${goalText} (${Math.round(percent)}%)</span></div>
-      ${Number.isFinite(yesterday) ? `<div class="kv"><span class="k">Gestern</span><span class="v">${fmtMl(yesterday)}</span></div>` : ""}
-      ${Number.isFinite(count) ? `<div class="kv"><span class="k">Buchungen</span><span class="v">${Math.round(count)}</span></div>` : ""}
-      ${paceInfo ? `<div><span class="status ${paceInfo.cls}">${escapeHtml(paceInfo.text)}</span></div>` : ""}
+      <div class="kv"><span class="k">${escapeHtml(t("ui_panel_drink_today", "Heute"))}</span><span class="v">${fmtMl(ml)} / ${goalText} (${Math.round(percent)}%)</span></div>
+      ${Number.isFinite(yesterday) ? `<div class="kv"><span class="k">${escapeHtml(t("ui_panel_drink_yesterday", "Gestern"))}</span><span class="v">${fmtMl(yesterday)}</span></div>` : ""}
+      ${Number.isFinite(count) ? `<div class="kv"><span class="k">${escapeHtml(t("ui_panel_drink_bookings", "Buchungen"))}</span><span class="v">${Math.round(count)}</span></div>` : ""}
+      ${paceInfo ? `<div><span class="status ${paceInfo.cls}">${escapeHtml(
+        t(paceInfo.textKey, paceInfo.text)
+      )}</span></div>` : ""}
     </div>`;
 
   const quick = QUICK_DRINKS.map(
     (d) => `<button class="btn" data-action="book" data-ml="${d.ml}" data-drink="${escapeHtml(d.type)}" type="button"${panel._busy ? " disabled" : ""}>
-        <span>${escapeHtml(d.emoji)} ${escapeHtml(d.label)}</span>
+        <span>${escapeHtml(d.emoji)} ${escapeHtml(t(d.labelKey, d.label))}</span>
         <span class="ml">${Math.round(d.ml)} ml</span>
       </button>`
   ).join("");
@@ -198,9 +487,14 @@ function drinkTab(panel, data, entryId) {
     : "";
 
   const canUndo = !(data.undo) || data.undo.drink !== false;
+  const undoTitle = escapeHtml(
+    t("ui_panel_undo_no_drink_title", "Keine Getränkebuchung zum Rückgängigmachen vorhanden")
+  );
   const undo = `<button class="btn ghost" data-action="undo" type="button"${
     panel._busy || !canUndo ? " disabled" : ""
-  }${canUndo ? "" : ' title="Keine Getränkebuchung zum Rückgängigmachen vorhanden"'}${canUndo ? "" : ' aria-disabled="true"'}>\u21A9 Undo</button>`;
+  }${canUndo ? "" : ` title="${undoTitle}"`}${canUndo ? "" : ' aria-disabled="true"'}>\u21A9 ${escapeHtml(
+    t("ui_common_undo", "Undo")
+  )}</button>`;
 
   return `
     <div class="card">
@@ -210,17 +504,23 @@ function drinkTab(panel, data, entryId) {
       </div>
     </div>
     <div class="card">
-      <div class="muted">Schnell buchen</div>
+      <div class="muted">${escapeHtml(t("ui_panel_drink_quick", "Schnell buchen"))}</div>
+      ${tsFieldHtml(panel, "drink-ts")}
       <div class="quick">${quick}</div>
       <form class="freetext" data-form="drink">
-        <input type="text" data-field="drink-text" placeholder="z. B. Kaffee 300 ml"
+        <input type="text" data-field="drink-text" placeholder="${escapeHtml(
+          t("ui_panel_drink_placeholder", "z. B. Kaffee 300 ml")
+        )}"
           enterkeyhint="done" autocomplete="off" />
-        <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>Buchen</button>
+        <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>${escapeHtml(
+          t("ui_panel_drink_book", "Buchen")
+        )}</button>
       </form>
       ${formError}
       ${undo}
     </div>
-    ${breakdown(panel, data)}`;
+    ${breakdown(panel, data)}
+    ${historySection(panel, entryId, "drinks")}`;
 }
 
 function breakdown(panel, data) {
@@ -239,7 +539,7 @@ function breakdown(panel, data) {
       </div>`)
     .join("");
   return `<div class="card">
-      <div class="muted">Heute nach Getränk</div>
+      <div class="muted">${escapeHtml(t("ui_panel_drink_breakdown", "Heute nach Getränk"))}</div>
       ${bars}
     </div>`;
 }
@@ -258,12 +558,12 @@ function bpTab(panel, data, entryId) {
 
   const metaParts = [];
   if (Number.isFinite(pulse)) metaParts.push(`${Math.round(pulse)} bpm`);
-  if (bp.at) metaParts.push(relativeTime(bp.at));
+  if (bp.at) metaParts.push(entryTime(bp.at));
 
   const head = `<div class="bp-head">
       <div class="bp-big">${hasReading ? `${Math.round(sys)} / ${Math.round(dia)}` : "\u2013 / \u2013"}</div>
       <div class="bp-meta">
-        <span>systolisch / diastolisch</span>
+        <span>${escapeHtml(t("ui_panel_bp_axis", "systolisch / diastolisch"))}</span>
         ${metaParts.length ? `<span>\u00B7 ${escapeHtml(metaParts.join(" \u00B7 "))}</span>` : ""}
         ${category ? `<span class="status ${category.cls}">${escapeHtml(category.label)}</span>` : ""}
       </div>
@@ -273,7 +573,10 @@ function bpTab(panel, data, entryId) {
   const avgParts = [];
   if (avg.sys != null && avg.dia != null) {
     avgParts.push(
-      `\u00D8 7 T: ${Math.round(avg.sys)}/${Math.round(avg.dia)}${avg.pulse != null ? ` \u00B7 ${Math.round(avg.pulse)}` : ""}`
+      t("ui_panel_bp_avg7", "Ø 7 T: {sys}/{dia}", {
+        sys: Math.round(avg.sys),
+        dia: Math.round(avg.dia),
+      }) + (avg.pulse != null ? ` \u00B7 ${Math.round(avg.pulse)}` : "")
     );
   }
   const avgHtml = avgParts.length
@@ -281,7 +584,9 @@ function bpTab(panel, data, entryId) {
     : "";
 
   const warnHtml = warn
-    ? `<div class="banner" role="alert">\u26A0\uFE0F Letzte Messung oberhalb der Schwellen</div>`
+    ? `<div class="banner" role="alert">\u26A0\uFE0F ${escapeHtml(
+        t("ui_panel_bp_threshold_banner", "Letzte Messung oberhalb der Schwellen")
+      )}</div>`
     : "";
 
   const formError = panel._formError
@@ -289,26 +594,43 @@ function bpTab(panel, data, entryId) {
     : "";
 
   const form = `<form class="card" data-form="bp">
-      <div class="muted">Neue Messung</div>
+      <div class="muted">${escapeHtml(t("ui_panel_bp_new", "Neue Messung"))}</div>
+      ${tsFieldHtml(panel, "bp-ts")}
       <div class="bp-inputs">
-        <label class="field">Systolisch
+        <label class="field">${escapeHtml(t("ui_panel_chart_bp_systolic", "Systolisch"))}
           <input type="number" inputmode="numeric" data-field="sys" min="40" max="300" placeholder="120" />
         </label>
-        <label class="field">Diastolisch
+        <label class="field">${escapeHtml(t("ui_panel_chart_bp_diastolic", "Diastolisch"))}
           <input type="number" inputmode="numeric" data-field="dia" min="20" max="200" placeholder="80" />
         </label>
-        <label class="field">Puls
-          <input type="number" inputmode="numeric" data-field="pulse" min="20" max="250" placeholder="optional" />
+        <label class="field">${escapeHtml(t("ui_panel_bp_pulse", "Puls"))}
+          <input type="number" inputmode="numeric" data-field="pulse" min="20" max="250" placeholder="${escapeHtml(
+            t("ui_common_optional", "optional")
+          )}" />
         </label>
       </div>
-      <label class="field">Notiz
-        <input type="text" data-field="note" placeholder="optional" autocomplete="off" />
+      <label class="field">${escapeHtml(t("ui_panel_bp_note", "Notiz"))}
+        <input type="text" data-field="note" placeholder="${escapeHtml(
+          t("ui_common_optional", "optional")
+        )}" autocomplete="off" />
       </label>
-      <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>\u{1F4BE} Speichern</button>
+      <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>\u{1F4BE} ${escapeHtml(
+        t("ui_common_save", "Speichern")
+      )}</button>
       ${formError}
     </form>`;
 
-  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${bpHistoryChartHtml(bp.entries, { title: "Verlauf systolisch/diastolisch" })}`;
+  const undo = undoButtonHtml(
+    panel,
+    entryId,
+    "blood_pressure",
+    t("ui_panel_undo_bp", "Letzte Blutdruckmessung rückgängig machen")
+  );
+
+  return `<div class="card">${head}${avgHtml}</div>${warnHtml}${form}${undo}${bpHistoryChartHtml(
+    bp.entries,
+    { title: t("ui_panel_bp_history", "Verlauf systolisch/diastolisch") }
+  )}${historySection(panel, entryId, "blood_pressure")}`;
 }
 
 /* ---- Tab: Wohlbefinden (4.4) --------------------------------------------- */
@@ -358,11 +680,14 @@ export function wellbeingView(panel, data) {
   const liveLabel = liveAttribute(panel, data, "wellbeing", "label");
   const liveEmoji = liveAttribute(panel, data, "wellbeing", "emoji");
   const liveImage = liveAttribute(panel, data, "wellbeing", "image");
+  const rawLabel =
+    liveLabel || wb.label || (known && known.label) || t("ui_common_unknown", "Keine Angabe");
   return {
     key,
     emoji: liveEmoji || wb.emoji || (known && known.emoji) || "\u{1F642}",
     image: liveImage || wb.image || (known && known.image) || "",
-    label: liveLabel || wb.label || (known && known.label) || "Keine Angabe",
+    /* Server labels are German; translate by the canonical state key. */
+    label: key ? t(`ui_common_wb_${key}`, rawLabel) : rawLabel,
     at: wb.at || (typeof live === "string" && live !== "unknown" ? live : ""),
     // Numerischer Score (1…N); null ohne Meldung (REQ-HOM-112).
     score,
@@ -403,25 +728,29 @@ function wellbeingTab(panel, data, entryId) {
       </button>`
   ).join("");
 
-  const pendingLabel = pendingState
-    ? escapeHtml(pendingState.label)
-    : "";
   const pendingScoreText = pendingScore != null && pendingScore > 0
     ? ` (${pendingScore} / ${scoreMax})`
     : "";
   const confirmRow = confirm && pendingState
     ? `<div class="wb-confirm">
-        <span class="wb-pending-hint">Ausgewählt: ${pendingLabel}${pendingScoreText} \u2013 noch nicht übernommen</span>
-        <button class="btn" data-action="wb-confirm" type="button"${panel._busy ? " disabled" : ""}>Übernehmen</button>
+        <span class="wb-pending-hint">${escapeHtml(
+          t("ui_panel_wb_confirm_hint", "Ausgewählt: {label}{score} – noch nicht übernommen", {
+            label: pendingState.label,
+            score: pendingScoreText,
+          })
+        )}</span>
+        <button class="btn" data-action="wb-confirm" type="button"${panel._busy ? " disabled" : ""}>${escapeHtml(
+          t("ui_panel_wb_confirm", "Übernehmen")
+        )}</button>
       </div>`
     : "";
 
-  const at = view.at ? relativeTime(view.at) : "";
+  const at = view.at ? entryTime(view.at) : "";
   const scoreText =
     view.score != null ? ` \u00B7 ${view.score} / ${scoreMax}` : "";
   const last = `<div class="tile-row">
       ${wellbeingVisual(view)}
-      <span>Zuletzt: <strong>${escapeHtml(view.label)}</strong>${scoreText}</span>
+      <span>${escapeHtml(t("ui_panel_wb_last", "Zuletzt:"))} <strong>${escapeHtml(view.label)}</strong>${scoreText}</span>
       ${at ? `<span class="muted">\u00B7 ${escapeHtml(at)}</span>` : ""}
     </div>`;
 
@@ -429,53 +758,33 @@ function wellbeingTab(panel, data, entryId) {
     ? `<div class="msg error">${escapeHtml(panel._formError)}</div>`
     : "";
   const scoreForm = `<form class="card" data-form="wellbeing">
-      <div class="muted">Alternativ als Zahl (1\u2013${scoreMax})</div>
+      <div class="muted">${escapeHtml(
+        t("ui_panel_wb_numeric", "Alternativ als Zahl (1–{max})", { max: scoreMax })
+      )}</div>
       <div class="bp-inputs">
-        <label class="field">Wert
+        <label class="field">${escapeHtml(t("ui_panel_wb_value", "Wert"))}
           <input type="number" inputmode="numeric" data-field="wb-score" min="1" max="${scoreMax}" step="1" placeholder="1\u2013${scoreMax}" />
         </label>
-        <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>\u{1F4BE} Melden</button>
+        <button class="btn" type="submit"${panel._busy ? " disabled" : ""}>\u{1F4BE} ${escapeHtml(
+          t("ui_panel_wb_report", "Melden")
+        )}</button>
       </div>
       ${scoreFormError}
     </form>`;
 
-  /* Verlaufsliste UNTER dem Chart: pro Eintrag Zeitpunkt (relativ), Emoji,
-   * Label und Score ("3 / 5"). Reine Anzeige aus `wellbeing.history` (letzte
-   * 20) — kein rohes JSON, alle Texte escaped. Neueste Meldung OBEN
-   * (`slice(-20).reverse()`), der Chart bleibt unveraendert chronologisch.
-   * Unbekannte Keys/Felder fallen defensiv auf die kanonische Skala bzw.
-   * einen neutralen Text zurueck. */
+  /* Einzige Verlaufsquelle ist die History-API (`historySection`, REQ-HOM-115)
+   * — `wellbeing.history` speist nur noch den Score-Chart, damit die Liste
+   * nicht doppelt gerendert wird. */
   const history = Array.isArray(data.wellbeing && data.wellbeing.history)
     ? data.wellbeing.history
     : [];
-  const histItems = history
-    .slice(-20)
-    .reverse()
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return "";
-      const entryKey = String(entry.key || "").toLowerCase();
-      const knownState = scale.find((state) => state.key === entryKey);
-      const entryAt = entry.ts ? relativeTime(entry.ts) : "";
-      const entryLabel = entry.label || (knownState && knownState.label) || "Keine Angabe";
-      const entryVisual = {
-        emoji: entry.emoji || (knownState && knownState.emoji) || "\u{1F642}",
-        image: entry.image || (knownState && knownState.image) || "",
-      };
-      const entryScore = wellbeingScore(entry);
-      return `<li class="wb-hist">
-          ${wellbeingVisual(entryVisual)}
-          <span class="wb-hist-label">${escapeHtml(entryLabel)}</span>
-          <span class="wb-hist-time">${escapeHtml(entryAt || "ohne Zeitangabe")}</span>
-          ${entryScore != null ? `<span class="wb-hist-score">${entryScore} / ${scoreMax}</span>` : ""}
-        </li>`;
-    })
-    .join("");
-  const histHtml = histItems
-    ? `<div class="card">
-        <div class="muted">Verlauf</div>
-        <ul class="wb-history">${histItems}</ul>
-      </div>`
-    : "";
+
+  const undo = undoButtonHtml(
+    panel,
+    entryId,
+    "wellbeing",
+    t("ui_panel_undo_wb", "Letzte Wohlbefinden-Meldung rückgängig machen")
+  );
 
   /* Score-Chart (REQ-HOM-112): Linienchart des Verlaufs, Y-Achse 1…N,
    * aktueller Wert hervorgehoben. Leerer Verlauf -> Hinweis statt Chart.
@@ -497,13 +806,15 @@ function wellbeingTab(panel, data, entryId) {
       score: view.score,
     },
     scale,
-    title: "Score-Verlauf",
+    title: t("ui_panel_chart_wb_title", "Score-Verlauf"),
   });
 
   return `<div class="card">
-      <div class="muted">Wie geht es dir?</div>
+      <div class="muted">${escapeHtml(t("ui_panel_wb_question", "Wie geht es dir?"))}</div>
+      ${tsFieldHtml(panel, "wb-ts")}
       <div class="wb-row">${buttons}</div>
       ${confirmRow}
       ${last}
-    </div>${scoreForm}${chartHtml}${histHtml}`;
+      ${undo}
+    </div>${scoreForm}${chartHtml}${historySection(panel, entryId, "wellbeing")}`;
 }

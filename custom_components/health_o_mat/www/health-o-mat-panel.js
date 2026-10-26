@@ -52,6 +52,7 @@ import {
   REFRESH_DEBOUNCE_MS,
   escapeHtml,
   toNumber,
+  localDateTimeValue,
   intOrNull,
   errMsg,
   wsErrorText,
@@ -59,23 +60,42 @@ import {
   normalizeQuickDrinks,
   normalizePersons,
   WELLBEING_STATES,
+  TAB_HISTORY_KIND,
+  HISTORY_LIMIT,
   parseDrinkText,
   personSlug,
   resolvePersonByParam,
   areasForPerson,
   enabledTabs,
   messageHtml,
-} from "./health-o-mat-panel-base.js?v=0.13.0";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.13.0";
+  t,
+  setUiTranslator,
+  setUiLanguage,
+} from "./health-o-mat-panel-base.js?v=0.14.0";
+import {
+  loadUiTranslations,
+  t as uiTranslate,
+  currentLanguage as uiCurrentLanguage,
+} from "./health-o-mat-i18n.js?v=0.14.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.14.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
-} from "./health-o-mat-panel-admin.js?v=0.13.0";
+  collectRestorePayload,
+} from "./health-o-mat-panel-admin.js?v=0.14.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
+
+/* Single translation source: the i18n module owns the cache, the base module
+ * owns the `t()` used by every renderer. Injecting once at module load keeps
+ * the base module import-free (unit-testable in Node). */
+setUiTranslator(uiTranslate);
+
+/* Rückdatierung (REQ-HOM-120): dieselbe Toleranz wie der Server. */
+const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 /* Person-flow target when the admin adds a person (no custom CRUD flow). */
 const CONFIG_FLOW_URL = "/config/integrations/dashboard";
@@ -98,6 +118,8 @@ class HealthOMatPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._hass = null;
     this._panel = null;
+    /* Language whose `common` translations are loaded ("" = not loaded yet). */
+    this._uiLang = "";
 
     this._persons = null; // null = not yet loaded, [] = none configured
     this._data = {}; // entry_id -> panel_data payload
@@ -117,6 +139,33 @@ class HealthOMatPanel extends HTMLElement {
     this._exportBusy = false;
     this._exportResult = null; // { ok: boolean, text: string }
 
+    // --- Verlauf / Korrekturen (REQ-HOM-115) ---
+    /* entryId -> kind -> { entries, error, loading, loaded, includeVoided } */
+    this._history = {};
+    this._historyFilter = { drinks: false, blood_pressure: false, wellbeing: false };
+    this._historyBusy = false;
+    this._historyConfirm = null; // { entryId, kind, id } bei Inline-Bestätigung
+    this._historyStatus = null; // { kind, ok, text }
+    this._historyFocus = null; // { action, kind, id } nach Void/Restore
+
+    // --- Restore-Verwaltung (REQ-HOM-116 UI) ---
+    this._restoreFiles = [];
+    this._restoreFilesBusy = false;
+    this._restoreFilesError = null;
+    this._restoreBusy = false;
+    this._restoreResult = null; // { dryRun, data }
+    this._restoreError = null;
+    this._restoreDraft = {
+      filename: "",
+      mode: "merge",
+      datasets: { drinks: true, blood_pressure: true, wellbeing: true },
+      from: "",
+      to: "",
+      personMap: "",
+      confirm: "",
+      advanced: false,
+    };
+
     // --- person management (D7) ---
     this._adminStatus = null; // { ok: boolean, text: string }
     this._adminBusy = false;
@@ -131,8 +180,11 @@ class HealthOMatPanel extends HTMLElement {
     this._busy = false;
     this._manualBusy = false;
     /* REQ-HOM-114: vorgemerkte, noch nicht übernommene Wohlbefinden-Auswahl
-     * (`{ entryId, key, score }`) — nur im Bestätigungsmodus befüllt. */
+     * (`{ entryId, key, score, ts }`) — nur im Bestätigungsmodus befüllt. */
     this._wbPending = null;
+    /* REQ-HOM-120: Zeitpunkt-Entwürfe der `datetime-local`-Felder. Leer =
+     * "jetzt"; ein Re-Render darf eine bewusste Auswahl nicht verwerfen. */
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
 
     this._unsub = null;
     this._pending = new Set();
@@ -162,6 +214,12 @@ class HealthOMatPanel extends HTMLElement {
       this._bootstrap();
       return;
     }
+    if (this._normalisedLanguage(hass.language) !== this._uiLang) {
+      // Runtime language switch: reload resources, then re-render with the
+      // new texts (the in-flight marker in the loader prevents duplicate loads).
+      this._syncTranslations();
+      return;
+    }
     if (this._loading) return;
     // The settings form holds unsaved user input and needs no live entity
     // values — a background render would clobber it. Only explicit actions
@@ -173,6 +231,27 @@ class HealthOMatPanel extends HTMLElement {
 
   get hass() {
     return this._hass;
+  }
+
+  _normalisedLanguage(value) {
+    const raw = value == null ? "" : String(value).trim().toLowerCase();
+    return raw ? raw.split(/[-_]/)[0] : "de";
+  }
+
+  /* Load the HA `common` translations for `hass.language` (never throws) and
+   * keep the base module's Intl locale in sync. */
+  async _syncTranslations(silent) {
+    let language = "de";
+    try {
+      language = await loadUiTranslations(this._hass);
+      language = this._normalisedLanguage(language || uiCurrentLanguage());
+    } catch (_error) {
+      language = this._normalisedLanguage(this._hass && this._hass.language);
+    }
+    this._uiLang = language;
+    setUiLanguage(language);
+    if (!silent) this._render();
+    return language;
   }
 
   set panel(panel) {
@@ -203,7 +282,9 @@ class HealthOMatPanel extends HTMLElement {
 
   _ws(message) {
     if (!this._hass || typeof this._hass.callWS !== "function") {
-      return Promise.reject(new Error("Keine Verbindung zu Home Assistant."));
+      return Promise.reject(
+        new Error(t("ui_panel_no_connection", "Keine Verbindung zu Home Assistant."))
+      );
     }
     return this._hass.callWS(message);
   }
@@ -298,6 +379,10 @@ class HealthOMatPanel extends HTMLElement {
     // Re-register the listener (idempotent) so a re-bootstrap never duplicates it.
     this._removePopStateListener();
     this._addPopStateListener();
+    /* Await the (cached) translations before the first paint so an English
+     * instance never flashes German labels. A failed load falls back to the
+     * embedded German texts — `_syncTranslations` never throws. */
+    await this._syncTranslations(true);
     this._render();
     try {
       let saved = "";
@@ -376,7 +461,7 @@ class HealthOMatPanel extends HTMLElement {
         this._data[entryId] = data;
         delete this._entryErrors[entryId];
       } else {
-        this._entryErrors[entryId] = "Keine Daten für diese Person.";
+        this._entryErrors[entryId] = t("ui_common_no_data", "Keine Daten für diese Person.");
       }
     } catch (err) {
       this._entryErrors[entryId] = errMsg(err);
@@ -389,6 +474,184 @@ class HealthOMatPanel extends HTMLElement {
     // (REQ-HOM-114). Verworfen wird nur in den expliziten Reset-Pfaden und
     // nach einer erfolgreichen Übernahme (`_setWellbeing`).
     await this._loadEntry(entryId);
+  }
+
+  /* ---- Verlauf / Korrekturen (REQ-HOM-115) -------------------------------- */
+
+  /* Lazy state je Person/Ziel. `includeVoided` folgt dem Filter des Ziels. */
+  _historyState(entryId, kind) {
+    if (!this._history[entryId]) this._history[entryId] = {};
+    const bucket = this._history[entryId];
+    if (!bucket[kind]) {
+      bucket[kind] = {
+        entries: [],
+        error: "",
+        loading: false,
+        loaded: false,
+        includeVoided: !!this._historyFilter[kind],
+      };
+    }
+    return bucket[kind];
+  }
+
+  async _loadHistory(entryId, kind, opts) {
+    const options = opts || {};
+    if (!entryId || !kind) return;
+    const state = this._historyState(entryId, kind);
+    if (state.loading && !options.force) return;
+    if (state.loaded && !options.force) return;
+    // Sequenz statt Sperre: ein erzwungener Reload (Filter/Aktion) darf einen
+    // laufenden Load überholen; nur die jüngste Antwort wird übernommen.
+    const seq = (state.seq || 0) + 1;
+    state.seq = seq;
+    state.loading = true;
+    state.error = "";
+    state.includeVoided = !!this._historyFilter[kind];
+    if (options.render !== false) this._render();
+    try {
+      const res = await this._ws({
+        type: WS.listHistory,
+        entry_id: entryId,
+        kind,
+        include_voided: state.includeVoided,
+      });
+      if (state.seq !== seq) return;
+      const entries = res && Array.isArray(res.entries) ? res.entries : [];
+      state.entries = entries.slice(0, HISTORY_LIMIT);
+      state.loaded = true;
+    } catch (err) {
+      if (state.seq !== seq) return;
+      state.error = wsErrorText(err);
+      state.loaded = true;
+    } finally {
+      if (state.seq === seq) {
+        state.loading = false;
+        if (options.render !== false) this._render();
+      }
+    }
+  }
+
+  async _loadAllHistory(entryId, opts) {
+    if (!entryId) return;
+    await Promise.all(
+      Object.keys(TAB_HISTORY_KIND)
+        .map((tab) => TAB_HISTORY_KIND[tab])
+        .map((kind) => this._loadHistory(entryId, kind, Object.assign({}, opts, { render: false })))
+    );
+    if (!opts || opts.render !== false) this._render();
+  }
+
+  /* Nach einer eigenen Schreibaktion die betroffenen Verläufe neu holen. */
+  async _refreshHistory(entryId, kinds) {
+    if (!entryId) return;
+    // Nur bereits geladene Verläufe nachziehen: ein noch nie geöffneter Tab
+    // holt seine Liste ohnehin beim ersten Öffnen (`_setTab`).
+    const loaded = (kinds || []).filter((kind) => {
+      const state = this._history[entryId] && this._history[entryId][kind];
+      return !!(state && state.loaded);
+    });
+    await Promise.all(
+      loaded.map((kind) =>
+        this._loadHistory(entryId, kind, { force: true, render: false })
+      )
+    );
+  }
+
+  _tabHistoryKind(tab) {
+    return TAB_HISTORY_KIND[tab] || "";
+  }
+
+  _setHistoryFilter(kind, includeVoided) {
+    const entryId = this._selectedEntry;
+    if (!kind || !entryId) return;
+    this._historyFilter[kind] = !!includeVoided;
+    const state = this._historyState(entryId, kind);
+    state.includeVoided = !!includeVoided;
+    this._historyConfirm = null;
+    this._historyStatus = null;
+    this._loadHistory(entryId, kind, { force: true });
+  }
+
+  _beginHistoryVoid(entryId, kind, id) {
+    if (!entryId || !kind || !id) return;
+    this._historyConfirm = { entryId, kind, id: String(id) };
+    this._historyStatus = null;
+    this._render();
+  }
+
+  _cancelHistoryVoid() {
+    this._historyConfirm = null;
+    this._render();
+  }
+
+  async _confirmHistoryVoid(entryId, kind, id) {
+    this._historyConfirm = null;
+    await this._setEntryVoided(entryId, kind, id, false);
+  }
+
+  async _setEntryVoided(entryId, kind, id, restore) {
+    if (!entryId || !kind || !id || this._historyBusy) return;
+    this._historyBusy = true;
+    this._historyStatus = null;
+    this._render();
+    try {
+      await this._ws({
+        type: restore ? WS.restoreEntry : WS.voidEntry,
+        entry_id: entryId,
+        kind,
+        item_id: String(id),
+      });
+      this._historyStatus = {
+        kind,
+        ok: true,
+        text: restore
+          ? t("ui_panel_entry_restored", "Eintrag wiederhergestellt.")
+          : t("ui_panel_entry_deleted", "Eintrag gelöscht."),
+      };
+      // Nach der Aktion steht der komplementäre Button im Fokus.
+      this._historyFocus = {
+        action: restore ? "history-void" : "history-restore",
+        kind,
+        id: String(id),
+      };
+      await this._reloadEntry(entryId);
+      await this._refreshHistory(entryId, [kind]);
+    } catch (err) {
+      this._historyStatus = { kind, ok: false, text: wsErrorText(err) };
+    } finally {
+      this._historyBusy = false;
+      this._render();
+    }
+  }
+
+  /* Undo-Verfügbarkeit: die geladene History ist die Wahrheit (nur aktive
+   * Einträge zählen); vor dem ersten Load dient `panel_data.undo` als
+   * defensiver Fallback. */
+  _canUndo(entryId, kind) {
+    const state = this._history[entryId] && this._history[entryId][kind];
+    if (state && state.loaded && !state.loading) {
+      return state.entries.some((entry) => entry && !entry.voided_at);
+    }
+    const data = this._data[entryId];
+    if (!data) return false;
+    if (kind === "drinks") return !data.undo || data.undo.drink !== false;
+    if (kind === "blood_pressure") return !data.undo || data.undo.blood_pressure !== false;
+    return !!(data.wellbeing && (data.wellbeing.at || data.wellbeing.key));
+  }
+
+  _applyHistoryFocus() {
+    const focus = this._historyFocus;
+    this._historyFocus = null;
+    if (!focus) return;
+    const selector = `[data-action="${focus.action}"][data-kind="${focus.kind}"][data-id="${focus.id}"]`;
+    const el = this.shadowRoot.querySelector(selector);
+    if (el && typeof el.focus === "function") {
+      try {
+        el.focus();
+      } catch (_e) {
+        // Fokus ist Komfort, nie kritisch.
+      }
+    }
   }
 
   async _subscribe() {
@@ -438,6 +701,9 @@ class HealthOMatPanel extends HTMLElement {
     this._pending.clear();
     if (!ids.length) return;
     await Promise.all(ids.map((id) => this._loadEntry(id)));
+    if (this._selectedEntry && ids.includes(this._selectedEntry)) {
+      await this._loadAllHistory(this._selectedEntry, { force: true, render: false });
+    }
     if (this._view !== "settings") this._render();
   }
 
@@ -456,6 +722,11 @@ class HealthOMatPanel extends HTMLElement {
     this._formError = null;
     if (!o.silent) this._pushPersonUrl(this._slugFor(entryId));
     if (!this._data[entryId]) this._loadEntry(entryId).then(() => this._render());
+    // Beim Öffnen wird der Verlauf immer frisch geholt (er ist nicht Teil von
+    // `panel_data` und kann sich außerhalb des Panels geändert haben).
+    this._loadAllHistory(entryId, { force: true, render: false }).then(() => {
+      if (this._view === "detail" && this._selectedEntry === entryId) this._render();
+    });
     this._persistSelected(entryId);
     this._render();
   }
@@ -468,6 +739,8 @@ class HealthOMatPanel extends HTMLElement {
     this._wbPending = null;
     this._actionError = null;
     this._formError = null;
+    this._historyConfirm = null;
+    this._historyStatus = null;
     if (!o.silent) this._pushOverviewUrl();
     this._persistSelected("");
     this._render();
@@ -484,6 +757,8 @@ class HealthOMatPanel extends HTMLElement {
     this._tab = tab;
     this._actionError = null;
     this._formError = null;
+    const kind = this._tabHistoryKind(tab);
+    if (kind) this._loadHistory(this._selectedEntry, kind);
     this._render();
   }
 
@@ -513,6 +788,9 @@ class HealthOMatPanel extends HTMLElement {
         // keep the previous list
       }
       await this._loadAll();
+      if (this._selectedEntry) {
+        await this._loadAllHistory(this._selectedEntry, { force: true, render: false });
+      }
       const persons = this._persons || [];
       if (!persons.length) {
         this._view = "overview";
@@ -561,7 +839,12 @@ class HealthOMatPanel extends HTMLElement {
     this._exportResult = null;
     this._adminStatus = null;
     this._deleteTarget = "";
+    this._restoreResult = null;
+    this._restoreError = null;
+    this._restoreFilesError = null;
     this._settingsEntry = entryId;
+    // Admin-only: Dateiliste für die Restore-Karte (nie für Nicht-Admins).
+    this._loadRestoreFiles();
     // The quick-drink draft belongs to exactly one person — always re-sync it,
     // otherwise a cached switch would re-use the previous person's slots.
     this._syncQuickDrafts(this._settings[entryId]);
@@ -598,7 +881,10 @@ class HealthOMatPanel extends HTMLElement {
         delete this._settingsErrors[entryId];
         if (this._settingsEntry === entryId) this._syncQuickDrafts(res);
       } else {
-        this._settingsErrors[entryId] = "Leere Antwort auf get_settings.";
+        this._settingsErrors[entryId] = t(
+          "ui_panel_empty_settings",
+          "Leere Antwort auf get_settings."
+        );
         delete this._settings[entryId];
       }
     } catch (err) {
@@ -702,24 +988,61 @@ class HealthOMatPanel extends HTMLElement {
 
     const goal = intOrNull(this._readField("daily_goal_ml", ""));
     if (goal === null || goal < L.goalMin || goal > L.goalMax) {
-      errors.push(`Tagesziel: ganze Zahl zwischen ${L.goalMin} und ${L.goalMax} ml.`);
+      errors.push(
+        t("ui_panel_val_goal", "Tagesziel: ganze Zahl zwischen {min} und {max} ml.", {
+          min: L.goalMin,
+          max: L.goalMax,
+        })
+      );
     }
     const reset = intOrNull(this._readField("daily_reset_hour", ""));
     if (reset === null || reset < L.resetMin || reset > L.resetMax) {
-      errors.push(`Reset-Uhrzeit: ganze Zahl zwischen ${L.resetMin} und ${L.resetMax}.`);
+      errors.push(
+        t("ui_panel_val_reset", "Reset-Uhrzeit: ganze Zahl zwischen {min} und {max}.", {
+          min: L.resetMin,
+          max: L.resetMax,
+        })
+      );
     }
     const display = String(this._readField("person_display", "") || "").trim();
     const sys = intOrNull(this._readField("sys_threshold", ""));
     if (sys === null || sys < L.thresholdMin || sys > L.thresholdMax) {
-      errors.push(`Systolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+      errors.push(
+        t(
+          "ui_panel_val_sys_threshold",
+          "Systolische Schwelle: zwischen {min} und {max}.",
+          { min: L.thresholdMin, max: L.thresholdMax }
+        )
+      );
     }
     const dia = intOrNull(this._readField("dia_threshold", ""));
     if (dia === null || dia < L.thresholdMin || dia > L.thresholdMax) {
-      errors.push(`Diastolische Schwelle: zwischen ${L.thresholdMin} und ${L.thresholdMax}.`);
+      errors.push(
+        t(
+          "ui_panel_val_dia_threshold",
+          "Diastolische Schwelle: zwischen {min} und {max}.",
+          { min: L.thresholdMin, max: L.thresholdMax }
+        )
+      );
     }
     const retention = intOrNull(this._readField("retention_months", ""));
     if (retention === null || retention < L.retentionMin || retention > L.retentionMax) {
-      errors.push(`Retention: ${L.retentionMin} (aus) bis ${L.retentionMax} Monate.`);
+      errors.push(
+        t("ui_panel_val_retention", "Retention: {min} (aus) bis {max} Monate.", {
+          min: L.retentionMin,
+          max: L.retentionMax,
+        })
+      );
+    }
+    const auditLimit = intOrNull(this._readField("audit_limit", ""));
+    if (auditLimit === null || auditLimit < L.auditMin || auditLimit > L.auditMax) {
+      errors.push(
+        t(
+          "ui_panel_val_audit",
+          "Audit-Log-Limit: ganze Zahl zwischen {min} (unbegrenzt) und {max}.",
+          { min: L.auditMin, max: L.auditMax }
+        )
+      );
     }
 
     const lexiconEl = this.shadowRoot.querySelector('[data-field="drink_lexicon"]');
@@ -727,7 +1050,12 @@ class HealthOMatPanel extends HTMLElement {
     // Guard against wiping the lexicon with an accidental empty textarea; the
     // server re-validates the 'word=Type,ml' format and reports the line.
     if (!lexicon.trim()) {
-      errors.push("Getränke-Lexikon: mindestens eine Zeile (wort=Typ,ml) erforderlich.");
+      errors.push(
+        t(
+          "ui_panel_val_lexicon",
+          "Getränke-Lexikon: mindestens eine Zeile (wort=Typ,ml) erforderlich."
+        )
+      );
     }
 
     const sidebarEl = this.shadowRoot.querySelector('[data-field="enable_sidebar_panel"]');
@@ -754,7 +1082,11 @@ class HealthOMatPanel extends HTMLElement {
       const ml = toNumber(slot.ml, NaN);
       if (!Number.isFinite(ml) || ml < L.quickMlMin || ml > L.quickMlMax) {
         errors.push(
-          `Quick-Drink ${i + 1}: ml zwischen ${L.quickMlMin} und ${L.quickMlMax}.`
+          t("ui_panel_val_quick_ml", "Quick-Drink {index}: ml zwischen {min} und {max}.", {
+            index: i + 1,
+            min: L.quickMlMin,
+            max: L.quickMlMax,
+          })
         );
         return;
       }
@@ -769,7 +1101,11 @@ class HealthOMatPanel extends HTMLElement {
     // here so the user gets a precise message instead of a schema error.
     if (quick.length < L.minQuickDrinks) {
       errors.push(
-        `Quick-Drinks: mindestens ${L.minQuickDrinks} Slot mit Label erforderlich.`
+        t(
+          "ui_panel_val_quick_label",
+          "Quick-Drinks: mindestens {min} Slot mit Label erforderlich.",
+          { min: L.minQuickDrinks }
+        )
       );
     }
 
@@ -785,6 +1121,7 @@ class HealthOMatPanel extends HTMLElement {
         sys_threshold: sys,
         dia_threshold: dia,
         retention_months: retention,
+        audit_limit: auditLimit,
         enable_sidebar_panel: sidebar,
         wellbeing_confirm: wellbeingConfirm,
         areas,
@@ -831,6 +1168,9 @@ class HealthOMatPanel extends HTMLElement {
     if (!sameNum(payload.retention_months, current.retention_months)) {
       out.retention_months = payload.retention_months;
     }
+    if (!sameNum(payload.audit_limit, current.audit_limit)) {
+      out.audit_limit = payload.audit_limit;
+    }
     if (!!current.enable_sidebar_panel !== payload.enable_sidebar_panel) {
       out.enable_sidebar_panel = payload.enable_sidebar_panel;
     }
@@ -857,13 +1197,13 @@ class HealthOMatPanel extends HTMLElement {
     }
     const changes = this._changedSettings(entryId, collected.payload);
     if (!Object.keys(changes).length) {
-      this._settingsStatus = { ok: true, text: "Keine Änderungen." };
+      this._settingsStatus = { ok: true, text: t("ui_panel_no_changes", "Keine Änderungen.") };
       this._updateStatusDom();
       return;
     }
 
     this._settingsBusy = true;
-    this._settingsStatus = { ok: true, text: "Speichere…" };
+    this._settingsStatus = { ok: true, text: t("ui_panel_saving", "Speichere…") };
     this._syncSettingsButtons();
     this._updateStatusDom();
     try {
@@ -879,7 +1219,10 @@ class HealthOMatPanel extends HTMLElement {
       this._syncQuickDrafts(this._settings[entryId]);
       await this._reloadPersons();
       this._settingsBusy = false;
-      this._settingsStatus = { ok: true, text: "Einstellungen gespeichert." };
+      this._settingsStatus = {
+        ok: true,
+        text: t("ui_panel_settings_saved", "Einstellungen gespeichert."),
+      };
       // Full re-render: the form is now rebuilt from the (reloaded) server state.
       this._render();
       this._loadEntry(entryId);
@@ -898,7 +1241,7 @@ class HealthOMatPanel extends HTMLElement {
     const sel = this.shadowRoot.querySelector('[data-field="export_dataset"]');
     const dataset = sel && sel.value ? String(sel.value) : "all";
     this._exportBusy = true;
-    this._exportResult = { ok: true, text: "Export läuft…" };
+    this._exportResult = { ok: true, text: t("ui_panel_export_running", "Export läuft…") };
     // Targeted DOM updates only — a full re-render would drop unsaved edits.
     this._syncExportButton();
     this._updateExportResultDom();
@@ -919,14 +1262,17 @@ class HealthOMatPanel extends HTMLElement {
   async _startPersonFlow() {
     if (!this._isAdmin() || this._adminBusy) return;
     this._adminBusy = true;
-    this._adminStatus = { ok: true, text: "Starte Anlegen\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_flow_starting", "Starte Anlegen…") };
     this._render();
     try {
       await this._ws({ type: WS.startPersonFlow });
       this._adminBusy = false;
       this._adminStatus = {
         ok: true,
-        text: "Dialog ge\u00F6ffnet \u2013 bitte die neue Person dort anlegen.",
+        text: t(
+          "ui_panel_flow_opened",
+          "Dialog geöffnet – bitte die neue Person dort anlegen."
+        ),
       };
       this._render();
       this._navigateToConfigFlow();
@@ -953,15 +1299,136 @@ class HealthOMatPanel extends HTMLElement {
   async _runBackup() {
     if (!this._isAdmin() || this._adminBusy) return;
     this._adminBusy = true;
-    this._adminStatus = { ok: true, text: "Backup l\u00E4uft\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_backup_running", "Backup läuft…") };
     this._render();
     try {
       await this._ws({ type: WS.backup });
-      this._adminStatus = { ok: true, text: "Backup erstellt." };
+      this._adminStatus = { ok: true, text: t("ui_panel_backup_created", "Backup erstellt.") };
     } catch (err) {
       this._adminStatus = { ok: false, text: wsErrorText(err) };
     } finally {
       this._adminBusy = false;
+      this._render();
+    }
+  }
+
+  /* ---- Restore-Verwaltung (REQ-HOM-116 UI) -------------------------------- */
+
+  _restoreField(name) {
+    return this.shadowRoot.querySelector(`[data-field="restore-${name}"]`);
+  }
+
+  /* DOM -> Draft. Wird vor jedem Restore-Lauf gelesen, damit getippte Werte
+   * einen Busy-Re-Render überleben. */
+  _syncRestoreDraftFromDom() {
+    const draft = this._restoreDraft;
+    const text = (name, fallback) => {
+      const el = this._restoreField(name);
+      return el && el.value != null ? String(el.value) : fallback;
+    };
+    const checked = (name, fallback) => {
+      const el = this._restoreField(name);
+      return el ? !!el.checked : fallback;
+    };
+    draft.filename = text("filename", draft.filename);
+    draft.mode = text("mode", draft.mode) === "replace" ? "replace" : "merge";
+    draft.from = text("from", draft.from);
+    draft.to = text("to", draft.to);
+    draft.personMap = text("person-map", draft.personMap);
+    draft.confirm = text("confirm", draft.confirm);
+    draft.datasets = {
+      drinks: checked("dataset-drinks", draft.datasets.drinks),
+      blood_pressure: checked("dataset-blood_pressure", draft.datasets.blood_pressure),
+      wellbeing: checked("dataset-wellbeing", draft.datasets.wellbeing),
+    };
+    const advanced = this.shadowRoot.querySelector("[data-restore-advanced]");
+    if (advanced) draft.advanced = !!advanced.open;
+  }
+
+  _syncRestoreField(field, el) {
+    const draft = this._restoreDraft;
+    const name = String(field || "").replace(/^restore-/, "");
+    if (!name) return;
+    if (name === "dataset-drinks") {
+      draft.datasets.drinks = !!el.checked;
+    } else if (name === "dataset-blood_pressure") {
+      draft.datasets.blood_pressure = !!el.checked;
+    } else if (name === "dataset-wellbeing") {
+      draft.datasets.wellbeing = !!el.checked;
+    } else if (name === "mode") {
+      draft.mode = el.value === "replace" ? "replace" : "merge";
+      this._render();
+    } else if (name === "filename") {
+      draft.filename = el.value == null ? "" : String(el.value);
+    } else if (name === "from") {
+      draft.from = el.value == null ? "" : String(el.value);
+    } else if (name === "to") {
+      draft.to = el.value == null ? "" : String(el.value);
+    } else if (name === "person-map") {
+      draft.personMap = el.value == null ? "" : String(el.value);
+    } else if (name === "confirm") {
+      draft.confirm = el.value == null ? "" : String(el.value);
+    }
+  }
+
+  async _loadRestoreFiles() {
+    if (!this._isAdmin() || this._restoreFilesBusy) return;
+    this._restoreFilesBusy = true;
+    this._restoreFilesError = null;
+    if (this._view === "settings") this._render();
+    try {
+      const res = await this._ws({ type: WS.listImportFiles });
+      const files = res && Array.isArray(res.files)
+        ? res.files.map((name) => String(name)).filter((name) => name)
+        : [];
+      this._restoreFiles = files;
+      if (!files.includes(this._restoreDraft.filename)) {
+        this._restoreDraft.filename = files.length ? files[0] : "";
+      }
+    } catch (err) {
+      this._restoreFiles = [];
+      this._restoreFilesError = wsErrorText(err);
+    } finally {
+      this._restoreFilesBusy = false;
+      if (this._view === "settings") this._render();
+    }
+  }
+
+  async _runRestore(dryRun) {
+    if (!this._isAdmin() || this._restoreBusy) return;
+    this._syncRestoreDraftFromDom();
+    const collected = collectRestorePayload(this, { dryRun: !!dryRun });
+    this._restoreError = null;
+    if (!collected.ok) {
+      this._restoreError = collected.error;
+      this._render();
+      return;
+    }
+    this._restoreBusy = true;
+    this._restoreResult = null;
+    this._render();
+    try {
+      const message = Object.assign(
+        { type: WS.restoreBackup, dry_run: !!dryRun },
+        collected.payload
+      );
+      const res = await this._ws(message);
+      this._restoreResult = { dryRun: !!dryRun, data: res && typeof res === "object" ? res : {} };
+      if (!dryRun) {
+        // Personen/Settings/Entries können sich durch den Restore ändern.
+        this._restoreDraft.confirm = "";
+        await this._reloadPersons();
+        await this._loadAll();
+        const entryId = this._settingsEntry;
+        if (entryId) await this._loadSettings(entryId);
+        if (this._selectedEntry) {
+          await this._loadAllHistory(this._selectedEntry, { force: true, render: false });
+        }
+      }
+    } catch (err) {
+      this._restoreError = wsErrorText(err);
+    } finally {
+      this._restoreBusy = false;
       this._render();
     }
   }
@@ -993,7 +1460,10 @@ class HealthOMatPanel extends HTMLElement {
     if (!slug || typed !== slug) {
       this._adminStatus = {
         ok: false,
-        text: "Die Best\u00E4tigung stimmt nicht mit dem Personen-Schl\u00FCssel \u00FCberein.",
+        text: t(
+          "ui_panel_delete_confirmation_mismatch",
+          "Die Bestätigung stimmt nicht mit dem Personen-Schlüssel überein."
+        ),
       };
       this._render();
       return;
@@ -1001,18 +1471,22 @@ class HealthOMatPanel extends HTMLElement {
     // Second gate: an explicit browser confirmation with the backup caveat.
     const confirmed = typeof window !== "undefined" && typeof window.confirm === "function"
       ? window.confirm(
-          `\u201E${person.display_name}\u201C endg\u00FCltig l\u00F6schen? Backups k\u00F6nnen derzeit NICHT wiederhergestellt werden.`
+          t(
+            "ui_panel_delete_prompt",
+            "„{name}“ endgültig löschen? Backups können derzeit NICHT wiederhergestellt werden.",
+            { name: person.display_name }
+          )
         )
       : true;
     if (!confirmed) return;
 
     this._deleteBusy = true;
-    this._adminStatus = { ok: true, text: "L\u00F6sche\u2026" };
+    this._adminStatus = { ok: true, text: t("ui_panel_deleting", "Lösche…") };
     this._render();
     try {
       await this._ws({ type: WS.deletePerson, entry_id: entryId, confirm: slug });
       this._deleteBusy = false;
-      this._adminStatus = { ok: true, text: "Person gel\u00F6scht." };
+      this._adminStatus = { ok: true, text: t("ui_panel_person_deleted", "Person gelöscht.") };
       await this._reloadPersons();
       this._afterPersonsChanged(entryId);
     } catch (err) {
@@ -1082,13 +1556,74 @@ class HealthOMatPanel extends HTMLElement {
     if (node) node.innerHTML = exportResultHtml(this);
   }
 
+  /* ---- Rückdatierung (REQ-HOM-120) ---------------------------------------- */
+
+  _tsInput(field) {
+    return this.shadowRoot.querySelector(`[data-field="${field}"]`);
+  }
+
+  /* `datetime-local`-Feld lesen und validieren.
+   * Rückgabe `{ ok: true, iso }` (iso "" = jetzt) oder `{ ok: false, error }`. */
+  _readEntryTs(field) {
+    const el = this._tsInput(field);
+    const raw = el && el.value != null ? String(el.value).trim() : "";
+    if (!raw) return { ok: true, iso: "" };
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) {
+      return {
+        ok: false,
+        error: t("ui_panel_val_ts_invalid", "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen."),
+      };
+    }
+    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
+      return {
+        ok: false,
+        error: t(
+          "ui_panel_val_ts_future",
+          "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz)."
+        ),
+      };
+    }
+    if (parsed.getFullYear() < 1900) {
+      return {
+        ok: false,
+        error: t("ui_panel_val_ts_old", "Der Zeitpunkt ist zu alt (frühestens 1900)."),
+      };
+    }
+    return { ok: true, iso: parsed.toISOString() };
+  }
+
+  _setTsDraft(field, value) {
+    this._tsDraft[field] = value == null ? "" : String(value);
+    const el = this._tsInput(field);
+    if (el) el.value = this._tsDraft[field] || localDateTimeValue(new Date());
+  }
+
+  _resetTs(field) {
+    this._tsDraft[field] = "";
+    const el = this._tsInput(field);
+    if (el) el.value = "";
+  }
+
   /* ---- Write actions ------------------------------------------------------ */
 
-  async _book(entryId, ml, drinkType) {
+  async _book(entryId, ml, drinkType, ts) {
     if (!entryId || this._busy) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("drink-ts");
+      if (!read.ok) {
+        this._actionError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     const value = Math.round(toNumber(ml, 0));
     if (!Number.isFinite(value) || value <= 0 || value > 10000) {
-      this._formError = "Bitte eine Menge zwischen 1 und 10000 ml angeben.";
+      this._formError = t(
+        "ui_panel_val_amount",
+        "Bitte eine Menge zwischen 1 und 10000 ml angeben."
+      );
       this._render();
       return;
     }
@@ -1099,8 +1634,11 @@ class HealthOMatPanel extends HTMLElement {
     try {
       const message = { type: WS.bookDrink, entry_id: entryId, ml: value };
       if (drinkType) message.drink_type = String(drinkType);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("drink-ts");
       await this._reloadEntry(entryId);
+      await this._refreshHistory(entryId, ["drinks"]);
     } catch (err) {
       this._actionError = errMsg(err);
     } finally {
@@ -1109,16 +1647,21 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  async _undo(entryId) {
+  async _undo(entryId, kind = "drinks") {
     if (!entryId || this._busy) return;
     const data = this._data[entryId];
-    if (data && data.undo && data.undo.drink === false) return;
+    // Getränke behalten die bisherige Vorab-Prüfung (kein Fehler-Toast ohne
+    // buchbare Buchung); BD/WB fragen dieselbe Verfügbarkeit über `_canUndo`.
+    if (kind === "drinks" && data && data.undo && data.undo.drink === false) return;
+    if (kind !== "drinks" && !this._canUndo(entryId, kind)) return;
     this._busy = true;
     this._actionError = null;
+    this._historyStatus = null;
     this._render();
     try {
-      await this._ws({ type: WS.undoLast, entry_id: entryId, kind: "drink" });
+      await this._ws({ type: WS.undoLast, entry_id: entryId, kind });
       await this._reloadEntry(entryId);
+      await this._refreshHistory(entryId, [kind]);
     } catch (err) {
       this._actionError = errMsg(err);
     } finally {
@@ -1127,20 +1670,35 @@ class HealthOMatPanel extends HTMLElement {
     }
   }
 
-  async _saveMeasurement(entryId, sys, dia, pulse, note) {
+  async _saveMeasurement(entryId, sys, dia, pulse, note, ts) {
     if (!entryId || this._busy) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("bp-ts");
+      if (!read.ok) {
+        this._formError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     if (!Number.isFinite(sys) || sys < 40 || sys > 300) {
-      this._formError = "Systolisch muss zwischen 40 und 300 liegen.";
+      this._formError = t(
+        "ui_panel_val_bp_sys",
+        "Systolisch muss zwischen 40 und 300 liegen."
+      );
       this._render();
       return;
     }
     if (!Number.isFinite(dia) || dia < 20 || dia > 200) {
-      this._formError = "Diastolisch muss zwischen 20 und 200 liegen.";
+      this._formError = t(
+        "ui_panel_val_bp_dia",
+        "Diastolisch muss zwischen 20 und 200 liegen."
+      );
       this._render();
       return;
     }
     if (pulse != null && (!Number.isFinite(pulse) || pulse < 20 || pulse > 250)) {
-      this._formError = "Puls muss zwischen 20 und 250 liegen.";
+      this._formError = t("ui_panel_val_bp_pulse", "Puls muss zwischen 20 und 250 liegen.");
       this._render();
       return;
     }
@@ -1157,8 +1715,11 @@ class HealthOMatPanel extends HTMLElement {
       };
       if (pulse != null) message.pulse = Math.round(pulse);
       if (note) message.note = String(note);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("bp-ts");
       await this._reloadEntry(entryId);
+      await this._refreshHistory(entryId, ["blood_pressure"]);
     } catch (err) {
       this._actionError = errMsg(err);
     } finally {
@@ -1183,12 +1744,22 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   /* Merkt eine Auswahl nur vor — gesendet wird sie erst mit „Übernehmen". */
-  _stageWellbeing(entryId, key, score) {
+  _stageWellbeing(entryId, key, score, ts) {
     if (!entryId || (!key && score == null)) return;
+    if (ts === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._formError = read.error;
+        this._render();
+        return;
+      }
+      ts = read.iso;
+    }
     this._wbPending = {
       entryId,
       key: key == null ? "" : String(key),
       score: score == null ? null : Number(score),
+      ts: ts == null ? "" : String(ts),
     };
     this._actionError = null;
     this._formError = null;
@@ -1198,10 +1769,10 @@ class HealthOMatPanel extends HTMLElement {
   async _confirmWellbeing() {
     const pending = this._wbPendingFor(this._selectedEntry);
     if (!pending || this._busy) return;
-    await this._setWellbeing(pending.entryId, pending.key || null, pending.score);
+    await this._setWellbeing(pending.entryId, pending.key || null, pending.score, pending.ts || "");
   }
 
-  async _setWellbeing(entryId, key, score) {
+  async _setWellbeing(entryId, key, score, ts = "") {
     if (!entryId || (!key && score == null) || this._busy) return;
     this._busy = true;
     this._actionError = null;
@@ -1211,8 +1782,11 @@ class HealthOMatPanel extends HTMLElement {
       const message = { type: WS.setWellbeing, entry_id: entryId };
       if (key) message.key = String(key);
       else message.score = Number(score);
+      if (ts) message.ts = String(ts);
       await this._ws(message);
+      this._resetTs("wb-ts");
       await this._reloadEntry(entryId);
+      await this._refreshHistory(entryId, ["wellbeing"]);
       // Erst die erfolgreiche Übernahme erledigt die Vormerkung; bei einem
       // Fehler bleibt sie für den nächsten Versuch stehen (REQ-HOM-114).
       if (this._wbPendingFor(entryId)) this._wbPending = null;
@@ -1294,6 +1868,11 @@ class HealthOMatPanel extends HTMLElement {
   _render() {
     try {
       this.shadowRoot.innerHTML = this._html();
+      try {
+        this._applyHistoryFocus();
+      } catch (_e) {
+        // Fokus ist Komfort, nie ein Render-Grund.
+      }
     } catch (err) {
       // Absolute last resort: never let the panel break the app shell.
       this.shadowRoot.innerHTML =
@@ -1313,23 +1892,33 @@ class HealthOMatPanel extends HTMLElement {
     const multi = (this._persons || []).length > 1;
     const back =
       this._view === "settings" || (this._view === "detail" && multi)
-        ? `<button class="icon-btn" data-action="back" type="button" aria-label="Zurück zur Übersicht">\u2190</button>`
+        ? `<button class="icon-btn" data-action="back" type="button" aria-label="${escapeHtml(
+            t("ui_panel_back_aria", "Zurück zur Übersicht")
+          )}">\u2190</button>`
         : "";
     const refreshing = this._manualBusy ? " disabled" : "";
     const gear =
       this._isAdmin() && this._view !== "settings"
-        ? `<button class="icon-btn" data-action="settings" type="button" aria-label="Einstellungen" title="Einstellungen">\u2699\uFE0F</button>`
+        ? `<button class="icon-btn" data-action="settings" type="button" aria-label="${escapeHtml(
+            t("ui_panel_settings_aria", "Einstellungen")
+          )}" title="${escapeHtml(
+            t("ui_panel_settings_aria", "Einstellungen")
+          )}">\u2699\uFE0F</button>`
         : "";
     return `<div class="topbar">
         ${back}
         <div class="title"><span aria-hidden="true">\u{1F4A7}</span><span class="name">Health-O-Mat</span></div>
         ${gear}
-        <button class="icon-btn" data-action="refresh" type="button" aria-label="Aktualisieren"${refreshing}>\u21BB</button>
+        <button class="icon-btn" data-action="refresh" type="button" aria-label="${escapeHtml(
+          t("ui_panel_refresh_aria", "Aktualisieren")
+        )}"${refreshing}>\u21BB</button>
       </div>`;
   }
 
   _footerHtml() {
-    return `<div class="footer">Health-O-Mat · keine medizinische Beratung</div>`;
+    return `<div class="footer">${escapeHtml(
+      t("ui_panel_footer", "Health-O-Mat · keine medizinische Beratung")
+    )}</div>`;
   }
 
   _bodyHtml() {
@@ -1337,10 +1926,16 @@ class HealthOMatPanel extends HTMLElement {
       return `<div class="content">${messageHtml(this._fatal, true)}</div>`;
     }
     if (this._persons == null) {
-      return `<div class="content">${messageHtml("Lade Health-O-Mat\u2026", false)}</div>`;
+      return `<div class="content">${messageHtml(
+        t("ui_panel_loading_app", "Lade Health-O-Mat…"),
+        false
+      )}</div>`;
     }
     if (!this._persons.length) {
-      return `<div class="content">${messageHtml("Keine Person eingerichtet.", false)}</div>`;
+      return `<div class="content">${messageHtml(
+        t("ui_common_no_person", "Keine Person eingerichtet."),
+        false
+      )}</div>`;
     }
     if (this._view === "settings" && this._isAdmin()) {
       return `<div class="content">${this._settingsHtml()}</div>`;
@@ -1370,6 +1965,13 @@ class HealthOMatPanel extends HTMLElement {
     const el = ev.target && ev.target.closest ? ev.target.closest("[data-action]") : null;
     if (!el) return;
     const action = el.getAttribute("data-action");
+    const tsQuick = /^(drink|bp|wb)-ts-(now|yesterday)$/.exec(action || "");
+    if (tsQuick) {
+      const when = new Date();
+      if (tsQuick[2] === "yesterday") when.setDate(when.getDate() - 1);
+      this._setTsDraft(`${tsQuick[1]}-ts`, localDateTimeValue(when));
+      return;
+    }
     try {
       switch (action) {
         case "open":
@@ -1416,23 +2018,78 @@ class HealthOMatPanel extends HTMLElement {
         case "tab":
           this._setTab(el.getAttribute("data-tab"));
           break;
-        case "book":
+        case "book": {
+          const ts = this._readEntryTs("drink-ts");
+          if (!ts.ok) {
+            this._actionError = ts.error;
+            this._render();
+            break;
+          }
           this._book(
             this._selectedEntry,
             toNumber(el.getAttribute("data-ml"), 0),
-            el.getAttribute("data-drink") || ""
+            el.getAttribute("data-drink") || "",
+            ts.iso
           );
           break;
+        }
         case "undo":
-          this._undo(this._selectedEntry);
+          this._undo(this._selectedEntry, el.getAttribute("data-kind") || "drinks");
           break;
-        case "wb":
+        case "history-filter":
+          this._setHistoryFilter(
+            el.getAttribute("data-kind"),
+            el.getAttribute("data-voided") === "1"
+          );
+          break;
+        case "history-void":
+          this._beginHistoryVoid(
+            this._selectedEntry,
+            el.getAttribute("data-kind"),
+            el.getAttribute("data-id")
+          );
+          break;
+        case "history-void-confirm":
+          this._confirmHistoryVoid(
+            this._selectedEntry,
+            el.getAttribute("data-kind"),
+            el.getAttribute("data-id")
+          );
+          break;
+        case "history-void-cancel":
+          this._cancelHistoryVoid();
+          break;
+        case "history-restore":
+          this._setEntryVoided(
+            this._selectedEntry,
+            el.getAttribute("data-kind"),
+            el.getAttribute("data-id"),
+            true
+          );
+          break;
+        case "restore-files-refresh":
+          this._loadRestoreFiles();
+          break;
+        case "restore-dry-run":
+          this._runRestore(true);
+          break;
+        case "restore-apply":
+          this._runRestore(false);
+          break;
+        case "wb": {
+          const ts = this._readEntryTs("wb-ts");
+          if (!ts.ok) {
+            this._formError = ts.error;
+            this._render();
+            break;
+          }
           if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
-            this._stageWellbeing(this._selectedEntry, el.getAttribute("data-key"), null);
+            this._stageWellbeing(this._selectedEntry, el.getAttribute("data-key"), null, ts.iso);
           } else {
-            this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"));
+            this._setWellbeing(this._selectedEntry, el.getAttribute("data-key"), null, ts.iso);
           }
           break;
+        }
         case "wb-confirm":
           this._confirmWellbeing();
           break;
@@ -1448,6 +2105,15 @@ class HealthOMatPanel extends HTMLElement {
   _onChange(ev) {
     const el = ev.target;
     if (!el || !el.getAttribute) return;
+    const field = el.getAttribute("data-field") || "";
+    if (field.endsWith("-ts")) {
+      this._tsDraft[field] = el.value == null ? "" : String(el.value);
+      return;
+    }
+    if (field.startsWith("restore-")) {
+      this._syncRestoreField(field, el);
+      return;
+    }
     if (el.getAttribute("data-action") === "settings-person") {
       this._selectSettingsPerson(el.value ? String(el.value) : "");
     }
@@ -1476,11 +2142,20 @@ class HealthOMatPanel extends HTMLElement {
     const input = this.shadowRoot.querySelector('[data-field="drink-text"]');
     const parsed = parseDrinkText(input ? input.value : "");
     if (!parsed) {
-      this._formError = "Menge nicht erkannt. Beispiel: \u201EKaffee 300 ml\u201C.";
+      this._formError = t(
+        "ui_panel_drink_parse_error",
+        "Menge nicht erkannt. Beispiel: „Kaffee 300 ml“."
+      );
       this._render();
       return;
     }
-    this._book(this._selectedEntry, parsed.ml, parsed.type);
+    const ts = this._readEntryTs("drink-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
+      this._render();
+      return;
+    }
+    this._book(this._selectedEntry, parsed.ml, parsed.type, ts.iso);
   }
 
   _submitBp() {
@@ -1497,7 +2172,13 @@ class HealthOMatPanel extends HTMLElement {
     const pulse = read("pulse");
     const noteEl = this.shadowRoot.querySelector('[data-field="note"]');
     const note = noteEl && noteEl.value ? String(noteEl.value).trim() : "";
-    this._saveMeasurement(this._selectedEntry, sys, dia, pulse, note);
+    const ts = this._readEntryTs("bp-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
+      this._render();
+      return;
+    }
+    this._saveMeasurement(this._selectedEntry, sys, dia, pulse, note, ts.iso);
   }
 
   _submitWellbeing() {
@@ -1508,15 +2189,25 @@ class HealthOMatPanel extends HTMLElement {
       ? this._data[this._selectedEntry].wellbeing_scale.length
       : 10;
     if (!/^\d+$/.test(raw) || !Number.isInteger(score) || score < 1 || score > scale) {
-      this._formError = `Bitte eine ganze Zahl zwischen 1 und ${scale} eingeben.`;
+      this._formError = t(
+        "ui_panel_val_wb",
+        "Bitte eine ganze Zahl zwischen 1 und {max} eingeben.",
+        { max: scale }
+      );
+      this._render();
+      return;
+    }
+    const ts = this._readEntryTs("wb-ts");
+    if (!ts.ok) {
+      this._formError = ts.error;
       this._render();
       return;
     }
     if (this._wellbeingConfirmEnabled(this._selectedEntry)) {
-      this._stageWellbeing(this._selectedEntry, null, score);
+      this._stageWellbeing(this._selectedEntry, null, score, ts.iso);
       return;
     }
-    this._setWellbeing(this._selectedEntry, null, score);
+    this._setWellbeing(this._selectedEntry, null, score, ts.iso);
   }
 }
 

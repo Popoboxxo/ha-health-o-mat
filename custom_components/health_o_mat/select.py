@@ -35,7 +35,8 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
 
     @property
     def _data(self) -> dict:
-        return self._store.all_entries().get(self._entry.entry_id, {})
+        # Aktive Sicht: voided Wohlbefinden-Meldungen steuern den Zustand nicht.
+        return self._store.active_entry(self._entry.entry_id)
 
     @property
     def current_option(self) -> str | None:
@@ -44,7 +45,12 @@ class WellbeingSelect(HealthOMatEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         if option not in self._by_key:
             return
-        await self._store.set_wellbeing(self._entry.entry_id, option, dt_util.now().isoformat())
+        await self._store.set_wellbeing(
+            self._entry.entry_id,
+            option,
+            dt_util.now().isoformat(),
+            audit_limit=logic.audit_limit_from_options(self._entry.options),
+        )
         signal_refresh(self.hass, self._entry.entry_id)
 
     @property

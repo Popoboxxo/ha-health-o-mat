@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -14,19 +15,28 @@ from homeassistant.util import dt as dt_util
 
 from . import areas, logic
 from .const import (
-    ARCHIVE_STORE_KEY,
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .panel import async_apply_panel_state
+from .reminders import (
+    async_send_notification,
+    async_setup_reminders,
+    async_unload_reminders,
+    collect_weekly_metrics,
+    normalize_weekly_report,
+    render_weekly_report_markdown,
+    weekly_report_title,
+)
 from .statistics import async_migrate_legacy_volume_statistics
-from .store import HealthOMatStore
+from .store import HealthOMatStore, async_load_archive_store
 from .ws_api import async_register_ws_api
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,10 +63,14 @@ _SERVICE_NAMES = (
     "add_drink",
     "add_blood_pressure",
     "remove_last_entry",
+    "void_entry",
+    "restore_entry",
     "export_csv",
     "import_csv",
     "backup",
+    "restore_backup",
     "set_wellbeing",
+    "weekly_report",
 )
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
@@ -71,6 +85,10 @@ class HealthOMatData:
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
         self.areas: dict[str, bool] = dict(areas.DEFAULT_AREAS)
+        # S-4: zuletzt gesehener `set_lifetime_ml`-Optionswert. Nur eine
+        # explizite Änderung darf den Lebenszähler setzen — sonst würde jede
+        # Options-Änderung (z. B. Tagesziel) den gewachsenen Zähler zurücksetzen.
+        self.lifetime_setting_seen: int | None = None
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -118,6 +136,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     if lifetime_start:
         await store.set_lifetime_start(entry.entry_id, int(lifetime_start))
 
+    # B-2: Archiv-Store immer laden, wenn die Datei existiert — unabhängig von
+    # `retention_months`. Sonst fehlt das Archiv nach einem Neustart mit
+    # Retention AUS in Backup/Export/Restore (Lifetime wäre inkonsistent).
+    await async_load_archive_store(hass, create=False)
+
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
@@ -151,6 +174,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     # Opt-in-Sidebar-Panel (L2) erst NACH der Options-Auswertung anwenden.
     await _async_apply_panel_layer(hass)
     await _apply_retention(hass, entry, store)
+    await async_setup_reminders(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
     return True
@@ -185,13 +209,22 @@ def _retention_months(entry) -> int:
 
 async def _get_archive_store(hass: HomeAssistant) -> HealthOMatStore:
     """Archiv-Store einmalig anlegen/laden (Shared-Bereich)."""
-    shared: dict = hass.data[DOMAIN].setdefault("shared", {})
-    archive = shared.get("archive_store")
-    if archive is None:
-        archive = HealthOMatStore(hass, storage_key=ARCHIVE_STORE_KEY)
-        await archive.async_load()
-        shared["archive_store"] = archive
+    archive = await async_load_archive_store(hass, create=True)
+    if archive is None:  # pragma: no cover - create=True liefert immer einen Store
+        raise RuntimeError("Archiv-Speicher nicht verfügbar")
     return archive
+
+
+def _kept_with_voided(raw_items: object, moved: list) -> list:
+    """Rohliste ohne die ins Archiv wandernden Einträge (voided bleibt erhalten).
+
+    `moved` enthält nur aktive Einträge (partitioniert auf der aktiven Sicht);
+    voided Einträge sind dort nie enthalten und bleiben damit im Haupt-Store.
+    Die Reihenfolge des Rohbestands bleibt unverändert.
+    """
+    items = raw_items if isinstance(raw_items, list) else []
+    moved_ids = {id(item) for item in moved}
+    return [item for item in items if id(item) not in moved_ids]
 
 
 async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -> None:
@@ -201,19 +234,47 @@ async def _apply_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -
     nichts wird verschoben und kein Archiv-Store angelegt. Aktiv: Einträge
     älter als `retention_months` wandern on-read ins Archiv; der Lebenszähler
     bleibt unverändert.
+
+    Partitioniert wird ausschließlich auf der **aktiven** Sicht: voided
+    (gelöschte) Einträge werden nie archiviert, sondern bleiben im Haupt-Store
+    — sonst würde ein gelöschter Eintrag im Archiv wieder auftauchen (M2a).
+    `archived_counts` zählt entsprechend nur aktive Verschiebungen.
     """
     months = _retention_months(entry)
     if months <= 0:
         return
     current = store.entry(entry.entry_id)
     cutoff = logic.months_ago(dt_util.now(), months)
-    kept_drinks, moved_drinks = logic.partition_by_cutoff(current.get("drinks", []), cutoff)
-    kept_readings, moved_readings = logic.partition_by_cutoff(current.get("readings", []), cutoff)
+    _, moved_drinks = logic.partition_by_cutoff(store.active_drinks(entry.entry_id), cutoff)
+    _, moved_readings = logic.partition_by_cutoff(store.active_readings(entry.entry_id), cutoff)
     if not moved_drinks and not moved_readings:
         return
+    kept_drinks = _kept_with_voided(current.get("drinks", []), moved_drinks)
+    kept_readings = _kept_with_voided(current.get("readings", []), moved_readings)
     archive = await _get_archive_store(hass)
-    await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
-    await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)
+    # S-5: Erst das Archiv schreiben, dann im Haupt-Store entfernen. Schlägt
+    # der Archiv-Save fehl, bleibt der Haupt-Store unverändert (kein Daten-
+    # verlust); schlägt danach der Haupt-Save fehl, wird das Archiv zurück-
+    # gerollt.
+    previous_archive = archive.raw_entries_copy()
+    try:
+        await archive.append_archive(entry.entry_id, moved_drinks, moved_readings)
+    except Exception:
+        # In-Memory-Stand des Archivs zurücksetzen (der Save ist fehlgeschlagen;
+        # ein erneuter Versuch darf keine Duplikate sehen).
+        try:
+            await archive.async_set_entries(previous_archive)
+        except Exception:  # noqa: BLE001 - Rollback ist best effort
+            _LOGGER.exception("Health-O-Mat: Archiv-Rollback nach Save-Fehler fehlgeschlagen")
+        raise
+    try:
+        await store.apply_retention(entry.entry_id, kept_drinks, kept_readings)
+    except Exception:
+        try:
+            await archive.async_set_entries(previous_archive)
+        except Exception:  # noqa: BLE001 - Rollback ist best effort
+            _LOGGER.exception("Health-O-Mat: Archiv-Rollback nach Retention-Fehler fehlgeschlagen")
+        raise
     signal_refresh(hass, entry.entry_id)
 
 
@@ -250,6 +311,13 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
+    # S-4: Optionswert nur als "zuletzt gesehen" merken, nicht anwenden. Ein
+    # späterer Options-Save ohne explizite Änderung darf den Zähler nicht
+    # zurücksetzen; nur `_options_updated` wendet eine echte Änderung an.
+    try:
+        rt.lifetime_setting_seen = int(opts.get("set_lifetime_ml") or 0)
+    except (TypeError, ValueError):
+        rt.lifetime_setting_seen = 0
     # `set_lifetime_ml` wird bewusst NICHT hier (Setup/Reload) angewandt: der
     # Options-Wert bleibt dauerhaft gespeichert, ein Reload (z. B. ausgelöst
     # durch eine Bereichs-Umschaltung) würde den gewachsenen Lebenszähler sonst
@@ -281,23 +349,34 @@ async def _options_updated(hass, entry) -> None:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
+        # Vor dem Reload: Timer neu aufsetzen (der Reload löst zwar erneut
+        # Setup aus, aber bis dahin soll die neue Options-Wahl schon gelten).
+        await async_setup_reminders(hass, entry, store)
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
 
     wanted = int(opts.get("set_lifetime_ml") or 0)
-    current = int(store.all_entries().get(entry.entry_id, {}).get("total_ml_lifetime", 0))
-    if wanted and wanted != current:
+    seen = getattr(rt, "lifetime_setting_seen", None)
+    if seen is None:
+        # Erster Lauf ohne Setup-Spiegel: den aktuellen Optionswert nur merken,
+        # nicht anwenden (kein Rücksetzen eines bereits gewachsenen Zählers).
+        seen = wanted
+    if wanted and wanted != seen:
         await store.set_lifetime_start(entry.entry_id, wanted)
+    rt.lifetime_setting_seen = wanted
     # Retention nach Options-Änderung anwenden (idempotent, No-op wenn AUS).
     await _apply_retention(hass, entry, store)
     # Opt-in-Sidebar-Panel: Option enable/disable → Panel registrieren/entfernen.
     await _async_apply_panel_layer(hass)
+    # Erinnerungs-/Berichts-Timer an die neuen Optionen anpassen (idempotent).
+    await async_setup_reminders(hass, entry, store)
     signal_refresh(hass, entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
+        await async_unload_reminders(hass, entry.entry_id)
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not _has_runtime_entries(hass):
             # Letzter Entry entladen → Frontend-Fallback zurückbauen (defensiv:
@@ -409,6 +488,97 @@ async def _async_apply_panel_layer(
         _LOGGER.exception("Health-O-Mat: Sidebar-Panel-Zustand nicht anwendbar")
 
 
+def _service_actor(call: ServiceCall) -> str | None:
+    """HA-User-ID eines Service-Calls (None bei Automationen/anonymen Aufrufen)."""
+    user_id = getattr(getattr(call, "context", None), "user_id", None)
+    return str(user_id) if user_id else None
+
+
+def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
+    """Audit-Cap der Person aus `entry.options` (Default 1000, 0 = unbegrenzt)."""
+    try:
+        entry = hass.config_entries.async_get_entry(entry_id)
+    except Exception:  # noqa: BLE001 - Options-Lesen ist nie service-kritisch
+        entry = None
+    options = getattr(entry, "options", None) if entry is not None else None
+    return logic.audit_limit_from_options(options)
+
+
+def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
+    """Optionales Service-Feld `ts` validieren (REQ-HOM-120).
+
+    ``None`` bedeutet "kein Zeitpunkt übergeben" → der Aufrufer setzt jetzt.
+    Ein ungültiger, zu weit in der Zukunft oder vor 1900 liegender Wert wird
+    als ``ServiceValidationError`` gemeldet.
+    """
+    raw = call.data.get("ts")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    parsed = logic.parse_entry_timestamp(raw, now=now)
+    if parsed is None:
+        raise ServiceValidationError(logic.ENTRY_TS_INVALID_MESSAGE.format(value=raw))
+    return parsed.isoformat()
+
+
+async def _async_require_admin(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Admin-Gate für Verwaltungs-Services (z. B. Restore).
+
+    Ein Service-Call OHNE User-ID stammt aus einer Automation/einem Skript und
+    gilt als vertrauenswürdig (dokumentiert: Automationen laufen bewusst ohne
+    Login). Mit User-ID wird der HA-User geladen und ``is_admin`` geprüft.
+    """
+    user_id = getattr(getattr(call, "context", None), "user_id", None)
+    if not user_id:
+        return
+    auth = getattr(hass, "auth", None)
+    get_user = getattr(auth, "async_get_user", None)
+    if get_user is None:
+        raise ServiceValidationError("Admin-Prüfung ist nicht verfügbar")
+    user = await get_user(user_id)
+    if not getattr(user, "is_admin", False):
+        raise ServiceValidationError("Dieser Service ist Administratoren vorbehalten")
+
+
+# Menschliche Bezeichnung der Korrektur-Ziele (Fehlertexte).
+_KIND_LABELS: dict[str, str] = {
+    "drinks": "Getränke",
+    "blood_pressure": "Blutdruckmessungen",
+    "wellbeing": "Wohlbefinden-Meldungen",
+}
+
+
+async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: bool) -> None:
+    """Gemeinsamer Pfad für `void_entry`/`restore_entry` (ein Store-Aufruf je Ziel).
+
+    `kind` und `id` werden fachlich validiert; ein unbekanntes/bereits im
+    Zielzustand befindliches Ziel wird als `ServiceValidationError` gemeldet
+    (kein stiller Erfolg). Schreibwege bleiben die bestehenden `void_*`/
+    `restore_*`-Methoden — inklusive Audit-Eintrag und Store-Persistenz.
+    """
+    entry_id, _info = get_runtime_data(hass, call)
+    kind = logic.normalize_history_kind(call.data.get("kind"))
+    if kind is None:
+        raise ServiceValidationError(
+            f"Unbekannter kind '{call.data.get('kind')}' — "
+            f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+        )
+    item_id = str(call.data.get("id") or "").strip()
+    if not item_id:
+        raise ServiceValidationError("id fehlt")
+    store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+    methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
+    changed = await getattr(store, methods[kind])(
+        entry_id,
+        item_id,
+        actor=_service_actor(call),
+        audit_limit=_entry_audit_limit(hass, entry_id),
+    )
+    if not changed:
+        state = "nicht gelöscht" if restore else "bereits gelöscht"
+        raise ServiceValidationError(f"Eintrag '{item_id}' nicht gefunden oder {state}")
+    signal_refresh(hass, entry_id)
+
+
 def _register_services(hass: HomeAssistant) -> None:
     """Öffentliche Services (idempotent registriert).
 
@@ -425,13 +595,18 @@ def _register_services(hass: HomeAssistant) -> None:
         ml = int(call.data["amount_ml"])
         if ml <= 0 or ml > 10000:
             raise ServiceValidationError("amount_ml muss zwischen 1 und 10000 liegen")
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         await store.add_drink(
             entry_id,
-            dt_util.now().isoformat(),
+            ts_iso,
             ml,
             call.data.get("drink_type") or "Eigen",
             call.data.get("source") or "service",
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
         )
         signal_refresh(hass, entry_id)
 
@@ -439,14 +614,19 @@ def _register_services(hass: HomeAssistant) -> None:
         entry_id, _info = get_runtime_data(hass, call)
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         pulse = call.data.get("pulse")
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         await store.add_reading(
             entry_id,
-            dt_util.now().isoformat(),
+            ts_iso,
             int(call.data["systolic"]),
             int(call.data["diastolic"]),
             int(pulse) if pulse else None,
             call.data.get("note") or "",
             "service",
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
         )
         signal_refresh(hass, entry_id)
 
@@ -468,30 +648,58 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
             )
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        await store.set_wellbeing(entry_id, status, dt_util.now().isoformat())
+        await store.set_wellbeing(
+            entry_id,
+            status,
+            ts_iso,
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
         signal_refresh(hass, entry_id)
 
     async def remove_last_entry(call: ServiceCall) -> None:
+        """Letzte **aktive** Buchung voiden (Undo, drinks|blood_pressure|wellbeing)."""
         entry_id, _info = get_runtime_data(hass, call)
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        kind = call.data.get("kind") or "drinks"
-        if kind == "blood_pressure":
-            removed = await store.remove_last_reading(entry_id)
-            if not removed:
-                raise ServiceValidationError("Keine Blutdruckmessungen zum Entfernen")
-        else:
-            removed = await store.remove_last_drink(entry_id)
-            if not removed:
-                raise ServiceValidationError("Keine Getränke zum Entfernen")
+        kind = logic.normalize_history_kind(call.data.get("kind") or "drinks")
+        if kind is None:
+            raise ServiceValidationError(
+                f"Unbekannter kind '{call.data.get('kind')}' — "
+                f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+            )
+        remove_last = getattr(store, logic.REMOVE_LAST_METHOD_BY_KIND[kind])
+        removed = await remove_last(
+            entry_id,
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        if not removed:
+            raise ServiceValidationError(f"Keine {_KIND_LABELS[kind]} zum Entfernen")
         signal_refresh(hass, entry_id)
 
+    async def void_entry(call: ServiceCall) -> None:
+        """Einen Eintrag als gelöscht markieren (kein Hard-Delete)."""
+        await _set_entry_state(hass, call, restore=False)
+
+    async def restore_entry(call: ServiceCall) -> None:
+        """Einen gelöschten Eintrag wiederherstellen."""
+        await _set_entry_state(hass, call, restore=True)
+
     async def export_csv(call: ServiceCall) -> None:
+        """CSV-Export (Admin-only, wie das WS-Pendant)."""
+        await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
+        # B-2: Archiv on demand laden (create=False) — der Shared-Eintrag kann
+        # fehlen, wenn die Archiv-Datei erst nach dem Setup entstanden ist.
+        archive_store = await async_load_archive_store(hass, create=False)
         from .exporter import async_export_csv
 
-        await async_export_csv(hass, store, call, archive_store=shared.get("archive_store"))
+        await async_export_csv(hass, store, call, archive_store=archive_store)
 
     async def import_csv(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
@@ -499,14 +707,80 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = shared.get("store")
         from .importer import async_import_csv
 
-        await async_import_csv(hass, store, entry_id, call)
+        await async_import_csv(
+            hass,
+            store,
+            entry_id,
+            call,
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
 
     async def backup(call: ServiceCall) -> None:
+        """JSON-Backup schreiben (Admin-only, wie das WS-Pendant)."""
+        await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
+        # B-2: wie export_csv — Archiv on demand nachladen, nie still weglassen.
+        archive_store = await async_load_archive_store(hass, create=False)
         from .backup import async_backup
 
-        await async_backup(hass, store)
+        await async_backup(hass, store, archive_store)
+
+    async def restore_backup(call: ServiceCall) -> None:
+        """Backup kontrolliert zurückspielen (Admin-only, optional Dry-Run)."""
+        await _async_require_admin(hass, call)
+        from .restore import RestoreError, async_restore_command
+
+        try:
+            await async_restore_command(hass, dict(call.data), actor=_service_actor(call))
+        except RestoreError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def weekly_report(call: ServiceCall) -> None:
+        """Wochenbericht als Markdown-Notification senden (REQ-HOM-118).
+
+        Kein Datei-Schreiben, kein Export-Ordner: der Bericht ist eine reine
+        Notification. Ohne ``person`` bekommt jede laufende Person einen
+        eigenen Bericht; eine unbekannte Person wird abgelehnt.
+        """
+        store: HealthOMatStore = hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
+        try:
+            if store is None:
+                raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+            if (call.data.get("person") or "").strip():
+                entry_id, _info = get_runtime_data(hass, call)
+                target_ids = [entry_id]
+            else:
+                target_ids = [
+                    key
+                    for key, value in hass.data.get(DOMAIN, {}).items()
+                    if key not in _NON_ENTRY_KEYS
+                    and isinstance(value, dict)
+                    and "coordinator" in value
+                ]
+                if not target_ids:
+                    raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+            entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
+            language = getattr(hass.config, "language", "de")
+            now = dt_util.now()
+            for entry_id in target_ids:
+                entry = entries.get(entry_id)
+                if entry is None:
+                    continue
+                options = entry.options or {}
+                report = normalize_weekly_report(options.get(OPTION_WEEKLY_REPORT))
+                metrics = collect_weekly_metrics(store.active_entry(entry_id), options, now)
+                person = effective_person(entry)
+                await async_send_notification(
+                    hass,
+                    report["notify_service"],
+                    weekly_report_title(person, language),
+                    render_weekly_report_markdown(metrics, person, language),
+                )
+        except ServiceValidationError:
+            raise
+        except Exception as err:  # noqa: BLE001 - einheitliche Service-Fehlersemantik
+            raise ServiceValidationError(f"Wochenbericht fehlgeschlagen: {err}") from err
 
     hass.services.async_register(
         DOMAIN,
@@ -517,6 +791,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("drink_type"): str,
                 vol.Optional("person"): str,
                 vol.Optional("source"): str,
+                vol.Optional("ts"): str,
             }
         ),
         service_func=add_drink,
@@ -531,6 +806,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("pulse"): vol.Coerce(int),
                 vol.Optional("person"): str,
                 vol.Optional("note"): str,
+                vol.Optional("ts"): str,
             }
         ),
         service_func=add_blood_pressure,
@@ -543,6 +819,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("person"): str,
                 vol.Optional("status"): str,
                 vol.Optional("score"): vol.Coerce(int),
+                vol.Optional("ts"): str,
             }
         ),
         service_func=set_wellbeing,
@@ -553,10 +830,36 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Optional("kind", default="drinks"): vol.In(["drinks", "blood_pressure"]),
+                vol.Optional("kind", default="drinks"): vol.In(
+                    ["drinks", "blood_pressure", "wellbeing"]
+                ),
             }
         ),
         service_func=remove_last_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "void_entry",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("id"): str,
+            }
+        ),
+        service_func=void_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "restore_entry",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("id"): str,
+            }
+        ),
+        service_func=restore_entry,
     )
     hass.services.async_register(
         DOMAIN,
@@ -586,4 +889,29 @@ def _register_services(hass: HomeAssistant) -> None:
         "backup",
         schema=vol.Schema({}),
         service_func=backup,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "restore_backup",
+        schema=vol.Schema(
+            {
+                vol.Required("filename"): str,
+                vol.Optional("mode", default="merge"): vol.In(["merge", "replace"]),
+                vol.Optional("persons"): [str],
+                vol.Optional("datasets"): [str],
+                vol.Optional("from"): str,
+                vol.Optional("to"): str,
+                vol.Optional("person_map"): dict,
+                vol.Optional("dry_run", default=False): bool,
+                vol.Optional("confirm"): str,
+                vol.Optional("restore_audit", default=False): bool,
+            }
+        ),
+        service_func=restore_backup,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "weekly_report",
+        schema=vol.Schema({vol.Optional("person"): str}),
+        service_func=weekly_report,
     )

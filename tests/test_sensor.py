@@ -4,13 +4,14 @@ Audit-Punkt 7b (M-5): LastReadingSensor correctly calls logic.avg_over_window()
 for 7-day average and includes it in extra_state_attributes as avg_7d.
 """
 
+import asyncio
 import importlib.util
 import json
 import os
 import sys
 import types
 from datetime import datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
@@ -40,6 +41,15 @@ sensor_module = _load("sensor")
 logic_module = _load("logic")
 
 
+def _fake_store(data: dict) -> MagicMock:
+    """Store-Mock: Rohsicht und aktive Sicht aus demselben Datenbestand."""
+    store = MagicMock()
+    store.all_entries = MagicMock(return_value=data)
+    store.active_entry = MagicMock(side_effect=lambda entry_id: data.get(entry_id, {}))
+    store.active_entries = MagicMock(return_value=data)
+    return store
+
+
 def _make_last_reading_sensor_fixture(key="sys", readings_data=None):
     """Create a LastReadingSensor with mocked dependencies."""
     coordinator = MagicMock()
@@ -47,16 +57,9 @@ def _make_last_reading_sensor_fixture(key="sys", readings_data=None):
     entry.entry_id = "test-entry-1"
     entry.runtime_data = MagicMock()
 
-    store = MagicMock()
     if readings_data is None:
         readings_data = []
-    store.all_entries = MagicMock(
-        return_value={
-            "test-entry-1": {
-                "readings": readings_data,
-            }
-        }
-    )
+    store = _fake_store({"test-entry-1": {"readings": readings_data}})
 
     sensor = sensor_module.LastReadingSensor(coordinator, entry, store, key, "mmHg")
 
@@ -233,12 +236,7 @@ def _make_today_sensor_fixture(options=None, drinks=None):
     entry.runtime_data = MagicMock()
     entry.runtime_data.daily_goal_ml = 2000
 
-    store = MagicMock()
-    store.all_entries = MagicMock(
-        return_value={
-            "test-entry-1": {"drinks": drinks if drinks is not None else []},
-        }
-    )
+    store = _fake_store({"test-entry-1": {"drinks": drinks if drinks is not None else []}})
 
     sensor = sensor_module.TodaySensor(coordinator, entry, store)
     return sensor, entry, store
@@ -309,8 +307,7 @@ def _make_store_sensor(sensor_cls, person_data):
     entry.runtime_data = MagicMock()
     entry.runtime_data.daily_goal_ml = 2000
 
-    store = MagicMock()
-    store.all_entries = MagicMock(return_value={"test-entry-1": person_data})
+    store = _fake_store({"test-entry-1": person_data})
     return sensor_cls(coordinator, entry, store)
 
 
@@ -448,8 +445,7 @@ def test_volume_sensors_use_valid_ml_unit_others_unchanged():
         entry = MagicMock()
         entry.entry_id = "test-entry-1"
         entry.runtime_data = MagicMock()
-        store = MagicMock()
-        store.all_entries = MagicMock(return_value={"test-entry-1": {"readings": []}})
+        store = _fake_store({"test-entry-1": {"readings": []}})
         bp = sensor_module.LastReadingSensor(coordinator, entry, store, key, unit)
         assert bp._attr_native_unit_of_measurement == unit
 
@@ -578,8 +574,7 @@ def test_setup_entry_registers_new_wave2_sensors():
     entry.runtime_data = MagicMock()
     entry.runtime_data.daily_goal_ml = 2000
     coord = MagicMock()
-    store = MagicMock()
-    store.all_entries = MagicMock(return_value={"test-entry-1": {}})
+    store = _fake_store({"test-entry-1": {}})
     hass.data = {
         "health_o_mat": {
             entry.entry_id: {"coordinator": coord},
@@ -678,8 +673,7 @@ def test_setup_entry_registers_goal_streak_and_caffeine_sensors():
     entry.runtime_data = MagicMock()
     entry.runtime_data.daily_goal_ml = 2000
     coord = MagicMock()
-    store = MagicMock()
-    store.all_entries = MagicMock(return_value={"test-entry-1": {}})
+    store = _fake_store({"test-entry-1": {}})
     hass.data = {
         "health_o_mat": {
             entry.entry_id: {"coordinator": coord},
@@ -730,8 +724,7 @@ def _sensor_setup(options: dict) -> set[str]:
     entry.runtime_data = MagicMock()
     entry.runtime_data.daily_goal_ml = 2000
     coord = MagicMock()
-    store = MagicMock()
-    store.all_entries = MagicMock(return_value={_ENTRY_ID: {}})
+    store = _fake_store({_ENTRY_ID: {}})
     hass.data = {
         "health_o_mat": {
             _ENTRY_ID: {"coordinator": coord},
@@ -947,3 +940,195 @@ def test_req_hom_112_wellbeing_score_sensor_follows_area_toggle():
     assert score_id in on_again_keys
     # Die unique_id bleibt identisch (kein Neu-Anlegen durch die Änderung).
     assert {k for k in on_again_keys if k == score_id} == {score_id}
+
+
+# ============================================================================
+# M2a: voided Einträge aus allen Sensor-Auswertungen ausschließen
+# ============================================================================
+
+
+def _load_store_module():
+    """Store-Modul im selben Fake-Paket (auch bei früherem Laden wiederverwenden)."""
+    name = f"{_PKG}.store"
+    if name in sys.modules:
+        return sys.modules[name]
+    return _load("store")
+
+
+def _real_store():
+    """HealthOMatStore mit gemocktem HA-Store-Backend (leerer Start)."""
+    store = _load_store_module().HealthOMatStore(MagicMock())
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value=None)
+    store._store.async_save = AsyncMock(return_value=None)
+    asyncio.run(store.async_load())
+    return store
+
+
+def _entry(entry_id="e1", options=None, goal=2000):
+    entry = MagicMock()
+    entry.entry_id = entry_id
+    entry.options = options if options is not None else {}
+    entry.runtime_data = MagicMock()
+    entry.runtime_data.daily_goal_ml = goal
+    return entry
+
+
+def _item_id(store, kind, index=-1, entry_id="e1"):
+    """ID eines Store-Eintrags (drinks/readings/wellbeing_entries)."""
+    return store.entry(entry_id)[kind][index]["id"]
+
+
+def test_m2a_voided_drink_excluded_from_today_percent_yesterday_history():
+    """[M2a] Voided Getränk zählt nicht in Today/Percent/Yesterday/Historie."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 250, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-14T09:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 500, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", _item_id(store, "drinks")))
+
+    entry = _entry()
+    today = sensor_module.TodaySensor(MagicMock(), entry, store)
+    percent = sensor_module.PercentSensor(MagicMock(), entry, store)
+    history = sensor_module.HistoryDrinksSensor(MagicMock(), entry, store)
+
+    assert today.native_value == 250
+    attrs = today.extra_state_attributes
+    assert attrs["drinks_count"] == 1
+    assert attrs["percent_of_goal"] == 12.5
+    assert attrs["yesterday_ml"] == 300
+    assert json.loads(attrs["breakdown_by_type"]) == {"Wasser": 250}
+    assert attrs["last_drink_at"].startswith("2026-10-15T08:00:00")
+
+    assert percent.native_value == 12.5
+    assert history.native_value == 1  # nur heutige, aktive Buchungen
+    hist_attrs = history.extra_state_attributes
+    # Historie = alle aktiven Buchungen (heute + gestern), nie das voided Kaffee.
+    assert hist_attrs["total_count"] == 2
+    assert [d["ml"] for d in json.loads(hist_attrs["entries_json"])] == [300, 250]
+
+
+def test_m2a_lifetime_keeps_corrected_sum_with_voided_drink():
+    """[M2a] Lifetime bleibt die korrigierte M1-Summe (nicht die Rohsumme)."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 250, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 500, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", _item_id(store, "drinks")))
+
+    lifetime = sensor_module.LifetimeSensor(MagicMock(), _entry(), store)
+
+    assert lifetime.native_value == 250
+
+
+def test_m2a_voided_drink_excluded_from_trend_streak_and_caffeine():
+    """[M2a] Voided Getränk zählt nicht in Trend, Serie und Koffein."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    store = _real_store()
+    # Vorwoche: 700 ml gestern → Ø 100 ml/Tag.
+    asyncio.run(store.add_drink("e1", "2026-10-14T08:00:00", 700, "Wasser", "button"))
+    # Heute nur ein (voided) Kaffee — ohne Filter würde er Trend + Serie + Koffein füllen.
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 800, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", _item_id(store, "drinks")))
+
+    entry = _entry(goal=700)
+    trend = sensor_module.DrinksTrendSensor(MagicMock(), entry, store)
+    streak = sensor_module.GoalStreakSensor(MagicMock(), entry, store)
+    caffeine = sensor_module.CaffeineTodaySensor(MagicMock(), entry, store)
+
+    assert trend.native_value == -100.0
+    assert trend.extra_state_attributes == {"today_ml": 0, "prev_week_avg_ml": 100.0}
+    assert streak.native_value == 1
+    assert streak.extra_state_attributes["best_streak"] == 1
+    assert caffeine.native_value == 0.0
+    assert json.loads(caffeine.extra_state_attributes["caffeine_by_type_mg"]) == {}
+
+
+def test_m2a_voided_reading_excluded_from_bp_sensors():
+    """[M2a] Voided Messung zählt nicht in BP-Werten/Historie/Ø/Trend."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    store = _real_store()
+    for days_ago, sys_, dia, pulse in (
+        (1, 120, 80, 60),
+        (2, 122, 82, 62),
+        (3, 118, 78, 58),
+        (8, 130, 80, 60),
+        (9, 132, 82, 62),
+        (10, 128, 78, 58),
+    ):
+        asyncio.run(
+            store.add_reading("e1", f"2026-10-{15 - days_ago:02d}T08:00:00", sys_, dia, pulse)
+        )
+    # Voided Extremwert heute: ohne Filter würde er letzter Wert/Ø/Trend sein.
+    asyncio.run(store.add_reading("e1", "2026-10-15T09:00:00", 200, 120, 99))
+    asyncio.run(store.void_reading("e1", _item_id(store, "readings")))
+
+    entry = _entry()
+    last = sensor_module.LastReadingSensor(MagicMock(), entry, store, "sys", "mmHg")
+    assert last.native_value == 120
+    attrs = last.extra_state_attributes
+    assert attrs["readings_total"] == 6
+    assert attrs["avg_7d"] == 120.0
+    assert attrs["measured_at"].startswith("2026-10-14T08:00:00")
+
+    history = sensor_module.BloodPressureHistorySensor(MagicMock(), entry, store)
+    assert history.native_value == 6
+    entries = json.loads(history.extra_state_attributes["history_json"])
+    assert [r["sys"] for r in entries] == [128, 132, 130, 118, 122, 120]
+
+    category = sensor_module.BloodPressureCategorySensor(MagicMock(), entry, store)
+    assert category.extra_state_attributes["systolic"] == 120
+    assert category.native_value == logic_module.bp_category(120, 80)
+
+    trend = sensor_module.BpTrendSensor(MagicMock(), entry, store)
+    assert trend.native_value == "falling"
+    assert trend.extra_state_attributes["sys_delta"] == -10.0
+
+
+def test_m2a_voided_reading_only_bp_trend_has_too_few_readings():
+    """[M2a] Sind alle Messungen voided, bleibt der BP-Trend `unknown`."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    store = _real_store()
+    for days_ago in (1, 2, 3):
+        asyncio.run(store.add_reading("e1", f"2026-10-{15 - days_ago:02d}T08:00:00", 120, 80, 60))
+        asyncio.run(store.void_reading("e1", _item_id(store, "readings")))
+
+    trend = sensor_module.BpTrendSensor(MagicMock(), _entry(), store)
+
+    assert trend.native_value is None
+    assert trend.extra_state_attributes == {}
+
+
+def test_m2a_voided_wellbeing_excluded_from_since_and_score(monkeypatch):
+    """[M2a] Voided Wohlbefinden-Meldung bestimmt weder Zeitpunkt noch Score."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    monkeypatch.setattr(sensor_module.dt_util, "as_local", lambda value: value)
+    store = _real_store()
+    asyncio.run(store.set_wellbeing("e1", "good", "2026-10-15T08:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "bad", "2026-10-15T09:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "great", "2026-10-15T10:00:00"))
+    asyncio.run(store.void_wellbeing("e1", _item_id(store, "wellbeing_entries")))
+
+    since = sensor_module.WellbeingSinceSensor(MagicMock(), _entry(), store)
+    score = sensor_module.WellbeingScoreSensor(MagicMock(), _entry(), store)
+
+    assert since.native_value == datetime.fromisoformat("2026-10-15T09:00:00")
+    assert score.native_value == logic_module.wellbeing_score("bad")
+    assert score.extra_state_attributes["reported_at"] == "2026-10-15T09:00:00"
+
+
+def test_m2a_all_wellbeing_voided_yields_unknown_states(monkeypatch):
+    """[M2a] Alle Meldungen voided → Since/Score `unknown` (kein Alt-Wert)."""
+    sensor_module.dt_util.now = MagicMock(return_value=datetime(2026, 10, 15, 12, 0))
+    monkeypatch.setattr(sensor_module.dt_util, "as_local", lambda value: value)
+    store = _real_store()
+    asyncio.run(store.set_wellbeing("e1", "good", "2026-10-15T08:00:00"))
+    asyncio.run(store.void_wellbeing("e1", _item_id(store, "wellbeing_entries")))
+
+    since = sensor_module.WellbeingSinceSensor(MagicMock(), _entry(), store)
+    score = sensor_module.WellbeingScoreSensor(MagicMock(), _entry(), store)
+
+    assert since.native_value is None
+    assert score.native_value is None
+    assert score.extra_state_attributes["reported_at"] is None

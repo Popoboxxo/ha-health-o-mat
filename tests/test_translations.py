@@ -11,6 +11,7 @@ Reiner JSON-Datei-Test: kein Home-Assistant-Import nötig.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -113,4 +114,215 @@ def test_set_wellbeing_service_documented_in_all_translations() -> None:
         block = data["services"]["set_wellbeing"]
         assert block["name"], f"{path}: name fehlt"
         assert block["description"], f"{path}: description fehlt"
-        assert set(block["fields"]) == {"person", "status", "score"}, f"{path}: Felder weichen ab"
+        assert set(block["fields"]) == {"person", "status", "score", "ts"}, (
+            f"{path}: Felder weichen ab"
+        )
+
+
+def test_req_hom_120_ts_field_documented_for_all_write_services() -> None:
+    """[REQ-HOM-120] `ts` ist in Master + beiden Sprachen vollständig beschrieben."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service in ("add_drink", "add_blood_pressure", "set_wellbeing"):
+            field = data["services"][service]["fields"]["ts"]
+            assert field["name"], f"{path}: {service}.ts.name fehlt"
+            assert field["description"], f"{path}: {service}.ts.description fehlt"
+
+
+def test_m2b_void_and_restore_services_documented_in_all_translations() -> None:
+    """[M2b] `void_entry`/`restore_entry` sind in Master + beiden Sprachen vollständig."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service in ("void_entry", "restore_entry"):
+            block = data["services"][service]
+            assert block["name"], f"{path}: {service}.name fehlt"
+            assert block["description"], f"{path}: {service}.description fehlt"
+            assert set(block["fields"]) == {"person", "kind", "id"}, (
+                f"{path}: {service}-Felder weichen ab"
+            )
+        assert set(data["services"]["remove_last_entry"]["fields"]) == {"person", "kind"}
+
+
+def test_m2c_restore_backup_service_documented_in_all_translations() -> None:
+    """[M2c] `restore_backup` ist in Master + beiden Sprachen vollständig."""
+    expected_fields = {
+        "filename",
+        "mode",
+        "persons",
+        "datasets",
+        "from",
+        "to",
+        "person_map",
+        "dry_run",
+        "confirm",
+        "restore_audit",
+    }
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        block = data["services"]["restore_backup"]
+        assert block["name"], f"{path}: restore_backup.name fehlt"
+        assert block["description"], f"{path}: restore_backup.description fehlt"
+        assert set(block["fields"]) == expected_fields, f"{path}: Felder weichen ab"
+        for field in expected_fields:
+            assert block["fields"][field]["name"], f"{path}: {field}.name fehlt"
+            assert block["fields"][field]["description"], f"{path}: {field}.description fehlt"
+
+
+# --- REQ-HOM-117: HA-native UI translations (common) -----------------------
+
+_UI_JS_FILES = (
+    "health-o-mat-panel-base.js",
+    "health-o-mat-panel-views.js",
+    "health-o-mat-panel-admin.js",
+    "health-o-mat-panel.js",
+    "health-o-mat-card.js",
+)
+_UI_KEY_LITERAL_RE = re.compile(r"""["'`](ui_[a-z0-9_]+)["'`]""")
+
+
+def _common(path: Path) -> dict[str, str]:
+    common = _load(path).get("common")
+    assert isinstance(common, dict), f"{path}: Sektion 'common' fehlt"
+    return common
+
+
+def test_req_hom_117_common_keys_parity_and_non_empty() -> None:
+    """[REQ-HOM-117] de/en haben exakt die Master-Keys, alle Werte nicht leer."""
+    master = _common(_MASTER)
+    assert master, "strings.json: common ist leer"
+
+    for lang, path in sorted(_TRANSLATIONS.items()):
+        other = _common(path)
+        assert set(other) == set(master), (
+            f"translations/{lang}.json: common-Keys weichen ab "
+            f"(fehlt: {sorted(set(master) - set(other))[:5]}, "
+            f"überzählig: {sorted(set(other) - set(master))[:5]})"
+        )
+        empty = sorted(key for key, value in other.items() if not str(value).strip())
+        assert not empty, f"translations/{lang}.json: leere common-Werte: {empty[:5]}"
+
+
+def test_req_hom_117_placeholders_match_between_languages() -> None:
+    """[REQ-HOM-117] Beide Sprachen nutzen dieselben `{platzhalter}`."""
+    placeholder_re = re.compile(r"\{([A-Za-z0-9_]+)\}")
+    de = _common(_TRANSLATIONS["de"])
+    en = _common(_TRANSLATIONS["en"])
+    for key, en_text in en.items():
+        assert set(placeholder_re.findall(en_text)) == set(placeholder_re.findall(de[key])), (
+            f"{key}: Platzhalter weichen zwischen de und en ab"
+        )
+
+
+def test_req_hom_117_every_js_key_exists_in_both_languages() -> None:
+    """[REQ-HOM-117] Jeder in www/*.js referenzierte Key existiert in de UND en."""
+    component = Path(__file__).resolve().parent.parent / "custom_components" / "health_o_mat"
+    used: set[str] = set()
+    for name in _UI_JS_FILES:
+        text = (component / "www" / name).read_text(encoding="utf-8")
+        for match in _UI_KEY_LITERAL_RE.finditer(text):
+            key = match.group(1)
+            # Dynamic prefixes like `ui_common_wb_${key}` are not literals.
+            if key.endswith("_"):
+                continue
+            used.add(key)
+
+    assert used, "keine ui_-Keys in den JS-Modulen gefunden"
+    de = _common(_TRANSLATIONS["de"])
+    en = _common(_TRANSLATIONS["en"])
+    missing_de = sorted(used - set(de))
+    missing_en = sorted(used - set(en))
+    assert not missing_de, f"fehlende de-Keys: {missing_de}"
+    assert not missing_en, f"fehlende en-Keys: {missing_en}"
+
+
+# --- M3d: Erinnerungen/Wochenbericht (REQ-HOM-118) -------------------------
+
+_NOTIFICATION_FIELDS = {
+    "reminders_enabled",
+    "reminder_time",
+    "reminder_days",
+    "reminder_notify_service",
+    "reminder_quiet_start",
+    "reminder_quiet_end",
+    "reminder_drink_goal",
+    "reminder_no_drink_hours",
+    "reminder_bp_days",
+    "reminder_wellbeing_days",
+    "weekly_report_enabled",
+    "weekly_report_day",
+    "weekly_report_time",
+    "weekly_report_notify_service",
+}
+
+
+def test_m3d_weekly_report_service_documented_in_all_translations() -> None:
+    """[REQ-HOM-118] `weekly_report` ist in Master + beiden Sprachen vollständig."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        block = _load(path)["services"]["weekly_report"]
+        assert block["name"], f"{path}: weekly_report.name fehlt"
+        assert block["description"], f"{path}: weekly_report.description fehlt"
+        assert set(block["fields"]) == {"person"}, f"{path}: Felder weichen ab"
+        assert block["fields"]["person"]["name"]
+        assert block["fields"]["person"]["description"]
+
+
+def test_m3d_notifications_options_step_documented_in_all_translations() -> None:
+    """[REQ-HOM-118] Der Notifications-Schritt ist in allen drei Dateien gleich."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        step = _load(path)["options"]["step"]["notifications"]
+        assert step["title"]
+        assert step["description"]
+        assert set(step["data"]) == _NOTIFICATION_FIELDS | {"skip"}, f"{path}: data-Keys weichen ab"
+        assert set(step["data_description"]) == _NOTIFICATION_FIELDS, (
+            f"{path}: data_description-Keys weichen ab"
+        )
+        empty = [key for key, value in step["data"].items() if not str(value).strip()]
+        assert not empty, f"{path}: leere Labels: {empty}"
+
+
+# --- M3e: Options-Menü (REQ-HOM-119) ---------------------------------------
+
+_OPTIONS_MENU_STEPS = (
+    "basics",
+    "drinks",
+    "wellbeing",
+    "notifications",
+    "defaults",
+    "summary",
+)
+_OPTIONS_SECTIONS_WITH_SKIP = ("basics", "drinks", "wellbeing", "notifications")
+
+
+def test_m3e_options_menu_steps_documented_in_all_translations() -> None:
+    """[REQ-HOM-119] Menü-Labels und Schritt-Titel sind in allen Dateien vorhanden."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        steps = _load(path)["options"]["step"]
+        missing = [step for step in _OPTIONS_MENU_STEPS if not steps.get(step, {}).get("title")]
+        assert not missing, f"{path}: Titel fehlen für {missing}"
+        menu_labels = steps["init"].get("menu_options", {})
+        assert set(menu_labels) == set(_OPTIONS_MENU_STEPS), f"{path}: menu_options weichen ab"
+        empty = [step for step, label in menu_labels.items() if not str(label).strip()]
+        assert not empty, f"{path}: leere Menü-Labels: {empty}"
+
+
+def test_m3e_skip_documented_for_optional_sections() -> None:
+    """[REQ-HOM-119] Alle optionalen Abschnitte dokumentieren den `skip`-Schalter."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        steps = _load(path)["options"]["step"]
+        for step_id in _OPTIONS_SECTIONS_WITH_SKIP:
+            label = steps[step_id]["data"].get("skip")
+            assert label and str(label).strip(), f"{path}: {step_id}.skip fehlt"
+
+
+def test_m3e_summary_documents_changes_placeholder() -> None:
+    """[REQ-HOM-119] Die Zusammenfassung zeigt `{changes}` in allen drei Dateien."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        description = _load(path)["options"]["step"]["summary"]["description"]
+        assert "{changes}" in description, f"{path}: summary.description ohne {{changes}}"
+
+
+def test_m3e_defaults_step_has_description_in_all_translations() -> None:
+    """[REQ-HOM-119] „Defaults übernehmen" ist in allen drei Dateien beschrieben."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        description = _load(path)["options"]["step"]["defaults"]["description"]
+        assert description and str(description).strip(), f"{path}: defaults.description fehlt"

@@ -385,14 +385,74 @@ def test_async_import_csv_missing_file_raises(tmp_path):
 
 def test_build_backup_document_shape():
     """[REQ-HOM-007] Backup-Dokument ist versioniert und enthält alle Einträge."""
-    raw = {"schema": 3, "entries": {"e1": {"person": "Max", "drinks": [{"ml": 250}]}}}
+    raw = {"schema": 4, "entries": {"e1": {"person": "Max", "drinks": [{"ml": 250}]}}}
 
     document = backup.build_backup_document(raw, datetime(2026, 10, 14, 12, 0, 0))
 
     assert document["format"] == backup.BACKUP_FORMAT
-    assert document["version"] == backup.BACKUP_VERSION
+    assert document["version"] == backup.BACKUP_VERSION == 2
+    assert document["schema"] == 4
     assert document["created"] == "2026-10-14T12:00:00"
+    assert document["persons"] == {"e1": "Max"}
+    assert document["counts"] == {
+        "e1": {
+            "drinks": {"total": 1, "active": 1, "voided": 0},
+            "readings": {"total": 0, "active": 0, "voided": 0},
+            "wellbeing": {"total": 0, "active": 0, "voided": 0},
+        }
+    }
     assert document["entries"] == raw["entries"]
+
+
+def test_build_backup_document_counts_voided_separately():
+    """[REQ-HOM-007] counts weist gelöschte (voided) Einträge separat aus."""
+    raw = {
+        "schema": 4,
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "drinks": [{"ml": 250}, {"ml": 500, "voided_at": "2026-10-14T10:00:00"}],
+                "readings": [
+                    {"sys": 120, "dia": 80},
+                    {"sys": 130, "dia": 85, "voided_at": "2026-10-14T11:00:00"},
+                ],
+                "wellbeing_entries": [
+                    {"key": "good"},
+                    {"key": "bad", "voided_at": "2026-10-14T12:00:00"},
+                ],
+            }
+        },
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14))
+
+    assert document["counts"]["e1"] == {
+        "drinks": {"total": 2, "active": 1, "voided": 1},
+        "readings": {"total": 2, "active": 1, "voided": 1},
+        "wellbeing": {"total": 2, "active": 1, "voided": 1},
+    }
+
+
+def test_build_backup_document_legacy_wellbeing_counts():
+    """[REQ-HOM-007] Vor-v4-Bestände: Wellbeing aus Legacy-Spiegel gezählt."""
+    raw = {
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "wellbeing": {"status": "good", "ts": "2026-10-14T10:00:00"},
+                "wellbeing_history": [{"ts": "2026-10-13T10:00:00", "status": "bad"}],
+            }
+        }
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14))
+
+    assert document["schema"] is None
+    assert document["counts"]["e1"]["wellbeing"] == {
+        "total": 2,
+        "active": 2,
+        "voided": 0,
+    }
 
 
 def test_build_backup_document_is_deep_copy():
@@ -431,9 +491,17 @@ def test_async_backup_writes_all_persons(tmp_path, monkeypatch):
 
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     assert document["format"] == backup.BACKUP_FORMAT
+    assert document["version"] == 2
+    assert document["schema"] == 4
     assert set(document["entries"]) == {"e1", "e2"}
+    assert document["persons"] == {"e1": "Max", "e2": "Caro"}
+    assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 1, "voided": 0}
     assert document["entries"]["e1"]["drinks"][0]["ml"] == 250
     assert document["entries"]["e2"]["readings"][0]["sys"] == 120
+    # v4-Felder sind im Backup vollständig enthalten
+    assert document["entries"]["e1"]["drinks"][0]["voided_at"] is None
+    assert document["entries"]["e1"]["audit_log"]
+    assert "wellbeing_entries" in document["entries"]["e1"]
     hass.services.async_call.assert_called_once()
     assert hass.services.async_call.call_args[0][0] == "persistent_notification"
 
@@ -499,3 +567,368 @@ def test_import_csv_service_writes_via_runtime_data(tmp_path):
     _run(func(_call({"filename": "drinks.csv", "dataset": "all", "person": "Max"})))
 
     assert len(store.entry("e1")["drinks"]) == 2
+
+
+# ============================================================================
+# M2a: voided Einträge in Export/Import/Backup
+# ============================================================================
+
+
+def test_export_csv_excludes_voided_entries(tmp_path):
+    """[M2a] CSV-Export enthält nur aktive Drinks/Readings (voided fehlt)."""
+    _load_init()  # lädt u. a. das exporter-Modul
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _run(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    _run(store.add_reading("e1", "2026-10-14T09:00:00", 120, 80, 60, "aktiv"))
+    _run(store.add_reading("e1", "2026-10-14T10:00:00", 200, 120, 99, "voided-notiz"))
+    _run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    exporter.dt_util = types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "all"})))
+
+    drinks_csv = next(tmp_path.glob("health_o_mat_drinks_*.csv")).read_text(encoding="utf-8-sig")
+    bp_csv = next(tmp_path.glob("health_o_mat_bloodpressure_*.csv")).read_text(encoding="utf-8-sig")
+
+    assert "Wasser" in drinks_csv
+    assert "Kaffee" not in drinks_csv
+    assert "250" in drinks_csv
+    assert "500" not in drinks_csv
+
+    assert "120;80;60" in bp_csv
+    assert "voided-notiz" not in bp_csv
+    assert ";200;" not in bp_csv
+
+
+def test_export_csv_excludes_voided_entries_from_archive(tmp_path):
+    """[M2a] Auch Archiv-Einträge werden nur aktiv exportiert (defensiv)."""
+    _load_init()
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    archive = _fresh_store()
+    _run(
+        archive.append_archive(
+            "e1",
+            [
+                {"ts": "2025-12-31T10:00:00", "ml": 300, "type": "Saft", "src": "button"},
+                {
+                    "ts": "2025-12-30T10:00:00",
+                    "ml": 700,
+                    "type": "Kaffee",
+                    "src": "button",
+                    "voided_at": "2026-01-01T00:00:00",
+                },
+            ],
+            [],
+        )
+    )
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    exporter.dt_util = types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+
+    _run(
+        exporter.async_export_csv(hass, store, _call({"dataset": "drinks"}), archive_store=archive)
+    )
+
+    content = next(tmp_path.glob("health_o_mat_drinks_*.csv")).read_text(encoding="utf-8-sig")
+    assert "Wasser" in content
+    assert "Saft" in content
+    assert "Kaffee" not in content
+    assert "700" not in content
+
+
+def test_async_import_csv_skips_voided_duplicates(tmp_path):
+    """[M2a] Re-Import lässt einen bewusst gelöschten Eintrag nicht auferstehen."""
+    folder = _import_dir(tmp_path)
+    (folder / "drinks.csv").write_text(_drinks_csv(), encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+    call = _call({"filename": "drinks.csv", "dataset": "drinks"})
+
+    _run(importer.async_import_csv(hass, store, "e1", call))
+    for drink in list(store.entry("e1")["drinks"]):
+        _run(store.void_drink("e1", drink["id"]))
+
+    second = _run(importer.async_import_csv(hass, store, "e1", call))
+
+    assert second["imported"] == 0
+    assert second["skipped"] == 2
+    assert len(store.entry("e1")["drinks"]) == 2
+    assert all(drink["voided_at"] for drink in store.entry("e1")["drinks"])
+
+
+def test_backup_contains_voided_entries_and_audit(tmp_path, monkeypatch):
+    """[M2a] Backup bleibt roh: voided Einträge + Audit-Log sind enthalten."""
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Kaffee", "button"))
+    _run(store.void_drink("e1", store.entry("e1")["drinks"][0]["id"]))
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    entry = document["entries"]["e1"]
+    assert len(entry["drinks"]) == 1
+    assert entry["drinks"][0]["voided_at"] is not None
+    assert [event["action"] for event in entry["audit_log"]] == [
+        "drink_added",
+        "entry_voided",
+    ]
+    assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 0, "voided": 1}
+
+
+# ============================================================================
+# Backup v2 — Archiv-Store (M2c)
+# ============================================================================
+
+
+def test_build_backup_document_includes_archive_additively():
+    """[M2c] v2-Backup nimmt den Archiv-Store additiv mit auf."""
+    raw = {"schema": 4, "entries": {"e1": {"person": "Max", "drinks": []}}}
+    archive = {
+        "schema": 4,
+        "entries": {
+            "e1": {
+                "drinks": [{"ml": 500, "voided_at": None}],
+                "readings": [{"sys": 120, "dia": 80, "voided_at": None}],
+            }
+        },
+    }
+
+    document = backup.build_backup_document(raw, datetime(2026, 10, 14), archive)
+
+    assert document["archive_schema"] == 4
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+    assert document["archive_entries"]["e1"]["readings"][0]["sys"] == 120
+    assert document["archive_counts"]["e1"]["drinks"] == {
+        "total": 1,
+        "active": 1,
+        "voided": 0,
+    }
+    # Hauptbestand bleibt unverändert enthalten (keine Regression).
+    assert document["entries"]["e1"]["person"] == "Max"
+
+
+def test_build_backup_document_without_archive_is_empty():
+    """[M2c] Ohne Archiv bleiben die Archivfelder leer (abwärtskompatibel)."""
+    document = backup.build_backup_document({"schema": 4, "entries": {}}, datetime(2026, 10, 14))
+
+    assert document["archive_entries"] == {}
+    assert document["archive_schema"] is None
+    assert document["archive_counts"] == {}
+
+
+def test_async_backup_includes_archive_store(tmp_path, monkeypatch):
+    """[M2c] async_backup schreibt Archiv-Einträge in dasselbe Dokument."""
+    store = _fresh_store()
+    archive = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Kaffee", "button"))
+    _run(archive.append_archive("e1", [{"ml": 500, "ts": "2025-01-01T08:00:00"}], []))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store, archive))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document["archive_schema"] == 4
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_backup_service_passes_archive_store():
+    """[M2c] Der Backup-Service übergibt den vorhandenen Archiv-Store."""
+    init = _load_init()
+    store = _fresh_store()
+    archive = _fresh_store()
+    hass = _import_hass(Path("/tmp"))
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    hass.data[_DOMAIN]["shared"]["archive_store"] = archive
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    _schema, func = hass.services.registered["backup"]
+    calls = []
+
+    async def _fake_backup(hass_, store_, archive_=None):
+        calls.append((store_, archive_))
+        return "/tmp/x.json"
+
+    original = backup.async_backup
+    lazy_backup = importlib.import_module(f"{_PKG}.init.backup")
+    lazy_backup.async_backup = _fake_backup
+    try:
+        call = _call({})
+        call.context.user_id = None  # Automation/Skript → Admin-Gate lässt durch
+        _run(func(call))
+    finally:
+        lazy_backup.async_backup = original
+
+    assert calls == [(store, archive)]
+
+
+def _on_demand_archive(tmp_path, monkeypatch, init, archive):
+    """Shared ohne archive_store; Archiv-Datei existiert → Laden on demand."""
+    store_mod = importlib.import_module(f"{_PKG}.init.store")
+    monkeypatch.setattr(store_mod, "HealthOMatStore", lambda hass_, storage_key=None: archive)
+    storage_dir = tmp_path / ".storage"
+    storage_dir.mkdir(exist_ok=True)
+    (storage_dir / const_module.ARCHIVE_STORE_KEY).write_text("{}", encoding="utf-8")
+    hass = _import_hass(tmp_path)
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    return hass
+
+
+def test_backup_service_loads_archive_on_demand(tmp_path, monkeypatch):
+    """[B-2] Fehlender Shared-Store wird bei vorhandener Archiv-Datei nachgeladen."""
+    init = _load_init()
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    archive = _fresh_store()
+    _run(archive.append_archive("e1", [{"ml": 500, "ts": "2025-01-01T08:00:00"}], []))
+    # On-demand-Laden darf den vorhandenen Archiv-Inhalt nicht verlieren.
+    archive._store.async_load = AsyncMock(return_value=archive.raw_data())
+    hass = _on_demand_archive(tmp_path, monkeypatch, init, archive)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    backup_mod = importlib.import_module(f"{_PKG}.init.backup")
+    monkeypatch.setattr(
+        backup_mod,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0)),
+    )
+    _schema, func = hass.services.registered["backup"]
+
+    call = _call({})
+    call.context.user_id = None
+    _run(func(call))
+
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    path = next((tmp_path / "health_o_mat_export").glob("health_o_mat_backup_*.json"))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_export_csv_service_loads_archive_on_demand(tmp_path, monkeypatch):
+    """[B-2] CSV-Export enthält das on-demand geladene Archiv."""
+    init = _load_init()
+    exporter = importlib.import_module(f"{_PKG}.init.exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    archive = _fresh_store()
+    _run(
+        archive.append_archive(
+            "e1", [{"ts": "2025-01-01T08:00:00", "ml": 500, "type": "Saft", "src": "button"}], []
+        )
+    )
+    # On-demand-Laden darf den vorhandenen Archiv-Inhalt nicht verlieren.
+    archive._store.async_load = AsyncMock(return_value=archive.raw_data())
+    hass = _on_demand_archive(tmp_path, monkeypatch, init, archive)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    monkeypatch.setattr(
+        exporter, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    _schema, func = hass.services.registered["export_csv"]
+
+    call = _call({"dataset": "drinks"})
+    call.context.user_id = None
+    _run(func(call))
+
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    content = next((tmp_path / "health_o_mat_export").glob("health_o_mat_drinks_*.csv")).read_text(
+        encoding="utf-8-sig"
+    )
+    assert "Wasser" in content
+    assert "Saft" in content
+
+
+# ============================================================================
+# Review-Fix S-11: Backup-/Pre-Restore-Dateien im Restore-Pfad
+# ============================================================================
+
+
+def test_list_import_files_includes_export_dir_json_only(tmp_path):
+    """[S-11] Export-Ordner (Backups/Pre-Restore) ist in der Restore-Liste sichtbar."""
+    import_dir = tmp_path / importer.IMPORT_DIR_NAME
+    export_dir = tmp_path / "health_o_mat_export"
+    import_dir.mkdir()
+    export_dir.mkdir()
+    (import_dir / "manual.json").write_text("{}", encoding="utf-8")
+    (export_dir / "health_o_mat_backup_1.json").write_text("{}", encoding="utf-8")
+    (export_dir / "health_o_mat_pre_restore_1.json").write_text("{}", encoding="utf-8")
+    (export_dir / "drinks_export.csv").write_text("a;b", encoding="utf-8")
+    (export_dir / ".hidden.json").write_text("{}", encoding="utf-8")
+
+    files = importer.list_import_files(str(tmp_path))
+
+    assert files == [
+        "health_o_mat_backup_1.json",
+        "health_o_mat_pre_restore_1.json",
+        "manual.json",
+    ]
+
+
+def test_safe_restore_path_accepts_import_and_export(tmp_path):
+    """[S-11] Whitelist erlaubt nur JSON in Import-/Export-Ordner."""
+    (tmp_path / importer.IMPORT_DIR_NAME).mkdir()
+    export_dir = tmp_path / "health_o_mat_export"
+    export_dir.mkdir()
+    created = export_dir / "backup.json"
+    created.write_text("{}", encoding="utf-8")
+
+    path = importer.safe_restore_path(str(tmp_path), "backup.json")
+
+    assert os.path.realpath(path) == os.path.realpath(created)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["/etc/passwd", "../secret.json", "unterordner/backup.json", "backup.csv", "   "],
+)
+def test_safe_restore_path_rejects_invalid_names(tmp_path, filename):
+    """[S-11] Absolute Pfade, Traversal, Unterordner und Nicht-JSON sind tabu."""
+    with pytest.raises(ValueError):
+        importer.safe_restore_path(str(tmp_path), filename)
+
+
+def test_safe_restore_path_rejects_symlink(tmp_path):
+    """[S-11] Symlinks werden auch im Export-Ordner abgelehnt."""
+    export_dir = tmp_path / "health_o_mat_export"
+    export_dir.mkdir()
+    outside = tmp_path / "aussen.json"
+    outside.write_text("{}", encoding="utf-8")
+    link = export_dir / "link.json"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlinks auf diesem System nicht verfügbar")
+
+    with pytest.raises(ValueError):
+        importer.safe_restore_path(str(tmp_path), "link.json")

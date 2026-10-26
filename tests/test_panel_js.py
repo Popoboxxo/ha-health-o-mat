@@ -292,7 +292,7 @@ def test_req_hom_112_panel_base_chart_summary_uses_current_series_point():
     assert re.search(r"const\s+last\s*=\s*list\[\s*list\.length\s*-\s*1\s*\]", text), (
         "die Zusammenfassung nutzt nicht den letzten Serienpunkt"
     )
-    assert re.search(r"aktuell \$\{[^}]*score[^}]*\}", text), (
+    assert re.search(r"aktuell (?:\$\{[^}]*score[^}]*\}|\{score\})", text), (
         "die Zusammenfassung nennt keinen aktuellen Score"
     )
     # Die Chart-Card holt ihre Punkte aus der Series (inkl. aktuellem Punkt).
@@ -766,6 +766,16 @@ const panel = {
   _actionError: "",
   _busy: false,
   _wbPending: spec.pending || null,
+  _history: spec.history || {},
+  _historyFilter: spec.historyFilter || {},
+  _historyConfirm: spec.historyConfirm || null,
+  _historyStatus: spec.historyStatus || null,
+  _historyBusy: false,
+  _canUndo: (entryId, kind) => {
+    const flags = spec.canUndo || {};
+    return Object.prototype.hasOwnProperty.call(flags, kind) ? flags[kind] : true;
+  },
+  _isWarning: () => false,
   _liveValue: (data, key, fallback) => (key === "wellbeing" ? spec.live_wellbeing : fallback),
   _liveNumber: (data, key, fallback) => (key === "wellbeing_score" ? spec.live_score : fallback),
 };
@@ -818,6 +828,9 @@ def _prepare_views_copy(tmp_path) -> Path:
     (tmp_path / "health-o-mat-panel-views.js").write_text(patched, encoding="utf-8")
     (tmp_path / "health-o-mat-panel-base.js").write_bytes(
         (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    (tmp_path / "health-o-mat-i18n.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-i18n.js").read_bytes()
     )
     # Ohne package.json stuft Node `.js` als CommonJS ein — die Kopien sollen
     # ES-Module bleiben (wie im Browser).
@@ -1402,117 +1415,158 @@ def test_req_hom_112_card_falls_back_to_snapshot_label_and_emoji(tmp_path):
 # --- Wohlbefinden-Verlauf unter dem Chart (Plan §6 / Decision E6) -----------
 
 
-def _wellbeing_history_css(text: str) -> str:
-    """CSS-Regeln der Verlaufsliste (`.wb-history` / `.wb-hist…`)."""
-    return "\n".join(re.findall(r"\.wb-hi(?:story|st)[^{]*\{[^}]*\}", text))
+def test_panel_wellbeing_history_uses_the_history_api_only():
+    """[REQ-HOM-115] WB-Verlauf kommt aus `historySection` — keine Dopplung.
 
-
-def test_panel_wellbeing_history_lists_time_emoji_label_and_score():
-    """[REQ-HOM-112] Die Verlaufsliste unter dem Chart zeigt alle vier Felder.
-
-    Die Liste bleibt reine Anzeige: kein rohes JSON, alle Texte escaped.
+    Die bisherige Liste aus `wellbeing.history` ist ersetzt: der Tab rendert
+    die API-Liste (eine Quelle), `wellbeing.history` speist nur den Chart.
     """
     views = _panel_views_source()
     body = _js_function_block(views, "wellbeingTab")
 
-    # Letzte 20 Eintraege aus `wellbeing.history`, als Liste unter dem Chart.
-    assert "slice(-20)" in body
-    # Neueste Meldung oben; der Chart bleibt unveraendert chronologisch.
-    assert re.search(r"slice\(-20\)\s*\.reverse\(\)", body), (
-        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
+    assert 'historySection(panel, entryId, "wellbeing")' in body, (
+        "der Wohlbefinden-Tab rendert die History-API-Liste nicht"
     )
-    assert 'class="wb-history"' in body
-    assert 'class="wb-hist-label"' in body
-    assert 'class="wb-hist-score"' in body
-    # Zeitpunkt (relativ), Emoji, Label und Score pro Eintrag …
-    assert "relativeTime(entry.ts)" in body
-    assert "wellbeingScore(entry)" in body
-    assert "scoreMax" in body and "WELLBEING_SCORE_MAX" in body
-    assert "entry.emoji" in body and "entry.label" in body
-    # … alle Texte escaped, kein JSON-Dump.
-    for value in ("entryLabel", "entryAt"):
-        assert f"escapeHtml({value}" in body, f"{value} wird nicht escaped"
-    assert "wellbeingVisual(entryVisual)" in body, (
-        "Emoji/Bild wird nicht ueber wellbeingVisual gerendert"
+    assert 'class="wb-history"' not in views, (
+        "die alte WB-Verlaufsliste wird weiterhin gerendert (Dopplung)"
     )
-    assert "JSON.stringify" not in body, "die Historie wird als rohes JSON gerendert"
+    assert "histHtml" not in body, "die alte Verlaufsliste ist nicht entfernt"
 
-    # Reihenfolge: Chart zuerst, Liste darunter.
-    assert "${chartHtml}${histHtml}" in views, "die Verlaufsliste steht nicht unter dem Score-Chart"
+    history = _js_function_block(views, "historySection")
+    assert "slice(0, HISTORY_LIMIT)" in history, "die Liste ist nicht auf 50 gedeckelt"
+    assert 'data-action="history-filter"' in history
+    assert "aria-pressed" in history
+    assert 'class="history-list"' in history
+    assert 'class="history-item' in views, "die Verlaufszeile fehlt"
+    assert 'data-action="history-void"' in views
+    assert 'data-action="history-restore"' in views
+    assert "Wirklich löschen?" in views
+    assert "gelöscht" in views
+    # Kein rohes JSON in der Liste.
+    assert "JSON.stringify" not in history
 
 
-def test_panel_wellbeing_history_css_is_mobile_readable():
-    """Die Verlaufsliste hat eigenes CSS (Zeile, Label, Zeit, Score)."""
-    css = _wellbeing_history_css(_panel_base_source())
+def test_panel_history_css_is_mobile_readable():
+    """[REQ-HOM-115] Verlauf: Liste, Zeit/Text/Status und <400 px ohne Überlauf."""
+    css = _panel_base_source()
 
-    assert css, "CSS fuer die Verlaufsliste fehlt im Basis-Modul"
-    for selector in (".wb-hist-label", ".wb-hist-time", ".wb-hist-score"):
-        assert selector in css, f"{selector} fehlt im CSS der Verlaufsliste"
+    for selector in (
+        ".history-list",
+        ".history-item",
+        ".history-time",
+        ".history-text",
+        ".history-actions",
+        ".history-confirm",
+        "@media (max-width: 400px)",
+    ):
+        assert selector in css, f"{selector} fehlt im CSS des Verlaufs"
+    assert "text-decoration: line-through" in css, "gelöschte Einträge sind nicht markiert"
+    assert "overflow-wrap: anywhere" in css, "lange Texte können überlaufen"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
-def test_panel_wellbeing_history_renders_escaped_entries(tmp_path):
-    """[REQ-HOM-112] Gerenderte Verlaufsliste: Emoji, Label, Zeit und Score.
+def test_panel_history_renders_kinds_filter_and_inline_confirm(tmp_path):
+    """[REQ-HOM-115] Gerenderte API-Liste: drei Typen, Filter, Confirm, Escaping.
 
-    Enthaelt zusaetzlich einen HOSTILE Eintrag (`<img …>`/`<b>` in Label und
-    Emoji): er muss escaped im Output landen, nicht als Markup.
+    Feeds come exclusively from `_history` (the list_history shape), including
+    a hostile label and a voided entry.
     """
     views_copy = _prepare_views_copy(tmp_path)
-    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
-    data["wellbeing"]["history"].append(
-        {
-            "ts": "2026-10-19T09:30:00+02:00",
-            "key": "great",
-            "label": "<img src=x onerror=alert(1)>",
-            "emoji": "<b>",
-            "score": 5,
+    entry = "entry-1"
+    history = {
+        entry: {
+            "drinks": {
+                "entries": [
+                    {
+                        "id": "d1",
+                        "ts": "2026-10-19T09:30:00+02:00",
+                        "ml": 250,
+                        "type": "Kaffee",
+                        "src": "panel",
+                        "voided_at": None,
+                    },
+                ],
+                "includeVoided": False,
+            },
+            "blood_pressure": {
+                "entries": [
+                    {
+                        "id": "b1",
+                        "ts": "2026-10-19T08:00:00+02:00",
+                        "sys": 120,
+                        "dia": 80,
+                        "pulse": 62,
+                        "note": "morgens",
+                        "voided_at": None,
+                    },
+                ],
+                "includeVoided": False,
+            },
+            "wellbeing": {
+                "entries": [
+                    {
+                        "id": "w1",
+                        "ts": "2026-10-19T09:30:00+02:00",
+                        "key": "great",
+                        "label": "<img src=x onerror=alert(1)>",
+                        "voided_at": None,
+                    },
+                    {
+                        "id": "w0",
+                        "ts": "2026-10-19T08:00:00+02:00",
+                        "key": "bad",
+                        "voided_at": "2026-10-19T10:00:00+02:00",
+                    },
+                ],
+                "includeVoided": True,
+            },
         }
-    )
-    spec = {
-        "entry_id": "entry-1",
-        "display_name": "Alex",
-        "live_wellbeing": "unknown",
-        "live_score": 4,
-        "data": data,
     }
+    data = json.loads(json.dumps(_PANEL_STALE_SNAPSHOT))
+    data["wellbeing"]["history"] = []  # Chart darf die Liste NICHT speisen.
 
-    out = json.loads(
-        _run_node(
-            tmp_path,
-            _NODE_VIEWS_RUNNER,
-            [str(views_copy), json.dumps(spec)],
-            "runner_panel_history",
-        )
-    )
-    html = out["html"]
+    def render(tab, confirm=None):
+        spec = {
+            "entry_id": entry,
+            "display_name": "Alex",
+            "live_wellbeing": "unknown",
+            "live_score": 4,
+            "data": data,
+            "history": history,
+            "historyConfirm": confirm,
+            "canUndo": {"blood_pressure": True, "wellbeing": True},
+        }
+        # Der Runner waehlt den Tab ueber `panel._tab`; hier direkt setzen.
+        runner = _NODE_VIEWS_RUNNER.replace('_tab: "wellbeing"', f'_tab: "{tab}"')
+        path = tmp_path / f"runner_{tab}.mjs"
+        path.write_text(runner, encoding="utf-8")
+        return json.loads(
+            _run_node(tmp_path, path.read_text(), [str(views_copy), json.dumps(spec)], f"r_{tab}")
+        )["html"]
 
-    match = re.search(r'<ul class="wb-history">(.*?)</ul>', html, re.S)
-    assert match is not None, "die Verlaufsliste fehlt im gerenderten Tab"
-    history_html = match.group(1)
+    drinks = render("drink")
+    assert 'data-history="drinks"' in drinks
+    assert "250 ml" in drinks and "Kaffee" in drinks and "Panel" in drinks
+    assert 'data-action="history-void"' in drinks
+    assert 'aria-pressed="true"' in drinks
 
-    # Der Historieneintrag traegt Label, Emoji, relativen Zeitpunkt und Score.
-    assert "Sehr schlecht" in history_html
-    assert "\U0001f635" in history_html
-    assert "1 / 10" in history_html
-    assert re.search(r"vor \d+ |gerade eben", history_html), (
-        f"der Zeitpunkt der Verlaufsliste fehlt: {history_html}"
-    )
-    # Der aktuelle Live-Wert (4) gehoert NICHT in die Verlaufsliste.
-    assert "4 / 10" not in history_html
-    # Kein rohes JSON.
-    assert '{"' not in history_html
+    bp = render("bp")
+    assert "120/80" in bp and "62 bpm" in bp and "morgens" in bp
+    assert 'data-action="undo" data-kind="blood_pressure"' in bp
 
-    # Hostile Felder sind escaped — kein Markup aus Nutzerdaten.
-    assert "&lt;img src=x onerror=alert(1)&gt;" in history_html, (
-        f"das hostile Label ist nicht escaped: {history_html}"
-    )
-    assert "&lt;b&gt;" in history_html, f"das hostile Emoji ist nicht escaped: {history_html}"
-    assert "<img src=x" not in history_html
-    assert "<b>" not in history_html
-    # Neueste Meldung oben: der 09:30-Eintrag steht vor dem 08:00-Eintrag.
-    assert history_html.index("&lt;img src=x") < history_html.index("Sehr schlecht"), (
-        "die Verlaufsliste ist nicht neueste-zuerst sortiert"
-    )
+    wb = render("wellbeing")
+    assert 'data-history="wellbeing"' in wb
+    assert "9 / 10" in wb
+    assert "gelöscht" in wb, "gelöschter Eintrag ist nicht markiert"
+    assert 'data-action="history-restore"' in wb
+    assert "&lt;img src=x onerror=alert(1)&gt;" in wb, "hostiles Label ist nicht escaped"
+    assert "<img src=x" not in wb
+    assert 'class="wb-history"' not in wb, "die alte WB-Liste ist wieder da"
+
+    confirm = render("drink", {"entryId": entry, "kind": "drinks", "id": "d1"})
+    assert "Wirklich löschen?" in confirm
+    assert 'data-action="history-void-confirm"' in confirm
+    assert 'data-action="history-void-cancel"' in confirm
 
 
 def test_panel_undo_is_disabled_without_drinks():
@@ -1729,6 +1783,7 @@ def _prepare_panel_copy(tmp_path) -> Path:
         "health-o-mat-panel-views.js",
         "health-o-mat-panel-admin.js",
         "health-o-mat-panel.js",
+        "health-o-mat-i18n.js",
     ):
         source = (_WWW_DIR / name).read_text(encoding="utf-8")
         patched = re.sub(r'"(\./health-o-mat-panel[^"]*?\.js)\?v=[^"]+"', r'"\1"', source)
@@ -1758,15 +1813,20 @@ def test_req_hom_114_panel_defers_wellbeing_report_until_confirmation(tmp_path):
     assert out["staged"]["calls"] == [], (
         "der Klick loest trotz Bestätigungsmodus sofort `_setWellbeing` aus"
     )
-    assert out["staged"]["pending"] == {"entryId": "entry-1", "key": "great", "score": None}
+    assert out["staged"]["pending"] == {
+        "entryId": "entry-1",
+        "key": "great",
+        "score": None,
+        "ts": "",
+    }
 
     assert len(out["immediate"]["calls"]) == 1, (
         "ohne Bestätigungsmodus wird die Meldung nicht sofort gesendet"
     )
-    assert out["immediate"]["calls"][0] == ["entry-1", "great"]
+    assert out["immediate"]["calls"][0] == ["entry-1", "great", None, ""]
     assert out["immediate"]["pending"] is None
 
-    assert out["confirmed"]["calls"] == [["entry-1", "good", None]], (
+    assert out["confirmed"]["calls"] == [["entry-1", "good", None, ""]], (
         "der Bestätigungsbutton sendet die vorgemerkte Auswahl nicht"
     )
 
@@ -1778,6 +1838,7 @@ def test_req_hom_114_panel_defers_wellbeing_report_until_confirmation(tmp_path):
         "entryId": "entry-1",
         "key": "good",
         "score": None,
+        "ts": "",
     }, "ein unbeteiligter Reload verwirft die Vormerkung"
 
 
@@ -1905,6 +1966,7 @@ admin._settings = {
     sys_threshold: 140,
     dia_threshold: 90,
     retention_months: 12,
+    audit_limit: 1000,
     enable_sidebar_panel: false,
     wellbeing_confirm: false,
     areas: { drink: true, bp: true, wellbeing: true },
@@ -1918,6 +1980,7 @@ admin.shadowRoot._fields = {
   sys_threshold: { value: "140" },
   dia_threshold: { value: "90" },
   retention_months: { value: "12" },
+  audit_limit: { value: "1000" },
   drink_lexicon: { value: "wasser=Wasser,250" },
   enable_sidebar_panel: { checked: false },
   wellbeing_confirm: { checked: true },
@@ -1961,16 +2024,18 @@ def test_req_hom_114_panel_pending_survives_unrelated_writes(tmp_path):
         "entryId": "entry-1",
         "key": "k3",
         "score": None,
+        "ts": "",
     }, "eine Getraenkebuchung verwirft die vorgemerkte Auswahl"
     assert out["reload"]["pending"] == {
         "entryId": "entry-1",
         "key": "k3",
         "score": None,
+        "ts": "",
     }, "`_reloadEntry` verwirft die vorgemerkte Auswahl"
 
     # S4a: Zahleneingabe merkt vor, sendet nichts, Bestaetigung sendet den Score.
     staged = out["scoreStaged"]
-    assert staged["pending"] == {"entryId": "entry-1", "key": "", "score": 7}, (
+    assert staged["pending"] == {"entryId": "entry-1", "key": "", "score": 7, "ts": ""}, (
         "die Zahleneingabe wird nicht (mit Personenbezug) vorgemerkt"
     )
     assert staged["sent"] == 0, "die Zahleneingabe meldet trotz Bestaetigungsmodus sofort"
@@ -2017,3 +2082,953 @@ def test_req_hom_114_panel_admin_payload_carries_wellbeing_confirm(tmp_path):
     assert out["changes"] == {"wellbeing_confirm": True}, (
         f"das Change-Set traegt den Schalter nicht korrekt: {out['changes']!r}"
     )
+
+
+# --- M2b: Audit-Log-Limit im Admin-Formular ---------------------------------
+
+_NODE_AUDIT_LIMIT_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "settings";
+  panel._persons = [{ entry_id: "entry-1", display_name: "Alex" }];
+  panel._quickDraft = [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }];
+  panel._settings = {
+    "entry-1": {
+      daily_goal_ml: 2000,
+      daily_reset_hour: 0,
+      person_display: "Alex",
+      quick_drinks: [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi-cup" }],
+      drink_lexicon: "wasser=Wasser,250",
+      wellbeing_images: {},
+      sys_threshold: 140,
+      dia_threshold: 90,
+      retention_months: 0,
+      audit_limit: 1000,
+      enable_sidebar_panel: false,
+      wellbeing_confirm: false,
+      areas: { drink: true, bp: true, wellbeing: true },
+    },
+  };
+  panel._render = () => {};
+  panel._messages = [];
+  panel._ws = async () => ({});
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function fields(audit) {
+  return {
+    daily_goal_ml: { value: "2000" },
+    daily_reset_hour: { value: "0" },
+    person_display: { value: "Alex" },
+    sys_threshold: { value: "140" },
+    dia_threshold: { value: "90" },
+    retention_months: { value: "0" },
+    audit_limit: { value: audit },
+    drink_lexicon: { value: "wasser=Wasser,250" },
+    enable_sidebar_panel: { checked: false },
+    wellbeing_confirm: { checked: false },
+    "area-drink": { checked: true },
+    "area-bp": { checked: true },
+    "area-wellbeing": { checked: true },
+  };
+}
+
+function run(audit) {
+  const panel = makePanel();
+  panel.shadowRoot._fields = fields(audit);
+  const collected = panel._collectSettingsPayload();
+  return {
+    payload: collected.payload.audit_limit,
+    errors: collected.errors,
+    changes: panel._changedSettings("entry-1", collected.payload),
+  };
+}
+
+process.stdout.write(
+  JSON.stringify({
+    unchanged: run("1000"),
+    zero: run("0"),
+    negative: run("-1"),
+    text: run("abc"),
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_m2b_panel_audit_limit_payload_and_change_set(tmp_path):
+    """[M2b] `audit_limit` wird gelesen, validiert und nur bei Änderung gesendet."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_AUDIT_LIMIT_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_audit_limit",
+        )
+    )
+
+    unchanged = out["unchanged"]
+    assert unchanged["errors"] == [], f"Formular meldet Fehler: {unchanged['errors']}"
+    assert unchanged["payload"] == 1000
+    assert unchanged["changes"] == {}, "unveraendertes Limit wird faelschlich gesendet"
+
+    zero = out["zero"]
+    assert zero["errors"] == [], "0 (unbegrenzt) wird als ungueltig abgelehnt"
+    assert zero["payload"] == 0
+    assert zero["changes"] == {"audit_limit": 0}, f"Change-Set: {zero['changes']!r}"
+
+    for key in ("negative", "text"):
+        invalid = out[key]
+        assert invalid["errors"], f"{key} wird nicht abgelehnt"
+        assert any("Audit" in message for message in invalid["errors"]), invalid["errors"]
+
+
+def test_m2b_panel_audit_limit_field_is_wired_into_admin_form():
+    """[M2b] Das Admin-Feld sitzt in der Karte „Datenhaltung" (number, min 0)."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    assert "Audit-Log-Limit (0 = unbegrenzt)" in admin
+    assert 'data-field="audit_limit"' in admin
+    assert "SETTINGS_FALLBACKS.audit_limit" in admin
+
+    base = _panel_base_source()
+    assert "audit_limit: 1000" in base
+    assert "auditMin: 0" in base
+
+
+# --- REQ-HOM-120: Rückdatierung im Panel ------------------------------------
+
+_NODE_PANEL_TS_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel(confirm) {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._view = "detail";
+  panel._data = { "entry-1": { wellbeing_confirm: confirm } };
+  panel._busy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._ws = async (msg) => { panel._messages.push(msg); return {}; };
+  panel._reloadEntry = async () => {};
+  panel.shadowRoot._fields = {
+    "drink-ts": { value: "" },
+    "bp-ts": { value: "" },
+    "wb-ts": { value: "" },
+  };
+  return panel;
+}
+
+function messagesOf(panel) {
+  return panel._messages.map((msg) => ({
+    type: msg.type,
+    ts: msg.ts || "",
+    ml: msg.ml,
+  }));
+}
+
+/* Getränk: bewusster Zeitpunkt wird gesendet, danach Feld zurückgesetzt. */
+const drink = makePanel(false);
+drink.shadowRoot._fields["drink-ts"].value = "2026-10-24T18:30";
+await drink._book("entry-1", 250, "Wasser");
+const drinkAfter = {
+  messages: messagesOf(drink),
+  draft: drink._tsDraft["drink-ts"],
+  field: drink.shadowRoot._fields["drink-ts"].value,
+};
+
+/* Getränk: Zukunft wird clientseitig abgelehnt (keine stille Buchung). */
+const future = makePanel(false);
+future.shadowRoot._fields["drink-ts"].value = "2999-01-01T10:00";
+await future._book("entry-1", 250, "Wasser");
+const futureResult = { messages: messagesOf(future), error: future._actionError };
+
+/* Schnellwahl „Gestern" setzt Entwurf + Feld ohne Render. */
+const quick = makePanel(false);
+quick._onClick({
+  target: {
+    closest: () => ({
+      getAttribute: (name) => (name === "data-action" ? "drink-ts-yesterday" : ""),
+    }),
+  },
+});
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+const pad = (n) => String(n).padStart(2, "0");
+const expectedYesterday = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(
+  yesterday.getDate()
+)}T${pad(yesterday.getHours())}:${pad(yesterday.getMinutes())}`;
+const quickResult = {
+  draft: quick._tsDraft["drink-ts"],
+  field: quick.shadowRoot._fields["drink-ts"].value,
+  expected: expectedYesterday,
+};
+
+/* Blutdruck: ts wird mitgesendet. */
+const bp = makePanel(false);
+bp.shadowRoot._fields["bp-ts"].value = "2026-10-24T07:15";
+await bp._saveMeasurement("entry-1", 120, 80, null, "");
+const bpResult = { messages: messagesOf(bp), draft: bp._tsDraft["bp-ts"] };
+
+/* Wohlbefinden: Vormerkung trägt den Zeitpunkt, erst „Übernehmen" sendet ihn. */
+const wb = makePanel(true);
+wb.shadowRoot._fields["wb-ts"].value = "2026-10-23T20:00";
+wb._stageWellbeing("entry-1", "great", null);
+const wbStaged = { pending: wb._wbPending, sent: messagesOf(wb) };
+await wb._confirmWellbeing();
+const wbConfirmed = { pending: wb._wbPending, sent: messagesOf(wb) };
+
+/* Wohlbefinden: Zukunft wird im Formularpfad verständlich gemeldet. */
+const wbFuture = makePanel(false);
+wbFuture.shadowRoot._fields["wb-ts"].value = "2999-01-01T10:00";
+wbFuture.shadowRoot._fields["wb-score"] = { value: "7" };
+wbFuture._submitWellbeing();
+const wbFutureResult = { messages: messagesOf(wbFuture), error: wbFuture._formError };
+
+process.stdout.write(
+  JSON.stringify({
+    drink: drinkAfter,
+    future: futureResult,
+    quick: quickResult,
+    bp: bpResult,
+    wbStaged,
+    wbConfirmed,
+    wbFuture: wbFutureResult,
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_120_panel_sends_ts_and_validates_future(tmp_path):
+    """[REQ-HOM-120] Panel: ts in allen drei Schreibpfaden, Zukunft blockiert."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(tmp_path, _NODE_PANEL_TS_RUNNER, [str(panel_copy)], "runner_panel_ts")
+    )
+
+    drink = out["drink"]
+    assert len(drink["messages"]) == 1
+    assert drink["messages"][0]["type"] == "health_o_mat/book_drink"
+    assert drink["messages"][0]["ts"]
+    assert drink["draft"] == "", "das Zeitpunkt-Feld wird nach Erfolg nicht zurückgesetzt"
+    assert drink["field"] != "2026-10-24T18:30"
+
+    future = out["future"]
+    assert future["messages"] == [], "ein Zukunft-Zeitpunkt wird trotzdem gebucht"
+    assert "Zukunft" in future["error"]
+
+    quick = out["quick"]
+    assert quick["draft"] == quick["expected"]
+    assert quick["field"] == quick["expected"], "die Schnellwahl setzt das Feld nicht"
+
+    bp = out["bp"]
+    assert len(bp["messages"]) == 1 and bp["messages"][0]["ts"]
+    assert bp["messages"][0]["type"] == "health_o_mat/save_measurement"
+    assert bp["draft"] == ""
+
+    staged = out["wbStaged"]
+    assert staged["sent"] == [], "die Vormerkung sendet trotz Bestätigungsmodus sofort"
+    assert staged["pending"]["ts"], "die Vormerkung trägt keinen Zeitpunkt"
+
+    confirmed = out["wbConfirmed"]
+    assert len(confirmed["sent"]) == 1
+    assert confirmed["sent"][0]["type"] == "health_o_mat/set_wellbeing"
+    assert confirmed["sent"][0]["ts"], "die Bestätigung sendet den Zeitpunkt nicht"
+    assert confirmed["pending"] is None
+
+    wb_future = out["wbFuture"]
+    assert wb_future["messages"] == []
+    assert "Zukunft" in wb_future["error"]
+
+
+def test_req_hom_120_panel_views_render_ts_fields_and_quick_buttons():
+    """[REQ-HOM-120] Alle drei Tabs rendern `datetime-local` + Jetzt/Gestern."""
+    views = _panel_views_source()
+
+    for field in ("drink-ts", "bp-ts", "wb-ts"):
+        assert f'tsFieldHtml(panel, "{field}")' in views, f"{field}-Feld fehlt im Tab"
+    assert 'data-field="${field}"' in views
+    assert 'data-action="${prefix}-ts-now"' in views
+    assert 'data-action="${prefix}-ts-yesterday"' in views
+    assert "localDateTimeValue" in views, "kein Default 'jetzt' für die Felder"
+
+
+def test_req_hom_120_panel_entry_time_is_relative_then_absolute():
+    """[REQ-HOM-120] Anzeige: frisch relativ, älter als 24 h absolut."""
+    base = _panel_base_source()
+
+    assert re.search(r"export\s+function\s+entryTime\s*\(", base)
+    body = _js_function_block(base, "entryTime")
+    assert "relativeTime(iso)" in body
+    assert "24 * 60 * 60 * 1000" in body
+    assert re.search(r"pad\(date\.getDate\(\)\)", body)
+    assert "entryTime(" in _panel_views_source()
+
+
+# --- REQ-HOM-115: Panel-Verlauf + Korrekturen (Verhalten) -------------------
+
+_NODE_PANEL_HISTORY_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+const ENTRY = "entry-1";
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = ENTRY;
+  panel._view = "detail";
+  panel._tab = "drink";
+  panel._persons = [{ entry_id: ENTRY, display_name: "Alex", person_slug: "alex" }];
+  panel._data = {
+    [ENTRY]: {
+      areas: { drink: true, bp: true, wellbeing: true },
+      undo: { drink: true, blood_pressure: true },
+      wellbeing: { key: "good", at: "2026-10-19T18:00:00+02:00" },
+    },
+  };
+  panel._busy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._failVoid = false;
+  panel._payloads = {
+    drinks: [
+      { id: "d1", ts: "2026-10-19T09:30:00+02:00", ml: 250, type: "Kaffee" },
+      { id: "d0", ts: "2026-10-19T08:00:00+02:00", ml: 200, type: "Wasser",
+        voided_at: "2026-10-19T10:00:00+02:00" },
+    ],
+    blood_pressure: [{ id: "b1", ts: "2026-10-19T07:00:00+02:00", sys: 120, dia: 80 }],
+    wellbeing: [{ id: "w1", ts: "2026-10-19T18:00:00+02:00", key: "good" }],
+  };
+  panel._ws = async (msg) => {
+    panel._messages.push(msg);
+    if (msg.type === "health_o_mat/panel_data") return panel._data[msg.entry_id];
+    if (msg.type === "health_o_mat/list_history") {
+      const includeVoided = msg.include_voided === true;
+      const all = panel._payloads[msg.kind] || [];
+      return { kind: msg.kind, entries: includeVoided ? all : all.filter((e) => !e.voided_at) };
+    }
+    if (msg.type === "health_o_mat/void_entry" && panel._failVoid) {
+      throw new Error("Server nicht erreichbar");
+    }
+    return { ok: true };
+  };
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function typesOf(panel) { return panel._messages.map((msg) => msg.type); }
+function lastOf(panel, type) {
+  const hits = panel._messages.filter((msg) => msg.type === type);
+  return hits.length ? hits[hits.length - 1] : null;
+}
+
+/* Öffnen lädt alle drei Verläufe; Default = nur aktive. */
+const opened = makePanel();
+await opened._openPerson(ENTRY, { silent: true });
+const openedState = {
+  types: typesOf(opened).filter((type) => type === "health_o_mat/list_history"),
+  includes: opened._messages
+    .filter((msg) => msg.type === "health_o_mat/list_history")
+    .map((msg) => msg.include_voided),
+  drinks: opened._history[ENTRY].drinks.entries.length,
+  loaded: opened._history[ENTRY].drinks.loaded,
+  canUndoDrinks: opened._canUndo(ENTRY, "drinks"),
+};
+
+/* Filter „Auch gelöscht" lädt mit include_voided neu. */
+const filtered = makePanel();
+await filtered._openPerson(ENTRY, { silent: true });
+filtered._messages = [];
+filtered._setHistoryFilter("drinks", true);
+await new Promise((resolve) => setTimeout(resolve, 0));
+const filterResult = {
+  includeVoided: filtered._history[ENTRY].drinks.includeVoided,
+  flag: filtered._historyFilter.drinks,
+  message: lastOf(filtered, "health_o_mat/list_history"),
+  entries: filtered._history[ENTRY].drinks.entries.length,
+};
+
+/* Inline-Bestätigung: erst der zweite Klick voidet (kein window.confirm). */
+const voided = makePanel();
+await voided._openPerson(ENTRY, { silent: true });
+voided._messages = [];
+voided._beginHistoryVoid(ENTRY, "drinks", "d1");
+const beforeConfirm = { confirm: voided._historyConfirm, sent: typesOf(voided) };
+await voided._confirmHistoryVoid(ENTRY, "drinks", "d1");
+const afterVoid = {
+  confirm: voided._historyConfirm,
+  status: voided._historyStatus,
+  voidMsg: lastOf(voided, "health_o_mat/void_entry"),
+  reloaded: typesOf(voided).includes("health_o_mat/panel_data"),
+  historyReloaded: typesOf(voided).filter((t) => t === "health_o_mat/list_history").length,
+};
+
+/* Wiederherstellen ruft restore_entry und aktualisiert. */
+const restored = makePanel();
+await restored._openPerson(ENTRY, { silent: true });
+restored._messages = [];
+await restored._setEntryVoided(ENTRY, "drinks", "d0", true);
+const restoreResult = {
+  msg: lastOf(restored, "health_o_mat/restore_entry"),
+  status: restored._historyStatus,
+};
+
+/* Fehlerpfad: Banner-Status statt Exception. */
+const failed = makePanel();
+failed._failVoid = true;
+await failed._openPerson(ENTRY, { silent: true });
+await failed._setEntryVoided(ENTRY, "drinks", "d1", false);
+const failedResult = {
+  status: failed._historyStatus,
+  sent: lastOf(failed, "health_o_mat/void_entry"),
+};
+
+/* Undo für BD/WB mit passendem kind. */
+const undone = makePanel();
+await undone._openPerson(ENTRY, { silent: true });
+undone._messages = [];
+await undone._undo(ENTRY, "blood_pressure");
+const undoBp = lastOf(undone, "health_o_mat/undo_last");
+undone._messages = [];
+await undone._undo(ENTRY, "wellbeing");
+const undoWb = lastOf(undone, "health_o_mat/undo_last");
+
+process.stdout.write(JSON.stringify({
+  opened: openedState,
+  filter: filterResult,
+  beforeConfirm,
+  afterVoid,
+  restore: restoreResult,
+  failed: failedResult,
+  undoBp,
+  undoWb,
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_115_panel_history_flow(tmp_path):
+    """[REQ-HOM-115] Laden/Filter/Void/Restore/Undo/Fehler ohne window.confirm."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_HISTORY_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_history",
+        )
+    )
+
+    opened = out["opened"]
+    assert sorted(opened["types"]) == [
+        "health_o_mat/list_history",
+        "health_o_mat/list_history",
+        "health_o_mat/list_history",
+    ], "beim Öffnen werden nicht alle drei Verläufe geladen"
+    assert opened["includes"] == [False, False, False], "Default ist nicht 'nur aktive'"
+    assert opened["drinks"] == 1 and opened["loaded"] is True
+    assert opened["canUndoDrinks"] is True
+
+    filtered = out["filter"]
+    assert filtered["flag"] is True and filtered["includeVoided"] is True
+    assert filtered["message"]["include_voided"] is True, "Filter lädt nicht neu"
+    assert filtered["entries"] == 2, "gelöschte Einträge fehlen nach dem Filterwechsel"
+
+    assert out["beforeConfirm"]["confirm"] == {
+        "entryId": "entry-1",
+        "kind": "drinks",
+        "id": "d1",
+    }
+    assert out["beforeConfirm"]["sent"] == [], "der erste Klick löscht sofort"
+    after = out["afterVoid"]
+    assert after["voidMsg"]["item_id"] == "d1"
+    assert after["confirm"] is None
+    assert after["status"]["ok"] is True and "gelöscht" in after["status"]["text"]
+    assert after["reloaded"] is True, "panel_data wird nach Void nicht neu geladen"
+    assert after["historyReloaded"] == 1, "der Verlauf wird nach Void nicht neu geladen"
+
+    assert out["restore"]["msg"]["item_id"] == "d0"
+    assert "wiederhergestellt" in out["restore"]["status"]["text"]
+
+    assert out["failed"]["sent"]["item_id"] == "d1", "void_entry wurde nicht versucht"
+    assert out["failed"]["status"]["ok"] is False
+    assert "Server nicht erreichbar" in out["failed"]["status"]["text"]
+
+    assert out["undoBp"]["kind"] == "blood_pressure"
+    assert out["undoWb"]["kind"] == "wellbeing"
+
+
+# --- REQ-HOM-116: Admin-Restore (Verhalten) ---------------------------------
+
+_NODE_PANEL_RESTORE_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+const admin = await import(pathToFileURL(process.argv[3]).href);
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._view = "settings";
+  panel._settingsEntry = "entry-1";
+  panel._selectedEntry = "entry-1";
+  panel._persons = [{ entry_id: "entry-1", display_name: "Alex" }];
+  panel._data = { "entry-1": { areas: {} } };
+  panel._settings = {};
+  panel._quickDraft = [];
+  panel._adminBusy = false;
+  panel._settingsBusy = false;
+  panel._deleteBusy = false;
+  panel._render = () => {};
+  panel._messages = [];
+  panel._failRestore = false;
+  panel._ws = async (msg) => {
+    panel._messages.push(msg);
+    if (panel._failRestore && msg.type === "health_o_mat/restore_backup") {
+      throw new Error("Backup kaputt");
+    }
+    if (msg.type === "health_o_mat/list_import_files") {
+      return { files: ["b_backup.json", "a_backup.json"] };
+    }
+    if (msg.type === "health_o_mat/list_persons") return { persons: panel._persons };
+    if (msg.type === "health_o_mat/panel_data") return panel._data[msg.entry_id];
+    if (msg.type === "health_o_mat/get_settings") return { daily_goal_ml: 2000 };
+    if (msg.type === "health_o_mat/restore_backup") {
+      return {
+        plan: {
+          mode: msg.mode,
+          persons: { alex: "entry-1" },
+          totals: { added: 3, skipped: 1, conflicts: 0, errors: 0 },
+          counts: {},
+          actions: [{ target: "entry-1", dataset: "drinks", op: "add", id: "d9" }],
+          actions_truncated: false,
+          errors: [],
+          warnings: ["Zeitzone fehlt"],
+          has_changes: true,
+        },
+        applied: !msg.dry_run,
+        dry_run: !!msg.dry_run,
+        backup_path: msg.dry_run ? null : "/config/health_o_mat_backup/pre.json",
+      };
+    }
+    return {};
+  };
+  panel._hass = { user: { is_admin: true }, states: {}, connection: {} };
+  return panel;
+}
+
+function setRestoreFields(panel, overrides) {
+  const values = Object.assign({
+    "restore-filename": { value: "a_backup.json" },
+    "restore-mode": { value: "merge" },
+    "restore-dataset-drinks": { checked: true },
+    "restore-dataset-blood_pressure": { checked: true },
+    "restore-dataset-wellbeing": { checked: false },
+    "restore-from": { value: "2026-10-01T00:00" },
+    "restore-to": { value: "2026-10-20T23:59" },
+    "restore-person-map": { value: '{"alex": "entry-1"}' },
+    "restore-confirm": { value: "" },
+  }, overrides || {});
+  panel.shadowRoot._fields = values;
+}
+
+/* Dateiliste laden (Admin-Kommando). */
+const files = makePanel();
+await files._loadRestoreFiles();
+const fileResult = {
+  files: files._restoreFiles.slice(),
+  draft: files._restoreDraft.filename,
+  message: files._messages.find((msg) => msg.type === "health_o_mat/list_import_files"),
+};
+
+/* Dry-Run: vollständiger Payload (Teil-Datensätze, Zeitraum, Mapping). */
+const dry = makePanel();
+await dry._loadRestoreFiles();
+setRestoreFields(dry);
+await dry._runRestore(true);
+const dryMsg = dry._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").pop();
+const dryResult = {
+  msg: dryMsg,
+  result: dry._restoreResult && dry._restoreResult.dryRun,
+  html: admin.restoreResultHtml(dry),
+  // S-1: datetime-local → UTC-ISO (browser-lokal, daher im Runner berechnet)
+  expectedFrom: new Date("2026-10-01T00:00").toISOString(),
+  expectedTo: new Date("2026-10-20T23:59").toISOString(),
+};
+
+/* Replace ohne "REPLACE" wird beim Apply lokal abgelehnt. */
+const blocked = makePanel();
+await blocked._loadRestoreFiles();
+setRestoreFields(blocked, { "restore-mode": { value: "replace" } });
+await blocked._runRestore(false);
+const blockedResult = {
+  error: blocked._restoreError,
+  sent: blocked._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").length,
+};
+
+/* N-7: Replace-Dry-Run ist OHNE Bestätigung erlaubt. */
+const dryReplace = makePanel();
+await dryReplace._loadRestoreFiles();
+setRestoreFields(dryReplace, { "restore-mode": { value: "replace" } });
+await dryReplace._runRestore(true);
+const dryReplaceResult = {
+  error: dryReplace._restoreError,
+  msg: dryReplace._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").pop(),
+};
+
+/* Replace mit Bestätigung + Apply: Personen/Settings/Entries neu laden. */
+const applied = makePanel();
+await applied._loadRestoreFiles();
+setRestoreFields(applied, {
+  "restore-mode": { value: "replace" },
+  "restore-confirm": { value: "REPLACE" },
+});
+await applied._runRestore(false);
+const appliedMsg = applied._messages
+  .filter((msg) => msg.type === "health_o_mat/restore_backup")
+  .pop();
+const appliedResult = {
+  msg: appliedMsg,
+  reloads: applied._messages.map((msg) => msg.type).filter((type) =>
+    type === "health_o_mat/list_persons" ||
+    type === "health_o_mat/panel_data" ||
+    type === "health_o_mat/get_settings"),
+  html: admin.restoreResultHtml(applied),
+  confirm: applied._restoreDraft.confirm,
+};
+
+/* Fehlerpfad: Banner statt Crash. */
+const failed = makePanel();
+failed._failRestore = true;
+await failed._loadRestoreFiles();
+setRestoreFields(failed);
+await failed._runRestore(true);
+const failedResult = { error: failed._restoreError, busy: failed._restoreBusy };
+
+/* Karte: Dateiauswahl + Ergebnis-Rendering. */
+const card = makePanel();
+await card._loadRestoreFiles();
+card._restoreResult = {
+  dryRun: true,
+  data: {
+    plan: {
+      mode: "merge",
+      persons: { alex: "entry-1" },
+      totals: { added: 3, skipped: 1, conflicts: 2, errors: 0 },
+      actions: [{ target: "entry-1", dataset: "drinks", op: "add" }],
+      actions_truncated: true,
+      warnings: ["Warnung A"],
+      has_changes: true,
+    },
+    applied: false,
+    dry_run: true,
+  },
+};
+const cardHtml = admin.restoreCard(card);
+
+process.stdout.write(JSON.stringify({
+  files: fileResult,
+  dry: dryResult,
+  blocked: blockedResult,
+  dryReplace: dryReplaceResult,
+  applied: appliedResult,
+  failed: failedResult,
+  cardHtml,
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_116_panel_restore_flow(tmp_path):
+    """[REQ-HOM-116] Dateiliste, Dry-Run-Payload, Replace-Gate, Ergebnis, Fehler."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    admin_copy = tmp_path / "health-o-mat-panel-admin.js"
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_RESTORE_RUNNER,
+            [str(panel_copy), str(admin_copy)],
+            "runner_panel_restore",
+        )
+    )
+
+    files = out["files"]
+    assert files["files"] == ["b_backup.json", "a_backup.json"]
+    assert files["draft"] == "b_backup.json", "die erste Datei wird nicht vorausgewählt"
+    assert files["message"]["type"] == "health_o_mat/list_import_files"
+
+    dry = out["dry"]
+    msg = dry["msg"]
+    assert msg["dry_run"] is True
+    assert msg["filename"] == "a_backup.json"
+    assert msg["mode"] == "merge"
+    assert msg["datasets"] == ["drinks", "blood_pressure"]
+    # S-1: `datetime-local` wird als UTC-ISO gesendet (Browser-lokale Zeit).
+    assert msg["from"] == dry["expectedFrom"]
+    assert msg["to"] == dry["expectedTo"]
+    assert msg["from"].endswith("Z") and msg["to"].endswith("Z")
+    assert msg["person_map"] == {"alex": "entry-1"}
+    assert "confirm" not in msg
+    assert dry["result"] is True
+    assert "Dry-Run" in dry["html"]
+    assert "3 hinzugefügt" in dry["html"] and "0 Konflikte" in dry["html"]
+    assert "Alex" in dry["html"], "Personen-Mapping wird nicht aufgelöst"
+    assert "Warnung" in dry["html"] and "Aktionen" in dry["html"]
+    assert "Änderungen würden übernommen" in dry["html"]
+
+    blocked = out["blocked"]
+    assert blocked["sent"] == 0, "Replace ohne Bestätigung wird trotzdem gesendet"
+    assert "REPLACE" in blocked["error"]
+
+    # N-7: Dry-Run ist ohne Bestätigung möglich und sendet kein `confirm`.
+    dry_replace = out["dryReplace"]
+    assert dry_replace["error"] is None
+    assert dry_replace["msg"]["mode"] == "replace"
+    assert dry_replace["msg"]["dry_run"] is True
+    assert "confirm" not in dry_replace["msg"]
+
+    applied = out["applied"]
+    assert applied["msg"]["mode"] == "replace"
+    assert applied["msg"]["confirm"] == "REPLACE"
+    assert applied["msg"]["dry_run"] is False
+    assert applied["confirm"] == "", "die Bestätigung wird nach dem Apply nicht geleert"
+    assert "health_o_mat/list_persons" in applied["reloads"]
+    assert "health_o_mat/panel_data" in applied["reloads"]
+    assert "health_o_mat/get_settings" in applied["reloads"]
+    assert "Wiederhergestellt" in applied["html"]
+    assert "Sicherheitsbackup" in applied["html"]
+
+    assert "Backup kaputt" in out["failed"]["error"]
+    assert out["failed"]["busy"] is False
+
+    card_html = out["cardHtml"]
+    assert 'data-action="restore-dry-run"' in card_html
+    assert 'data-action="restore-apply"' in card_html
+    assert 'data-action="restore-files-refresh"' in card_html
+    assert "<option" in card_html and "a_backup.json" in card_html
+    assert "3 hinzugefügt" in card_html
+    assert "gekürzt" in card_html
+    assert "Warnung A" in card_html
+
+
+# --- REQ-HOM-117: HA-native UI translations (panel) ------------------------
+
+_I18N_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+const i18n = await import(pathToFileURL(process.argv[4]).href);
+const spec = JSON.parse(process.argv[5]);
+
+async function load(language, resources, fail) {
+  const hass = {
+    language,
+    callWS: async () => {
+      if (fail) throw new Error("boom");
+      return { resources: resources || {} };
+    },
+  };
+  return i18n.loadUiTranslations(hass);
+}
+
+await load("de", {}, false);
+const fallback = i18n.t("ui_card_goal", "Ziel");
+const missingFallback = i18n.t("ui_missing", "Fallback {x}", { x: 7 });
+const rawKey = i18n.t("ui_missing");
+
+await load("en", spec.resources, false);
+base.setUiTranslator(i18n.t);
+base.setUiLanguage(i18n.currentLanguage());
+const entryId = spec.panel.entry_id;
+const panel = {
+  _selectedEntry: entryId,
+  _persons: [{ entry_id: entryId, display_name: spec.panel.display_name }],
+  _data: { [entryId]: spec.panel.data },
+  _entryErrors: {},
+  _tab: "drink",
+  _actionError: "",
+  _busy: false,
+  _history: {},
+  _historyStatus: null,
+  _historyBusy: false,
+  _tsDraft: {},
+  _formError: "",
+  _canUndo: () => true,
+  _isWarning: () => false,
+  _liveValue: (data, key, fallback) => fallback,
+  _liveNumber: (data, key, fallback) => fallback,
+};
+const english = views.renderDetail(panel);
+
+await i18n.resetUiTranslations();
+await load("en", {}, true);
+const failed = i18n.t("ui_card_goal", "Ziel");
+
+process.stdout.write(JSON.stringify({
+  language: i18n.currentLanguage(),
+  fallback,
+  missingFallback,
+  rawKey,
+  english,
+  failed,
+}));
+"""
+
+_RESOURCES_EN = {
+    "component.health_o_mat.common.ui_common_area_drink": "Drinking",
+    "component.health_o_mat.common.ui_panel_drink_today": "Today",
+    "component.health_o_mat.common.ui_panel_history_title": "History",
+    "component.health_o_mat.common.ui_panel_drink_book": "Add",
+    "component.health_o_mat.common.ui_panel_drink_quick": "Quick add",
+    "component.health_o_mat.common.ui_panel_wb_question": "How are you feeling?",
+    "component.health_o_mat.common.ui_common_wb_good": "Good",
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_117_panel_translations_load_fallback_and_language_switch(tmp_path):
+    """[REQ-HOM-117] Loader-Cache, `t()`-Interpolation, Fallback und de→en-Render."""
+    views_copy = _prepare_views_copy(tmp_path)
+    plugin_dir = views_copy.parent
+    panel = {
+        "entry_id": "entry-1",
+        "display_name": "Alex",
+        "live_wellbeing": "unknown",
+        "live_score": 4,
+        "data": {
+            "goal_ml": 2000,
+            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "entities": {},
+            "today": {"ml": 500, "percent": 25, "count": 1, "breakdown": {}},
+            "bp": {},
+            "wellbeing": {"key": "good", "label": "Gut", "score": 4},
+            "undo": {"drink": True},
+        },
+    }
+    spec = {"resources": _RESOURCES_EN, "panel": panel}
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _I18N_RUNNER,
+            [
+                str(plugin_dir / "health-o-mat-panel-base.js"),
+                str(views_copy),
+                str(plugin_dir / "health-o-mat-i18n.js"),
+                json.dumps(spec),
+            ],
+            "runner_i18n_panel",
+        )
+    )
+
+    assert out["language"] == "en"
+    assert out["fallback"] == "Ziel", "der deutsche Fallback geht verloren"
+    assert out["missingFallback"] == "Fallback 7", "`{platzhalter}` wird nicht interpoliert"
+    assert out["rawKey"] == "", "ein fehlender Key darf nie roh angezeigt werden"
+    assert out["failed"] == "Ziel", "ein Ladefehler muss auf den Fallback zurückfallen"
+
+    html = out["english"]
+    assert "Drinking" in html, "englischer Tab-Text fehlt nach dem Sprachwechsel"
+    assert "Today" in html and "History" in html, "englische Panel-Labels fehlen"
+    assert "Trinken" not in html, "deutscher Tab-Text bleibt trotz en aktiv"
+    assert "ui_" not in html, "roher ui_-Key im gerenderten HTML"
+    assert "Gut" not in html, "das Server-Label wird nicht per Key übersetzt"

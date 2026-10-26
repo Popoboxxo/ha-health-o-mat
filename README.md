@@ -22,9 +22,22 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
   heute und der **Wohlbefinden-Score (1–10)** — je eine Entity für den
   Entscheidungswert, Details als Attribute
-- ↩️ **Undo-Button** für die letzte Buchung
+- ↩️ **Verlauf & Korrigieren**: je Datentyp (Getränke, Blutdruck, Wohlbefinden)
+  ein Verlauf mit **Löschen (Void)**, **Wiederherstellen (Restore)** und
+  **Undo** — kein Hard-Delete in der UI, Korrekturen werden auditierbar
+  protokolliert
+- 🕒 **Rückdatieren**: Buchungen/Messungen/Meldungen mit Zeitpunkt nachtragen
+  (unbegrenzt zurück, nie in die Zukunft); „Jetzt"/„Gestern" als Schnellwahl
+- 🌍 **Deutsch/Englisch**: Panel, Karte, Editor und Admin folgen der
+  HA-Sprache (`hass.language`), mit deutschem Fallback
+- 🔔 **Erinnerungen & Wochenbericht**: Trink-/BD-/Wohlbefinden-Erinnerungen und
+  ein Wochenbericht als Notification (optional per Scheduler), plus importierbare
+  Blueprints
+- 🧭 **Options-Wizard**: Grundlagen, Getränke, Wohlbefinden, Benachrichtigungen
+  und Defaults in optionalen Schritten — eine neue Person ist sofort einsatzbereit
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
-  (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich)
+  (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich; exportiert nur **aktive**
+  Einträge, das Archiv bleibt enthalten)
 - 👥 **Multi-Person**: ein Config-Entry = eine Person = ein Device — beliebig viele
 - 🌙 **Tagesgrenze**: einstellbare Reset-Uhrzeit (Options, 0–23 Uhr, Default 0 Uhr);
   neustartfest, weil „heute"/„gestern" on-read aus der Historie berechnet werden
@@ -39,6 +52,94 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 2. Herunterladen, HA neu starten
 3. Einstellungen → Geräte & Dienste → Integration hinzufügen → **HA Health-O-Mat**
 4. Person anlegen (pro Person einmal durchlaufen)
+
+## Schnellstart: Person anlegen, Defaults nutzen
+
+Eine neu angelegte Person ist **sofort einsatzbereit**, ohne dass der
+Options-Dialog geöffnet werden muss: Die Quick-Drinks (Glas Wasser, Flasche
+Wasser, Tasse Kaffee, Glas Saft), das eingebaute Getränke-Lexikon und
+ausgeschaltete Erinnerungen greifen automatisch. Eigene Wellbeing-Bilder sind
+leer (es erscheinen die Emojis). Anpassen lässt sich alles später unter
+Einstellungen → Geräte & Dienste → **HA Health-O-Mat** → *Konfigurieren*.
+
+### Options-Wizard
+
+Der Options-Dialog ist ein **Menü mit optionalen Abschnitten**. Änderungen
+werden nur vorgemerkt und erst in der Zusammenfassung gespeichert:
+
+| Abschnitt | Inhalt |
+|---|---|
+| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel, Bereichs-Toggles |
+| **Getränke** | Quick-Drinks **und** Getränke-Lexikon in einem Formular (Lexikon mit Zeilen-Validierung) |
+| **Wohlbefinden** | Eigene Bilder je Stufe (optional, sonst Emojis) |
+| **Benachrichtigungen** | Erinnerungen und Wochenbericht (Standard: aus) |
+| **Defaults übernehmen** | Setzt Standard-Quick-Drinks, eingebautes Lexikon, leere Bilder und ausgeschaltete Erinnerungen |
+| **Zusammenfassung** | Zeigt die geänderten Schlüssel/Werte; **Speichern** übernimmt sie |
+
+- Jeder **optionale** Abschnitt (Grundlagen, Getränke, Wohlbefinden,
+  Benachrichtigungen) hat **„Diesen Schritt überspringen"** — er kehrt dann ohne
+  Änderung ins Menü zurück. Die Zusammenfassung ist der Speicherpunkt.
+- **Direkte Navigation:** Jeder Menüpunkt ist jederzeit erreichbar; die
+  Zusammenfassung ist der einzige Speicherpunkt.
+- **Nichts geht verloren:** Optionen, die in diesem Lauf nicht geändert werden
+  (u. a. `wellbeing_confirm`, `audit_limit` sowie die genesteten `reminders`- und
+  `weekly_report`-Strukturen), bleiben beim Speichern unverändert erhalten.
+  Ein Abbruch des Dialogs ändert nichts.
+- **Defaults sofort nutzbar:** Eine neu angelegte Person arbeitet ohne
+  Options-Dialog mit den Standard-Quick-Drinks, dem eingebauten Lexikon, leeren
+  Wohlbefinden-Bildern und ausgeschalteten Erinnerungen. Wer nichts anpassen
+  will, überspringt die optionalen Schritte und speichert direkt.
+
+Die benachrichtigungsbezogenen Optionen (Erinnerungen, Wochenbericht) sind im
+Abschnitt [Erinnerungen, Wochenbericht & Blueprints](#erinnerungen-wochenbericht--blueprints)
+beschrieben.
+
+## Erinnerungen, Wochenbericht & Blueprints
+
+### Erinnerungen (Options-Schritt „Benachrichtigungen")
+
+Erinnerungen sind pro Person **standardmäßig aus** und ändern ohne explizites
+Aktivieren nichts am bisherigen Verhalten. Einstellbar sind:
+
+- **Uhrzeit** und **Wochentage** (leer/ungültig = alle Tage)
+- **Notify-Service** (jeder `notify.*`-Dienst; `notify.mobile_app_x` und
+  `mobile_app_x` werden gleich behandelt)
+- **Quiet Hours** (optionales Ruhefenster, auch über Mitternacht)
+- **Bedingungen**: Tagesziel noch nicht erreicht, seit X Stunden nichts
+  getrunken, seit X Tagen keine Blutdruckmessung, seit X Tagen keine
+  Wohlbefinden-Meldung
+
+Die Erinnerungen laufen über einen Scheduler je Config-Entry, werden bei
+Options-Änderungen neu aufgesetzt und **pro Tag dedupliziert**. Ausgewertet wird
+die aktive Store-Sicht (gelöschte Einträge zählen nicht); es gibt keinen
+Reset-Job. Ist kein `notify.*`-Dienst gesetzt oder schlägt die Zustellung fehl,
+fällt die Integration auf **`persistent_notification`** zurück; Zustellfehler
+sind sichtbar, blockieren aber nie das Setup.
+
+### Wochenbericht
+
+Der Wochenbericht fasst die letzten sieben Tage je Person als
+**Markdown-Notification** zusammen — **es wird keine Datei geschrieben**.
+Er ist als Service (`health_o_mat.weekly_report`, Abschnitt
+[Services](#services)) und optional geplant (Wochentag + Uhrzeit im
+Options-Schritt „Benachrichtigungen") verfügbar. Ohne `person` erhält jede
+eingerichtete Person einen eigenen Bericht.
+
+### Blueprints
+
+Unter `blueprints/automation/health_o_mat/` liegen drei importierbare
+Automationen:
+
+- `evening_reminder.yaml` — Abend-Erinnerung, wenn das Tagesziel noch nicht
+  erreicht ist
+- `blood_pressure_warning.yaml` — Benachrichtigung bei Blutdruck-Warnung
+- `weekly_report.yaml` — ruft den Wochenbericht-Service auf
+
+**Wichtig:** HACS installiert Blueprints **nicht automatisch**. Die YAML-Dateien
+müssen manuell importiert werden (Einstellungen → Automationen & Szenen →
+Blueprints → Blueprint importieren, z. B. per GitHub-URL oder Datei-Upload).
+Jeder Blueprint hat eine frei wählbare Person bzw. Entity-Auswahl und
+zweisprachige Beschreibungen.
 
 ## Entities & Benennung (je Person)
 
@@ -75,8 +176,8 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `goal_streak` | Ziel-Serie / Goal streak | Tage in Folge mit erreichtem Tagesziel (+ Bestwert) |
 | sensor | `caffeine_today` | Koffein heute / Caffeine today | **geschätzte** mg Koffein heute |
 | binary_sensor | `daily_goal_reached` / `blood_pressure_warning` | Tagesziel erreicht, Blutdruck-Warnung | Status |
-| button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Löschen/Speichern | Alltagseingabe |
-| button | `report_very_bad` … `report_great` | Melden: … / Report: … | Wohlbefinden |
+| button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Void/Speichern | Alltagseingabe |
+| button | `report_very_bad` … `report_excellent` | Melden: … / Report: … | Wohlbefinden (zehn Stufen) |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
 | number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe | Runtime-Einstellungen |
@@ -202,12 +303,15 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   nutzerdefiniert, z. B. `button.…_glas_wasser`).
 - `button.…_book_custom_amount` — bucht die unter `number.…_custom_drink_amount`
   eingetragene Menge.
-- `button.…_undo_last_drink` — entfernt die letzte Getränkebuchung.
+- `button.…_undo_last_drink` — **voidet** die letzte aktive Getränkebuchung
+  (Undo). Der Eintrag bleibt im Verlauf erhalten und ist dort wiederherstellbar;
+  für Blutdruck und Wohlbefinden stehen Undo/Verlauf im Panel bzw. in der Karte
+  bereit.
 - `button.…_save_measurement` — übernimmt die drei Number-Eingaben
   (`new_reading_systolic/diastolic/pulse`) als neue Blutdruckmessung und leert
   die Eingabefelder.
-- `button.…_report_very_bad` … `report_great` — Wohlbefinden-Meldung: setzt
-  den Select auf den Status und den Zeitstempel-Sensor.
+- `button.…_report_very_bad` … `report_excellent` — Wohlbefinden-Meldung: setzt
+  den Select auf den Status und den Zeitstempel-Sensor (zehn Stufen).
 
 **Select: kontinuierlicher Gesundheitszustand**
 
@@ -215,8 +319,10 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   Das ist die kontinuierliche Darstellung des Gesundheitszustands: Der
   HA-Verlaufsgraph zeigt ihn als Balken-/Timeline-Darstellung, mushroom
   bietet `custom:mushroom-select-card`. Attribute: `emoji`, `reported_at`,
-  `history_json` (letzte 10 Meldungen). Service-Aufrufe nutzen die Roh-Keys
-  (`very_bad`, `bad`, `okay`, `good`, `great`).
+  `history_json` (letzte 10 Meldungen), `score` und `scale_max` (10).
+  Service-Aufrufe nutzen die Roh-Keys
+  (`very_bad`, `awful`, `bad`, `poor`, `okay`, `mixed`, `good`, `very_good`,
+  `great`, `excellent`) oder `score: 1…10`.
 
 **Text: Freitext-Buchung**
 
@@ -313,22 +419,66 @@ Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
     an, um betroffene Statistiken zu löschen oder aufzuräumen — die
     Metadaten-Migration ist verlustfrei, und Home Assistant bietet
     „Statistiken löschen" bereits in der UI an.
+- **Update auf v0.14.0 (Verlauf/Void/Restore, Audit-Log, Backup v2, i18n,
+  Erinnerungen, Options-Wizard, Rückdatieren):** Der Store wird beim Start
+  automatisch auf **Schema v4** migriert (`id`, `created_at`, `voided_at`/
+  `voided_by`/`void_reason`, `audit_log`, `wellbeing_entries`). Bestehende
+  Getränke-/Messwerte und die Wohlbefinden-Historie bleiben erhalten; die
+  Migration ist idempotent. **Backups** werden als **v2** geschrieben (inkl.
+  Retention-Archiv und Zählern); **v1-Backups bleiben lesbar** und werden beim
+  Restore migriert. **Löschen ist jetzt Void:** Einträge werden markiert, nicht
+  entfernt, und bleiben wiederherstellbar. `remove_last_entry` **voidet**
+  (kein Hard-Delete mehr). Der CSV-Export enthält standardmäßig nur aktive
+  Einträge. **Keine Änderung an `unique_id`s, Entity-IDs oder Config-Entry-`data`.**
+  Die Recorder-Langzeitstatistik wird bei Korrekturen **nicht rückwirkend**
+  angepasst (dokumentierte Grenze); die Integration schreibt bei Änderungen
+  keine alten Statistikwerte um.
 
 ## Services
 
+Alle Schreib-Services (`add_drink`, `add_blood_pressure`, `set_wellbeing`)
+akzeptieren ein optionales **`ts`** (ISO 8601, z. B. `2026-10-24T18:30` oder mit
+Offset). Leer = jetzt. Werte höchstens 5 Minuten in der Zukunft und nicht vor
+1900 werden akzeptiert; naive Zeitstempel gelten als lokale Zeit. Ohne `person`
+wird die einzige konfigurierte Person verwendet.
+
 ```yaml
 action: health_o_mat.add_drink
-data: { person: "Caro", amount_ml: 250, drink_type: "Kaffee" }
+data:
+  person: "Caro"
+  amount_ml: 250
+  drink_type: "Kaffee"
+  ts: "2026-10-24T18:30:00+02:00"   # optional; leer = jetzt
 
 action: health_o_mat.add_blood_pressure
-data: { person: "Caro", systolic: 124, diastolic: 82, pulse: 64 }
+data:
+  person: "Caro"
+  systolic: 124
+  diastolic: 82
+  pulse: 64
+  ts: "2026-10-24T08:15:00"          # optional
 
 action: health_o_mat.set_wellbeing
-data: { person: "Caro", status: "good" }   # very_bad | bad | okay | good | great
+data:
+  person: "Caro"
+  status: "good"   # very_bad | awful | bad | poor | okay | mixed | good | very_good | great | excellent
+  # ODER: score: 7  (1–10)
+  # optional: ts
 
+# Undo: voidet die letzte aktive Buchung (kein Hard-Delete)
 action: health_o_mat.remove_last_entry
-data: { person: "Caro", kind: "drinks" }   # drinks (Default) | blood_pressure
+data:
+  person: "Caro"
+  kind: "drinks"   # drinks (Default) | blood_pressure | wellbeing
 
+# Einzelnen Eintrag voiden/wiederherstellen (ID aus dem Verlauf)
+action: health_o_mat.void_entry
+data: { person: "Caro", kind: "drinks", id: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60" }
+
+action: health_o_mat.restore_entry
+data: { person: "Caro", kind: "drinks", id: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60" }
+
+# nur Admin
 action: health_o_mat.export_csv
 data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all
 
@@ -337,59 +487,153 @@ data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
 # optional: dataset: drinks | blood_pressure | all (default: all = auto-detect)
 
 action: health_o_mat.backup
+
+# Backup kontrolliert zurückspielen (Admin-only; vorher Dry-Run)
+action: health_o_mat.restore_backup
+data:
+  filename: "health_o_mat_backup_20261024-120000.json"
+  mode: "merge"        # merge (Default) | replace
+  dry_run: true
+
+action: health_o_mat.weekly_report
+data: { person: "Caro" }   # leer = jede Person erhält einen Bericht
 ```
 
-`set_wellbeing` (Wohlbefinden melden) ist im Abschnitt
-[Wohlbefinden melden (Service)](#wohlbefinden-melden-service) ausführlich
-beschrieben — die Karten-Buttons und der Service nutzen denselben
+`remove_last_entry` behält seinen Namen als **Kompatibilitäts-Alias**, hat aber
+**Void-Semantik**: Der Eintrag wird markiert und bleibt im Verlauf
+wiederherstellbar. `void_entry`/`restore_entry` benötigen `kind` und die `id`
+aus dem Panel-Verlauf (WS `health_o_mat/list_history`). `set_wellbeing` ist im
+Abschnitt [Wohlbefinden melden (Service)](#wohlbefinden-melden-service)
+ausführlich beschrieben — Karten-Buttons und Service nutzen denselben
 Store-/Refresh-Pfad wie das Panel.
 
 ## Import & Backup
 
-### CSV import
+### CSV-Import
 
-Re-imports a previously exported CSV (or any file in the same format) into one
-person's history:
+Importiert eine zuvor exportierte CSV (oder eine Datei im gleichen Format) in
+die Historie einer Person:
 
-1. Copy the CSV into `/config/health_o_mat_import/` (create the folder if it
-   does not exist yet).
-2. Call the service:
+1. Datei nach `/config/health_o_mat_import/` kopieren (Ordner bei Bedarf
+   anlegen).
+2. Service aufrufen:
 
 ```yaml
 action: health_o_mat.import_csv
 data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
 ```
 
-The import is deliberately tolerant: semicolon-separated, UTF-8 with or without
-BOM, `#` comment lines, and a missing or deviating header are all accepted.
-Existing entries are recognised as duplicates and skipped (drinks by timestamp +
-amount, blood pressure by timestamp + systolic + diastolic); unreadable rows are
-rejected. A notification reports the outcome as `imported / skipped / rejected`.
+Der Import ist bewusst tolerant: Semikolon-getrennt, UTF-8 mit oder ohne BOM,
+`#`-Kommentarzeilen und eine fehlende/abweichende Kopfzeile werden akzeptiert.
+Bestehende Einträge werden als Duplikate erkannt und übersprungen (Getränke über
+Zeitstempel + Menge, Blutdruck über Zeitstempel + systolisch + diastolisch);
+unlesbare Zeilen werden abgelehnt. Eine Notification meldet das Ergebnis als
+`imported / skipped / rejected`.
 
-### Backup (JSON full export)
+### Backup (JSON-Voll-Export)
 
 ```yaml
 action: health_o_mat.backup
 ```
 
-Writes a versioned JSON backup of **all persons and datasets** — every time range
-— to `/config/health_o_mat_export/`, using a timestamped filename
-(`health_o_mat_backup_<YYYYMMDD-HHMMSS>.json`). It is the basis for a future
-restore.
+Schreibt ein versioniertes JSON-Backup **aller Personen und Datensätze** (alle
+Zeiträume) nach `/config/health_o_mat_export/` mit Zeitstempel-Dateinamen
+(`health_o_mat_backup_<YYYYMMDD-HHMMSS>.json`). **Format v2** enthält zusätzlich
+das **Retention-Archiv**, die Schema-Stufe, Personen-Namen und Zähler
+(gesamt/aktiv/gelöscht). **v1-Backups bleiben lesbar** und werden beim Restore
+migriert; neuere/unbekannte Versionen werden mit klarer Meldung abgelehnt.
+Der Service ist **nur für HA-Administratoren** verfügbar.
 
-### Data protection
+### Restore (Backup zurückspielen)
 
-Both services only ever touch private directories:
+Der Restore ist **verfügbar** und bewusst kontrolliert:
 
-- `/config/health_o_mat_import/` — import source
-- `/config/health_o_mat_export/` — CSV exports and JSON backups
+1. Backup-Datei nach `/config/health_o_mat_import/` kopieren oder eine
+   bereits geschriebene Backup-/Pre-Restore-Datei aus
+   `/config/health_o_mat_export/` verwenden (kein Browser-Upload).
+2. **Dry-Run** ausführen — er plant nur und schreibt nichts (auch für Replace
+   ohne Bestätigung).
+3. Bei Bedarf **Merge** (Default) oder **Replace** wählen und anwenden.
 
-Files are **never** written to `/config/www/`, which would be publicly reachable
-through the Home Assistant web server. Keep these folders out of any public
-share.
+```yaml
+# 1) Probelauf: zeigt added/updated/skipped/conflicts/errors/persons
+action: health_o_mat.restore_backup
+data:
+  filename: "health_o_mat_backup_20261024-120000.json"
+  mode: "merge"
+  dry_run: true
 
-> ℹ️ **Restore is not available yet.** The JSON backup cannot be re-imported
-> automatically; a restore feature is still open.
+# 2) Merge: ergänzt Einträge, Duplikate werden übersprungen
+action: health_o_mat.restore_backup
+data:
+  filename: "health_o_mat_backup_20261024-120000.json"
+  mode: "merge"
+
+# 3) Replace: leert zuerst den gewählten Scope — Bestätigung "REPLACE" Pflicht
+action: health_o_mat.restore_backup
+data:
+  filename: "health_o_mat_backup_20261024-120000.json"
+  mode: "replace"
+  confirm: "REPLACE"
+```
+
+- **Teil-Restore:** `persons` (Quell-Slug, Quell-Entry-ID oder Ziel-Entry-ID),
+  `datasets` (`drinks` / `blood_pressure` / `wellbeing`), `from`/`to` (ISO,
+  inklusiv auf `ts`; naive Werte gelten als lokale HA-Zeitzone).
+- **Mehrere Quellen → ein Ziel:** `person_map` darf mehrere Backup-Personen
+  auf denselben Ziel-Entry abbilden. Replace sammelt dann alle Quell-Records,
+  dedupliziert sie und leert den Ziel-Scope genau einmal (kein Datenverlust).
+- **Personen-Mapping:** `person_map: {<Quelle>: <Ziel-Entry-ID>}`. Unbekannte
+  Personen werden **nie automatisch angelegt** — ohne eindeutige Zuordnung
+  bricht der Restore mit einer Meldung ab.
+- **Sicherheitsbackup:** Vor jedem echten Restore entsteht automatisch ein
+  Pre-Restore-Backup im Export-Ordner. Der Restore ist atomar (ein Save,
+  In-Memory-Rollback bei Fehler).
+- **Admin-only:** Service und WebSocket-Kommando sind serverseitig auf
+  HA-Administratoren beschränkt; das Panel bietet eine Admin-Restore-Karte mit
+  Dateiauswahl, Modus, Filtern, Dry-Run und Bestätigung.
+- **Audit:** Importierte Audit-Historie wird standardmäßig **nicht** übernommen;
+  stattdessen werden neue `restore_backup`-Ereignisse geschrieben
+  (`restore_audit: true` nur für Experten).
+
+### Dateien & Datenschutz
+
+Beide Richtungen nutzen ausschließlich private Verzeichnisse:
+
+- `/config/health_o_mat_import/` — Import-/Restore-Quelle
+- `/config/health_o_mat_export/` — CSV-Exporte, JSON-Backups und
+  Pre-Restore-Sicherheitsbackups
+
+Dateien werden **nie** nach `/config/www/` geschrieben (dort wären sie über den
+HA-Webserver öffentlich erreichbar). Diese Ordner aus jedem öffentlichen Share
+heraushalten.
+
+## Löschen, Audit & Datenschutz
+
+**Bewusst kein Hard-Delete in der UI.** Löschen bedeutet immer **Void**: Der
+Eintrag wird mit `voided_at`/`voided_by`/`void_reason` markiert, zählt nicht
+mehr in Auswertungen (heute/gestern, Trends, Streak, BD-Ø, Koffein, Lifetime,
+Sensoren, CSV) und bleibt über **Restore** wiederherstellbar. Auch
+`remove_last_entry` voidet nur.
+
+- **Audit-Log:** Add, Void, Restore, Import und Restore-Backup erzeugen ein
+  append-only-Ereignis mit Zeit, Aktion, Ziel und Actor
+  (HA-User-ID, bei Automationen leer). Es enthält **keine vollen
+  Gesundheitswerte**, nur Metadaten. Default-Cap: **1000 Ereignisse pro Person**;
+  im Panel-Admin ist `0` = **unbegrenzt** (bzw. ein positiver Wert) einstellbar.
+  Beim Kappen bleibt ein `audit_pruned`-Summary-Ereignis nachvollziehbar.
+- **Vollständige Entfernung:** Nur **manuell außerhalb der UI** über die
+  Store-Datei bzw. die Integration (z. B. Entry löschen und Store-Datei
+  entfernen). Das Panel bietet dafür keinen Knopf.
+- **DSGVO-Hinweis/Restrisiko:** Void/Restore + Audit-Log sind die bewusste
+  Datenschutz-Abwägung. Gelöschte (voided) Einträge wachsen ohne Hard-Delete und
+  bleiben im Backup erhalten; die vollständige Datenentfernung ist ein
+  dokumentierter manueller Vorgang. Vor einer öffentlichen 1.0 wird das erneut
+  bewertet.
+- **Recorder:** Die HA-Langzeitstatistik wird bei Korrekturen **nicht
+  rückwirkend** angepasst — sie bleibt eine dokumentierte Grenze. Der CSV-Export
+  enthält standardmäßig nur aktive Einträge; das Backup enthält Audit- und
+  voided-Einträge.
 
 ## Dashboard-Beispiele
 
@@ -428,11 +672,16 @@ Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
 - 🩺 **Blutdruck** — letzte Messung (sys/dia/Puls) mit **WHO-Kategorie** und
   Warnhinweis, wenn sie über den konfigurierten Schwellen liegt
 - 🙂 **Wohlbefinden** — letzte Meldung mit Emoji und Zeitpunkt, dazu der
-  **Wohlbefinden-Score** als Badge (z. B. „4 / 5") und eine **kleine Sparkline**
+  **Wohlbefinden-Score** als Badge (z. B. „4 / 10") und eine **kleine Sparkline**
   der letzten 14 Meldungen. Die Karte bleibt damit eine einbettbare
   Kompaktanzeige — **kein** Panel-Ersatz
 - ↩️ **Quick-Drink-Buttons + Undo** — feste Menge buchen oder die letzte
-  Buchung zurücknehmen
+  Buchung **voiden**; Undo gibt es für Getränke, Blutdruck **und** Wohlbefinden
+- 🕒 **Rückdatieren** — Getränke-, Blutdruck- und Wohlbefinden-Eingaben haben
+  ein Zeitpunktfeld (`datetime-local`); **leer = jetzt**
+- 📜 **Optionaler Verlauf** — pro Typ die letzten **5** Einträge, inkl.
+  Inline-Löschen mit Bestätigung und Wiederherstellen (`show_history`, Default
+  **aus**). Die vollständige Ansicht bleibt das Panel
 
 Über den **Karten-Editor** lassen sich die Person (statt die Config-Entry-ID von
 Hand einzutragen) und alle Anzeige-/Eingabe-Blöcke einstellen. Bereiche, die per
@@ -462,7 +711,8 @@ Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
 | `show_wellbeing_numeric` | bool | `true` | Zusätzliches Zahlenfeld (1–10) neben den Smileys. |
 | `wellbeing_confirm` | bool | `false` | Wohlbefinden-Auswahl erst nach Klick auf **Übernehmen** melden (unabhängig von der Panel-/Server-Option `wellbeing_confirm`). |
 | `show_blood_pressure_history` | bool | `true` | Blutdruck-Verlaufsgraph (systolisch/diastolisch, letzte 30 Messungen). |
-| `show_undo` | bool | `true` | Undo der letzten Getränkebuchung. |
+| `show_history` | bool | **`false`** | Kompakter Verlauf je Typ (letzte **5** Einträge, inkl. gelöschter, damit Wiederherstellen erreichbar bleibt) mit Inline-Löschen (Void, mit Bestätigung) und Wiederherstellen. Die vollständige Historie zeigt das Panel. |
+| `show_undo` | bool | `true` | Undo für Getränke, Blutdruck und Wohlbefinden (voidet den letzten aktiven Eintrag). |
 | `drinks` | list[str] | alle | Keys der Quick-Drinks aus der Integration (`panel_data.quick_drinks`); unbekannte Keys werden ignoriert, leer/fehlend = alle. |
 | `manual_amounts` | list[int] | `[200, 500]` | ml-Presets (1…10000); leer/fehlend = Default. |
 | `allow_custom_amount` | bool | `true` | Zusätzliches freies Zahlenfeld mit Buchen-Button. |
@@ -471,7 +721,10 @@ Unbekannte Werte fallen auf den Default zurück (kein Render-Fehler).
 **Semantik:** `show_*=false` blendet den Block samt zugehöriger Eingaben aus.
 Ein **explizit** gesetztes `show_blood_pressure_input: true` hat Vorrang vor
 `show_blood_pressure: false` (die Eingabe bleibt sichtbar). Sind alle Blöcke aus,
-zeigt die Karte einen lesbaren Hinweis statt einer leeren Fläche.
+zeigt die Karte einen lesbaren Hinweis statt einer leeren Fläche. Die
+Zeitpunktfelder senden `ts` an dieselben Services wie das Panel; leere Felder
+bedeuten „jetzt", die Zukunft wird abgelehnt. `show_history` ist bewusst **aus**
+und lädt nur bei Bedarf die letzten 5 Einträge (inkl. gelöschter).
 
 **Beispiele**
 
@@ -554,6 +807,14 @@ HA-Seitenleiste einklinkt:
 - 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
   Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
   Feature-Toggle abgeschaltet sind, werden ausgeblendet
+- 🕒 **Rückdatieren** — jedes Eingabeformular hat ein Zeitpunktfeld
+  (`datetime-local`) plus Schnellwahl **„Jetzt"** und **„Gestern"**; **leer =
+  jetzt**, die Zukunft wird abgelehnt
+- 📜 **Verlauf je Tab** — neueste zuerst, mit Filter **„Nur aktive"**
+  / **„Auch gelöscht"**, Inline-**Löschen mit Bestätigung** (Void) und
+  **Wiederherstellen**. Gelöschte Einträge sind sichtbar markiert und zählen
+  nicht in den Auswertungen
+- ↩️ **Undo für alle Typen** — Getränke, Blutdruck und Wohlbefinden
 - 📈 **Wohlbefinden-Score-Chart** — im Tab „Wohlbefinden" zeigt das Panel den
   **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–10
   auf der Y-Achse (Extremwerte 1 und 10 hervorgehoben), Zeitachse und der
@@ -579,8 +840,9 @@ aktiviert, teilen sich alle Personen **ein** gemeinsames Sidebar-Panel
 
 Ist der angemeldete HA-Nutzer **Administrator**, zeigt das Panel zusätzlich eine
 **⚙️ Settings-Ansicht**. Dort lassen sich die Einstellungen einer Person an
-**einem** Ort verwalten (dieselben Schlüssel wie der Options-Dialog — nur als
-eine scrollbare Maske statt drei erzwungener Options-Schritte):
+**einem** Ort verwalten — inklusive der Schlüssel, die der Options-Wizard nicht
+zeigt (`wellbeing_confirm`, `audit_limit`), als eine scrollbare Maske statt
+verschachtelter Options-Schritte:
 
 - 🎯 **Tagesziel** (mL) und **Reset-Uhrzeit** (0–23 Uhr)
 - 🏷️ **Anzeigename** der Person
@@ -589,7 +851,8 @@ eine scrollbare Maske statt drei erzwungener Options-Schritte):
   Zeilen-Validierung (die Fehlermeldung nennt die betroffene Zeile)
 - 🩺 **Blutdruck-Warnschwellen** (sys/dia) — wirken zur Laufzeit sofort auf den
   Blutdruck-Warn-Binary-Sensor
-- 🗄️ **Aufbewahrung** (Retention in Monaten)
+- 🗄️ **Aufbewahrung** (Retention in Monaten) und **`audit_limit`**
+  (Audit-Log-Cap; Default **1000** Ereignisse/Person, `0` = **unbegrenzt**)
 - 🧩 **Feature-Toggles pro Person** — **Trinken / Blutdruck / Wohlbefinden**
   einzeln an/aus. Ein abgeschalteter Bereich erzeugt **keine** Entities mehr
   (sie werden beim Reload entladen); `unique_id` und Historie bleiben
@@ -602,16 +865,22 @@ eine scrollbare Maske statt drei erzwungener Options-Schritte):
   gesendet wird sie erst mit **Übernehmen**. Die Karte hat dafür einen eigenen,
   unabhängigen Schalter gleichen Namens
 - 📌 **Sidebar-Panel-Schalter** (Opt-in)
+- ♻️ **Restore-Karte** — Backup-Datei aus `/config/health_o_mat_import/`
+  auswählen, Modus **Merge/Replace**, Datensätze und Zeitraum filtern,
+  **Dry-Run** ausführen, bei Replace `REPLACE` bestätigen und anwenden.
+  Personen-Mapping ist möglich; vor dem echten Restore wird automatisch ein
+  Sicherheitsbackup geschrieben
 - 📄 **CSV-Export** direkt aus dem Panel anstoßen
   (`drinks` / `blood_pressure` / `all`, geschrieben nach
   `/config/health_o_mat_export/`)
 - 💾 **Backup** direkt aus dem Panel auslösen (ruft den `health_o_mat.backup`-Service)
 - ➕ **Person anlegen** — öffnet den Standard-HA-Config-Flow (kein eigener Dialog)
 - 🗑️ **Person löschen** — nur Admin, mit **Doppelbestätigung** (die Bestätigung
-  muss dem Personen-Schlüssel entsprechen). **Achtung:** Das Löschen entfernt
-  nur die Integration samt Entities — der Store wird nicht aufgeräumt, und ein
-  **Restore des Backups ist weiterhin nicht implementiert**; vorher ein Backup
-  erstellen
+  muss dem Personen-Schlüssel entsprechen). **Achtung:** Das entfernt die
+  Integration samt Entities und ist **kein Hard-Delete der Gesundheitsdaten** —
+  der Store wird nicht aufgeräumt. Ein Backup lässt sich inzwischen über die
+  Restore-Karte zurückspielen; für vollständige Datenentfernung siehe
+  [Löschen, Audit & Datenschutz](#löschen-audit--datenschutz)
 
 **Schreibrechte:** Die **Alltagseingaben bleiben für alle HA-Nutzer offen** —
 Buchen, Messen, Melden und Undo funktionieren unabhängig von Admin-Rechten. Nur
@@ -631,9 +900,28 @@ nicht mehr vorhanden); ihre Registry-Einträge und `unique_id`s bleiben bestehen
 Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
 unberührt und funktioniert unabhängig vom Panel.
 
+## Sprache & Internationalisierung (de/en)
+
+Panel, Karte, Karten-Editor und Admin-Ansicht folgen der **HA-Sprache**
+(`hass.language`) — **Deutsch und Englisch** vollständig. Ein Sprachwechsel zur
+Laufzeit rendert die Oberfläche neu, ohne Reload.
+
+- **HA-nativ statt eigenem Framework:** Die UI-Texte liegen als flache Schlüssel
+  im erlaubten `common`-Bereich (`component.health_o_mat.common.*`) und werden
+  im Frontend über `frontend/get_translations` (`category: "common"`,
+  `integration: ["health_o_mat"]`) geladen und pro Sprache gecacht.
+- **Sauberer Fallback:** Eine eingebettete de/en-Fallback-Map fängt fehlende
+  Übersetzungen ab; rohe `ui_…`-Keys werden **nie** angezeigt.
+- **Zahlen/Datum/relative Zeit** laufen über `Intl`/`hass.locale`.
+- **Entity- und Service-Übersetzungen** bleiben unverändert HA-nativ
+  (`translations/de.json` / `en.json`).
+- Übersetzungsbeiträge betreffen nur die `translations/*.json` — keine Logik.
+
 ## E2E-Tests (Playwright)
 
-Der Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
+**Aktueller Stand:** **18 E2E-Tests** (realer HA-Docker-Stack) und **1120
+Unit-Tests**; `ruff check .` und `ruff format --check .` sind clean. Der
+Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
 abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
 **Chromium** (Playwright) an. Das Panel ist ein bundler-freies Vanilla-JS-Web-
 Component ohne Python-Testfläche — ein realer Browser ist die einzige
@@ -656,6 +944,23 @@ Zusätzlich (`tests_e2e/test_wellbeing_confirm_e2e.py`, REQ-HOM-114):
   Bestätigungsbutton erscheint, erst dessen Klick schreibt den Wert
 - Panel-Admin-Option pro Person: Checkbox speichert, der Detail-Tab meldet erst
   nach dem Bestätigungsbutton
+
+Zusätzlich (`tests_e2e/test_history_e2e.py`, REQ-HOM-115/120):
+
+- **Rückdatieren** über das Zeitpunktfeld: der Eintrag landet am gewählten Tag
+  (z. B. „Gestern"), nicht in „Heute"
+- **Void im Verlauf:** gelöschter Eintrag verschwindet aus „Heute" und ist im
+  Filter **„Auch gelöscht"** sichtbar
+- **Restore:** Wiederherstellen stellt den Vorher-Wert wieder her
+
+Zusätzlich (`tests_e2e/test_i18n_e2e.py`, REQ-HOM-117):
+
+- Panel rendert bei **en-US** englische Labels (kein roher `ui_…`-Key)
+- Karte rendert bei **en-US** englische Labels
+
+Die Karten-Konfiguration ist außerdem in `tests_e2e/test_card_config_e2e.py`
+abgesichert (Sichtbarkeit der Blöcke, explizite BD-Eingabe, Wellbeing-Eingabe,
+Resave der Konfiguration).
 
 **Nicht Teil der Unit-Suite:** `pytest` im Repo-Root sammelt weiterhin nur
 `tests/` ein. Die Browser-Suite hat eine eigene Konfiguration

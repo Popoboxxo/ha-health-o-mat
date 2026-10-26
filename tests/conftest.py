@@ -163,6 +163,44 @@ if not _USING_REAL_HA:
         def __call__(self, value):
             return value
 
+    class TimeSelector:
+        """Minimal stand-in for homeassistant.helpers.selector.TimeSelector.
+
+        Validates nothing (the real selector delegates to ``cv.time``); the
+        options-flow tests exercise the HA-free normalisation instead.
+        """
+
+        selector_type = "time"
+
+        def __init__(self, config=None) -> None:
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
+    class SelectOptionDict(dict):
+        """Minimal stand-in for homeassistant.helpers.selector.SelectOptionDict."""
+
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+
+    class SelectSelectorConfig:
+        """Minimal stand-in for homeassistant.helpers.selector.SelectSelectorConfig."""
+
+        def __init__(self, **kwargs) -> None:
+            self.config = kwargs
+
+    class SelectSelector:
+        """Pass-through stand-in for homeassistant.helpers.selector.SelectSelector."""
+
+        selector_type = "select"
+
+        def __init__(self, config=None) -> None:
+            self.config = config
+
+        def __call__(self, value):
+            return value
+
     class OptionsFlow:
         """Minimal stand-in for homeassistant.config_entries.OptionsFlow."""
 
@@ -171,6 +209,9 @@ if not _USING_REAL_HA:
 
         def async_show_form(self, **kwargs):
             return {"type": "form", **kwargs}
+
+        def async_show_menu(self, **kwargs):
+            return {"type": "menu", **kwargs}
 
     class HomeAssistant:
         """Minimal stand-in for homeassistant.core.HomeAssistant (type hints only)."""
@@ -380,6 +421,14 @@ if not _USING_REAL_HA:
             "homeassistant.helpers.selector",
             TextSelector=TextSelector,
             TextSelectorConfig=TextSelectorConfig,
+            TimeSelector=TimeSelector,
+            SelectSelector=SelectSelector,
+            SelectSelectorConfig=SelectSelectorConfig,
+            SelectOptionDict=SelectOptionDict,
+        ),
+        "homeassistant.helpers.event": _module(
+            "homeassistant.helpers.event",
+            async_track_time_change=MagicMock(),
         ),
         "homeassistant.helpers.update_coordinator": _module(
             "homeassistant.helpers.update_coordinator",

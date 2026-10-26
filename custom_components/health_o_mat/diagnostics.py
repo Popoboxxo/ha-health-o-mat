@@ -9,7 +9,8 @@ landet üblicherweise in einem öffentlichen GitHub-Issue. Deshalb gilt eine str
 **Allow-List** statt einer Deny-List:
 
 Erlaubt: Integrations-/Entry-/Schema-Versionen, Entity-IDs der Person,
-``entry.options`` (Personennamen darin maskiert) und reine **Zähler**.
+``entry.options`` (Personennamen darin maskiert) und reine **Zähler**
+(gesamt/aktiv/voided je Datensatz sowie Audit-Anzahl).
 Verboten: ml-Mengen je Buchung, sys/dia/puls, Wohlbefinden-Status, Personennamen,
 rohe Zeitstempel. ``total_ml_lifetime`` wird bewusst weggelassen (grenzwertige
 Gesundheitsmenge, vgl. Fund N-5).
@@ -60,12 +61,57 @@ def redact_diagnostics(raw: Mapping[str, Any]) -> dict[str, Any]:
         },
         "entities": sorted(str(entity) for entity in _as_sequence(raw.get("entity_ids"))),
         "options": _redact_options(raw.get("options")),
-        "counters": {
-            "drinks": _count(store_entry.get("drinks")),
-            "readings": _count(store_entry.get("readings")),
-            "wellbeing_history": _count(store_entry.get("wellbeing_history")),
-        },
+        "counters": _counters(store_entry),
     }
+
+
+def _counters(store_entry: Mapping[str, Any]) -> dict[str, int]:
+    """Reine Zähler je Datensatz — gesamt, aktiv und voided (M2a).
+
+    Die bestehenden Keys (`drinks`, `readings`, `wellbeing_history`) behalten
+    ihre Bedeutung (Gesamtzahl der Rohliste bzw. Historie). Die `*_active`/
+    `*_voided`-Keys sind additiv und erlauben die Unterscheidung ohne jede
+    inhaltliche Angabe (keine Mengen, Werte oder Zeitstempel).
+    """
+    drinks_total, drinks_voided = _split_count(store_entry.get("drinks"))
+    readings_total, readings_voided = _split_count(store_entry.get("readings"))
+    wellbeing_total, wellbeing_voided = _wellbeing_counts(store_entry)
+    return {
+        "drinks": drinks_total,
+        "drinks_active": drinks_total - drinks_voided,
+        "drinks_voided": drinks_voided,
+        "readings": readings_total,
+        "readings_active": readings_total - readings_voided,
+        "readings_voided": readings_voided,
+        "wellbeing_history": _count(store_entry.get("wellbeing_history")),
+        "wellbeing_entries": wellbeing_total,
+        "wellbeing_active": wellbeing_total - wellbeing_voided,
+        "wellbeing_voided": wellbeing_voided,
+        "audit_events": _count(store_entry.get("audit_log")),
+    }
+
+
+def _split_count(value: Any) -> tuple[int, int]:
+    """(gesamt, voided) einer Buchungsliste — voided = gesetztes `voided_at`."""
+    items = _as_sequence(value)
+    voided = sum(1 for item in items if isinstance(item, Mapping) and item.get("voided_at"))
+    return len(items), voided
+
+
+def _wellbeing_counts(store_entry: Mapping[str, Any]) -> tuple[int, int]:
+    """(gesamt, voided) der Wohlbefinden-Meldungen.
+
+    Ab v4 zählt `wellbeing_entries`; für Vor-v4-Bestände ohne Ereignisliste
+    wird der Legacy-Spiegel (aktueller Wert + Historie) als aktiv gezählt.
+    """
+    entries = store_entry.get("wellbeing_entries")
+    if isinstance(entries, list):
+        return _split_count(entries)
+    legacy = _count(store_entry.get("wellbeing_history"))
+    current = store_entry.get("wellbeing")
+    if isinstance(current, Mapping) and current.get("status"):
+        legacy += 1
+    return legacy, 0
 
 
 def _as_sequence(value: Any) -> list[Any]:

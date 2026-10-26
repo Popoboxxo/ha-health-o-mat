@@ -181,8 +181,10 @@ def _entry(
 
 
 def _store(data: dict):
+    """Store-Fake: `data` ist bereits die aktive Sicht (wie im Produktionspfad)."""
     store = MagicMock()
     store.all_entries.return_value = data
+    store.active_entry.side_effect = lambda entry_id: data.get(entry_id, {})
     return store
 
 
@@ -190,11 +192,19 @@ def _write_store() -> MagicMock:
     """Store-Fake mit async-Write-Methoden (Aufrufe + Rückgaben injizierbar)."""
     store = MagicMock()
     store.all_entries.return_value = {}
+    store.active_entry.return_value = {}
     store.add_drink = AsyncMock()
     store.add_reading = AsyncMock()
     store.set_wellbeing = AsyncMock()
     store.remove_last_drink = AsyncMock(return_value=True)
     store.remove_last_reading = AsyncMock(return_value=True)
+    store.remove_last_wellbeing = AsyncMock(return_value=True)
+    store.void_drink = AsyncMock(return_value=True)
+    store.void_reading = AsyncMock(return_value=True)
+    store.void_wellbeing = AsyncMock(return_value=True)
+    store.restore_drink = AsyncMock(return_value=True)
+    store.restore_reading = AsyncMock(return_value=True)
+    store.restore_wellbeing = AsyncMock(return_value=True)
     return store
 
 
@@ -767,6 +777,9 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_PANEL_DATA,
     ws_api.COMMAND_BOOK_DRINK,
     ws_api.COMMAND_UNDO_LAST,
+    ws_api.COMMAND_LIST_HISTORY,
+    ws_api.COMMAND_VOID_ENTRY,
+    ws_api.COMMAND_RESTORE_ENTRY,
     ws_api.COMMAND_SAVE_MEASUREMENT,
     ws_api.COMMAND_SET_WELLBEING,
     ws_api.COMMAND_SUBSCRIBE,
@@ -778,6 +791,8 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_START_PERSON_FLOW,
     ws_api.COMMAND_DELETE_PERSON,
     ws_api.COMMAND_BACKUP,
+    ws_api.COMMAND_LIST_IMPORT_FILES,
+    ws_api.COMMAND_RESTORE_BACKUP,
 )
 
 
@@ -828,6 +843,50 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
         )["ml"]
         == 250
     )
+
+    # list_history: entry_id + kind Pflicht, include_voided strikt bool
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_LIST_HISTORY](
+            {"id": 1, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1"}
+        )
+    assert (
+        schemas[ws_api.COMMAND_LIST_HISTORY](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": "drinks",
+            }
+        )["include_voided"]
+        is False
+    )
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_LIST_HISTORY](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": "drinks",
+                "include_voided": "true",
+            }
+        )
+
+    # void_entry/restore_entry: item_id Pflicht (`id` ist die Message-ID)
+    for command in (ws_api.COMMAND_VOID_ENTRY, ws_api.COMMAND_RESTORE_ENTRY):
+        with pytest.raises(vol.Invalid):
+            schemas[command]({"id": 1, "type": command, "entry_id": "e1", "kind": "drinks"})
+        assert (
+            schemas[command](
+                {
+                    "id": 1,
+                    "type": command,
+                    "entry_id": "e1",
+                    "kind": "wellbeing",
+                    "item_id": "w1",
+                }
+            )["item_id"]
+            == "w1"
+        )
 
     # save_measurement: sys/dia Pflicht und bereichsgeprüft
     with pytest.raises(vol.Invalid):
@@ -929,6 +988,16 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
         == 1
     )
     assert schemas[ws_api.COMMAND_BACKUP]({"id": 1, "type": ws_api.COMMAND_BACKUP})["id"] == 1
+    assert (
+        schemas[ws_api.COMMAND_RESTORE_BACKUP](
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_RESTORE_BACKUP,
+                "filename": "backup.json",
+            }
+        )["mode"]
+        == "merge"
+    )
 
 
 def test_register_ws_api_uses_real_registration():
@@ -1140,7 +1209,7 @@ def test_undo_last_drinks_default(monkeypatch):
     )
 
     assert connection.results == [(1, None)]
-    store.remove_last_drink.assert_awaited_once_with("e1")
+    store.remove_last_drink.assert_awaited_once_with("e1", actor="user-1", audit_limit=1000)
     store.remove_last_reading.assert_not_called()
     assert coordinator.updated == [NOW.isoformat()]
 
@@ -1160,7 +1229,7 @@ def test_undo_last_drink_alias(monkeypatch):
         )
     )
 
-    store.remove_last_drink.assert_awaited_once_with("e1")
+    store.remove_last_drink.assert_awaited_once_with("e1", actor="user-1", audit_limit=1000)
     store.remove_last_reading.assert_not_called()
 
 
@@ -1184,7 +1253,7 @@ def test_undo_last_blood_pressure(monkeypatch):
         )
     )
 
-    store.remove_last_reading.assert_awaited_once_with("e1")
+    store.remove_last_reading.assert_awaited_once_with("e1", actor="user-1", audit_limit=1000)
     store.remove_last_drink.assert_not_called()
 
 
@@ -1361,7 +1430,14 @@ def test_set_wellbeing_valid_key(monkeypatch):
     )
 
     assert connection.results == [(1, None)]
-    store.set_wellbeing.assert_awaited_once_with("e1", "good", NOW.isoformat())
+    store.set_wellbeing.assert_awaited_once_with(
+        "e1",
+        "good",
+        NOW.isoformat(),
+        created_ts_iso=NOW.isoformat(),
+        actor="user-1",
+        audit_limit=1000,
+    )
     assert coordinator.updated == [NOW.isoformat()]
 
 
@@ -1402,7 +1478,14 @@ def test_set_wellbeing_accepts_numeric_score(monkeypatch):
     )
 
     assert connection.results == [(3, None)]
-    store.set_wellbeing.assert_awaited_once_with("e1", "good", NOW.isoformat())
+    store.set_wellbeing.assert_awaited_once_with(
+        "e1",
+        "good",
+        NOW.isoformat(),
+        created_ts_iso=NOW.isoformat(),
+        actor="user-1",
+        audit_limit=1000,
+    )
 
 
 def test_set_wellbeing_requires_key_or_score(monkeypatch):
@@ -1668,6 +1751,7 @@ SETTINGS_DEFAULTS = {
     "sys_threshold": 140,
     "dia_threshold": 90,
     "retention_months": 0,
+    "audit_limit": 1000,
     "enable_sidebar_panel": False,
     "wellbeing_confirm": False,
 }
@@ -1747,6 +1831,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "retention_months": 6,
                 "enable_sidebar_panel": True,
                 "wellbeing_confirm": False,
+                "audit_limit": 1000,
                 "areas": {"drink": True, "bp": True, "wellbeing": True},
             },
         )
@@ -2581,6 +2666,8 @@ def test_admin_only_commands_are_marked():
         ws_api.COMMAND_START_PERSON_FLOW,
         ws_api.COMMAND_DELETE_PERSON,
         ws_api.COMMAND_BACKUP,
+        ws_api.COMMAND_RESTORE_BACKUP,
+        ws_api.COMMAND_LIST_IMPORT_FILES,
     }
     for command in (
         ws_api.COMMAND_BOOK_DRINK,
@@ -3009,3 +3096,783 @@ def test_req_hom_114_panel_data_carries_wellbeing_confirm(monkeypatch, options, 
     assert payload is not None
     assert payload["wellbeing_confirm"] is expected
     assert isinstance(payload["wellbeing_confirm"], bool)
+
+
+# ============================================================================
+# M2a: panel_data zeigt keine voided Einträge
+# ============================================================================
+
+
+def _load_store_module():
+    """Store-Modul im selben Fake-Paket (auch bei früherem Laden wiederverwenden)."""
+    name = f"{_PKG}.store"
+    if name in sys.modules:
+        return sys.modules[name]
+    return _load("store")
+
+
+def _real_store():
+    """HealthOMatStore mit gemocktem HA-Store-Backend (leerer Start)."""
+    store = _load_store_module().HealthOMatStore(MagicMock())
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value=None)
+    store._store.async_save = AsyncMock(return_value=None)
+    asyncio.run(store.async_load())
+    return store
+
+
+def _panel_hass_for_store(store, entry, monkeypatch) -> FakeHass:
+    hass = _write_hass(store, [entry])
+    monkeypatch.setattr(ws_api.er, "async_get", lambda hass: object())
+    monkeypatch.setattr(ws_api.er, "async_entries_for_config_entry", lambda registry, entry_id: [])
+    monkeypatch.setattr(ws_api.dt_util, "now", lambda: NOW)
+    return hass
+
+
+def test_m2a_panel_data_excludes_voided_entries(monkeypatch):
+    """[M2a] Voided Drinks/Readings/Wellbeing fehlen in today/bp/wellbeing."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 900, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    asyncio.run(store.add_reading("e1", "2026-10-15T09:00:00", 120, 80, 60))
+    asyncio.run(store.add_reading("e1", "2026-10-15T10:00:00", 200, 120, 99))
+    asyncio.run(store.void_reading("e1", store.entry("e1")["readings"][1]["id"]))
+    asyncio.run(store.set_wellbeing("e1", "good", "2026-10-15T08:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "okay", "2026-10-15T09:00:00"))
+    asyncio.run(store.set_wellbeing("e1", "bad", "2026-10-15T10:00:00"))
+    asyncio.run(store.void_wellbeing("e1", store.entry("e1")["wellbeing_entries"][2]["id"]))
+
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["today"]["ml"] == 300
+    assert payload["today"]["count"] == 1
+    assert payload["today"]["breakdown"] == {"Wasser": 300}
+    assert payload["today"]["yesterday_ml"] == 0
+
+    assert payload["bp"]["sys"] == 120
+    assert payload["bp"]["dia"] == 80
+    assert payload["bp"]["pulse"] == 60
+    entries = payload["bp"]["entries"]
+    assert len(entries) == 1
+    assert entries[0]["id"] == store.entry("e1")["readings"][0]["id"]
+    assert (entries[0]["sys"], entries[0]["dia"], entries[0]["pulse"]) == (120, 80, 60)
+    assert payload["bp"]["avg7"]["sys"] == 120.0
+    assert payload["bp"]["warning"] is False
+
+    assert payload["wellbeing"]["key"] == "okay"
+    assert payload["wellbeing"]["at"] == "2026-10-15T09:00:00"
+    assert [item["key"] for item in payload["wellbeing"]["history"]] == ["good"]
+
+    assert payload["undo"] == {"drink": True, "blood_pressure": True}
+
+
+def test_m2a_panel_data_undo_flags_require_active_entries(monkeypatch):
+    """[M2a] undo-Flags sind nur true, wenn aktive Einträge existieren."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][0]["id"]))
+    asyncio.run(store.add_reading("e1", "2026-10-15T09:00:00", 120, 80, 60))
+    asyncio.run(store.void_reading("e1", store.entry("e1")["readings"][0]["id"]))
+
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert payload["undo"] == {"drink": False, "blood_pressure": False}
+    assert payload["today"]["ml"] == 0
+    assert payload["today"]["count"] == 0
+    assert payload["bp"]["entries"] == []
+    assert payload["bp"]["sys"] is None
+    assert payload["bp"]["category"] is None
+    assert payload["wellbeing"]["key"] is None
+
+
+def test_m2a_panel_data_keeps_contract_keys_with_voided_entries(monkeypatch):
+    """[M2a] Voided ändert nur Werte, nie das Payload-Vertragsgerüst."""
+    store = _real_store()
+    asyncio.run(store.add_drink("e1", "2026-10-15T08:00:00", 300, "Wasser", "button"))
+    asyncio.run(store.add_drink("e1", "2026-10-15T09:00:00", 900, "Kaffee", "button"))
+    asyncio.run(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass_for_store(store, entry, monkeypatch)
+
+    payload = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert set(payload) == {
+        "entry_id",
+        "person",
+        "person_slug",
+        "areas",
+        "person_anchor",
+        "goal_ml",
+        "reset_hour",
+        "today",
+        "undo",
+        "bp",
+        "wellbeing",
+        "wellbeing_scale",
+        "quick_drinks",
+        "wellbeing_confirm",
+        "entities",
+    }
+    assert payload["goal_ml"] == 2000
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["today"]["percent"] == 15.0
+
+
+# --- M2b: Historie + Void/Restore + Audit-Cap -------------------------------
+
+
+def _history_store(items_by_list: dict[str, list[dict]]) -> MagicMock:
+    """Store-Fake, dessen `entry()` die übergebenen Rohlisten liefert."""
+    raw = {
+        "drinks": [],
+        "readings": [],
+        "wellbeing_entries": [],
+        **items_by_list,
+    }
+    store = _write_store()
+    store.entry = MagicMock(return_value=raw)
+    return store
+
+
+def _history_entry(kind: str, item_id: str, ts: str, *, voided_at=None, **extra) -> dict:
+    return {
+        "id": item_id,
+        "ts": ts,
+        "created_at": extra.pop("created_at", ts),
+        "voided_at": voided_at,
+        "voided_by": extra.pop("voided_by", None),
+        "void_reason": extra.pop("void_reason", None),
+        **extra,
+    }
+
+
+def test_list_history_defaults_to_active_entries_only():
+    """`list_history` filtert voided Einträge standardmäßig heraus."""
+    store = _history_store(
+        {
+            "drinks": [
+                _history_entry(
+                    "drinks", "d1", "2026-10-14T08:00:00", ml=250, type="Wasser", src="button"
+                ),
+                _history_entry(
+                    "drinks",
+                    "d2",
+                    "2026-10-14T09:00:00",
+                    voided_at="2026-10-14T10:00:00",
+                    voided_by="user-1",
+                    void_reason="tippfehler",
+                    ml=500,
+                    type="Kaffee",
+                    src="button",
+                ),
+            ]
+        }
+    )
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 1, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "drinks"},
+        )
+    )
+
+    assert connection.errors == []
+    payload = connection.results[0][1]
+    assert payload["kind"] == "drinks"
+    assert [item["id"] for item in payload["entries"]] == ["d1"]
+    assert payload["entries"][0]["ml"] == 250
+    assert payload["entries"][0]["voided_at"] is None
+
+
+def test_list_history_include_voided_sorted_desc_and_normalized():
+    """`include_voided` liefert die Rohhistorie, ts absteigend, Felder normalisiert."""
+    store = _history_store(
+        {
+            "readings": [
+                _history_entry(
+                    "blood_pressure",
+                    "r1",
+                    "2026-10-14T08:00:00",
+                    sys=120,
+                    dia=80,
+                    pulse=60,
+                    note="",
+                ),
+                _history_entry(
+                    "blood_pressure",
+                    "r2",
+                    "2026-10-14T09:00:00",
+                    created_at="2026-10-14T09:00:05",
+                    voided_at="2026-10-14T09:30:00",
+                    voided_by="user-9",
+                    void_reason="falsch",
+                    sys=130,
+                    dia=85,
+                    pulse=65,
+                    note="morgens",
+                ),
+            ]
+        }
+    )
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": "readings",
+                "include_voided": True,
+            },
+        )
+    )
+
+    payload = connection.results[0][1]
+    assert payload["kind"] == "blood_pressure"
+    assert [item["id"] for item in payload["entries"]] == ["r2", "r1"]
+    first = payload["entries"][0]
+    assert first["voided_by"] == "user-9"
+    assert first["void_reason"] == "falsch"
+    assert (first["sys"], first["dia"], first["pulse"], first["note"]) == (130, 85, 65, "morgens")
+    assert first["created_at"] == "2026-10-14T09:00:05"
+
+
+def test_list_history_wellbeing_kind():
+    """`kind=wellbeing` liest die Ereignisliste inkl. `key`."""
+    store = _history_store(
+        {
+            "wellbeing_entries": [
+                _history_entry("wellbeing", "w1", "2026-10-14T08:00:00", key="good"),
+                _history_entry("wellbeing", "w2", "2026-10-14T09:00:00", key="bad"),
+            ]
+        }
+    )
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 3, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "wellbeing"},
+        )
+    )
+
+    entries = connection.results[0][1]["entries"]
+    assert [item["key"] for item in entries] == ["bad", "good"]
+
+
+def test_list_history_unknown_kind_sends_error():
+    """Unbekanntes Ziel → `invalid_format`, kein Store-Zugriff."""
+    store = _history_store({})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "tea"},
+        )
+    )
+
+    assert connection.errors[0][1] == "invalid_format"
+    assert connection.results == []
+
+
+def test_void_entry_calls_store_void_with_actor_and_audit_limit(monkeypatch):
+    """`void_entry` delegiert an `store.void_*` und refresht."""
+    _now(monkeypatch)
+    store = _history_store({})
+    coordinator = FakeCoordinator()
+    hass = _write_hass(
+        store,
+        [_entry("e1", options={"audit_limit": 250})],
+        {"e1": coordinator},
+    )
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            connection,
+            {
+                "id": 5,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "blood_pressure",
+                "item_id": "r1",
+            },
+        )
+    )
+
+    store.void_reading.assert_awaited_once_with("e1", "r1", actor="user-1", audit_limit=250)
+    assert connection.results == [(5, {"ok": True, "kind": "blood_pressure", "id": "r1"})]
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+def test_void_entry_missing_target_sends_not_found():
+    """Bereits gelöscht/unbekannt → `not_found`, kein Refresh."""
+    store = _history_store({})
+    store.void_drink = AsyncMock(return_value=False)
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            connection,
+            {
+                "id": 6,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "drinks",
+                "item_id": "nope",
+            },
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    assert coordinator.updated == []
+
+
+def test_restore_entry_calls_store_restore():
+    """`restore_entry` delegiert an `store.restore_*`."""
+    store = _history_store({})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_restore_entry(
+            hass,
+            connection,
+            {
+                "id": 7,
+                "type": ws_api.COMMAND_RESTORE_ENTRY,
+                "entry_id": "e1",
+                "kind": "wellbeing",
+                "item_id": "w1",
+            },
+        )
+    )
+
+    store.restore_wellbeing.assert_awaited_once_with("e1", "w1", actor="user-1", audit_limit=1000)
+    assert connection.results == [(7, {"ok": True, "kind": "wellbeing", "id": "w1"})]
+
+
+def test_undo_last_wellbeing(monkeypatch):
+    """`undo_last` unterstützt kind=wellbeing (Void statt Pop)."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 8, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "wellbeing"},
+        )
+    )
+
+    store.remove_last_wellbeing.assert_awaited_once_with("e1", actor="user-1", audit_limit=1000)
+    assert connection.results == [(8, None)]
+
+
+def test_undo_last_wellbeing_empty_sends_error(monkeypatch):
+    """Keine aktive Wellbeing-Meldung → `not_found` mit passendem Text."""
+    _now(monkeypatch)
+    store = _write_store()
+    store.remove_last_wellbeing = AsyncMock(return_value=False)
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 9, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "wellbeing"},
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    assert "Wohlbefinden" in connection.errors[0][2]
+
+
+def test_book_drink_forwards_actor_and_audit_limit(monkeypatch):
+    """WS-Schreibpfade übergeben Akteur und Audit-Cap aus den Options."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1", options={"audit_limit": 0})])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 10, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 250},
+        )
+    )
+
+    _args, kwargs = store.add_drink.await_args
+    assert kwargs == {
+        "created_ts_iso": NOW.isoformat(),
+        "actor": "user-1",
+        "audit_limit": 0,
+    }
+
+
+def test_settings_audit_limit_default_zero_and_validation():
+    """`audit_limit` ist strikt (int >= 0, max 1_000_000), 0 = unbegrenzt."""
+    assert ws_api.build_settings(_entry("e1"))["audit_limit"] == 1000
+
+    updates, error = ws_api.parse_settings_message({"audit_limit": 0})
+    assert error is None and updates == {"audit_limit": 0}
+
+    updates, error = ws_api.parse_settings_message({"audit_limit": 2500})
+    assert error is None and updates == {"audit_limit": 2500}
+
+    for bad in (-1, "1000", 1000.5, True, 1_000_001):
+        _updates, error = ws_api.parse_settings_message({"audit_limit": bad})
+        assert error is not None and "audit_limit" in error, bad
+
+
+# --- restore_backup (M2c) ---------------------------------------------------
+
+
+def _restore_module():
+    return importlib.import_module(f"{_PKG}.restore")
+
+
+def test_restore_backup_requires_admin(monkeypatch):
+    """[M2c] Nicht-Admin → `unauthorized`, kein Restore-Aufruf."""
+    restore = _restore_module()
+    called = AsyncMock()
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _settings_hass(_entry("e1"))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_RESTORE_BACKUP, filename="backup.json"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    called.assert_not_awaited()
+
+
+def test_restore_backup_dry_run_returns_plan(monkeypatch):
+    """[M2c] Admin + Dry-Run → Plan wird unverändert zurückgegeben."""
+    restore = _restore_module()
+    payload = {
+        "plan": {"mode": "merge", "totals": {"added": 1}},
+        "applied": False,
+        "dry_run": True,
+        "backup_path": None,
+    }
+    called = AsyncMock(return_value=payload)
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_RESTORE_BACKUP,
+                filename="backup.json",
+                dry_run=True,
+                persons=["Max"],
+            ),
+        )
+    )
+
+    assert connection.results == [(1, payload)]
+    data = called.await_args.args[1]
+    kwargs = called.await_args.kwargs
+    assert data["filename"] == "backup.json"
+    assert data["dry_run"] is True
+    assert data["persons"] == ["Max"]
+    assert kwargs["actor"] == "user-1"
+
+
+def test_restore_backup_error_is_structured(monkeypatch):
+    """[M2c] Restore-Fehler → eigener Fehlercode `restore_failed`."""
+    restore = _restore_module()
+    monkeypatch.setattr(
+        restore,
+        "async_restore_command",
+        AsyncMock(side_effect=restore.RestoreError("Backup-Version 9 zu neu")),
+    )
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_RESTORE_BACKUP, filename="backup.json"),
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "restore_failed"
+    assert "Version 9" in connection.errors[0][2]
+
+
+# --- REQ-HOM-120: Rückdatierung über die WebSocket-Schreibpfade --------------
+
+
+def test_req_hom_120_book_drink_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `book_drink` trennt `ts` (Rückdatierung) von `created_at`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_BOOK_DRINK,
+                "entry_id": "e1",
+                "ml": 250,
+                "ts": "2026-10-15T09:30:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.add_drink.await_args.args[1].startswith("2026-10-15T09:30:00")
+    assert store.add_drink.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+def test_req_hom_120_save_measurement_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `save_measurement` übernimmt das optionale `ts`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+                "ts": "2026-10-15T07:15:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.add_reading.await_args.args[1].startswith("2026-10-15T07:15:00")
+    assert store.add_reading.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+def test_req_hom_120_set_wellbeing_sends_backdated_ts(monkeypatch):
+    """[REQ-HOM-120] `set_wellbeing` übernimmt das optionale `ts`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {
+                "id": 3,
+                "type": ws_api.COMMAND_SET_WELLBEING,
+                "entry_id": "e1",
+                "key": "good",
+                "ts": "2026-10-14T20:00:00",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.set_wellbeing.await_args.args[2].startswith("2026-10-14T20:00:00")
+    assert store.set_wellbeing.await_args.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+@pytest.mark.parametrize("ts", ["kaputt", "2026-10-15T13:00:00", "1899-12-31T23:59:59"])
+@pytest.mark.parametrize(
+    ("handler", "message", "method"),
+    [
+        (
+            ws_api.websocket_book_drink,
+            {"ml": 250},
+            "add_drink",
+        ),
+        (
+            ws_api.websocket_save_measurement,
+            {"sys": 120, "dia": 80},
+            "add_reading",
+        ),
+        (
+            ws_api.websocket_set_wellbeing,
+            {"key": "good"},
+            "set_wellbeing",
+        ),
+    ],
+)
+def test_req_hom_120_ws_rejects_invalid_ts(monkeypatch, ts, handler, message, method):
+    """[REQ-HOM-120] Ungültig/zukünftig/zu alt → `invalid_format`, kein Schreibzugriff."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        handler(
+            hass,
+            connection,
+            {
+                "id": 9,
+                "type": "health_o_mat/test",
+                "entry_id": "e1",
+                **message,
+                "ts": ts,
+            },
+        )
+    )
+
+    assert connection.results == []
+    assert len(connection.errors) == 1
+    assert connection.errors[0][1] == ws_api.ERR_INVALID_FORMAT
+    assert "Zeitpunkt" in connection.errors[0][2]
+    getattr(store, method).assert_not_awaited()
+
+
+def test_req_hom_120_ws_without_ts_keeps_now(monkeypatch):
+    """[REQ-HOM-120] Ohne `ts` bleibt "jetzt" (rückwärtskompatibel)."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 4, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "e1", "ml": 250},
+        )
+    )
+
+    assert store.add_drink.await_args.args[1] == NOW.isoformat()
+
+
+# --- M3b: list_import_files (Admin-Restore-UI, REQ-HOM-116) -----------------
+
+
+def _import_dir(tmp_path):
+    folder = tmp_path / "health_o_mat_import"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def test_list_import_files_lists_only_regular_files_sorted(tmp_path):
+    """[M3b] Nur reguläre Dateien, sortiert, keine Verzeichnisse/Symlinks."""
+    folder = _import_dir(tmp_path)
+    (folder / "zeta.json").write_text("{}", encoding="utf-8")
+    (folder / "Alpha.json").write_text("{}", encoding="utf-8")
+    (folder / "beta.json").write_text("{}", encoding="utf-8")
+    (folder / "unterordner").mkdir()
+    (folder / ".versteckt.json").write_text("{}", encoding="utf-8")
+    outside = tmp_path / "aussen.json"
+    outside.write_text("{}", encoding="utf-8")
+    (folder / "symlink.json").symlink_to(outside)
+
+    files = ws_api._list_import_files(str(tmp_path))
+
+    assert files == ["Alpha.json", "beta.json", "zeta.json"]
+
+
+def test_list_import_files_missing_folder_is_empty(tmp_path):
+    """[M3b] Ein fehlender Import-Ordner ist kein Fehler."""
+    assert ws_api._list_import_files(str(tmp_path)) == []
+
+
+def test_list_import_files_ws_command_is_admin_only_and_returns_names(tmp_path):
+    """[M3b] WS-Kommando ist admin-only und liefert ausschließlich Basisnamen."""
+    folder = _import_dir(tmp_path)
+    (folder / "backup.json").write_text("{}", encoding="utf-8")
+
+    hass = FakeHass()
+    hass.config = SimpleNamespace(config_dir=str(tmp_path))
+    connection = FakeConnection(is_admin=True)
+
+    asyncio.run(ws_api.websocket_list_import_files(hass, connection, {"id": 7}))
+
+    assert connection.errors == []
+    assert connection.results == [(7, {"files": ["backup.json"]})]
+    assert ws_api.COMMAND_LIST_IMPORT_FILES in ws_api.ADMIN_ONLY_COMMANDS
+
+
+def test_list_import_files_ws_command_rejects_non_admin(tmp_path):
+    """[M3b] Nicht-Admins erhalten keine Dateiliste (Server-Gate, nicht nur UI)."""
+    folder = _import_dir(tmp_path)
+    (folder / "backup.json").write_text("{}", encoding="utf-8")
+
+    hass = FakeHass()
+    hass.config = SimpleNamespace(config_dir=str(tmp_path))
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(ws_api.websocket_list_import_files(hass, connection, {"id": 8}))
+
+    assert connection.results == []
+    assert connection.errors
+
+
+# --- Review-Fix S-13 --------------------------------------------------------
+
+
+def test_set_settings_partial_areas_keeps_disabled_keys():
+    """[S-13] Partielles `areas`-Update reaktiviert keine bestehenden False-Werte."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000, "areas": {"wellbeing": False}})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                areas={"drink": False},
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]["areas"]
+    assert stored == {"drink": False, "bp": True, "wellbeing": False}
+    assert connection.results[0][1]["areas"] == stored

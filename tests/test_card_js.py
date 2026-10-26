@@ -31,7 +31,16 @@ _CARD_JS = os.path.join(
 )
 
 # Erlaubte WS-Kommandos der eingebetteten Karte (nur lesend, kein Admin).
-_ALLOWED_WS_COMMANDS = {"list_persons", "panel_data", "subscribe"}
+_ALLOWED_WS_COMMANDS = {
+    "list_persons",
+    "panel_data",
+    "subscribe",
+    # REQ-HOM-115: Verlauf lesen und einzelne Einträge korrigieren (kein
+    # Admin-Vorgang, dieselbe API wie im Panel).
+    "list_history",
+    "void_entry",
+    "restore_entry",
+}
 
 # Admin-/Settings-Kommandos, die NIE in der Karte auftauchen dürfen.
 _FORBIDDEN_WS_COMMANDS = {
@@ -43,6 +52,8 @@ _FORBIDDEN_WS_COMMANDS = {
     "backup",
     "set_ui_settings",
     "get_ui_settings",
+    "restore_backup",
+    "list_import_files",
 }
 
 # Die sieben WHO-Blutdruck-Kategorien (logic.bp_category).
@@ -755,7 +766,7 @@ def test_card_editor_renders_all_nine_flags_in_two_groups():
     inputs = _js_method_block(editor, "_inputSection")
 
     assert "Anzeige" in display
-    assert "Eingabe &amp; Aktionen" in inputs
+    assert "Eingabe &amp; Aktionen" in inputs or "Eingabe & Aktionen" in inputs
     for key in (
         "show_person",
         "show_hydration",
@@ -1328,6 +1339,7 @@ def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
         "kind": "key",
         "key": "good",
         "score": None,
+        "ts": "",
     }, "der Klick merkt die Auswahl nicht inkl. Personenbezug vor"
     assert staged["calls"] == [], "der Klick meldet trotz Bestätigungsmodus sofort"
     assert 'data-action="wellbeing-confirm"' in staged["html"], (
@@ -1356,6 +1368,7 @@ def test_req_hom_114_card_defers_wellbeing_report_until_confirmation(tmp_path):
         "kind": "score",
         "key": "",
         "score": 7,
+        "ts": "",
     }, "die Zahleneingabe wird nicht vorgemerkt"
     assert score["calls"] == []
     assert score["confirmedCalls"][0][2]["score"] == 7
@@ -1459,3 +1472,581 @@ def test_req_hom_114_card_editor_toggle_writes_config(tmp_path):
     )
     assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default ist `false`)"
     assert editor["eventOff"].get("wellbeing_confirm") is None
+
+
+# --- REQ-HOM-120: Rückdatierung in der Karte --------------------------------
+
+_NODE_CARD_TS_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-role="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+  appendChild(child) { return child; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+  dispatchEvent() { return true; }
+  setAttribute() {}
+  removeAttribute() {}
+}
+
+const context = {
+  HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail ? init.detail : null;
+    }
+  },
+  customElements: { get: () => undefined, define: () => {} },
+  window: {},
+  document: { createElement: () => ({}), addEventListener: () => {} },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  __out: null,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const outPromise = vm.runInContext(
+  `(async () => {
+  function makeCard(confirm) {
+    const card = new HealthOMatCard();
+    card._config = { entry_id: "e1", wellbeing_confirm: confirm };
+    card._data = { person: "Caro", wellbeing: { key: "bad", label: "Schlecht" } };
+    card._activeEntry = "e1";
+    card._render = () => {};
+    card._loadData = () => Promise.resolve();
+    card._calls = [];
+    card._hass = {
+      callWS: () => Promise.resolve({}),
+      callService: (domain, service, payload) => {
+        card._calls.push([domain, service, payload]);
+        return Promise.resolve();
+      },
+      states: {},
+    };
+    card.shadowRoot._fields = {
+      "drink-ts": { value: "" },
+      "bp-ts": { value: "" },
+      "wb-ts": { value: "" },
+      "bp-sys": { value: "120" },
+      "bp-dia": { value: "80" },
+      "bp-pulse": { value: "" },
+      "bp-note": { value: "" },
+    };
+    return card;
+  }
+
+  const drink = makeCard(false);
+  drink.shadowRoot._fields["drink-ts"].value = "2026-10-24T18:30";
+  await drink._book(250, "Wasser");
+  const drinkResult = {
+    calls: drink._calls,
+    draft: drink._tsDraft["drink-ts"],
+    field: drink.shadowRoot._fields["drink-ts"].value,
+  };
+
+  const future = makeCard(false);
+  future.shadowRoot._fields["drink-ts"].value = "2999-01-01T10:00";
+  await future._book(250, "Wasser");
+  const futureResult = { calls: future._calls, error: future._actionError };
+
+  const bp = makeCard(false);
+  bp.shadowRoot._fields["bp-ts"].value = "2026-10-24T07:15";
+  await bp._saveBp();
+  const bpResult = { calls: bp._calls, draft: bp._tsDraft["bp-ts"] };
+
+  const wb = makeCard(true);
+  wb.shadowRoot._fields["wb-ts"].value = "2026-10-23T20:00";
+  wb._stageWellbeing("great", null);
+  const wbStaged = { pending: wb._wbPending, calls: wb._calls.slice() };
+  await wb._confirmWellbeing();
+  const wbConfirmed = { pending: wb._wbPending, calls: wb._calls };
+
+  const wbFuture = makeCard(false);
+  wbFuture.shadowRoot._fields["wb-ts"].value = "2999-01-01T10:00";
+  await wbFuture._reportWellbeing("great");
+  const wbFutureResult = { calls: wbFuture._calls, error: wbFuture._wbError };
+
+  __out = {
+    drink: drinkResult,
+    future: futureResult,
+    bp: bpResult,
+    wbStaged,
+    wbConfirmed,
+    wbFuture: wbFutureResult,
+  };
+  return __out;
+  })()`,
+  context,
+  { filename: "card-ts-probe.js" }
+);
+
+process.stdout.write(JSON.stringify(await outPromise));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_120_card_sends_ts_and_validates_future(tmp_path):
+    """[REQ-HOM-120] Karte: ts in allen drei Schreibpfaden, Zukunft blockiert."""
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_ts.mjs"
+    runner_path.write_text(_NODE_CARD_TS_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    out = json.loads(result.stdout)
+
+    drink = out["drink"]
+    assert len(drink["calls"]) == 1
+    assert drink["calls"][0][1] == "add_drink"
+    assert drink["calls"][0][2]["ts"]
+    assert drink["draft"] == "", "der Zeitpunkt-Entwurf wird nach Erfolg nicht geleert"
+    assert drink["field"] == ""
+
+    future = out["future"]
+    assert future["calls"] == [], "ein Zukunft-Zeitpunkt wird trotzdem gebucht"
+    assert "Zukunft" in future["error"]
+
+    bp = out["bp"]
+    assert len(bp["calls"]) == 1 and bp["calls"][0][1] == "add_blood_pressure"
+    assert bp["calls"][0][2]["ts"]
+    assert bp["draft"] == ""
+
+    staged = out["wbStaged"]
+    assert staged["calls"] == [], "die Vormerkung meldet trotz Bestätigungsmodus sofort"
+    assert staged["pending"]["ts"], "die Vormerkung trägt keinen Zeitpunkt"
+
+    confirmed = out["wbConfirmed"]
+    assert len(confirmed["calls"]) == 1 and confirmed["calls"][0][1] == "set_wellbeing"
+    assert confirmed["calls"][0][2]["ts"]
+    assert confirmed["pending"] is None
+
+    wb_future = out["wbFuture"]
+    assert wb_future["calls"] == []
+    assert "Zukunft" in wb_future["error"]
+
+
+def test_req_hom_120_card_renders_ts_fields_in_all_three_blocks():
+    """[REQ-HOM-120] Karte: kompaktes `datetime-local` in Getränk/BD/Wohlbefinden."""
+    text = _card_source()
+
+    assert 'this._tsFieldHtml("drink-ts")' in _js_method_block(text, "_drinkActions")
+    assert 'this._tsFieldHtml("drink-ts")' in _js_method_block(text, "_manualAmounts")
+    assert 'this._tsFieldHtml("bp-ts")' in _js_method_block(text, "_bloodPressureInput")
+    assert 'this._tsFieldHtml("wb-ts")' in _js_method_block(text, "_wellbeingInput")
+
+    field = _js_method_block(text, "_tsFieldHtml")
+    assert '<label class="field">' in field, "das Feld nutzt nicht das kompakte Feld-Layout"
+    assert 'type="datetime-local"' in field
+    assert 'data-role="${role}"' in field
+    # Leer = jetzt (kein stiller Fallback auf eine erfundene Zeit).
+    assert "leer = jetzt" in field
+
+
+def test_req_hom_120_card_payloads_carry_ts():
+    """[REQ-HOM-120] Alle drei Service-Payloads senden `ts` nur wenn gesetzt."""
+    text = _card_source()
+
+    assert re.search(r'_readEntryTs\(\s*"drink-ts"\s*\)', _js_method_block(text, "_book"))
+    assert re.search(r"payload\.ts\s*=\s*ts\.iso", _js_method_block(text, "_book"))
+    assert re.search(r'_readEntryTs\(\s*"bp-ts"\s*\)', _js_method_block(text, "_saveBp"))
+    assert re.search(r"payload\.ts\s*=\s*ts\.iso", _js_method_block(text, "_saveBp"))
+
+    stage = _js_method_block(text, "_stageWellbeing")
+    assert 'this._readEntryTs("wb-ts")' in stage
+    assert "ts: ts.iso" in stage
+    confirm = _js_method_block(text, "_confirmWellbeing")
+    assert "pending.ts" in confirm
+    report = _js_method_block(text, "_reportWellbeing")
+    assert "timestamp" in report and "payload.ts" in report
+
+
+def test_req_hom_120_card_time_label_relative_then_absolute():
+    """[REQ-HOM-120] Karte: frisch relativ, älter als 24 h absolut."""
+    text = _card_source()
+
+    label = _js_method_block(text, "_timeLabel")
+    assert "this._relativeTime(iso)" in label
+    assert "24 * 60 * 60 * 1000" in label
+    assert "pad(date.getDate())" in label
+    # Beide Anzeigepfade (BD, Wohlbefinden) nutzen den Helfer.
+    assert "_timeLabel(bp.at)" in text
+    assert "_timeLabel(wb.at)" in text
+
+
+# --- M3b: Undo für alle Typen + optionaler Verlauf --------------------------
+
+
+def test_card_show_history_defaults_to_false_and_is_not_a_show_key():
+    """[M3b] `show_history` ist Default AUS und unabhängig von CARD_SHOW_KEYS."""
+    text = _card_source()
+    normalizer = _js_function_block(text, "normalizeCardConfig")
+    keys = re.search(r"CARD_SHOW_KEYS\s*=\s*\[(.*?)\]", text, re.S)
+    assert keys is not None
+    assert "show_history" not in keys.group(1), "show_history darf nicht in CARD_SHOW_KEYS stehen"
+    assert re.search(r"showHistory:\s*toBool\(\s*source\.show_history\s*,\s*false\s*\)", normalizer)
+
+    editor = _js_class_block(text, "HealthOMatCardEditor")
+    inputs = _js_method_block(editor, "_inputSection")
+    assert 'data-key="show_history"' in inputs
+    assert "Verlauf anzeigen (letzte 5)" in inputs
+    assert 'key === "show_history"' in _js_method_block(editor, "_toggleFlag")
+
+
+def test_card_undo_and_history_use_the_expected_commands():
+    """[M3b] Card: kind-basiertes Undo, list_history mit include_voided."""
+    text = _card_source()
+    undo = _js_method_block(text, "_undo")
+    load = _js_method_block(text, "_loadHistory")
+
+    assert "remove_last_entry" in undo
+    assert "kind: undoKind" in undo
+    assert '"blood_pressure"' in undo and '"wellbeing"' in undo
+    assert "list_history" in load
+    assert "include_voided: true" in load, (
+        "die Karte kann gelöschte Einträge nicht wiederherstellen"
+    )
+    assert "history-void-confirm" in _js_method_block(text, "_historyBlock")
+    assert "Wirklich löschen?" in _js_method_block(text, "_historyBlock")
+    assert "history-restore" in _js_method_block(text, "_historyBlock")
+
+
+_NODE_CARD_HISTORY_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+  setAttribute() {}
+  removeAttribute() {}
+  dispatchEvent() { return true; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  CustomEvent: class {
+    constructor(type, init) { this.type = type; this.detail = init && init.detail; }
+  },
+  customElements: { get: () => undefined, define: () => {} },
+  window: {},
+  document: { createElement: () => ({}), addEventListener: () => {} },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+  setTimeout: () => 0,
+  clearTimeout: () => {},
+  __out: null,
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const promise = vm.runInContext(
+  `(async () => {
+  function makeCard() {
+    const card = new HealthOMatCard();
+    card._config = { entry_id: "e1", show_history: true };
+    card._activeEntry = "e1";
+    card._data = {
+      person: "Caro",
+      person_anchor: "caro",
+      undo: { drink: true, blood_pressure: true },
+      wellbeing: { key: "good", at: "2026-10-19T18:00:00+02:00" },
+      areas: { drink: true, bp: true, wellbeing: true },
+      wellbeing_scale: [
+        { key: "bad", label: "Schlecht" },
+        { key: "good", label: "Gut" },
+      ],
+    };
+    card._render = () => {};
+    card._loads = 0;
+    card._loadData = () => { card._loads += 1; return Promise.resolve(); };
+    card._calls = [];
+    card._wsCalls = [];
+    card._payloads = {
+      drinks: Array.from({ length: 7 }, (_, i) => ({
+        id: "d" + i,
+        ts: "2026-10-19T0" + (i % 9) + ":00:00+02:00",
+        ml: 200,
+        type: "Wasser",
+        voided_at: i === 1 ? "2026-10-19T10:00:00+02:00" : null,
+      })),
+      blood_pressure: [{ id: "b1", ts: "2026-10-19T07:00:00+02:00", sys: 120, dia: 80 }],
+      wellbeing: [{ id: "w1", ts: "2026-10-19T18:00:00+02:00", key: "good" }],
+    };
+    card._hass = {
+      callService: (domain, service, payload) => {
+        card._calls.push([domain, service, payload]);
+        return Promise.resolve();
+      },
+      callWS: (msg) => {
+        card._wsCalls.push(msg);
+        if (msg.type === "health_o_mat/list_history") {
+          return Promise.resolve({ kind: msg.kind, entries: card._payloads[msg.kind] || [] });
+        }
+        return Promise.resolve({});
+      },
+      states: {},
+    };
+    return card;
+  }
+
+  const history = makeCard();
+  await history._loadHistory();
+  const loaded = {
+    calls: history._wsCalls.slice(),
+    drinks: history._history.drinks.entries.length,
+    voidedVisible: history._history.drinks.entries.some((entry) => entry.voided_at),
+  };
+
+  const blockCard = makeCard();
+  blockCard._history = {
+    drinks: {
+      entries: blockCard._payloads.drinks.slice(0, 2),
+      loading: false,
+      loaded: true,
+      error: "",
+    },
+  };
+  const blockHtml = blockCard._historyBlock("drinks");
+  blockCard._beginHistoryVoid("drinks", "d0");
+  const confirmHtml = blockCard._historyBlock("drinks");
+
+  const voided = makeCard();
+  await voided._setHistoryEntryVoided("drinks", "d0", false);
+  const voidResult = {
+    call: voided._wsCalls[0],
+    loads: voided._loads,
+    confirm: voided._historyConfirm,
+  };
+
+  const restored = makeCard();
+  await restored._setHistoryEntryVoided("drinks", "d1", true);
+  const restoreResult = { call: restored._wsCalls[0], loads: restored._loads };
+
+  const undoBp = makeCard();
+  undoBp._history.blood_pressure = { entries: [{ id: "b1" }], loading: false, loaded: true };
+  await undoBp._undo("blood_pressure");
+
+  const undoWb = makeCard();
+  undoWb._history.wellbeing = { entries: [{ id: "w1" }], loading: false, loaded: true };
+  await undoWb._undo("wellbeing");
+
+  const editor = new HealthOMatCardEditor();
+  editor._config = { entry_id: "e1" };
+  editor._render = () => {};
+  const events = [];
+  editor.dispatchEvent = (event) => { events.push(event); return true; };
+  editor._toggleFlag("show_history", true);
+  const on = Object.assign({}, editor._config);
+  const eventOn = events[events.length - 1].detail.config;
+  editor._toggleFlag("show_history", false);
+  const off = Object.assign({}, editor._config);
+
+  __out = {
+    normalizer: {
+      default: normalizeCardConfig({}).showHistory,
+      enabled: normalizeCardConfig({ show_history: true }).showHistory,
+    },
+    loaded,
+    blockHtml,
+    confirmHtml,
+    htmlWithoutHistory: (() => {
+      const plain = makeCard();
+      plain._config = { entry_id: "e1" };
+      return plain._historyBlock("drinks");
+    })(),
+    voidResult,
+    restoreResult,
+    undoBp: undoBp._calls,
+    undoWb: undoWb._calls,
+    editor: {
+      on,
+      off,
+      eventOn,
+      hasOn: Object.prototype.hasOwnProperty.call(on, "show_history"),
+      hasOff: Object.prototype.hasOwnProperty.call(off, "show_history"),
+    },
+  };
+  return __out;
+  })()`,
+  context,
+  { filename: "card-history-probe.js" }
+);
+process.stdout.write(JSON.stringify(await promise));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_card_history_and_undo_for_all_kinds(tmp_path):
+    """[M3b] History lädt inkl. gelöschter Einträge, Void/Restore + Undo BP/WB."""
+    module_path = tmp_path / "health-o-mat-card.js"
+    module_path.write_bytes(Path(_CARD_JS).read_bytes())
+    runner_path = tmp_path / "runner_card_history.mjs"
+    runner_path.write_text(_NODE_CARD_HISTORY_RUNNER, encoding="utf-8")
+
+    node = shutil.which("node") or "node"
+    result = subprocess.run(
+        [node, str(runner_path), str(module_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    out = json.loads(result.stdout)
+
+    assert out["normalizer"] == {"default": False, "enabled": True}
+    loaded = out["loaded"]
+    assert [call["kind"] for call in loaded["calls"]] == [
+        "drinks",
+        "blood_pressure",
+        "wellbeing",
+    ]
+    assert all(call["include_voided"] is True for call in loaded["calls"])
+    assert loaded["drinks"] == 5, "die Karte zeigt nicht maximal 5 Einträge"
+    assert loaded["voidedVisible"] is True, "gelöschte Einträge fehlen im Kartenverlauf"
+
+    assert 'data-history="drinks"' in out["blockHtml"]
+    assert "Wasser" in out["blockHtml"] and "gelöscht" in out["blockHtml"]
+    assert 'data-action="history-restore"' in out["blockHtml"]
+    assert 'data-action="history-void"' in out["blockHtml"]
+    assert "Wirklich löschen?" in out["confirmHtml"]
+    assert 'data-action="history-void-confirm"' in out["confirmHtml"]
+    assert out["htmlWithoutHistory"] == "", "show_history=false rendert dennoch einen Verlauf"
+
+    assert out["voidResult"]["call"]["type"] == "health_o_mat/void_entry"
+    assert out["voidResult"]["call"]["item_id"] == "d0"
+    assert out["voidResult"]["loads"] == 1
+    assert out["voidResult"]["confirm"] is None
+    assert out["restoreResult"]["call"]["type"] == "health_o_mat/restore_entry"
+    assert out["restoreResult"]["call"]["item_id"] == "d1"
+
+    assert out["undoBp"] == [
+        ["health_o_mat", "remove_last_entry", {"person": "caro", "kind": "blood_pressure"}]
+    ]
+    assert out["undoWb"] == [
+        ["health_o_mat", "remove_last_entry", {"person": "caro", "kind": "wellbeing"}]
+    ]
+
+    editor = out["editor"]
+    assert editor["hasOn"] is True and editor["on"]["show_history"] is True
+    assert editor["eventOn"].get("show_history") is True
+    assert editor["hasOff"] is False, "Ausschalten muss den Key entfernen (Default false)"
+
+
+# --- REQ-HOM-117: card UI translations (inline loader) ---------------------
+
+_NODE_CARD_I18N_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const resources = JSON.parse(process.argv[3]);
+const context = {
+  HTMLElement: class HTMLElement {},
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+await context._loadUiTranslations({ language: "de", callWS: async () => ({ resources: {} }) });
+const german = context._t("ui_card_goal", "Ziel");
+
+await context._loadUiTranslations({ language: "en", callWS: async () => ({ resources }) });
+const english = context._t("ui_card_goal", "Ziel");
+const interpolated = context._t("ui_card_book_aria", "{label} mit {ml} Milliliter buchen", {
+  label: "Coffee",
+  ml: 250,
+});
+const rawKey = context._t("ui_missing");
+const scale = context.customElements._classes["health-o-mat-card"].prototype._wellbeingScale.call({
+  _data: { wellbeing_scale: [{ key: "good", label: "Gut" }] },
+});
+
+process.stdout.write(JSON.stringify({ german, english, interpolated, rawKey, scale }));
+"""
+
+
+def _run_node(tmp_path, runner_source: str, args: list[str], name: str) -> str:
+    """Fuehrt einen Node-Runner aus und liefert dessen stdout."""
+    runner_path = tmp_path / f"{name}.mjs"
+    runner_path.write_text(runner_source, encoding="utf-8")
+    result = subprocess.run(
+        [shutil.which("node") or "node", str(runner_path), *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Node-Runner {name} fehlgeschlagen (rc={result.returncode}): {result.stderr}"
+    )
+    return result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_117_card_inline_translations_and_language_switch(tmp_path):
+    """[REQ-HOM-117] Karte: inline Loader, Interpolation, Fallback, en-Label."""
+    resources = {
+        "component.health_o_mat.common.ui_card_goal": "Goal",
+        "component.health_o_mat.common.ui_common_wb_good": "Good",
+    }
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_CARD_I18N_RUNNER,
+            [str(Path(_CARD_JS)), json.dumps(resources)],
+            "runner_i18n_card",
+        )
+    )
+
+    assert out["german"] == "Ziel", "der deutsche Fallback geht verloren"
+    assert out["english"] == "Goal", "der Sprachwechsel greift nicht"
+    assert out["interpolated"] == "Coffee mit 250 Milliliter buchen", (
+        "`{platzhalter}` wird nicht interpoliert"
+    )
+    assert out["rawKey"] == "", "ein fehlender Key darf nie roh angezeigt werden"
+    assert out["scale"][0]["label"] == "Good", (
+        "das Server-Wellbeing-Label wird nicht per Key übersetzt"
+    )

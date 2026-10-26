@@ -8,10 +8,12 @@ These tests verify the actual behavior of HealthOMatStore by:
 """
 
 import asyncio
+import copy
 import importlib.util
 import os
 import sys
 import types
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -155,8 +157,8 @@ def test_add_drink_calls_async_save(mock_store_fixture):
 # ============================================================================
 # Test 2: remove_last_drink removes and updates lifetime
 # ============================================================================
-def test_remove_last_drink_removes_entry(mock_store_fixture):
-    """[STORE-005] remove_last_drink removes the last drink from the list."""
+def test_remove_last_drink_voids_entry(mock_store_fixture):
+    """[STORE-005] remove_last_drink voidet den letzten Eintrag (kein Hard-Delete)."""
     store, _ = mock_store_fixture
     _async_test(store.async_load())
 
@@ -169,12 +171,13 @@ def test_remove_last_drink_removes_entry(mock_store_fixture):
     entry = store.entry(entry_id)
     assert len(entry["drinks"]) == 2
 
-    # Remove last drink
+    # Undo voidet den letzten Eintrag; die Rohliste behält ihn (Audit/Backup).
     success = _async_test(store.remove_last_drink(entry_id))
 
     assert success is True
-    assert len(entry["drinks"]) == 1
-    assert entry["drinks"][0]["ml"] == 250
+    assert len(entry["drinks"]) == 2, "der voided Eintrag darf nicht hart entfernt werden"
+    assert entry["drinks"][-1]["voided_at"] is not None
+    assert [d["ml"] for d in store.active_drinks(entry_id)] == [250]
 
 
 def test_remove_last_drink_updates_lifetime(mock_store_fixture):
@@ -224,7 +227,14 @@ def test_remove_last_drink_prevents_negative_lifetime(mock_store_fixture):
     # Manually set to test edge case
     entry["total_ml_lifetime"] = 300
     entry["drinks"].append(
-        {"ts": "2026-09-05T12:00:00Z", "ml": 500, "type": "juice", "src": "button"}
+        {
+            "id": "raw-1",
+            "ts": "2026-09-05T12:00:00Z",
+            "ml": 500,
+            "type": "juice",
+            "src": "button",
+            "voided_at": None,
+        }
     )
 
     # Remove this drink: should be max(0, 300 - 500) = 0
@@ -422,10 +432,12 @@ def test_set_wellbeing_history_capped_at_100(mock_store_fixture):
 
     entry_id = "person-1"
 
-    # Add 101 wellbeing updates
+    # Add 101 wellbeing updates (chronologisch aufsteigend — die Reihenfolge
+    # der Meldungen ist seit REQ-HOM-120 der `ts`, nicht die Erfassungsfolge).
+    base = datetime(2026, 9, 5, 0, 0)
     for i in range(101):
         status = f"status-{i}"
-        ts = f"2026-09-05T{i % 24:02d}:{i % 60:02d}:00Z"
+        ts = (base + timedelta(minutes=i)).isoformat()
         _async_test(store.set_wellbeing(entry_id, status, ts))
 
     entry = store.entry(entry_id)
@@ -734,8 +746,8 @@ def test_async_load_preserves_existing_data(mock_store_fixture):
 # ============================================================================
 # Finding N-7: remove_last_reading (BP-Undo)
 # ============================================================================
-def test_remove_last_reading_removes_last_reading(mock_store_fixture):
-    """[N-7] remove_last_reading entfernt die zuletzt angehängte Messung."""
+def test_remove_last_reading_voids_last_active_reading(mock_store_fixture):
+    """[N-7] remove_last_reading voidet die letzte aktive Messung (kein Pop)."""
     store, _ = mock_store_fixture
     _async_test(store.async_load())
 
@@ -746,8 +758,9 @@ def test_remove_last_reading_removes_last_reading(mock_store_fixture):
 
     assert success is True
     readings = store.entry("person-1")["readings"]
-    assert len(readings) == 1
-    assert readings[0]["sys"] == 120
+    assert len(readings) == 2, "der voided Eintrag bleibt in der Rohliste"
+    assert readings[-1]["voided_at"] is not None
+    assert [r["sys"] for r in store.active_readings("person-1")] == [120]
 
 
 def test_remove_last_reading_on_empty_returns_false(mock_store_fixture):
@@ -824,6 +837,41 @@ def test_apply_retention_keeps_only_kept_lists_and_lifetime_unchanged(mock_store
     assert entry["archived_counts"] == {"drinks": 1, "readings": 1}
 
 
+def test_apply_retention_rolls_back_in_memory_on_save_failure(mock_store_fixture):
+    """[S-5] Save-Fehler lässt den RAM-Stand unverändert (kein stiller Verlust)."""
+    store, backend = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry = store.entry("person-1")
+    old_drink = {"ts": "2025-01-01T00:00:00", "ml": 250, "type": "water", "src": "button"}
+    new_drink = {"ts": "2026-09-01T00:00:00", "ml": 500, "type": "water", "src": "button"}
+    old_reading = {"ts": "2025-01-01T00:00:00", "sys": 120, "dia": 80}
+    entry["drinks"] = [old_drink, new_drink]
+    entry["readings"] = [old_reading]
+    entry["archived_counts"] = {"drinks": 3, "readings": 2}
+    before = copy.deepcopy(entry)
+
+    backend.async_save = AsyncMock(side_effect=RuntimeError("save failed"))
+    with pytest.raises(RuntimeError, match="save failed"):
+        _async_test(store.apply_retention("person-1", [new_drink], []))
+
+    # Unveränderte Listen UND unveränderte Zähler (kein gekürzter RAM-Stand).
+    assert store.raw_data()["entries"]["person-1"] == before
+    assert store.raw_data()["entries"]["person-1"]["drinks"] == [old_drink, new_drink]
+    assert store.raw_data()["entries"]["person-1"]["archived_counts"] == {
+        "drinks": 3,
+        "readings": 2,
+    }
+
+    # Ein erneuter Versuch ist nach dem Rollback wieder möglich.
+    backend.async_save = AsyncMock()
+    _async_test(store.apply_retention("person-1", [new_drink], []))
+    current = store.raw_data()["entries"]["person-1"]
+    assert current["drinks"] == [new_drink]
+    assert current["readings"] == []
+    assert current["archived_counts"] == {"drinks": 4, "readings": 3}
+
+
 def test_append_archive_extends_archive_store(mock_store_fixture):
     """[N-2] append_archive hängt verschobene Einträge an (separater Store)."""
     archive, _ = mock_store_fixture
@@ -884,8 +932,11 @@ def test_store_migration_v2_to_v3_adds_archived_counts(mock_store_fixture):
     assert store.raw_data()["schema"] == store_module.STORE_SCHEMA_VERSION
     e1 = store.entry("e1")
     assert e1["archived_counts"] == {"drinks": 0, "readings": 0}
-    # Bestandsdaten unverändert
-    assert e1["drinks"] == _v2_fixture()["entries"]["e1"]["drinks"]
+    # Bestandsdaten unverändert; v4 ergänzt nur id/created_at/voided_*
+    assert [{k: d[k] for k in ("ts", "ml", "type", "src")} for d in e1["drinks"]] == [
+        {k: d[k] for k in ("ts", "ml", "type", "src")}
+        for d in _v2_fixture()["entries"]["e1"]["drinks"]
+    ]
     assert e1["total_ml_lifetime"] == 250
     assert e1["inputs"] == {"sys": 120}
 
@@ -921,4 +972,867 @@ def test_invalid_schema_backup_targets_own_storage_key():
     _async_test(store.async_load())
 
     assert hass.config.path.call_args[0] == (".storage", "health_o_mat_archive")
-    assert store.raw_data() == {"entries": {}}
+    assert store.raw_data() == {"schema": 4, "entries": {}}
+
+
+# ============================================================================
+# Store-Schema v4 (REQ-HOM-115): IDs/Void-Felder, Wellbeing-Ereignisse, Audit
+# ============================================================================
+def _v1_bestand() -> dict:
+    """v1-Bestand: kein schema-Feld, keine inputs/archived_counts/v4-Felder."""
+    return {
+        "entries": {
+            "e1": {
+                "person": "Max",
+                "drinks": [
+                    {"ts": "2026-09-01T08:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+                ],
+                "readings": [
+                    {
+                        "ts": "2026-09-01T09:00:00",
+                        "sys": 120,
+                        "dia": 80,
+                        "pulse": 60,
+                        "note": "",
+                        "src": "button",
+                    }
+                ],
+                "total_ml_lifetime": 250,
+                "wellbeing": {"status": "good", "ts": "2026-09-01T10:00:00"},
+                "wellbeing_history": [
+                    {"ts": "2026-09-01T07:00:00", "status": "bad"},
+                    {"ts": "2026-09-01T08:30:00", "status": "okay"},
+                ],
+            }
+        }
+    }
+
+
+def _v2_bestand() -> dict:
+    data = _v1_bestand()
+    data["schema"] = 2
+    data["entries"]["e1"]["inputs"] = {"sys": 120}
+    return data
+
+
+def _v3_bestand() -> dict:
+    data = _v2_bestand()
+    data["schema"] = 3
+    data["entries"]["e1"]["archived_counts"] = {"drinks": 0, "readings": 0}
+    return data
+
+
+def _expected_id(kind: str, index: int, ts) -> str:
+    import uuid as _uuid
+
+    return str(_uuid.uuid5(_uuid.NAMESPACE_URL, f"e1:{kind}:{index}:{ts}"))
+
+
+@pytest.mark.parametrize("fixture", [_v1_bestand, _v2_bestand, _v3_bestand])
+def test_store_migration_to_v4_adds_ids_and_void_fields(mock_store_fixture, fixture):
+    """[REQ-HOM-115] v1/v2/v3 → v4 ergänzt id, created_at und Void-Felder."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(return_value=fixture())
+
+    _async_test(store.async_load())
+
+    assert store.raw_data()["schema"] == 4
+    e1 = store.entry("e1")
+    drink = e1["drinks"][0]
+    reading = e1["readings"][0]
+    assert drink["id"] == _expected_id("drinks", 0, "2026-09-01T08:00:00")
+    assert drink["created_at"] == "2026-09-01T08:00:00"
+    assert drink["voided_at"] is None
+    assert drink["voided_by"] is None
+    assert drink["void_reason"] is None
+    assert reading["id"] == _expected_id("readings", 0, "2026-09-01T09:00:00")
+    assert reading["created_at"] == "2026-09-01T09:00:00"
+    assert reading["voided_at"] is None
+    # Bestandsdaten unverändert
+    assert (drink["ts"], drink["ml"], drink["type"], drink["src"]) == (
+        "2026-09-01T08:00:00",
+        250,
+        "Kaffee",
+        "button",
+    )
+    assert e1["total_ml_lifetime"] == 250
+    assert e1["audit_log"] == []
+
+
+@pytest.mark.parametrize("fixture", [_v1_bestand, _v2_bestand, _v3_bestand])
+def test_store_migration_to_v4_builds_wellbeing_entries(mock_store_fixture, fixture):
+    """[REQ-HOM-115] Historie + aktueller Wert → wellbeing_entries, aktueller zuletzt."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(return_value=fixture())
+
+    _async_test(store.async_load())
+
+    entries = store.entry("e1")["wellbeing_entries"]
+    assert [item["key"] for item in entries] == ["bad", "okay", "good"]
+    assert [item["ts"] for item in entries] == [
+        "2026-09-01T07:00:00",
+        "2026-09-01T08:30:00",
+        "2026-09-01T10:00:00",
+    ]
+    assert entries[-1]["created_at"] == "2026-09-01T10:00:00"
+    assert entries[-1]["voided_at"] is None
+    assert entries[-1]["id"] == _expected_id("wellbeing", 2, "2026-09-01T10:00:00")
+    assert all(
+        set(item)
+        == {
+            "id",
+            "ts",
+            "key",
+            "created_at",
+            "voided_at",
+            "voided_by",
+            "void_reason",
+        }
+        for item in entries
+    )
+    # Legacy-Spiegel bleibt unverändert/kompatibel
+    assert store.entry("e1")["wellbeing"] == {
+        "status": "good",
+        "ts": "2026-09-01T10:00:00",
+    }
+    assert store.entry("e1")["wellbeing_history"] == [
+        {"ts": "2026-09-01T07:00:00", "status": "bad"},
+        {"ts": "2026-09-01T08:30:00", "status": "okay"},
+    ]
+
+
+def test_store_migration_v4_is_idempotent_and_deterministic(mock_store_fixture):
+    """[REQ-HOM-115] Zweimal migrieren = gleiche IDs/Daten (keine Duplikate)."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(return_value=_v1_bestand())
+
+    _async_test(store.async_load())
+    first = copy.deepcopy(store.raw_data())
+    _async_test(store.async_load())
+    second = copy.deepcopy(store.raw_data())
+
+    assert first == second
+    assert second["schema"] == 4
+    assert len(second["entries"]["e1"]["wellbeing_entries"]) == 3
+    assert len(second["entries"]["e1"]["drinks"]) == 1
+
+
+def test_store_migration_v4_same_ids_for_separate_loads(mock_store_fixture):
+    """[REQ-HOM-115] Deterministische IDs: getrennte Läufe erzeugen dieselben IDs."""
+    store, mock_store_instance = mock_store_fixture
+    mock_store_instance.async_load = AsyncMock(return_value=_v1_bestand())
+    _async_test(store.async_load())
+    ids_first = [d["id"] for d in store.entry("e1")["drinks"]]
+
+    mock_store_instance.async_load = AsyncMock(return_value=_v1_bestand())
+    _async_test(store.async_load())
+    ids_second = [d["id"] for d in store.entry("e1")["drinks"]]
+
+    assert ids_first == ids_second
+
+
+def test_store_migration_v4_wellbeing_dedupes_and_tolerates_missing_ts(
+    mock_store_fixture,
+):
+    """[REQ-HOM-115] Doppelte (key, ts)-Paare und fehlende ts brechen nichts."""
+    store, mock_store_instance = mock_store_fixture
+    fixture = {
+        "schema": 3,
+        "entries": {
+            "e1": {
+                "drinks": [],
+                "readings": [],
+                "wellbeing": {"status": "good", "ts": "2026-09-01T10:00:00"},
+                "wellbeing_history": [
+                    {"ts": "2026-09-01T07:00:00", "status": "bad"},
+                    {"ts": "2026-09-01T07:00:00", "status": "bad"},
+                    {"status": "okay"},
+                    {"ts": "2026-09-01T10:00:00", "status": "good"},
+                ],
+            }
+        },
+    }
+    mock_store_instance.async_load = AsyncMock(return_value=fixture)
+
+    _async_test(store.async_load())
+
+    entries = store.entry("e1")["wellbeing_entries"]
+    assert [item["key"] for item in entries] == ["bad", "okay", "good"]
+    assert entries[1]["ts"] is None
+    assert entries[-1]["key"] == "good"
+
+
+def test_entry_default_includes_v4_fields(mock_store_fixture):
+    """[REQ-HOM-115] Neue Einträge tragen wellbeing_entries und audit_log."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    entry = store.entry("person-1")
+    assert entry["wellbeing_entries"] == []
+    assert entry["audit_log"] == []
+    assert entry["readings"] == []
+
+
+def test_active_helpers_filter_voided_entries(mock_store_fixture):
+    """[REQ-HOM-115] active_* blendet gelöschte Einträge aus, Bestand bleibt."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-09-05T11:00:00Z", 500, "Kaffee", "button"))
+    _async_test(store.add_reading("e1", "2026-09-05T12:00:00Z", 120, 80, 70))
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T13:00:00Z"))
+
+    first_drink = store.entry("e1")["drinks"][0]
+    _async_test(store.void_drink("e1", first_drink["id"]))
+
+    assert [d["ml"] for d in store.active_drinks("e1")] == [500]
+    assert len(store.entry("e1")["drinks"]) == 2  # kein Hard-Delete
+    assert len(store.active_readings("e1")) == 1
+    assert len(store.active_wellbeing_entries("e1")) == 1
+    assert store.current_wellbeing("e1")["key"] == "good"
+
+
+def test_void_and_restore_drink_updates_lifetime(mock_store_fixture):
+    """[REQ-HOM-115] Void subtrahiert ml, Restore addiert sie wieder."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-09-05T11:00:00Z", 500, "Kaffee", "button"))
+    entry = store.entry("e1")
+    assert entry["total_ml_lifetime"] == 750
+    first_id = entry["drinks"][0]["id"]
+
+    assert _async_test(store.void_drink("e1", first_id, actor="user-1", reason="Tippfehler"))
+    assert entry["total_ml_lifetime"] == 500
+    assert [d["ml"] for d in store.active_drinks("e1")] == [500]
+    assert entry["drinks"][0]["voided_by"] == "user-1"
+    assert entry["drinks"][0]["void_reason"] == "Tippfehler"
+    assert entry["drinks"][0]["voided_at"] is not None
+
+    # Doppeltes Void / unbekannte ID → False
+    assert _async_test(store.void_drink("e1", first_id)) is False
+    assert _async_test(store.void_drink("e1", "nope")) is False
+
+    assert _async_test(store.restore_drink("e1", first_id, actor="user-1"))
+    assert entry["total_ml_lifetime"] == 750
+    assert len(store.active_drinks("e1")) == 2
+    assert entry["drinks"][0]["voided_at"] is None
+    assert entry["drinks"][0]["voided_by"] is None
+    assert entry["drinks"][0]["void_reason"] is None
+    assert _async_test(store.restore_drink("e1", first_id)) is False
+
+
+def test_void_drink_lifetime_never_negative(mock_store_fixture):
+    """[REQ-HOM-115] Void klemmt total_ml_lifetime bei 0 (nie negativ)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 500, "Wasser", "button"))
+    entry = store.entry("e1")
+    entry["total_ml_lifetime"] = 100  # z. B. manuell korrigierter Startwert
+    drink_id = entry["drinks"][0]["id"]
+
+    _async_test(store.void_drink("e1", drink_id))
+
+    assert entry["total_ml_lifetime"] == 0
+
+
+def test_void_and_restore_reading(mock_store_fixture):
+    """[REQ-HOM-115] Void/Restore einer Messung lässt Lifetime unberührt."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T09:00:00Z", 250, "Wasser", "button"))
+    _async_test(store.add_reading("e1", "2026-09-05T10:00:00Z", 120, 80, 70))
+    _async_test(store.add_reading("e1", "2026-09-05T11:00:00Z", 130, 85, 75))
+    entry = store.entry("e1")
+    reading_id = entry["readings"][0]["id"]
+
+    assert _async_test(store.void_reading("e1", reading_id, actor="user-1", reason="doppelt"))
+    assert [r["sys"] for r in store.active_readings("e1")] == [130]
+    assert len(entry["readings"]) == 2
+    assert entry["readings"][0]["void_reason"] == "doppelt"
+    assert entry["total_ml_lifetime"] == 250
+    assert _async_test(store.void_reading("e1", reading_id)) is False
+
+    assert _async_test(store.restore_reading("e1", reading_id, actor="user-1"))
+    assert [r["sys"] for r in store.active_readings("e1")] == [120, 130]
+    assert entry["total_ml_lifetime"] == 250
+    assert _async_test(store.restore_reading("e1", reading_id)) is False
+
+
+def test_void_and_restore_wellbeing_falls_back_to_predecessor(mock_store_fixture):
+    """[REQ-HOM-115] Nach Void fällt der aktuelle Wert auf den Vorgänger."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T10:00:00Z"))
+    _async_test(store.set_wellbeing("e1", "bad", "2026-09-05T11:00:00Z"))
+    entry = store.entry("e1")
+    bad_id = entry["wellbeing_entries"][-1]["id"]
+    assert entry["wellbeing"] == {"status": "bad", "ts": "2026-09-05T11:00:00Z"}
+
+    assert _async_test(store.void_wellbeing("e1", bad_id, actor="user-1", reason="falsch"))
+    assert store.current_wellbeing("e1")["key"] == "good"
+    assert entry["wellbeing"] == {"status": "good", "ts": "2026-09-05T10:00:00Z"}
+    assert entry["wellbeing_history"] == []
+    assert len(entry["wellbeing_entries"]) == 2  # kein Hard-Delete
+    assert _async_test(store.void_wellbeing("e1", bad_id)) is False
+
+    assert _async_test(store.restore_wellbeing("e1", bad_id, actor="user-1"))
+    assert store.current_wellbeing("e1")["key"] == "bad"
+    assert entry["wellbeing"] == {"status": "bad", "ts": "2026-09-05T11:00:00Z"}
+    assert entry["wellbeing_history"] == [{"ts": "2026-09-05T10:00:00Z", "status": "good"}]
+    assert _async_test(store.restore_wellbeing("e1", bad_id)) is False
+
+
+def test_void_wellbeing_every_entry_leaves_empty_mirrors(mock_store_fixture):
+    """[REQ-HOM-115] Ohne aktive Meldung bleiben die Legacy-Spiegel leer."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T10:00:00Z"))
+    entry = store.entry("e1")
+    entry_id = entry["wellbeing_entries"][0]["id"]
+
+    _async_test(store.void_wellbeing("e1", entry_id))
+
+    assert store.current_wellbeing("e1") is None
+    assert entry["wellbeing"] == {}
+    assert entry["wellbeing_history"] == []
+
+
+# ============================================================================
+# Audit-Log (REQ-HOM-115)
+# ============================================================================
+def _actions(store, entry_id: str = "e1") -> list[str]:
+    return [event["action"] for event in store.entry(entry_id)["audit_log"]]
+
+
+def test_audit_log_records_add_void_restore(mock_store_fixture):
+    """[REQ-HOM-115] add/void/restore erzeugen Audit-Events mit minimalen Details."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(
+        store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button", actor="user-1")
+    )
+    drink = store.entry("e1")["drinks"][0]
+    _async_test(store.void_drink("e1", drink["id"], actor="user-1", reason="Tippfehler"))
+    _async_test(store.restore_drink("e1", drink["id"], actor="user-1"))
+
+    audit = store.entry("e1")["audit_log"]
+    assert [event["action"] for event in audit] == [
+        "drink_added",
+        "entry_voided",
+        "entry_restored",
+    ]
+    assert all(
+        set(event)
+        == {
+            "id",
+            "ts",
+            "action",
+            "kind",
+            "target_id",
+            "actor",
+            "details",
+        }
+        for event in audit
+    )
+    assert all(event["kind"] == "drinks" for event in audit)
+    assert all(event["target_id"] == drink["id"] for event in audit)
+    assert all(event["actor"] == "user-1" for event in audit)
+    # Nur Metadaten — keine vollständigen Gesundheitsdaten
+    assert audit[0]["details"] == {"src": "button"}
+    assert audit[1]["details"] == {"reason": "Tippfehler"}
+    assert audit[2]["details"] == {}
+    assert isinstance(audit[0]["ts"], str)
+
+
+def test_audit_log_covers_reading_and_wellbeing(mock_store_fixture):
+    """[REQ-HOM-115] Messung und Wohlbefinden erzeugen passende Events."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_reading("e1", "2026-09-05T10:00:00Z", 120, 80, 70))
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T11:00:00Z"))
+    reading_id = store.entry("e1")["readings"][0]["id"]
+    wellbeing_id = store.entry("e1")["wellbeing_entries"][0]["id"]
+    _async_test(store.void_reading("e1", reading_id))
+    _async_test(store.void_wellbeing("e1", wellbeing_id))
+    _async_test(store.restore_reading("e1", reading_id))
+    _async_test(store.restore_wellbeing("e1", wellbeing_id))
+
+    audit = store.entry("e1")["audit_log"]
+    assert [event["action"] for event in audit] == [
+        "reading_added",
+        "wellbeing_added",
+        "entry_voided",
+        "entry_voided",
+        "entry_restored",
+        "entry_restored",
+    ]
+    assert [event["kind"] for event in audit] == [
+        "readings",
+        "wellbeing",
+        "readings",
+        "wellbeing",
+        "readings",
+        "wellbeing",
+    ]
+    assert audit[0]["details"] == {"src": "button"}
+    assert audit[1]["details"] == {}
+
+
+def test_audit_log_cap_prunes_oldest_with_summary(mock_store_fixture):
+    """[REQ-HOM-115] Cap 3 hält höchstens 3 Events inkl. audit_pruned-Summary."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    for index in range(5):
+        _async_test(
+            store.add_drink(
+                "e1",
+                f"2026-09-05T1{index}:00:00Z",
+                250,
+                "Wasser",
+                "button",
+                audit_limit=3,
+            )
+        )
+
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 3
+    assert audit[-1]["action"] == "audit_pruned"
+    assert audit[-1]["kind"] == "audit"
+    assert audit[-1]["details"]["pruned"] >= 1
+    assert isinstance(audit[-1]["details"]["oldest_retained"], str)
+    assert _actions(store).count("audit_pruned") == 1
+
+
+def test_audit_log_cap_zero_means_unlimited(mock_store_fixture):
+    """[REQ-HOM-115] audit_limit=0 = unbegrenzt (kein Pruning)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    for index in range(5):
+        _async_test(
+            store.add_drink(
+                "e1",
+                f"2026-09-05T1{index}:00:00Z",
+                250,
+                "Wasser",
+                "button",
+                audit_limit=0,
+            )
+        )
+
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 5
+    assert _actions(store) == ["drink_added"] * 5
+
+
+def test_audit_log_cap_one_keeps_newest_event(mock_store_fixture):
+    """[REQ-HOM-115] Sehr kleines Limit (<2) bleibt defensiv beim neuesten Event."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(
+        store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button", audit_limit=1)
+    )
+    _async_test(
+        store.add_drink("e1", "2026-09-05T11:00:00Z", 500, "Kaffee", "button", audit_limit=1)
+    )
+
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 1
+    assert audit[0]["action"] == "drink_added"
+    assert audit[0]["details"] == {"src": "button"}
+
+
+def test_audit_log_default_cap_from_const(mock_store_fixture):
+    """[REQ-HOM-115] Default-Cap ist der Konstantenwert (1000)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button"))
+
+    assert len(store.entry("e1")["audit_log"]) == 1
+    assert store_module.DEFAULT_AUDIT_LIMIT == 1000
+
+
+# ============================================================================
+# v4-Felder beim Anlegen (IDs, created_at, Void-Felder)
+# ============================================================================
+def test_add_drink_sets_v4_fields(mock_store_fixture):
+    """[REQ-HOM-115] add_drink setzt id/created_at/void-Felder (ts bleibt separat)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(
+        store.add_drink(
+            "e1",
+            "2026-09-01T00:00:00Z",
+            250,
+            "Wasser",
+            "button",
+            created_ts_iso="2026-09-05T10:00:00Z",
+        )
+    )
+
+    drink = store.entry("e1")["drinks"][0]
+    assert drink["ts"] == "2026-09-01T00:00:00Z"  # Messzeit (rückdatiert)
+    assert drink["created_at"] == "2026-09-05T10:00:00Z"  # Erfassungszeit
+    assert isinstance(drink["id"], str) and drink["id"]
+    assert drink["voided_at"] is None
+    assert drink["voided_by"] is None
+    assert drink["void_reason"] is None
+
+
+def test_add_reading_and_set_wellbeing_set_v4_fields(mock_store_fixture):
+    """[REQ-HOM-115] add_reading/set_wellbeing setzen id/created_at/void-Felder."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_reading("e1", "2026-09-05T10:00:00Z", 120, 80, 70))
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T11:00:00Z"))
+
+    reading = store.entry("e1")["readings"][0]
+    wellbeing = store.entry("e1")["wellbeing_entries"][0]
+    for item in (reading, wellbeing):
+        assert isinstance(item["id"], str) and item["id"]
+        assert isinstance(item["created_at"], str) and item["created_at"]
+        assert item["voided_at"] is None
+        assert item["voided_by"] is None
+        assert item["void_reason"] is None
+    assert reading["id"] != wellbeing["id"]
+
+
+# ============================================================================
+# M2a: aktive Sicht (active_entry/active_entries)
+# ============================================================================
+
+
+def _void_all(store, entry_id, kind):
+    for item in list(store.entry(entry_id)[kind]):
+        if kind == "drinks":
+            _async_test(store.void_drink(entry_id, item["id"]))
+        elif kind == "readings":
+            _async_test(store.void_reading(entry_id, item["id"]))
+        else:
+            _async_test(store.void_wellbeing(entry_id, item["id"]))
+
+
+def test_active_entry_filters_voided_lists_and_rebuilds_wellbeing(mock_store_fixture):
+    """[M2a] active_entry liefert nur aktive Einträge + aktive Wellbeing-Spiegel."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.add_reading("e1", "2026-10-14T09:00:00", 120, 80, 60))
+    _async_test(store.add_reading("e1", "2026-10-14T10:00:00", 180, 110, 90))
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _async_test(store.set_wellbeing("e1", "bad", "2026-10-14T09:00:00"))
+    _async_test(store.set_wellbeing("e1", "great", "2026-10-14T10:00:00"))
+
+    raw = store.entry("e1")
+    _async_test(store.void_drink("e1", raw["drinks"][1]["id"]))
+    _async_test(store.void_reading("e1", raw["readings"][1]["id"]))
+    _async_test(store.void_wellbeing("e1", raw["wellbeing_entries"][2]["id"]))
+
+    view = store.active_entry("e1")
+
+    assert [d["type"] for d in view["drinks"]] == ["Wasser"]
+    assert [r["sys"] for r in view["readings"]] == [120]
+    assert [e["key"] for e in view["wellbeing_entries"]] == ["good", "bad"]
+    assert view["wellbeing"] == {"status": "bad", "ts": "2026-10-14T09:00:00"}
+    assert view["wellbeing_history"] == [{"ts": "2026-10-14T08:00:00", "status": "good"}]
+
+
+def test_active_entry_leaves_raw_data_untouched(mock_store_fixture):
+    """[M2a] entry()/all_entries() bleiben roh; active_entry verändert nichts."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+
+    view = store.active_entry("e1")
+    view["drinks"].clear()
+    view["drinks"].append({"ts": "x", "ml": 1, "type": "Fake", "voided_at": None})
+
+    raw = store.all_entries()["e1"]
+    assert len(raw["drinks"]) == 2
+    assert [d["ml"] for d in raw["drinks"]] == [250, 500]
+    assert raw["drinks"][1]["voided_at"] is not None
+
+    # Zweiter Aufruf liefert wieder die unveränderte aktive Sicht.
+    assert [d["ml"] for d in store.active_entry("e1")["drinks"]] == [250]
+
+
+def test_active_entry_carries_person_lifetime_inputs_counts_and_audit(mock_store_fixture):
+    """[M2a] Nicht-Listen-Felder werden unverändert übernommen."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_person("e1", "Caro"))
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e1", "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    _async_test(store.void_drink("e1", store.entry("e1")["drinks"][1]["id"]))
+    _async_test(store.set_inputs("e1", "sys", 120))
+    raw = store.entry("e1")
+    raw["archived_counts"] = {"drinks": 3, "readings": 2}
+
+    view = store.active_entry("e1")
+
+    assert view["person"] == "Caro"
+    assert view["total_ml_lifetime"] == 250  # korrigierte M1-Summe
+    assert view["inputs"] == {"sys": 120}
+    assert view["archived_counts"] == {"drinks": 3, "readings": 2}
+    assert view["audit_log"] == raw["audit_log"]
+
+
+def test_active_entry_unknown_person_returns_empty_without_creating(mock_store_fixture):
+    """[M2a] Unbekannte Person: leeres Dict, kein Seiteneffekt im Store."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    assert store.active_entry("unknown") == {}
+    assert "unknown" not in store.all_entries()
+
+
+def test_active_entries_returns_filtered_views_for_all_persons(mock_store_fixture):
+    """[M2a] active_entries filtert je Person, Schlüssel bleiben erhalten."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink("e2", "2026-10-14T08:00:00", 300, "Kaffee", "button"))
+    _async_test(store.add_drink("e2", "2026-10-14T09:00:00", 400, "Wasser", "button"))
+    _async_test(store.void_drink("e2", store.entry("e2")["drinks"][0]["id"]))
+
+    views = store.active_entries()
+
+    assert set(views) == {"e1", "e2"}
+    assert [d["ml"] for d in views["e1"]["drinks"]] == [250]
+    assert [d["ml"] for d in views["e2"]["drinks"]] == [400]
+    # Rohbestand bleibt vollständig (Schreibpfad/Backup/Diagnostics).
+    assert len(store.entry("e2")["drinks"]) == 2
+
+
+def test_active_entry_all_wellbeing_voided_leaves_empty_mirrors(mock_store_fixture):
+    """[M2a] Alle Meldungen voided → leere Wellbeing-Spiegel in der aktiven Sicht."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _void_all(store, "e1", "wellbeing_entries")
+
+    view = store.active_entry("e1")
+
+    assert view["wellbeing_entries"] == []
+    assert view["wellbeing"] == {}
+    assert view["wellbeing_history"] == []
+
+
+# ============================================================================
+# M2b: Undo-Semantik (letzter AKTIVER Eintrag) + Wellbeing-Undo + Audit
+# ============================================================================
+def test_remove_last_drink_skips_already_voided_tail(mock_store_fixture):
+    """[M2b] Undo voidet den letzten AKTIVEN Drink, nicht den voided Tail."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    entry_id = "person-1"
+    _async_test(store.add_drink(entry_id, "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_drink(entry_id, "2026-10-14T09:00:00", 500, "Kaffee", "button"))
+    last_id = store.entry(entry_id)["drinks"][-1]["id"]
+    _async_test(store.remove_last_drink(entry_id))
+    assert store.entry(entry_id)["total_ml_lifetime"] == 250
+
+    # Zweites Undo: der Tail ist bereits voided → der erste Drink wird voided.
+    assert _async_test(store.remove_last_drink(entry_id)) is True
+    drinks = store.entry(entry_id)["drinks"]
+    assert len(drinks) == 2, "kein Hard-Delete"
+    assert drinks[1]["id"] == last_id
+    assert all(d["voided_at"] for d in drinks)
+    # Lifetime darf NICHT doppelt gekürzt werden (einmal pro voided Drink).
+    assert store.entry(entry_id)["total_ml_lifetime"] == 0
+
+    # Drittes Undo: kein aktiver Eintrag mehr → False, unverändert.
+    assert _async_test(store.remove_last_drink(entry_id)) is False
+    assert store.entry(entry_id)["total_ml_lifetime"] == 0
+
+
+def test_remove_last_drink_audit_event_records_void(mock_store_fixture):
+    """[M2b] Undo schreibt ein Audit-Ereignis (Akteur + Ziel-ID)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("person-1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    target_id = store.entry("person-1")["drinks"][0]["id"]
+
+    _async_test(store.remove_last_drink("person-1", actor="user-7", audit_limit=50))
+
+    audit = store.entry("person-1")["audit_log"]
+    void_events = [event for event in audit if event["action"] == "entry_voided"]
+    assert len(void_events) == 1
+    assert void_events[0]["target_id"] == target_id
+    assert void_events[0]["actor"] == "user-7"
+    assert void_events[0]["kind"] == "drinks"
+
+
+def test_remove_last_reading_skips_voided_tail(mock_store_fixture):
+    """[M2b] BP-Undo voidet die letzte aktive Messung."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_reading("person-1", "2026-10-14T08:00:00", 120, 80, 60))
+    first_id = store.entry("person-1")["readings"][0]["id"]
+    _async_test(store.add_reading("person-1", "2026-10-14T09:00:00", 130, 85, 65))
+    _async_test(store.void_reading("person-1", store.entry("person-1")["readings"][-1]["id"]))
+
+    assert _async_test(store.remove_last_reading("person-1")) is True
+
+    readings = store.entry("person-1")["readings"]
+    assert len(readings) == 2
+    assert readings[0]["id"] == first_id and readings[0]["voided_at"] is not None
+    assert store.active_readings("person-1") == []
+    assert _async_test(store.remove_last_reading("person-1")) is False
+
+
+def test_remove_last_wellbeing_voids_last_active_event(mock_store_fixture):
+    """[M2b] Wellbeing-Undo voidet die letzte aktive Meldung, Spiegel folgen."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_wellbeing("person-1", "good", "2026-10-14T08:00:00"))
+    _async_test(store.set_wellbeing("person-1", "bad", "2026-10-14T09:00:00"))
+
+    assert _async_test(store.remove_last_wellbeing("person-1", actor="user-1")) is True
+
+    entry = store.entry("person-1")
+    assert len(entry["wellbeing_entries"]) == 2, "kein Hard-Delete"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("person-1")["key"] == "good"
+    assert entry["wellbeing"]["status"] == "good"
+    assert _async_test(store.remove_last_wellbeing("person-1")) is True
+    assert store.current_wellbeing("person-1") is None
+    assert _async_test(store.remove_last_wellbeing("person-1")) is False
+
+
+def test_last_active_helpers_ignore_voided_entries(mock_store_fixture):
+    """[M2b] last_active_* liefert den letzten nicht-voided Eintrag."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_drink("person-1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _async_test(store.add_reading("person-1", "2026-10-14T08:00:00", 120, 80, 60))
+    _async_test(store.set_wellbeing("person-1", "okay", "2026-10-14T08:00:00"))
+    _async_test(store.void_drink("person-1", store.entry("person-1")["drinks"][0]["id"]))
+
+    assert store.last_active_drink("person-1") is None
+    assert store.last_active_reading("person-1")["sys"] == 120
+    assert store.last_active_wellbeing("person-1")["key"] == "okay"
+
+
+# ============================================================================
+# REQ-HOM-120: Rückdatierte Wohlbefinden-Meldungen
+# ============================================================================
+
+
+def test_req_hom_120_backdated_wellbeing_current_follows_ts_not_capture_order(
+    mock_store_fixture,
+):
+    """[REQ-HOM-120] Aktueller Wert = zeitlich letzter, nicht zuletzt erfasst."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "great", "2026-10-14T09:00:00+02:00"))
+    # Rückdatiert NACH der neuesten Meldung erfasst.
+    _async_test(store.set_wellbeing("e1", "awful", "2026-10-14T07:00:00+02:00"))
+
+    entry = store.entry("e1")
+    assert entry["wellbeing"] == {"status": "great", "ts": "2026-10-14T09:00:00+02:00"}
+    assert entry["wellbeing_history"] == [
+        {"ts": "2026-10-14T07:00:00+02:00", "status": "awful"},
+        {"ts": "2026-10-14T08:00:00+02:00", "status": "good"},
+    ]
+    assert [item["key"] for item in store.active_wellbeing_entries("e1")] == [
+        "awful",
+        "good",
+        "great",
+    ]
+    assert store.current_wellbeing("e1")["key"] == "great"
+
+
+def test_req_hom_120_wellbeing_sort_tiebreak_is_created_at_then_insertion(
+    mock_store_fixture,
+):
+    """[REQ-HOM-120] Gleicher `ts`: `created_at`, danach Einfüge-Reihenfolge."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    ts = "2026-10-14T08:00:00+02:00"
+    _async_test(store.set_wellbeing("e1", "good", ts, created_ts_iso="2026-10-14T12:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "bad", ts, created_ts_iso="2026-10-14T12:05:00+02:00"))
+    assert store.current_wellbeing("e1")["key"] == "bad"
+
+    # Gleicher ts UND gleiches created_at: die spätere Erfassung gewinnt (stabil).
+    _async_test(store.set_wellbeing("e1", "okay", ts, created_ts_iso="2026-10-14T12:05:00+02:00"))
+    assert store.current_wellbeing("e1")["key"] == "okay"
+
+
+def test_req_hom_120_remove_last_wellbeing_uses_capture_order(mock_store_fixture):
+    """[REQ-HOM-120] Undo nimmt die zuletzt ERFASSTE Meldung, nicht den größten `ts`."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_wellbeing("e1", "good", "2026-10-14T09:00:00+02:00"))
+    _async_test(store.set_wellbeing("e1", "awful", "2026-10-14T07:00:00+02:00"))
+
+    assert store.current_wellbeing("e1")["key"] == "good"
+    assert _async_test(store.remove_last_wellbeing("e1")) is True
+
+    entry = store.entry("e1")
+    assert entry["wellbeing_entries"][-1]["key"] == "awful"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("e1")["key"] == "good"
+    assert entry["wellbeing_history"] == []
+
+    assert _async_test(store.remove_last_wellbeing("e1")) is True
+    assert store.current_wellbeing("e1") is None
+
+
+def test_req_hom_120_legacy_mirrors_follow_chronology_after_rebuild(mock_store_fixture):
+    """[REQ-HOM-120] `rebuild_wellbeing_mirrors` sortiert gemischte Roh-Reihenfolge."""
+    store, _ = mock_store_fixture
+    entry = {
+        "wellbeing_entries": [
+            {"key": "great", "ts": "2026-10-14T10:00:00+02:00", "created_at": None},
+            {"key": "bad", "ts": "2026-10-14T08:00:00+02:00", "created_at": None},
+            {"key": "good", "ts": "2026-10-14T09:00:00+02:00", "created_at": None},
+        ]
+    }
+
+    store.rebuild_wellbeing_mirrors(entry)
+
+    assert entry["wellbeing"] == {"status": "great", "ts": "2026-10-14T10:00:00+02:00"}
+    assert [item["status"] for item in entry["wellbeing_history"]] == ["bad", "good"]
+
+
+# --- Review-Fix S-9 ---------------------------------------------------------
+
+
+def test_audit_details_store_metadata_only(mock_store_fixture):
+    """[S-9] Audit-Details enthalten keine Gesundheitswerte (nur Metadaten)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.add_drink("e1", "2026-09-05T10:00:00Z", 250, "Wasser", "button"))
+    _async_test(store.set_wellbeing("e1", "good", "2026-09-05T11:00:00Z"))
+
+    by_action = {event["action"]: event for event in store.entry("e1")["audit_log"]}
+    assert by_action["drink_added"]["details"] == {"src": "button"}
+    assert by_action["wellbeing_added"]["details"] == {}
+    for event in by_action.values():
+        assert "ml" not in event["details"]
+        assert "key" not in event["details"]
+        assert "sys" not in event["details"]
+        assert "dia" not in event["details"]

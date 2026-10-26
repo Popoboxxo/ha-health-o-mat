@@ -97,7 +97,11 @@ def test_store_migration_v1_to_current_adds_inputs():
     assert data["schema"] == SCHEMA
     e1 = data["entries"]["e1"]
     assert e1["inputs"] == {}
-    assert e1["drinks"] == _v1_fixture()["entries"]["e1"]["drinks"]  # Daten unverändert
+    # Bestandsdaten unverändert; v4 ergänzt nur id/created_at/voided_*
+    assert [{k: d[k] for k in ("ts", "ml", "type", "src")} for d in e1["drinks"]] == [
+        {k: d[k] for k in ("ts", "ml", "type", "src")}
+        for d in _v1_fixture()["entries"]["e1"]["drinks"]
+    ]
 
 
 def _run(coro):
@@ -131,7 +135,7 @@ def test_store_invalid_schema_creates_backup_and_notification():
 
     _run(store.async_load())
 
-    assert store.raw_data() == {"entries": {}}
+    assert store.raw_data() == {"schema": SCHEMA, "entries": {}}
     hass.services.async_call.assert_called_once()
     args = hass.services.async_call.call_args[0]
     assert args[0] == "persistent_notification"
@@ -147,7 +151,7 @@ def test_store_none_is_fresh_start_without_notification():
 
     _run(store.async_load())
 
-    assert store.raw_data() == {"entries": {}}
+    assert store.raw_data() == {"schema": SCHEMA, "entries": {}}
     hass.services.async_call.assert_not_called()
 
 
@@ -295,9 +299,12 @@ class _FakeServices:
 
     def __init__(self) -> None:
         self.registered: dict[str, tuple] = {}
+        # Vorhandene Fremd-Services (z. B. notify.mobile_app_phone).
+        self.known: set[str] = set()
+        self.async_call = AsyncMock()
 
     def has_service(self, domain, name) -> bool:
-        return name in self.registered
+        return name in self.registered or f"{domain}.{name}" in self.known
 
     def async_register(self, domain, name, *, schema=None, service_func=None) -> None:
         self.registered[name] = (schema, service_func)
@@ -402,7 +409,11 @@ def test_remove_last_entry_default_kind_removes_drink():
     assert validated["kind"] == "drinks"
 
     _run(func(_call({"kind": validated["kind"]})))
-    assert store.entry("e1")["drinks"] == []
+    # M2b: Undo voidet (kein Pop) — die Rohliste behält den Eintrag.
+    assert store.active_drinks("e1") == []
+    assert len(store.entry("e1")["drinks"]) == 1
+    assert store.entry("e1")["drinks"][0]["voided_at"] is not None
+    assert store.entry("e1")["total_ml_lifetime"] == 0
 
 
 def test_remove_last_entry_kind_blood_pressure_removes_reading():
@@ -416,8 +427,8 @@ def test_remove_last_entry_kind_blood_pressure_removes_reading():
     _run(func(_call({"kind": "blood_pressure"})))
 
     readings = store.entry("e1")["readings"]
-    assert len(readings) == 1
-    assert readings[0]["sys"] == 120
+    assert len(readings) == 2, "der voided Eintrag bleibt in der Rohliste"
+    assert [r["sys"] for r in store.active_readings("e1")] == [120]
 
 
 def test_remove_last_entry_blood_pressure_empty_raises():
@@ -697,3 +708,625 @@ def test_set_wellbeing_service_multiple_persons_without_selection_raises():
 
     assert "Mehrere Personen" in str(exc.value)
     assert "wellbeing" not in store.entry("e1")
+
+
+# --- M2a: Retention lässt voided Einträge im Haupt-Store ---------------------
+
+
+def test_apply_retention_keeps_voided_entries_in_main_store(monkeypatch):
+    """[M2a] Nur aktive Einträge wandern ins Archiv; voided bleibt im Haupt-Store."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    old_active = {"ts": "2025-12-31T10:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+    old_voided = {
+        "ts": "2025-01-01T10:00:00",
+        "ml": 400,
+        "type": "Wasser",
+        "src": "button",
+        "voided_at": "2025-02-01T00:00:00",
+    }
+    recent = {"ts": "2026-09-30T10:00:00", "ml": 500, "type": "Wasser", "src": "button"}
+    voided_reading = {
+        "ts": "2025-03-01T08:00:00",
+        "sys": 120,
+        "dia": 80,
+        "pulse": 70,
+        "note": "",
+        "src": "button",
+        "voided_at": "2025-04-01T00:00:00",
+    }
+    e = store.entry("e1")
+    e["drinks"] = [old_active, old_voided, recent]
+    e["readings"] = [voided_reading]
+    e["total_ml_lifetime"] = 750
+    archive = _fresh_store()
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})  # Stichtag 2026-04-14
+    hass = _runtime_hass([entry], store=store, archive_store=archive)
+
+    _run(init._apply_retention(hass, entry, store))
+
+    main = store.entry("e1")
+    # Reihenfolge des Rohbestands bleibt erhalten, voided wurde nicht verschoben.
+    assert main["drinks"] == [old_voided, recent]
+    assert main["readings"] == [voided_reading]
+    assert main["total_ml_lifetime"] == 750  # Summe unverändert
+    assert main["archived_counts"] == {"drinks": 1, "readings": 0}
+    archived = archive.all_entries()["e1"]
+    assert archived["drinks"] == [old_active]
+    assert archived["readings"] == []
+
+
+def test_apply_retention_with_only_voided_entries_is_noop(monkeypatch):
+    """[M2a] Ausschließlich voided (alt) → nichts wird archiviert."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    voided = {
+        "ts": "2025-01-01T10:00:00",
+        "ml": 400,
+        "type": "Wasser",
+        "src": "button",
+        "voided_at": "2025-02-01T00:00:00",
+    }
+    e = store.entry("e1")
+    e["drinks"] = [voided]
+    e["total_ml_lifetime"] = 0
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})
+    hass = _runtime_hass([entry], store=store)
+
+    _run(init._apply_retention(hass, entry, store))
+
+    assert store.entry("e1")["drinks"] == [voided]
+    assert store.entry("e1")["archived_counts"] == {"drinks": 0, "readings": 0}
+    # Kein Archiv-Store angelegt (kein Verschieben nötig).
+    assert "archive_store" not in hass.data[_DOMAIN]["shared"]
+
+
+# --- M2b: Void/Restore-Services + Undo-Semantik -----------------------------
+
+
+def _registered_service(hass, name):
+    init = _load_init()
+    init._register_services(hass)
+    return init, hass.services.registered[name]
+
+
+def test_remove_last_entry_kind_wellbeing_voids_last_report():
+    """[M2b] remove_last_entry unterstützt kind=wellbeing (Void, kein Pop)."""
+    store = _fresh_store()
+    _run(store.set_wellbeing("e1", "good", "2026-10-14T08:00:00"))
+    _run(store.set_wellbeing("e1", "bad", "2026-10-14T09:00:00"))
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "remove_last_entry")
+
+    _run(func(_call({"kind": "wellbeing"})))
+
+    entry = store.entry("e1")
+    assert len(entry["wellbeing_entries"]) == 2, "kein Hard-Delete"
+    assert entry["wellbeing_entries"][-1]["voided_at"] is not None
+    assert store.current_wellbeing("e1")["key"] == "good"
+
+    # Zweites Undo voidet die verbleibende aktive Meldung …
+    _run(func(_call({"kind": "wellbeing"})))
+    assert store.current_wellbeing("e1") is None
+    # … danach gibt es nichts mehr zu entfernen.
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "wellbeing"})))
+    assert "Wohlbefinden" in str(exc.value)
+
+
+def test_remove_last_entry_schema_accepts_wellbeing():
+    """[M2b] Das Service-Schema kennt das dritte Ziel."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    _init, (schema, _func) = _registered_service(hass, "remove_last_entry")
+
+    assert schema({"kind": "wellbeing"})["kind"] == "wellbeing"
+
+
+def test_void_entry_service_marks_entry_deleted_and_audits():
+    """[M2b] health_o_mat.void_entry voidet per ID und schreibt Audit."""
+    store = _fresh_store()
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "service"))
+    drink_id = store.entry("e1")["drinks"][0]["id"]
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "void_entry")
+
+    _run(func(_call({"kind": "drinks", "id": drink_id})))
+
+    assert store.active_drinks("e1") == []
+    assert store.entry("e1")["total_ml_lifetime"] == 0
+    assert any(
+        event["action"] == "entry_voided" and event["target_id"] == drink_id
+        for event in store.entry("e1")["audit_log"]
+    )
+
+
+def test_void_entry_service_unknown_id_raises():
+    """[M2b] Unbekannte ID → ServiceValidationError (kein stiller Erfolg)."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "void_entry")
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "drinks", "id": "nope"})))
+
+    assert "nicht gefunden" in str(exc.value)
+
+
+def test_void_entry_service_schema_requires_kind_and_id():
+    """[M2b] kind und id sind Pflichtfelder des Service-Schemas."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    _init, (schema, _func) = _registered_service(hass, "void_entry")
+
+    with pytest.raises(vol.Invalid):
+        schema({})
+    with pytest.raises(vol.Invalid):
+        schema({"kind": "tea", "id": "x"})
+    validated = schema({"kind": "wellbeing", "id": "w1"})
+    assert validated == {"kind": "wellbeing", "id": "w1"}
+
+
+def test_restore_entry_service_restores_voided_entry():
+    """[M2b] health_o_mat.restore_entry hebt die Löschmarkierung auf."""
+    store = _fresh_store()
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "service"))
+    drink_id = store.entry("e1")["drinks"][0]["id"]
+    _run(store.void_drink("e1", drink_id))
+    assert store.entry("e1")["total_ml_lifetime"] == 0
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init, (_schema, func) = _registered_service(hass, "restore_entry")
+
+    _run(func(_call({"kind": "drinks", "id": drink_id})))
+
+    assert [d["id"] for d in store.active_drinks("e1")] == [drink_id]
+    assert store.entry("e1")["total_ml_lifetime"] == 250
+    assert any(
+        event["action"] == "entry_restored" and event["target_id"] == drink_id
+        for event in store.entry("e1")["audit_log"]
+    )
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({"kind": "drinks", "id": drink_id})))
+    assert "nicht gelöscht" in str(exc.value)
+
+
+def test_service_registration_includes_void_and_restore():
+    """[M2b] Beide neuen Services werden idempotent registriert."""
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init = _load_init()
+    init._register_services(hass)
+    init._register_services(hass)
+
+    assert {"void_entry", "restore_entry"}.issubset(hass.services.registered)
+
+
+# --- restore_backup-Service (M2c) -------------------------------------------
+
+
+def test_restore_backup_service_registered_with_schema():
+    """[M2c] restore_backup ist registriert; Defaults und Pflichtfelder stimmen."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+
+    schema, _func = hass.services.registered["restore_backup"]
+    validated = schema({"filename": "backup.json"})
+    assert validated["mode"] == "merge"
+    assert validated["dry_run"] is False
+    assert validated["restore_audit"] is False
+    with pytest.raises(vol.Invalid):
+        schema({})
+    with pytest.raises(vol.Invalid):
+        schema({"filename": "backup.json", "mode": "bogus"})
+
+
+def test_restore_backup_service_rejects_non_admin():
+    """[M2c] Nicht-Admin → ServiceValidationError, kein Restore."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.auth = MagicMock()
+    hass.auth.async_get_user = AsyncMock(return_value=types.SimpleNamespace(is_admin=False))
+    init._register_services(hass)
+    _schema, func = hass.services.registered["restore_backup"]
+    call = MagicMock()
+    call.data = {"filename": "backup.json"}
+    call.context.user_id = "user-1"
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(call))
+
+    assert "Administratoren" in str(exc.value)
+
+
+def test_restore_backup_service_without_user_is_trusted(tmp_path, monkeypatch):
+    """[M2c] Ohne User-ID (Automation) läuft der Restore-Pfad weiter."""
+    init = _load_init()
+    restore = _import_restore_module()
+    called = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(restore, "async_restore_command", called)
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.config.config_dir = str(tmp_path)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["restore_backup"]
+    call = MagicMock()
+    call.data = {"filename": "backup.json", "dry_run": True}
+    call.context.user_id = None
+
+    _run(func(call))
+
+    called.assert_awaited_once()
+    assert called.await_args.args[1] == {"filename": "backup.json", "dry_run": True}
+    assert called.await_args.kwargs["actor"] is None
+
+
+def _import_restore_module():
+    """Lazy-Modul des Service-Handlers (``__init__`` ist als ``<pkg>.init`` geladen)."""
+    return importlib.import_module(f"{_PKG}.init.restore")
+
+
+# --- REQ-HOM-120: Rückdatierung über die Services ---------------------------
+
+
+def _services_hass(monkeypatch, now: datetime = datetime(2026, 10, 15, 12, 0)):
+    init = _load_init()
+    monkeypatch.setattr(init, "dt_util", types.SimpleNamespace(now=lambda: now))
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    return init, store, hass
+
+
+def test_req_hom_120_add_drink_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `add_drink` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    schema, func = hass.services.registered["add_drink"]
+
+    assert schema({"amount_ml": 250, "ts": "2026-10-15T09:30:00"})["ts"] == ("2026-10-15T09:30:00")
+    _run(func(_call({"amount_ml": 250, "ts": "2026-10-15T09:30:00"})))
+
+    drink = store.entry("e1")["drinks"][0]
+    assert drink["ts"].startswith("2026-10-15T09:30:00")
+    assert drink["created_at"] == "2026-10-15T12:00:00"
+
+
+def test_req_hom_120_add_blood_pressure_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `add_blood_pressure` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(
+        func(
+            _call(
+                {
+                    "systolic": 124,
+                    "diastolic": 82,
+                    "ts": "2026-10-15T07:15:00",
+                }
+            )
+        )
+    )
+
+    reading = store.entry("e1")["readings"][0]
+    assert reading["ts"].startswith("2026-10-15T07:15:00")
+    assert reading["created_at"] == "2026-10-15T12:00:00"
+
+
+def test_req_hom_120_set_wellbeing_service_accepts_ts(monkeypatch):
+    """[REQ-HOM-120] `set_wellbeing` speichert `ts` und `created_at` getrennt."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["set_wellbeing"]
+
+    _run(func(_call({"status": "good", "ts": "2026-10-14T20:00:00"})))
+
+    entry = store.entry("e1")
+    assert entry["wellbeing"] == {
+        "status": "good",
+        "ts": entry["wellbeing_entries"][0]["ts"],
+    }
+    assert entry["wellbeing_entries"][0]["ts"].startswith("2026-10-14T20:00:00")
+    assert entry["wellbeing_entries"][0]["created_at"] == "2026-10-15T12:00:00"
+
+
+@pytest.mark.parametrize(
+    "ts",
+    [
+        "kaputt",
+        "2026-10-15T13:00:00",  # mehr als 5 Minuten in der Zukunft
+        "1899-12-31T23:59:59",  # vor 1900
+    ],
+)
+@pytest.mark.parametrize("service", ["add_drink", "add_blood_pressure", "set_wellbeing"])
+def test_req_hom_120_services_reject_invalid_ts(monkeypatch, service, ts):
+    """[REQ-HOM-120] Ungültige/zukünftige/zu alte Zeitpunkte → ServiceValidationError."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered[service]
+    payloads = {
+        "add_drink": {"amount_ml": 250},
+        "add_blood_pressure": {"systolic": 120, "diastolic": 80},
+        "set_wellbeing": {"status": "good"},
+    }
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(_call({**payloads[service], "ts": ts})))
+
+    assert "Zeitpunkt" in str(exc.value)
+    entry = store.entry("e1")
+    assert entry["drinks"] == []
+    assert entry["readings"] == []
+    assert entry.get("wellbeing_entries", []) == []
+
+
+def test_req_hom_120_service_ts_without_value_keeps_now(monkeypatch):
+    """[REQ-HOM-120] Ohne `ts` bleibt das bisherige Verhalten (jetzt) erhalten."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["add_drink"]
+
+    _run(func(_call({"amount_ml": 250})))
+
+    drink = store.entry("e1")["drinks"][0]
+    assert drink["ts"] == "2026-10-15T12:00:00"
+    assert drink["created_at"] == "2026-10-15T12:00:00"
+
+
+# --- M3d: Wochenbericht-Service (REQ-HOM-118) -------------------------------
+
+
+def test_weekly_report_service_registered_with_schema():
+    """`weekly_report` ist registriert; `person` ist optional."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+
+    init._register_services(hass)
+
+    schema, _func = hass.services.registered["weekly_report"]
+    assert schema({}) == {}
+    assert schema({"person": "Max"}) == {"person": "Max"}
+    assert "weekly_report" in init._SERVICE_NAMES
+
+
+def _seed_week(store) -> None:
+    """Kleine Woche für den Bericht (heute = 2026-10-26)."""
+    for ts, ml, drink_type in (
+        ("2026-10-26T09:00:00", 500, "Wasser"),
+        ("2026-10-25T09:00:00", 500, "Wasser"),
+        ("2026-10-24T09:00:00", 250, "Kaffee"),
+    ):
+        store.entry("e1")["drinks"].append({"ts": ts, "ml": ml, "type": drink_type})
+
+
+def test_weekly_report_service_sends_one_notification_per_person(monkeypatch):
+    """Ohne `person`: je laufender Person genau eine Markdown-Notification."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    hass.config.language = "de"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({})))
+
+    assert hass.services.async_call.await_count == 2
+    calls = [call.args for call in hass.services.async_call.await_args_list]
+    assert [args[0] for args in calls] == ["persistent_notification", "persistent_notification"]
+    titles = [args[2]["title"] for args in calls]
+    assert titles == ["Wochenbericht — Max", "Wochenbericht — Caro"]
+    assert "## Wochenbericht" in calls[0][2]["message"]
+    assert "1250 ml" in calls[0][2]["message"]
+
+
+def test_weekly_report_service_filters_person(monkeypatch):
+    """`person` wählt genau eine Person (Case-insensitive, wie alle Services)."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")], store=store)
+    hass.config.language = "en"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({"person": "caro"})))
+
+    assert hass.services.async_call.await_count == 1
+    args = hass.services.async_call.await_args.args
+    assert args[2]["title"] == "Weekly report — Caro"
+    assert "## Weekly report" in args[2]["message"]
+
+
+def test_weekly_report_service_uses_configured_notify_service(monkeypatch):
+    """Konfigurierter Notify-Service wird genutzt (kein persistent-Fallback)."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    options = {"weekly_report": {"enabled": False, "notify_service": "mobile_app_phone"}}
+    hass = _runtime_hass([_cfg_entry("e1", "Max", options)], store=store)
+    hass.services.known.add("notify.mobile_app_phone")
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    _run(func(_call({})))
+
+    args = hass.services.async_call.await_args.args
+    assert args[:2] == ("notify", "mobile_app_phone")
+
+
+def test_weekly_report_service_unknown_person_raises():
+    """Unbekannte Person → ServiceValidationError, keine Notification."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({"person": "Niemand"})))
+
+    hass.services.async_call.assert_not_awaited()
+
+
+def test_weekly_report_service_without_runtime_entries_raises():
+    """Keine laufende Person → ServiceValidationError."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([], store=store)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({})))
+
+
+def test_weekly_report_service_without_store_raises():
+    """Fehlender Store → ServiceValidationError statt AttributeError."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")])
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+
+    with pytest.raises(init.ServiceValidationError):
+        _run(func(_call({})))
+
+
+# --- Review-Fixes B-2/S-5/S-14 ----------------------------------------------
+
+
+def _archive_storage_file(tmp_path):
+    storage = tmp_path / ".storage"
+    storage.mkdir(parents=True, exist_ok=True)
+    path = storage / "health_o_mat_archive"
+    path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def test_archive_store_not_loaded_when_file_missing(tmp_path, monkeypatch):
+    """[B-2] Kein Archiv-Store/keine Datei nur durch Lesen anlegen."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.init.store"]
+    created: list[str | None] = []
+
+    class _Archive:
+        def __init__(self, hass_, storage_key=None):
+            created.append(storage_key)
+
+    monkeypatch.setattr(store_module, "HealthOMatStore", _Archive)
+    hass = _runtime_hass([])
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+
+    assert _run(init.async_load_archive_store(hass, create=False)) is None
+    assert created == []
+    assert "archive_store" not in hass.data[_DOMAIN]["shared"]
+    assert not (tmp_path / ".storage").exists()
+
+
+def test_archive_store_loaded_at_setup_like_read_when_file_exists(tmp_path, monkeypatch):
+    """[B-2] Existiert die Archiv-Datei, wird sie unabhängig von Retention geladen."""
+    init = _load_init()
+    store_module = sys.modules[f"{_PKG}.init.store"]
+    _archive_storage_file(tmp_path)
+    loaded: list[str] = []
+
+    class _Archive:
+        def __init__(self, hass_, storage_key=None):
+            self.storage_key = storage_key
+            self._data = {"schema": 4, "entries": {"e1": {"drinks": [{"ml": 500}]}}}
+
+        async def async_load(self):
+            loaded.append("load")
+
+        def raw_data(self):
+            return self._data
+
+    monkeypatch.setattr(store_module, "HealthOMatStore", _Archive)
+    hass = _runtime_hass([])
+    hass.config.path = MagicMock(side_effect=lambda *parts: os.path.join(str(tmp_path), *parts))
+
+    archive = _run(init.async_load_archive_store(hass, create=False))
+
+    assert isinstance(archive, _Archive)
+    assert loaded == ["load"]
+    assert archive.storage_key == "health_o_mat_archive"
+    assert hass.data[_DOMAIN]["shared"]["archive_store"] is archive
+    # Backup/Export sehen das Archiv damit auch bei Retention AUS.
+    assert archive.raw_data()["entries"]["e1"]["drinks"][0]["ml"] == 500
+
+
+def test_apply_retention_archive_save_failure_keeps_main_store(monkeypatch):
+    """[S-5] Archiv-Save-Fehler → Haupt-Store bleibt unverändert."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0))
+    )
+    store = _fresh_store()
+    old_drink = {"ts": "2025-12-31T10:00:00", "ml": 250, "type": "Kaffee", "src": "button"}
+    recent_drink = {"ts": "2026-09-30T10:00:00", "ml": 500, "type": "Wasser", "src": "button"}
+    e = store.entry("e1")
+    e["drinks"] = [old_drink, recent_drink]
+    e["total_ml_lifetime"] = 750
+    archive = _fresh_store()
+    archive._store.async_save = AsyncMock(side_effect=RuntimeError("archiv kaputt"))
+    entry = _cfg_entry("e1", "Max", {"retention_months": 6})
+    hass = _runtime_hass([entry], store=store, archive_store=archive)
+
+    with pytest.raises(RuntimeError):
+        _run(init._apply_retention(hass, entry, store))
+
+    assert store.entry("e1")["drinks"] == [old_drink, recent_drink]
+    assert store.entry("e1")["total_ml_lifetime"] == 750
+    assert store.entry("e1")["archived_counts"] == {"drinks": 0, "readings": 0}
+
+
+@pytest.mark.parametrize("service", ["export_csv", "backup"])
+def test_export_and_backup_services_reject_non_admin(service):
+    """[S-14] Export/Backup-Services sind admin-gated wie das WS-Pendant."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    hass.auth = MagicMock()
+    hass.auth.async_get_user = AsyncMock(return_value=types.SimpleNamespace(is_admin=False))
+    init._register_services(hass)
+    _schema, func = hass.services.registered[service]
+    call = _call({})
+    call.context.user_id = "user-1"
+
+    with pytest.raises(init.ServiceValidationError) as exc:
+        _run(func(call))
+
+    assert "Administratoren" in str(exc.value)
+
+
+@pytest.mark.parametrize("service", ["export_csv", "backup"])
+def test_export_and_backup_services_allow_automation(service, monkeypatch):
+    """[S-14] Automationen ohne User-ID bleiben erlaubt (kein Login)."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+    init._register_services(hass)
+    _schema, func = hass.services.registered[service]
+    called = AsyncMock(return_value=None)
+    lazy_name = "async_export_csv" if service == "export_csv" else "async_backup"
+    lazy_module = importlib.import_module(
+        f"{_PKG}.init.{'exporter' if service == 'export_csv' else 'backup'}"
+    )
+    monkeypatch.setattr(lazy_module, lazy_name, called)
+    call = _call({})
+    call.context.user_id = None
+
+    _run(func(call))
+
+    called.assert_awaited_once()

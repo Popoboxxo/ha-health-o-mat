@@ -367,15 +367,29 @@ def set_person_options(
     areas: dict[str, bool],
     goal_ml: int = DEFAULT_GOAL_ML,
 ) -> None:
-    """Configure one person through the real options flow
-    (init -> quick_drinks -> wellbeing_images -> drink_lexicon). `enable_panel`
-    is the opt-in that registers the sidebar panel; the update listener reacts
-    to it (`panel.async_apply_panel_state`)."""
+    """Configure one person through the real options menu wizard.
+
+    Navigation (REQ-HOM-119): ``init`` (menu) → ``basics`` → ``drinks`` →
+    ``wellbeing`` (skip) → ``notifications`` (skip) → ``summary`` (save).
+    `enable_panel` is the opt-in that registers the sidebar panel; the update
+    listener reacts to it (`panel.async_apply_panel_state`).
+    """
     base = f"{base_url}/api/config/config_entries/options/flow"
     flow = _post_json(base, access_token, {"handler": entry_id})
     flow_id = flow["flow_id"]
-    _require_form_step(flow, "init")
+    if flow.get("type") != "menu":
+        raise BootstrapError(f"expected options menu, got: {flow}")
 
+    def _select(step_id: str) -> dict[str, Any]:
+        result = _post_json(f"{base}/{flow_id}", access_token, {"next_step_id": step_id})
+        _require_form_step(result, step_id)
+        return result
+
+    def _back_to_menu(result: dict[str, Any]) -> None:
+        if result.get("type") != "menu":
+            raise BootstrapError(f"expected options menu after save, got: {result}")
+
+    _select("basics")
     flow = _post_json(
         f"{base}/{flow_id}",
         access_token,
@@ -387,24 +401,34 @@ def set_person_options(
             "area_drink": areas.get("drink", True),
             "area_bp": areas.get("bp", True),
             "area_wellbeing": areas.get("wellbeing", True),
+            "skip": False,
         },
     )
-    _require_form_step(flow, "quick_drinks")
+    _back_to_menu(flow)
 
-    quick: dict[str, Any] = {}
+    _select("drinks")
+    quick: dict[str, Any] = {
+        "drink_lexicon": LEXICON_TEXT,
+        "skip": False,
+    }
     for index, drink in enumerate(QUICK_DRINKS):
         quick[f"quick_{index}_label"] = drink["label"]
         quick[f"quick_{index}_ml"] = drink["ml"]
         quick[f"quick_{index}_icon"] = drink["icon"]
-
     flow = _post_json(f"{base}/{flow_id}", access_token, quick)
-    _require_form_step(flow, "wellbeing_images")
+    _back_to_menu(flow)
 
-    # Optional images stay empty in E2E (emoji fallback).
+    # Optional images and notifications stay at their defaults in E2E.
+    _select("wellbeing")
+    flow = _post_json(f"{base}/{flow_id}", access_token, {"skip": True})
+    _back_to_menu(flow)
+
+    _select("notifications")
+    flow = _post_json(f"{base}/{flow_id}", access_token, {"skip": True})
+    _back_to_menu(flow)
+
+    _select("summary")
     flow = _post_json(f"{base}/{flow_id}", access_token, {})
-    _require_form_step(flow, "drink_lexicon")
-
-    flow = _post_json(f"{base}/{flow_id}", access_token, {"drink_lexicon": LEXICON_TEXT})
     if flow.get("type") != "create_entry":
         raise BootstrapError(f"options flow for entry {entry_id} did not finish: {flow}")
 

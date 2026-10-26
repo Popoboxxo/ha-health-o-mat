@@ -18,6 +18,12 @@ add_drink:
       name: Quelle
       description: Freier Herkunfts-Tag (optional).
       example: "automation"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 add_blood_pressure:
   name: Blutdruckmessung speichern
@@ -43,6 +49,12 @@ add_blood_pressure:
       name: Notiz
       description: Freitext-Notiz zur Messung (optional).
       example: "morgens"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 set_wellbeing:
   name: Wohlbefinden melden
@@ -64,17 +76,28 @@ set_wellbeing:
         Numerischer Wert von 1 (sehr schlecht) bis 10 (ausgezeichnet).
         Alternative zu `status`.
       example: 7
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
 
 remove_last_entry:
   name: Letzte Buchung löschen
-  description: Entfernt die letzte Getränke- oder Blutdruckbuchung (Undo).
+  description: >-
+    Entfernt die letzte aktive Getränke-, Blutdruck- oder
+    Wohlbefinden-Buchung (Undo). Der Eintrag wird als gelöscht markiert und
+    bleibt im Verlauf wiederherstellbar.
   fields:
     person:
       name: Person
       description: Name der Person (leer = einzige konfigurierte Person).
     kind:
       name: Art
-      description: Welche Buchung entfernt wird — Getränk (Standard) oder Blutdruckmessung.
+      description: >-
+        Welche Buchung entfernt wird — Getränk (Standard), Blutdruckmessung
+        oder Wohlbefinden-Meldung.
       example: "drinks"
       selector:
         select:
@@ -83,10 +106,69 @@ remove_last_entry:
               value: "drinks"
             - label: Blutdruckmessung
               value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+
+void_entry:
+  name: Eintrag löschen
+  description: >-
+    Markiert einen einzelnen Eintrag als gelöscht (kein endgültiges Löschen).
+    Die ID stammt aus dem Eintrags-Verlauf; der Eintrag bleibt
+    wiederherstellbar.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+    kind:
+      name: Art
+      description: Art des Eintrags.
+      example: "drinks"
+      selector:
+        select:
+          options:
+            - label: Getränk
+              value: "drinks"
+            - label: Blutdruckmessung
+              value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+    id:
+      name: Eintrags-ID
+      description: ID des Eintrags (aus dem Verlauf).
+      example: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60"
+      required: true
+
+restore_entry:
+  name: Eintrag wiederherstellen
+  description: Hebt die Löschmarkierung eines Eintrags wieder auf.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+    kind:
+      name: Art
+      description: Art des Eintrags.
+      example: "drinks"
+      selector:
+        select:
+          options:
+            - label: Getränk
+              value: "drinks"
+            - label: Blutdruckmessung
+              value: "blood_pressure"
+            - label: Wohlbefinden-Meldung
+              value: "wellbeing"
+    id:
+      name: Eintrags-ID
+      description: ID des gelöschten Eintrags (aus dem Verlauf).
+      example: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f60"
+      required: true
 
 export_csv:
   name: CSV-Export
-  description: Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
+  description: >-
+    Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
+    Nur für Administratoren.
   fields:
     person:
       name: Person
@@ -138,3 +220,98 @@ backup:
   name: Backup
   description: >-
     Sichert alle Personen und Datensätze als JSON nach /config/health_o_mat_export/.
+    Nur für Administratoren.
+
+restore_backup:
+  name: Backup wiederherstellen
+  description: >-
+    Spielt ein JSON-Backup aus /config/health_o_mat_import/ oder
+    /config/health_o_mat_export/ kontrolliert zurück
+    (Merge oder Replace, optional nur bestimmte Personen/Datensätze/Zeiträume).
+    Vor jedem echten Restore wird ein Sicherheitsbackup im Export-Ordner
+    angelegt. Nur für Administratoren.
+  fields:
+    filename:
+      name: Dateiname
+      description: >-
+        Dateiname in /config/health_o_mat_import/ oder
+        /config/health_o_mat_export/.
+      example: "health_o_mat_backup_20261014-120000.json"
+      required: true
+    mode:
+      name: Modus
+      description: >-
+        Merge ergänzt Einträge (Duplikate werden übersprungen); Replace leert
+        zuerst den gewählten Bereich und benötigt die Bestätigung REPLACE.
+      default: "merge"
+      selector:
+        select:
+          options:
+            - label: Zusammenführen
+              value: "merge"
+            - label: Ersetzen
+              value: "replace"
+    persons:
+      name: Personen
+      description: >-
+        Nur diese Personen wiederherstellen (Quell-Slug, Quell-Entry-ID oder
+        Ziel-Entry-ID; leer = alle).
+    datasets:
+      name: Datensätze
+      description: Nur diese Datensätze wiederherstellen (leer = alle).
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Getränke
+              value: "drinks"
+            - label: Blutdruck
+              value: "blood_pressure"
+            - label: Wohlbefinden
+              value: "wellbeing"
+    from:
+      name: Von (ISO)
+      description: Nur Einträge ab diesem Zeitstempel (inklusive).
+      example: "2026-01-01T00:00:00"
+    to:
+      name: Bis (ISO)
+      description: Nur Einträge bis zu diesem Zeitstempel (inklusive).
+      example: "2026-12-31T23:59:59"
+    person_map:
+      name: Personen-Zuordnung
+      description: >-
+        Zuordnung {Quelle: Ziel-Entry-ID}. Nötig, wenn die Person im Ziel nicht
+        über den Namen eindeutig gefunden wird. Personen werden nie
+        automatisch angelegt.
+    dry_run:
+      name: Probelauf
+      description: Nur planen, nichts schreiben.
+      default: false
+      selector:
+        boolean:
+    confirm:
+      name: Bestätigung
+      description: Bei Modus "replace" ist exakt "REPLACE" erforderlich.
+      example: "REPLACE"
+    restore_audit:
+      name: Audit-Log importieren
+      description: >-
+        Audit-Log aus dem Backup zusätzlich übernehmen (nur für Experten;
+        standardmäßig werden nur neue Restore-Ereignisse geschrieben).
+      default: false
+      selector:
+        boolean:
+
+weekly_report:
+  name: Wochenbericht senden
+  description: >-
+    Sendet die letzten sieben Tage je Person als Markdown-Benachrichtigung
+    (kein Datei-Export). Leerer Benachrichtigungsdienst erzeugt einen Hinweis
+    in Home Assistant.
+  fields:
+    person:
+      name: Person
+      description: >-
+        Name der Person (leer = jede eingerichtete Person erhält einen eigenen
+        Bericht).
+      example: "Caro"

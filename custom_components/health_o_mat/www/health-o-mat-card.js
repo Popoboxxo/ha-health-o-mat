@@ -144,6 +144,127 @@ const PULSE_MAX = 250;
 /* Anzahl der Meldungen im kompakten Trend der Karte. */
 const WELLBEING_TREND_POINTS = 14;
 
+/* Rückdatierung (REQ-HOM-120): gleiche Zukunfts-Toleranz wie Server/Panel. */
+const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+/* --- UI translations (self-contained: the card has no imports) ----------- *
+ * Same WS contract as www/health-o-mat-i18n.js: `frontend/get_translations`
+ * for category `common`, integration `health_o_mat`. The German text at each
+ * call site is the resilience fallback; a failed load never throws and never
+ * renders a raw `ui_…` key. */
+const UI_KEY_PREFIX = "component.health_o_mat.common.";
+const UI_DEFAULT_LANGUAGE = "de";
+let _uiLanguage = UI_DEFAULT_LANGUAGE;
+let _uiCache = Object.create(null);
+const _uiInflight = Object.create(null);
+const _uiAttempted = Object.create(null);
+
+function _normaliseLanguage(value) {
+  const raw = value == null ? "" : String(value).trim().toLowerCase();
+  return raw ? raw.split(/[-_]/)[0] || UI_DEFAULT_LANGUAGE : UI_DEFAULT_LANGUAGE;
+}
+
+function _uiInterpolate(template, vars) {
+  let out = template == null ? "" : String(template);
+  if (vars && typeof vars === "object") {
+    out = out.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+      Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null
+        ? String(vars[name])
+        : match
+    );
+  }
+  return out;
+}
+
+/** Flat `common` key -> translated text, else the German fallback. */
+function _t(key, fallback, vars) {
+  const rawKey = key == null ? "" : String(key);
+  const shortKey = rawKey.startsWith(UI_KEY_PREFIX) ? rawKey.slice(UI_KEY_PREFIX.length) : rawKey;
+  const dict = _uiCache[_uiLanguage];
+  const value = dict ? dict[shortKey] : "";
+  if (typeof value === "string" && value !== "") return _uiInterpolate(value, vars);
+  return _uiInterpolate(fallback == null ? "" : fallback, vars);
+}
+
+function _normaliseUiResources(resources) {
+  const out = Object.create(null);
+  if (!resources || typeof resources !== "object") return out;
+  Object.keys(resources).forEach((fullKey) => {
+    const value = resources[fullKey];
+    if (typeof value !== "string" || value === "") return;
+    const key = fullKey.startsWith(UI_KEY_PREFIX) ? fullKey.slice(UI_KEY_PREFIX.length) : fullKey;
+    out[key] = value;
+  });
+  return out;
+}
+
+/** Load once per language; resolves `true` when new texts became available. */
+function _loadUiTranslations(hass) {
+  const language = _normaliseLanguage(hass && hass.language);
+  if (language !== _uiLanguage) _uiLanguage = language;
+  if (_uiAttempted[language]) return Promise.resolve(false);
+  if (_uiInflight[language]) return _uiInflight[language];
+  _uiAttempted[language] = true;
+  _uiInflight[language] = (async () => {
+    let resources = null;
+    try {
+      if (hass && typeof hass.callWS === "function") {
+        const result = await hass.callWS({
+          type: "frontend/get_translations",
+          language,
+          category: "common",
+          integration: ["health_o_mat"],
+        });
+        resources = result && result.resources;
+      }
+    } catch (_error) {
+      resources = null;
+    }
+    _uiCache[language] = _normaliseUiResources(resources);
+    delete _uiInflight[language];
+    _updateCustomCardDescription();
+    return true;
+  })();
+  return _uiInflight[language];
+}
+
+function _intlLocale() {
+  return _uiLanguage === "de" ? "de-DE" : _uiLanguage || "en";
+}
+
+function _formatNumber(value) {
+  const n = Number(value);
+  const safe = Number.isFinite(n) ? n : 0;
+  try {
+    return new Intl.NumberFormat(_intlLocale()).format(safe);
+  } catch (_error) {
+    return String(safe);
+  }
+}
+
+function _formatMl(value) {
+  return `${_formatNumber(Math.round(Number(value) || 0))} ml`;
+}
+
+function _relativeText(value, unit) {
+  try {
+    return new Intl.RelativeTimeFormat(_intlLocale(), { numeric: "auto" }).format(value, unit);
+  } catch (_error) {
+    return "";
+  }
+}
+
+/** Update the card-picker description once translations are available. */
+function _updateCustomCardDescription() {
+  if (typeof window === "undefined" || !Array.isArray(window.customCards)) return;
+  const entry = window.customCards.find((card) => card && card.type === CARD_TAG);
+  if (!entry) return;
+  entry.description = _t(
+    "ui_editor_description",
+    "Trinkmenge, Blutdruck und Wohlbefinden auf einen Blick — mit Quick-Buchung und Undo."
+  );
+}
+
 /* WHO blood-pressure category keys (logic.bp_category) -> friendly label.
  * Unknown/legacy values fall back to the raw value (see bpCategoryLabel). */
 const BP_CATEGORY_LABELS = {
@@ -158,10 +279,20 @@ const BP_CATEGORY_LABELS = {
 
 /* Hydration pace (ws_api.pace_label) -> compact, unobtrusive indicator. */
 const PACE_BADGE = {
-  goal_reached: { arrow: "\u2713", label: "Ziel erreicht", cls: "good" },
-  ahead: { arrow: "\u2191", label: "voraus", cls: "good" },
-  on_track: { arrow: "\u2192", label: "auf Kurs", cls: "ok" },
-  behind: { arrow: "\u2193", label: "hinten", cls: "warn" },
+  goal_reached: {
+    arrow: "\u2713",
+    label: "Ziel erreicht",
+    textKey: "ui_common_pace_goal_reached",
+    cls: "good",
+  },
+  ahead: { arrow: "\u2191", label: "voraus", textKey: "ui_common_pace_ahead", cls: "good" },
+  on_track: {
+    arrow: "\u2192",
+    label: "auf Kurs",
+    textKey: "ui_common_pace_on_track",
+    cls: "ok",
+  },
+  behind: { arrow: "\u2193", label: "hinten", textKey: "ui_common_pace_behind", cls: "warn" },
 };
 
 const RING_RADIUS = 42;
@@ -278,6 +409,25 @@ const CARD_CSS = `
   }
   .msg button { margin-top: 10px; flex: none; min-height: 40px; }
   .block { display: flex; flex-direction: column; gap: 10px; }
+  .history-list { list-style: none; margin: 0; padding: 0; display: flex;
+    flex-direction: column; gap: 4px; }
+  .history-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    min-width: 0; padding: 4px 0; font-size: .8rem;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
+  .history-item:last-child { border-bottom: none; }
+  .history-time { flex: none; font-size: .72rem; color: var(--secondary-text-color, #727272); }
+  .history-text { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+  .history-status { flex: none; font-size: .72rem; font-weight: 600;
+    color: var(--error-color, #db4437); }
+  .history-item.voided .history-time, .history-item.voided .history-text {
+    text-decoration: line-through; opacity: .7; }
+  .history-item button { flex: none; min-height: 36px; padding: 6px 10px; font-size: .75rem; }
+  .history-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    flex-basis: 100%; font-size: .78rem; }
+  @media (max-width: 400px) {
+    .history-item button { flex: 1 1 auto; }
+    .history-confirm { width: 100%; }
+  }
   .form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
   .form .field { flex: 1 1 84px; min-width: 72px; }
   .form > button { flex: 0 0 auto; min-width: 104px; min-height: 48px; flex-direction: row; }
@@ -420,7 +570,7 @@ function normalizeLegacyQuickDrinks(value) {
   if (!Array.isArray(value)) return [];
   return value
     .map((drink) => ({
-      label: drink && drink.label ? String(drink.label) : "Getränk",
+      label: drink && drink.label ? String(drink.label) : _t("ui_card_drink", "Getränk"),
       ml: toNumber(drink && drink.ml, 0),
       emoji: drink && drink.emoji ? String(drink.emoji) : DEFAULT_DRINK_EMOJI,
     }))
@@ -475,6 +625,9 @@ function normalizeCardConfig(raw) {
      * `show_*`-Schalter mit Default `true`) — dieser Schalter ist Default
      * `false` und unabhängig von der Panel-/Server-Option. */
     wellbeingConfirm: toBool(source.wellbeing_confirm, false),
+    /* Verlauf der letzten 5 Einträge — Default `false` und bewusst NICHT in
+     * `CARD_SHOW_KEYS` (die sind reine `show_*`-Schalter mit Default `true`). */
+    showHistory: toBool(source.show_history, false),
   };
 }
 
@@ -491,7 +644,7 @@ function normalizeServerQuickDrinks(value) {
       const rawKey = drink && drink.key != null ? String(drink.key).trim() : "";
       return {
         key: rawKey || `slot_${index}`,
-        label: drink && drink.label ? String(drink.label) : "Getränk",
+        label: drink && drink.label ? String(drink.label) : _t("ui_card_drink", "Getränk"),
         ml: toNumber(drink && drink.ml, 0),
         emoji:
           (drink && drink.emoji ? String(drink.emoji) : "") ||
@@ -506,7 +659,9 @@ function bpCategoryLabel(value) {
   // Friendly label for the known WHO keys; robust for unknown/legacy values.
   const raw = value == null ? "" : String(value);
   const key = raw.trim().toLowerCase();
-  return BP_CATEGORY_LABELS[key] || raw;
+  const label = BP_CATEGORY_LABELS[key];
+  if (!label) return raw;
+  return _t(`ui_common_bp_${key.replace(/_/g, "_")}`, label);
 }
 
 /* Ein Personen-Eintrag passt zu einem Filterwert, wenn entry_id, Slug oder
@@ -585,7 +740,9 @@ function bpHistorySvg(entries) {
     .map((r, index) => {
       const sys = sysCoords[index];
       const dia = diaCoords[index];
-      const when = r.ts ? formatChartDateTime(Date.parse(r.ts)) : "ohne Zeitangabe";
+      const when = r.ts
+        ? formatChartDateTime(Date.parse(r.ts))
+        : _t("ui_common_no_time", "ohne Zeitangabe");
       const title = `${when} \u2013 ${Math.round(toNumber(r.sys, 0))}/${Math.round(toNumber(r.dia, 0))}`;
       return `<circle class="bp-dot bp-sys-dot" cx="${sys.x.toFixed(1)}" cy="${sys.y.toFixed(1)}" r="2.1"><title>${escapeHtml(title)}</title></circle><circle class="bp-dot bp-dia-dot" cx="${dia.x.toFixed(1)}" cy="${dia.y.toFixed(1)}" r="2.1"><title>${escapeHtml(title)}</title></circle>`;
     })
@@ -603,7 +760,16 @@ function bpHistorySvg(entries) {
       `<text class="bp-axis" x="${width - pad.right}" y="${height - 6}" text-anchor="end">${escapeHtml(formatChartDate(last))}</text>`
     );
   }
-  const summary = `Blutdruck-Verlauf: ${list.length} Messungen, zuletzt ${Math.round(toNumber(list[list.length - 1].sys, 0))}/${Math.round(toNumber(list[list.length - 1].dia, 0))}`;
+  const latestReading = list[list.length - 1];
+  const summary = _t(
+    "ui_panel_chart_bp_aria",
+    "Blutdruck-Verlauf: {count} Messungen, zuletzt {sys}/{dia}",
+    {
+      count: list.length,
+      sys: Math.round(toNumber(latestReading.sys, 0)),
+      dia: Math.round(toNumber(latestReading.dia, 0)),
+    }
+  );
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg>`;
 }
 
@@ -705,21 +871,38 @@ function pad2(value) {
   return String(value).padStart(2, "0");
 }
 
-/* "19.10." — kompakte Achsenbeschriftung. */
+/* "19.10." — kompakte Achsenbeschriftung (Intl, HA-Sprache). */
 function formatChartDate(ts) {
   if (ts == null || !Number.isFinite(ts)) return "";
   const date = new Date(ts);
   if (!Number.isFinite(date.getTime())) return "";
-  return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+  try {
+    return new Intl.DateTimeFormat(_intlLocale(), {
+      day: "2-digit",
+      month: "2-digit",
+    }).format(date);
+  } catch (_error) {
+    return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.`;
+  }
 }
 
-/* "19.10.2026, 14:30 Uhr" — Zeitpunkt fuer die Tooltips. */
+/* "19.10.2026, 14:30" — Zeitpunkt fuer die Tooltips (Intl, HA-Sprache). */
 function formatChartDateTime(ts) {
   if (ts == null || !Number.isFinite(ts)) return "";
   const date = new Date(ts);
   if (!Number.isFinite(date.getTime())) return "";
-  const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
-  return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())} Uhr`;
+  try {
+    return new Intl.DateTimeFormat(_intlLocale(), {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch (_error) {
+    const day = `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+    return `${day}, ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  }
 }
 
 /* Kompakte Sparkline der letzten Meldungen (Score 1..N auf Y, Reihenfolge
@@ -749,8 +932,9 @@ function wellbeingTrendSvg(points) {
   const dots = list.map((point, index) => {
     const coord = coords[index];
     const current = point.isCurrent === true;
-    const when = point.ts != null ? formatChartDateTime(point.ts) : "ohne Zeitangabe";
-    const label = point.label || "Wohlbefinden";
+    const when =
+      point.ts != null ? formatChartDateTime(point.ts) : _t("ui_common_no_time", "ohne Zeitangabe");
+    const label = point.label || _t("ui_common_wellbeing", "Wohlbefinden");
     const title = `${when} \u2013 ${label} (${point.score} / ${max})`;
     const cls = current ? "point point-current" : "point";
     const radius = current ? 3.4 : 2.4;
@@ -761,10 +945,16 @@ function wellbeingTrendSvg(points) {
   // ein abgeloester Historienwert ("letzter Wert", kein "aktuell").
   const currentPoint = list.find((point) => point && point.isCurrent === true) || null;
   const summary = currentPoint
-    ? `Wohlbefinden-Trend: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
-      `aktuell ${currentPoint.score} von ${max}${currentPoint.label ? ` (${currentPoint.label})` : ""}`
-    : `Wohlbefinden-Trend: ${list.length} Meldung${list.length === 1 ? "" : "en"}, ` +
-      `letzter Wert ${last.score} von ${max}${last.label ? ` (${last.label})` : ""}`;
+    ? _t("ui_panel_chart_wb_aria_current", "Wohlbefinden-Score-Verlauf: {count} Meldungen, aktuell {score} von {max}", {
+        count: list.length,
+        score: currentPoint.score,
+        max,
+      }) + (currentPoint.label ? ` (${currentPoint.label})` : "")
+    : _t("ui_panel_chart_wb_aria_last", "Wohlbefinden-Score-Verlauf: {count} Meldungen, letzter Wert {score} von {max}", {
+        count: list.length,
+        score: last.score,
+        max,
+      }) + (last.label ? ` (${last.label})` : "");
   return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${coords.length >= 2 ? `<path class="line" d="${path}"></path>` : ""}${dots.join("")}</svg>`;
 }
 
@@ -794,8 +984,11 @@ class HealthOMatCard extends HTMLElement {
     this._wbError = "";
     this._wbScoreDraft = "";
     /* REQ-HOM-114: vorgemerkte, noch nicht gemeldete Wohlbefinden-Auswahl
-     * (`{kind: "key"|"score", key, score}`) — nur bei `wellbeing_confirm`. */
+     * (`{kind: "key"|"score", key, score, ts}`) — nur bei `wellbeing_confirm`. */
     this._wbPending = null;
+    /* REQ-HOM-120: Zeitpunkt-Entwürfe der `datetime-local`-Felder (leer =
+     * jetzt). Ein Re-Render darf eine getroffene Auswahl nicht verwerfen. */
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
     /* Fehler einer AKTION (buchen/undo) — eigener Kanal, damit er auch
      * sichtbar bleibt, wenn Daten bereits geladen sind (`_error` ist fuer
      * Ladefehler reserviert). */
@@ -807,6 +1000,13 @@ class HealthOMatCard extends HTMLElement {
     /* Getippte eigene Menge: ueberlebt einen fehlgeschlagenen Submit
      * (Validierung oder Service-Fehler) und wird nach Erfolg geleert. */
     this._amountDraft = "";
+    /* Verlauf (REQ-HOM-115): kind -> { entries, error, loading }. Die Liste
+     * kommt ausschließlich aus `health_o_mat/list_history` und ist nur bei
+     * `show_history` sichtbar. */
+    this._history = {};
+    this._historyBusy = false;
+    this._historyConfirm = null; // { kind, id }
+    this._undoBusyKind = "";
     this._renderScheduled = false;
     this._listenersAttached = false;
     this._onCardClick = this._onCardClick.bind(this);
@@ -834,9 +1034,14 @@ class HealthOMatCard extends HTMLElement {
     this._wbError = "";
     this._wbScoreDraft = "";
     this._wbPending = null;
+    this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
     this._actionError = "";
     this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
     this._amountDraft = "";
+    this._history = {};
+    this._historyBusy = false;
+    this._historyConfirm = null;
+    this._undoBusyKind = "";
     this._activeEntry = activeEntryId(config, "");
     this._render();
     if (this._hass) this._loadData();
@@ -856,6 +1061,7 @@ class HealthOMatCard extends HTMLElement {
     if (flags.show_blood_pressure_input) size += 2; // Formular + Notiz
     if (flags.show_wellbeing_input) size += 3; // 10 Buttons + Zahleneingabe
     if (flags.show_undo) size += 1;
+    if (this._configNorm().showHistory) size += 2; // optionale Verlaufslisten
     return Math.max(1, size);
   }
 
@@ -869,6 +1075,7 @@ class HealthOMatCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    this._ensureUiLanguage(hass);
     if (!this._config) return;
     if (!this._data && !this._loading && !this._error) {
       this._loadData();
@@ -876,6 +1083,18 @@ class HealthOMatCard extends HTMLElement {
     }
     // Live values come straight from hass.states; just re-render.
     this._scheduleRender();
+  }
+
+  /* Language switch at runtime: load the new `common` resources once, then
+   * re-render with the new texts (no duplicate listeners involved). */
+  _ensureUiLanguage(hass) {
+    const language = _normaliseLanguage(hass && hass.language);
+    if (language === _uiLanguage && _uiAttempted[language]) return;
+    const changed = language !== _uiLanguage;
+    _uiLanguage = language;
+    _loadUiTranslations(hass).then((loaded) => {
+      if (loaded || changed) this._render();
+    });
   }
 
   get hass() {
@@ -920,8 +1139,11 @@ class HealthOMatCard extends HTMLElement {
         this._persons = allowed;
         if (!allowed.length) {
           this._error = cfg.personFilter.length
-            ? "Keine Person passt zum konfigurierten Personen-Filter."
-            : "Keine Person eingerichtet.";
+            ? _t(
+                "ui_card_no_person_filter",
+                "Keine Person passt zum konfigurierten Personen-Filter."
+              )
+            : _t("ui_common_no_person", "Keine Person eingerichtet.");
           this._data = null;
           this._loading = false;
           this._render();
@@ -945,7 +1167,11 @@ class HealthOMatCard extends HTMLElement {
         /* Wechselt die aktive Person ohne `_onSelectChange` (Person faellt
          * aus Filter/Liste), gehoert die Vormerkung zur alten Person und muss
          * verworfen werden (REQ-HOM-114). */
-        if (entryId !== this._activeEntry) this._wbPending = null;
+        if (entryId !== this._activeEntry) {
+          this._wbPending = null;
+          this._history = {};
+          this._historyConfirm = null;
+        }
         this._activeEntry = entryId;
       } else {
         this._persons = null;
@@ -955,7 +1181,10 @@ class HealthOMatCard extends HTMLElement {
         entry_id: entryId,
       });
       this._data = data || null;
-      this._error = this._data ? null : "Keine Daten für diese Person.";
+      this._error = this._data
+        ? null
+        : _t("ui_common_no_data", "Keine Daten für diese Person.");
+      if (this._data && this._configNorm().showHistory) await this._loadHistory();
       /* Ein erfolgreicher stiller Reload (nach einer Aktion) beendet den
        * Fehlerzustand: eine alte Aktions-Meldung darf nicht stehen bleiben. */
       if (silent && this._data) this._actionError = "";
@@ -1044,19 +1273,26 @@ class HealthOMatCard extends HTMLElement {
     if (!this._hass || this._busyMl != null) return;
     const value = toNumber(ml, 0);
     if (value <= 0) return;
+    const ts = this._readEntryTs("drink-ts");
+    if (!ts.ok) {
+      this._actionError = ts.error;
+      this._render();
+      return;
+    }
     // Neuer Versuch: eine alte Aktions-Meldung verschwindet sofort.
     this._actionError = "";
     this._busyMl = value;
     this._render();
     try {
-      await Promise.resolve(
-        this._hass.callService("health_o_mat", "add_drink", {
-          amount_ml: value,
-          drink_type: drinkType ? String(drinkType) : "Eigen",
-          person: this._servicePerson(),
-        })
-      );
+      const payload = {
+        amount_ml: value,
+        drink_type: drinkType ? String(drinkType) : "Eigen",
+        person: this._servicePerson(),
+      };
+      if (ts.iso) payload.ts = ts.iso;
+      await Promise.resolve(this._hass.callService("health_o_mat", "add_drink", payload));
       this._actionError = "";
+      this._resetTs("drink-ts");
       await this._loadData(true);
     } catch (err) {
       this._actionError = (err && err.message) ? err.message : String(err);
@@ -1080,6 +1316,53 @@ class HealthOMatCard extends HTMLElement {
     return Number.parseInt(raw, 10);
   }
 
+  /* ---- Rückdatierung (REQ-HOM-120) ---------------------------------------- */
+
+  /* `datetime-local`-Feld lesen und validieren.
+   * Rückgabe `{ ok: true, iso }` (iso "" = jetzt) oder `{ ok: false, error }`. */
+  _readEntryTs(role) {
+    const raw = this._readInput(role);
+    if (!raw) return { ok: true, iso: "" };
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) {
+      return {
+        ok: false,
+        error: _t("ui_card_val_ts_invalid", "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen."),
+      };
+    }
+    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
+      return {
+        ok: false,
+        error: _t(
+          "ui_card_val_ts_future",
+          "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz)."
+        ),
+      };
+    }
+    if (parsed.getFullYear() < 1900) {
+      return {
+        ok: false,
+        error: _t("ui_card_val_ts_old", "Der Zeitpunkt ist zu alt (frühestens 1900)."),
+      };
+    }
+    return { ok: true, iso: parsed.toISOString() };
+  }
+
+  _tsFieldHtml(role) {
+    const draft = (this._tsDraft && this._tsDraft[role]) || "";
+    return `<label class="field"><span>${escapeHtml(
+      _t("ui_card_ts_label", "Zeitpunkt (leer = jetzt)")
+    )}</span>
+      <input type="datetime-local" data-role="${role}" value="${escapeHtml(draft)}" />
+    </label>`;
+  }
+
+  _resetTs(role) {
+    if (this._tsDraft) this._tsDraft[role] = "";
+    const el = this.shadowRoot.querySelector(`[data-role="${role}"]`);
+    if (el) el.value = "";
+  }
+
   async _submitCustomAmount() {
     if (!this._hass || this._busyMl != null) return;
     this._amountError = "";
@@ -1090,8 +1373,11 @@ class HealthOMatCard extends HTMLElement {
     const valid =
       /^\d+$/.test(raw) && Number.isFinite(value) && value >= MIN_AMOUNT_ML && value <= MAX_AMOUNT_ML;
     if (!valid) {
-      this._amountError =
-        `Bitte eine ganze Zahl zwischen ${MIN_AMOUNT_ML} und ${MAX_AMOUNT_ML} ml eingeben.`;
+      this._amountError = _t(
+        "ui_card_val_amount",
+        "Bitte eine ganze Zahl zwischen {min} und {max} ml eingeben.",
+        { min: MIN_AMOUNT_ML, max: MAX_AMOUNT_ML }
+      );
       this._render();
       return;
     }
@@ -1114,13 +1400,29 @@ class HealthOMatCard extends HTMLElement {
     const pulse = pulseRaw === "" ? null : this._readInt("bp-pulse");
     const note = this._readInput("bp-note");
 
+    const ts = this._readEntryTs("bp-ts");
+
     let error = "";
-    if (!Number.isInteger(sys) || sys < BP_SYS_MIN || sys > BP_SYS_MAX) {
-      error = `Systolisch: ganze Zahl zwischen ${BP_SYS_MIN} und ${BP_SYS_MAX}.`;
+    if (!ts.ok) {
+      error = ts.error;
+    } else if (!Number.isInteger(sys) || sys < BP_SYS_MIN || sys > BP_SYS_MAX) {
+      error = _t(
+        "ui_card_val_bp_sys",
+        "Systolisch: ganze Zahl zwischen {min} und {max}.",
+        { min: BP_SYS_MIN, max: BP_SYS_MAX }
+      );
     } else if (!Number.isInteger(dia) || dia < BP_DIA_MIN || dia > BP_DIA_MAX) {
-      error = `Diastolisch: ganze Zahl zwischen ${BP_DIA_MIN} und ${BP_DIA_MAX}.`;
+      error = _t(
+        "ui_card_val_bp_dia",
+        "Diastolisch: ganze Zahl zwischen {min} und {max}.",
+        { min: BP_DIA_MIN, max: BP_DIA_MAX }
+      );
     } else if (pulseRaw !== "" && (!Number.isInteger(pulse) || pulse < PULSE_MIN || pulse > PULSE_MAX)) {
-      error = `Puls: ganze Zahl zwischen ${PULSE_MIN} und ${PULSE_MAX} — oder leer lassen.`;
+      error = _t(
+        "ui_card_val_bp_pulse",
+        "Puls: ganze Zahl zwischen {min} und {max} — oder leer lassen.",
+        { min: PULSE_MIN, max: PULSE_MAX }
+      );
     }
     if (error) {
       this._bpError = error;
@@ -1138,12 +1440,14 @@ class HealthOMatCard extends HTMLElement {
       };
       if (pulse != null) payload.pulse = pulse;
       if (note) payload.note = note;
+      if (ts.iso) payload.ts = ts.iso;
       await Promise.resolve(
         this._hass.callService("health_o_mat", "add_blood_pressure", payload)
       );
       // Erfolgreich gespeichert: der Entwurf ist erledigt (der naechste
       // Render startet mit leeren Feldern).
       this._bpDraft = { sys: "", dia: "", pulse: "", note: "" };
+      this._resetTs("bp-ts");
       await this._loadData(true);
     } catch (err) {
       this._bpError = (err && err.message) ? err.message : String(err);
@@ -1161,8 +1465,15 @@ class HealthOMatCard extends HTMLElement {
     return this._configNorm().wellbeingConfirm === true;
   }
 
-  /* Merkt die Auswahl nur vor — gemeldet wird sie erst mit „Übernehmen". */
+  /* Merkt die Auswahl nur vor — gemeldet wird sie erst mit „Übernehmen".
+   * Der Zeitpunkt gehört zur Vormerkung (REQ-HOM-120). */
   _stageWellbeing(key, score) {
+    const ts = this._readEntryTs("wb-ts");
+    if (!ts.ok) {
+      this._wbError = ts.error;
+      this._render();
+      return;
+    }
     this._wbPending = {
       /* Personenbezug: die Karte darf eine Vormerkung nur unter der Person
        * anzeigen/übernehmen, für die sie entstanden ist (REQ-HOM-114). */
@@ -1170,6 +1481,7 @@ class HealthOMatCard extends HTMLElement {
       kind: score == null ? "key" : "score",
       key: key == null ? "" : String(key),
       score: score == null ? null : Number(score),
+      ts: ts.iso,
     };
     this._wbError = "";
     this._render();
@@ -1188,7 +1500,11 @@ class HealthOMatCard extends HTMLElement {
     const value = toNumber(rawScore, NaN);
     const max = this._wellbeingScale().length;
     if (!Number.isInteger(value) || value < 1 || value > max) {
-      this._wbError = `Bitte eine ganze Zahl zwischen 1 und ${max} eingeben.`;
+      this._wbError = _t(
+        "ui_card_val_wb",
+        "Bitte eine ganze Zahl zwischen 1 und {max} eingeben.",
+        { max }
+      );
       this._render();
       return;
     }
@@ -1198,26 +1514,38 @@ class HealthOMatCard extends HTMLElement {
   async _confirmWellbeing() {
     const pending = this._wbPendingFor();
     if (!pending || this._busyWb) return;
-    if (pending.kind === "score") await this._reportWellbeingScore(pending.score);
-    else await this._reportWellbeing(pending.key);
+    if (pending.kind === "score") await this._reportWellbeingScore(pending.score, pending.ts);
+    else await this._reportWellbeing(pending.key, pending.ts);
   }
 
-  async _reportWellbeing(key) {
+  /* `ts`: undefined = aus dem Feld lesen (Sofort-Modus), String = bereits
+   * aufgelöster Zeitpunkt der Vormerkung. */
+  async _reportWellbeing(key, ts) {
     if (!this._hass || this._busyWb) return;
     const status = key == null ? "" : String(key);
     if (!this._wellbeingScale().some((state) => state.key === status)) return;
+    let timestamp = ts;
+    if (timestamp === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._wbError = read.error;
+        this._render();
+        return;
+      }
+      timestamp = read.iso;
+    }
     this._busyWb = true;
     this._wbError = "";
     this._render();
     try {
+      const payload = { status: status, person: this._servicePerson() };
+      if (timestamp) payload.ts = String(timestamp);
       await Promise.resolve(
-        this._hass.callService("health_o_mat", "set_wellbeing", {
-          status: status,
-          person: this._servicePerson(),
-        })
+        this._hass.callService("health_o_mat", "set_wellbeing", payload)
       );
       // Erfolgreich gemeldet: eine vorgemerkte Auswahl ist erledigt.
       this._wbPending = null;
+      this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1228,27 +1556,41 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
-  async _reportWellbeingScore(rawScore) {
+  async _reportWellbeingScore(rawScore, ts) {
     if (!this._hass || this._busyWb) return;
     const value = toNumber(rawScore, NaN);
     const max = this._wellbeingScale().length;
     if (!Number.isInteger(value) || value < 1 || value > max) {
-      this._wbError = `Bitte eine ganze Zahl zwischen 1 und ${max} eingeben.`;
+      this._wbError = _t(
+        "ui_card_val_wb",
+        "Bitte eine ganze Zahl zwischen 1 und {max} eingeben.",
+        { max }
+      );
       this._render();
       return;
+    }
+    let timestamp = ts;
+    if (timestamp === undefined) {
+      const read = this._readEntryTs("wb-ts");
+      if (!read.ok) {
+        this._wbError = read.error;
+        this._render();
+        return;
+      }
+      timestamp = read.iso;
     }
     this._busyWb = true;
     this._wbError = "";
     this._render();
     try {
+      const payload = { score: value, person: this._servicePerson() };
+      if (timestamp) payload.ts = String(timestamp);
       await Promise.resolve(
-        this._hass.callService("health_o_mat", "set_wellbeing", {
-          score: value,
-          person: this._servicePerson(),
-        })
+        this._hass.callService("health_o_mat", "set_wellbeing", payload)
       );
       this._wbScoreDraft = "";
       this._wbPending = null;
+      this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
       this._wbError = (err && err.message) ? err.message : String(err);
@@ -1259,16 +1601,21 @@ class HealthOMatCard extends HTMLElement {
     }
   }
 
-  async _undo() {
-    if (!this._hass || this._busyMl != null) return;
-    if (this._data && this._data.undo && this._data.undo.drink === false) return;
+  async _undo(kind = "drinks") {
+    const undoKind = kind === "blood_pressure" || kind === "wellbeing" ? kind : "drinks";
+    if (!this._hass || this._busyMl != null || this._undoBusyKind) return;
+    if (undoKind === "drinks" && this._data && this._data.undo && this._data.undo.drink === false) {
+      return;
+    }
+    if (undoKind !== "drinks" && !this._historyAvailable(undoKind)) return;
     this._actionError = "";
-    this._busyMl = -1;
+    this._undoBusyKind = undoKind;
     this._render();
     try {
       await Promise.resolve(
         this._hass.callService("health_o_mat", "remove_last_entry", {
           person: this._servicePerson(),
+          kind: undoKind,
         })
       );
       this._actionError = "";
@@ -1277,9 +1624,195 @@ class HealthOMatCard extends HTMLElement {
       this._actionError = (err && err.message) ? err.message : String(err);
       this._render();
     } finally {
-      this._busyMl = null;
+      this._undoBusyKind = "";
       this._render();
     }
+  }
+
+  /* ---- Verlauf (REQ-HOM-115) --------------------------------------------- */
+
+  _historyState(kind) {
+    if (!this._history[kind]) {
+      this._history[kind] = { entries: [], error: "", loading: false, loaded: false };
+    }
+    return this._history[kind];
+  }
+
+  /* Kompakter Verlauf: IMMER inklusive gelöschter Einträge, damit
+   * „Wiederherstellen" in der Karte erreichbar bleibt. */
+  async _loadHistory() {
+    if (!this._hass || !this._activeEntry || !this._configNorm().showHistory) return;
+    const entryId = this._activeEntry;
+    const kinds = ["drinks", "blood_pressure", "wellbeing"];
+    await Promise.all(
+      kinds.map(async (kind) => {
+        const state = this._historyState(kind);
+        state.loading = true;
+        state.error = "";
+        try {
+          const res = await this._hass.callWS({
+            type: "health_o_mat/list_history",
+            entry_id: entryId,
+            kind,
+            include_voided: true,
+          });
+          // Personenwechsel während des Loads: die Antwort gehört zur alten
+          // Person und darf die neue Liste nicht überschreiben.
+          if (this._activeEntry !== entryId) return;
+          state.entries = res && Array.isArray(res.entries) ? res.entries.slice(0, 5) : [];
+          state.loaded = true;
+        } catch (err) {
+          if (this._activeEntry !== entryId) return;
+          state.error = (err && err.message) ? err.message : String(err);
+          state.loaded = true;
+        } finally {
+          if (this._activeEntry === entryId) state.loading = false;
+        }
+      })
+    );
+    if (this._activeEntry !== entryId) return;
+    this._render();
+  }
+
+  /* Aktive Einträge vorhanden? Vor dem ersten History-Load dient der
+   * `panel_data`-Fallback (Getränke/BD) bzw. der letzte WB-Block. */
+  _historyAvailable(kind) {
+    const state = this._history[kind];
+    if (state && state.loaded && !state.loading) {
+      return state.entries.some((entry) => entry && !entry.voided_at);
+    }
+    if (kind === "drinks") return !(this._data && this._data.undo) || this._data.undo.drink !== false;
+    if (kind === "blood_pressure") {
+      return !(this._data && this._data.undo) || this._data.undo.blood_pressure !== false;
+    }
+    return !!(this._data && this._data.wellbeing && (this._data.wellbeing.at || this._data.wellbeing.key));
+  }
+
+  _historyConfirmFor(kind, id) {
+    const confirm = this._historyConfirm;
+    return !!confirm && confirm.kind === kind && confirm.id === String(id);
+  }
+
+  _beginHistoryVoid(kind, id) {
+    this._historyConfirm = { kind, id: String(id) };
+    this._render();
+  }
+
+  async _setHistoryEntryVoided(kind, id, restore) {
+    if (!this._hass || !this._activeEntry || this._historyBusy) return;
+    this._historyBusy = true;
+    this._historyConfirm = null;
+    this._actionError = "";
+    this._render();
+    try {
+      await this._hass.callWS({
+        type: restore ? "health_o_mat/restore_entry" : "health_o_mat/void_entry",
+        entry_id: this._activeEntry,
+        kind,
+        item_id: String(id),
+      });
+      await this._loadData(true);
+    } catch (err) {
+      this._actionError = (err && err.message) ? err.message : String(err);
+    } finally {
+      this._historyBusy = false;
+      this._render();
+    }
+  }
+
+  _historyItemText(kind, entry) {
+    if (!entry || typeof entry !== "object") return "";
+    if (kind === "drinks") {
+      const parts = [];
+      if (Number.isFinite(toNumber(entry.ml, NaN))) parts.push(`${Math.round(toNumber(entry.ml, 0))} ml`);
+      if (entry.type) parts.push(String(entry.type));
+      if (entry.src) parts.push(String(entry.src));
+      return parts.join(" \u00B7 ");
+    }
+    if (kind === "blood_pressure") {
+      const parts = [];
+      const sys = toNumber(entry.sys, NaN);
+      const dia = toNumber(entry.dia, NaN);
+      if (Number.isFinite(sys) && Number.isFinite(dia)) parts.push(`${Math.round(sys)}/${Math.round(dia)}`);
+      if (Number.isFinite(toNumber(entry.pulse, NaN))) parts.push(`${Math.round(toNumber(entry.pulse, 0))} bpm`);
+      if (entry.note) parts.push(String(entry.note));
+      return parts.join(" \u00B7 ");
+    }
+    const scale = this._wellbeingScale();
+    const key = String(entry.key || "").toLowerCase();
+    const index = scale.findIndex((state) => state.key === key);
+    const known = index >= 0 ? scale[index] : null;
+    const label =
+      (entry.key ? _t(`ui_common_wb_${String(entry.key).toLowerCase()}`, "") : "") ||
+      entry.label ||
+      (known && known.label) ||
+      _t("ui_common_unknown", "Keine Angabe");
+    const score = index >= 0 ? index + 1 : null;
+    return score != null && known ? `${label} \u00B7 ${score} / ${scale.length}` : label;
+  }
+
+  _historyBlock(kind) {
+    if (!this._configNorm().showHistory) return "";
+    const state = this._history[kind];
+    const entries = state && Array.isArray(state.entries) ? state.entries.slice(0, 5) : [];
+    const loading = !!(state && state.loading);
+    const error = state && state.error
+      ? `<div class="form-error" role="alert">${escapeHtml(state.error)}</div>`
+      : "";
+    const items = entries
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return "";
+        const id = entry.id == null ? "" : String(entry.id);
+        const voided = !!entry.voided_at;
+        const when = entry.ts ? this._timeLabel(entry.ts) : "";
+        const awaiting = this._historyConfirmFor(kind, id);
+        const action = !id
+          ? ""
+          : awaiting
+          ? `<div class="history-confirm" role="group" aria-label="${escapeHtml(
+              _t("ui_card_history_confirm_aria", "Eintrag löschen bestätigen")
+            )}">
+              <span>${escapeHtml(_t("ui_card_history_really", "Wirklich löschen?"))}</span>
+              <button data-action="history-void-confirm" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="${escapeHtml(
+                  _t("ui_card_delete_confirm", "Löschen bestätigen")
+                )}">${escapeHtml(_t("ui_common_delete", "Löschen"))}</button>
+              <button class="ghost" data-action="history-void-cancel" aria-label="${escapeHtml(
+                _t("ui_card_delete_cancel", "Löschen abbrechen")
+              )}">${escapeHtml(_t("ui_common_cancel", "Abbrechen"))}</button>
+            </div>`
+          : voided
+            ? `<button class="ghost" data-action="history-restore" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="${escapeHtml(
+                  _t("ui_card_history_restore", "Eintrag wiederherstellen")
+                )}">${escapeHtml(_t("ui_common_restore", "Wiederherstellen"))}</button>`
+            : `<button class="ghost" data-action="history-void" data-kind="${escapeHtml(kind)}"
+                data-id="${escapeHtml(id)}" aria-label="${escapeHtml(
+                  _t("ui_card_history_delete", "Eintrag löschen")
+                )}">${escapeHtml(_t("ui_common_delete", "Löschen"))}</button>`;
+        return `<li class="history-item${voided ? " voided" : ""}">
+            <span class="history-time">${escapeHtml(
+              when || _t("ui_common_no_time", "ohne Zeitangabe")
+            )}</span>
+            <span class="history-text">${escapeHtml(this._historyItemText(kind, entry))}</span>
+            ${voided
+              ? `<span class="history-status">${escapeHtml(
+                  _t("ui_card_history_deleted", "gelöscht")
+                )}</span>`
+              : ""}
+            ${action}
+          </li>`;
+      })
+      .join("");
+    const body = loading
+      ? `<div class="msg">${escapeHtml(_t("ui_card_history_loading", "Lade Verlauf…"))}</div>`
+      : items
+        ? `<ul class="history-list">${items}</ul>`
+        : `<div class="msg">${escapeHtml(_t("ui_card_history_empty", "Keine Einträge."))}</div>`;
+    return `<div class="block history-block" data-history="${escapeHtml(kind)}">
+        <div class="sub">${escapeHtml(_t("ui_card_history_title", "Verlauf (letzte 5)"))}</div>
+        ${error}${body}
+      </div>`;
   }
 
   /* Getraenke-Quellen in Vorrang-Reihenfolge:
@@ -1315,12 +1848,15 @@ class HealthOMatCard extends HTMLElement {
     if (cleaned.length) {
       return cleaned.map((state) => ({
         key: state.key,
-        label: state.label || state.key,
+        label: _t(`ui_common_wb_${state.key}`, state.label || state.key),
         emoji: state.emoji || WELLBEING_EMOJI[state.key] || "\u{1F642}",
         image: state.image || "",
       }));
     }
-    return WELLBEING_SCALE;
+    return WELLBEING_SCALE.map((state) => ({
+      ...state,
+      label: _t(`ui_common_wb_${state.key}`, state.label),
+    }));
   }
 
   /* Aktuell gemeldeter Zustand (Live-Entity nur, wenn ihr Wert selbst ein
@@ -1345,6 +1881,10 @@ class HealthOMatCard extends HTMLElement {
     if (!target || !target.getAttribute) return;
     const role = target.getAttribute("data-role") || "";
     const value = target.value == null ? "" : String(target.value);
+    if (role.endsWith("-ts")) {
+      if (this._tsDraft) this._tsDraft[role] = value;
+      return;
+    }
     if (role === "custom-amount") {
       // Getippte eigene Menge ebenfalls ohne Re-Render merken.
       this._amountDraft = value;
@@ -1390,7 +1930,27 @@ class HealthOMatCard extends HTMLElement {
     } else if (action === "wellbeing-confirm") {
       this._confirmWellbeing();
     } else if (action === "undo") {
-      this._undo();
+      this._undo(target.getAttribute("data-kind") || "drinks");
+    } else if (action === "history-void") {
+      this._beginHistoryVoid(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || ""
+      );
+    } else if (action === "history-void-confirm") {
+      this._setHistoryEntryVoided(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || "",
+        false
+      );
+    } else if (action === "history-void-cancel") {
+      this._historyConfirm = null;
+      this._render();
+    } else if (action === "history-restore") {
+      this._setHistoryEntryVoided(
+        target.getAttribute("data-kind") || "drinks",
+        target.getAttribute("data-id") || "",
+        true
+      );
     } else if (action === "retry") {
       this._loadData();
     }
@@ -1413,7 +1973,12 @@ class HealthOMatCard extends HTMLElement {
       this._wbError = "";
       this._wbScoreDraft = "";
       this._wbPending = null;
+      this._tsDraft = { "drink-ts": "", "bp-ts": "", "wb-ts": "" };
       this._actionError = "";
+      this._history = {};
+      this._historyBusy = false;
+      this._historyConfirm = null;
+      this._undoBusyKind = "";
       this._activeEntry = nextEntry;
     }
     // Personenliste NICHT verwerfen: sie ist noch gueltig, das Dropdown bleibt
@@ -1465,7 +2030,7 @@ class HealthOMatCard extends HTMLElement {
       ? this._body()
       : this._error
         ? this._message(this._error, true)
-        : this._message("Lade Health-O-Mat\u2026", false);
+        : this._message(_t("ui_card_loading", "Lade Health-O-Mat…"), false);
     return `${style}<ha-card><div class="hom">${this._head()}${banner}${body}</div></ha-card>`;
   }
 
@@ -1476,7 +2041,9 @@ class HealthOMatCard extends HTMLElement {
 
   _message(text, isError) {
     const retry = isError
-      ? `<button class="ghost" data-action="retry">Erneut versuchen</button>`
+      ? `<button class="ghost" data-action="retry">${escapeHtml(
+          _t("ui_common_retry", "Erneut versuchen")
+        )}</button>`
       : "";
     return `<div class="msg${isError ? " error" : ""}">${escapeHtml(text)}${retry}</div>`;
   }
@@ -1500,7 +2067,9 @@ class HealthOMatCard extends HTMLElement {
           )}</option>`;
         })
         .join("");
-      selector = `<select data-role="person" aria-label="Person">${options}</select>`;
+      selector = `<select data-role="person" aria-label="${escapeHtml(
+        _t("ui_common_person", "Person")
+      )}">${options}</select>`;
     }
     return `<div class="head"><div class="head-title"><span class="dot"></span><span class="name">${escapeHtml(
       name
@@ -1538,12 +2107,27 @@ class HealthOMatCard extends HTMLElement {
     if (areas.wellbeing && flags.show_wellbeing_input) {
       parts.push(this._wellbeingInput());
     }
+    if (areas.bp && flags.show_undo) {
+      parts.push(this._undoAction("blood_pressure"));
+    }
+    if (areas.wellbeing && flags.show_undo) {
+      parts.push(this._undoAction("wellbeing"));
+    }
     if (areas.drink && flags.show_undo) {
       parts.push(this._undoAction());
     }
+    // Optionaler Verlauf (Default aus): kein Block, keine Layout-Sprünge.
+    if (this._configNorm().showHistory) {
+      if (areas.drink) parts.push(this._historyBlock("drinks"));
+      if (areas.bp) parts.push(this._historyBlock("blood_pressure"));
+      if (areas.wellbeing) parts.push(this._historyBlock("wellbeing"));
+    }
     return parts.length
       ? parts.join("")
-      : this._message("Keine Blöcke aktiviert — Karten-Konfiguration prüfen.", false);
+      : this._message(
+          _t("ui_card_no_blocks", "Keine Blöcke aktiviert — Karten-Konfiguration prüfen."),
+          false
+        );
   }
 
   _hydration() {
@@ -1566,29 +2150,41 @@ class HealthOMatCard extends HTMLElement {
     const streak = this._stateNumber(this._entity("goal_streak"), NaN);
     const caffeine = this._stateNumber(this._entity("caffeine_today"), NaN);
     const shownMl = Math.round(ml);
-    const goalText = goal > 0 ? `${Math.round(goal)} ml` : "\u2013";
+    const goalText = goal > 0 ? _formatMl(goal) : "\u2013";
 
     const stats = [
       this._paceBadge(),
-      `<div class="stat"><span class="k">Ziel</span><span class="v">${goalText}</span></div>`,
+      `<div class="stat"><span class="k">${escapeHtml(
+        _t("ui_card_goal", "Ziel")
+      )}</span><span class="v">${goalText}</span></div>`,
       Number.isFinite(count)
-        ? `<div class="stat"><span class="k">Buchungen</span><span class="v">${escapeHtml(count)}</span></div>`
+        ? `<div class="stat"><span class="k">${escapeHtml(
+            _t("ui_card_stat_bookings", "Buchungen")
+          )}</span><span class="v">${escapeHtml(count)}</span></div>`
         : "",
       Number.isFinite(yesterday)
-        ? `<div class="stat"><span class="k">Gestern</span><span class="v">${Math.round(yesterday)} ml</span></div>`
+        ? `<div class="stat"><span class="k">${escapeHtml(
+            _t("ui_card_yesterday", "Gestern")
+          )}</span><span class="v">${_formatMl(yesterday)}</span></div>`
         : "",
       Number.isFinite(streak) && streak >= 1
-        ? `<div class="stat"><span class="k">Serie</span><span class="v">${Math.round(streak)} d</span></div>`
+        ? `<div class="stat"><span class="k">${escapeHtml(
+            _t("ui_card_stat_streak", "Serie")
+          )}</span><span class="v">${Math.round(streak)} d</span></div>`
         : "",
       Number.isFinite(caffeine) && caffeine > 0
-        ? `<div class="stat"><span class="k">Koffein</span><span class="v">${Math.round(caffeine)} mg</span></div>`
+        ? `<div class="stat"><span class="k">${escapeHtml(
+            _t("ui_card_stat_caffeine", "Koffein")
+          )}</span><span class="v">${Math.round(caffeine)} mg</span></div>`
         : "",
     ].join("");
 
     return `
       <div class="grid">
         <div class="ring">
-          <svg viewBox="0 0 100 100" role="img" aria-label="${shownPercent}% des Tagesziels">
+          <svg viewBox="0 0 100 100" role="img" aria-label="${escapeHtml(
+              _t("ui_card_percent", "{percent}% des Tagesziels", { percent: shownPercent })
+            )}">
             <circle class="ring-track" cx="50" cy="50" r="${RING_RADIUS}"></circle>
             <circle class="ring-fill${done}" cx="50" cy="50" r="${RING_RADIUS}"
               stroke-dasharray="${RING_CIRCUMFERENCE.toFixed(2)}"
@@ -1597,7 +2193,7 @@ class HealthOMatCard extends HTMLElement {
           </svg>
           <div class="ring-label">
             <span class="ring-pct">${shownPercent}%</span>
-            <span class="ring-sub">${shownMl} / ${goalText}</span>
+            <span class="ring-sub">${_formatNumber(shownMl)} / ${goalText}</span>
           </div>
         </div>
         <div class="stats">${stats}</div>
@@ -1610,7 +2206,9 @@ class HealthOMatCard extends HTMLElement {
     const pace = this._data && this._data.today ? this._data.today.pace : null;
     const info = pace ? PACE_BADGE[String(pace)] : null;
     if (!info) return "";
-    return `<div class="pace ${info.cls}"><span class="arrow" aria-hidden="true">${info.arrow}</span><span>${escapeHtml(info.label)}</span></div>`;
+    return `<div class="pace ${info.cls}"><span class="arrow" aria-hidden="true">${
+      info.arrow
+    }</span><span>${escapeHtml(_t(info.textKey, info.label))}</span></div>`;
   }
 
   _bloodPressure() {
@@ -1632,11 +2230,13 @@ class HealthOMatCard extends HTMLElement {
     const subParts = [];
     if (Number.isFinite(pulse)) subParts.push(`${escapeHtml(Math.round(pulse))} bpm`);
     if (category) subParts.push(escapeHtml(bpCategoryLabel(category)));
-    const at = bp.at ? this._relativeTime(bp.at) : "";
+    const at = bp.at ? this._timeLabel(bp.at) : "";
     if (at) subParts.push(escapeHtml(at));
 
     const warningHtml = warning
-      ? `<div class="warn"><span aria-hidden="true">\u26A0\uFE0F</span><span>Letzte Messung oberhalb der Schwellen</span></div>`
+      ? `<div class="warn"><span aria-hidden="true">\u26A0\uFE0F</span><span>${escapeHtml(
+          _t("ui_card_bp_warning", "Letzte Messung oberhalb der Schwellen")
+        )}</span></div>`
       : "";
 
     return `
@@ -1644,7 +2244,9 @@ class HealthOMatCard extends HTMLElement {
         <span class="emoji" aria-hidden="true">\u{1FA78}</span>
         <div class="label">
           <div class="big">${bigValue}</div>
-          <div class="sub">${subParts.join(" \u00B7 ") || "Keine Messung"}</div>
+          <div class="sub">${
+            subParts.join(" \u00B7 ") || _t("ui_card_no_measurement", "Keine Messung")
+          }</div>
         </div>
       </div>
       ${warningHtml}`;
@@ -1655,8 +2257,12 @@ class HealthOMatCard extends HTMLElement {
     const svg = bpHistorySvg(bp.entries);
     if (!svg) return "";
     return `<div class="block bp-chart">
-      <div class="sub">Blutdruck-Verlauf</div>
-      <div class="bp-legend"><span class="sys">Systolisch</span><span class="dia">Diastolisch</span></div>
+      <div class="sub">${escapeHtml(_t("ui_card_bp_history", "Blutdruck-Verlauf"))}</div>
+      <div class="bp-legend"><span class="sys">${escapeHtml(
+        _t("ui_card_bp_systolic_short", "Systolisch")
+      )}</span><span class="dia">${escapeHtml(
+        _t("ui_card_bp_diastolic_short", "Diastolisch")
+      )}</span></div>
       ${svg}
     </div>`;
   }
@@ -1698,12 +2304,18 @@ class HealthOMatCard extends HTMLElement {
       "\u{1F642}";
     const image =
       this._stateAttribute(entWb, "image") || wb.image || scaleEntry.image || "";
-    const label =
+    const rawLabel =
       this._stateAttribute(entWb, "label") ||
       wb.label ||
       scaleEntry.label ||
-      (displayKey ? displayKey.charAt(0).toUpperCase() + displayKey.slice(1) : "Keine Angabe");
-    const at = (wb.at && this._relativeTime(wb.at)) || "";
+      (displayKey
+        ? displayKey.charAt(0).toUpperCase() + displayKey.slice(1)
+        : _t("ui_common_unknown", "Keine Angabe"));
+    /* Server labels are German; translate by the canonical state key. */
+    const label = displayKey
+      ? _t(`ui_common_wb_${displayKey}`, rawLabel)
+      : rawLabel;
+    const at = (wb.at && this._timeLabel(wb.at)) || "";
 
     // Score (1..N): Live-Entity, sonst Server-Feld (der Server ist die
     // Wahrheit: `score: null` bedeutet "kein Score"); nur wenn das Feld
@@ -1734,8 +2346,10 @@ class HealthOMatCard extends HTMLElement {
       <div class="row">
         <span class="emoji" aria-hidden="true">\u{1F642}</span>
         <div class="label">
-          <div class="big">Keine Angabe</div>
-          <div class="sub">Noch keine Wohlbefinden-Meldung</div>
+          <div class="big">${escapeHtml(_t("ui_common_unknown", "Keine Angabe"))}</div>
+          <div class="sub">${escapeHtml(
+            _t("ui_card_no_wb_report", "Noch keine Wohlbefinden-Meldung")
+          )}</div>
         </div>
       </div>`;
     }
@@ -1747,14 +2361,16 @@ class HealthOMatCard extends HTMLElement {
     const trend = points.length
       ? `<div class="wb-trend">${wellbeingTrendSvg(points)}</div>`
       : "";
-    const sub = at ? `Zuletzt ${escapeHtml(at)}` : "Wohlbefinden";
+    const sub = at
+      ? _t("ui_card_last_wb", "Zuletzt {at}", { at })
+      : _t("ui_common_wellbeing", "Wohlbefinden");
 
     return `
       <div class="row">
         ${wellbeingVisual({ emoji, image })}
         <div class="label">
           <div class="big">${escapeHtml(label)}</div>
-          <div class="sub">${sub}</div>
+          <div class="sub">${escapeHtml(sub)}</div>
         </div>
         ${scoreBadge}
       </div>
@@ -1774,7 +2390,12 @@ class HealthOMatCard extends HTMLElement {
       .map(
         (drink) => `<button data-action="book" data-ml="${drink.ml}"
             data-drink-type="${escapeHtml(drink.label)}"
-            aria-label="${escapeHtml(drink.label)} mit ${Math.round(drink.ml)} Milliliter buchen"${
+            aria-label="${escapeHtml(
+              _t("ui_card_book_aria", "{label} mit {ml} Milliliter buchen", {
+                label: drink.label,
+                ml: Math.round(drink.ml),
+              })
+            )}"${
               busy ? " disabled" : ""
             }>
             <span>${escapeHtml(drink.emoji)} ${escapeHtml(drink.label)}</span>
@@ -1783,9 +2404,11 @@ class HealthOMatCard extends HTMLElement {
       )
       .join("");
     const status = busy
-      ? `<div class="msg" role="status" aria-live="polite">Buchen\u2026</div>`
+      ? `<div class="msg" role="status" aria-live="polite">${escapeHtml(
+          _t("ui_card_booking", "Buchen…")
+        )}</div>`
       : "";
-    return `<div class="actions">${buttons}</div>${status}`;
+    return `${this._tsFieldHtml("drink-ts")}<div class="actions">${buttons}</div>${status}`;
   }
 
   _manualAmounts() {
@@ -1795,7 +2418,9 @@ class HealthOMatCard extends HTMLElement {
     const presets = cfg.manualAmounts
       .map(
         (ml) => `<button data-action="book" data-ml="${ml}" data-drink-type="Eigen"
-            aria-label="${ml} Milliliter als eigene Menge buchen"${busy ? " disabled" : ""}>
+            aria-label="${escapeHtml(
+              _t("ui_card_book_own_aria", "{ml} Milliliter als eigene Menge buchen", { ml })
+            )}"${busy ? " disabled" : ""}>
             <span>${ml}</span>
             <span class="ml">ml</span>
           </button>`
@@ -1805,11 +2430,15 @@ class HealthOMatCard extends HTMLElement {
       ? `<div class="custom-amount">
           <input type="number" inputmode="numeric" min="${MIN_AMOUNT_ML}"
             max="${MAX_AMOUNT_ML}" step="1" data-role="custom-amount"
-            aria-label="Eigene Menge in Milliliter" placeholder="Eigene ml"
+            aria-label="${escapeHtml(
+              _t("ui_card_own_amount", "Eigene Menge in Milliliter")
+            )}" placeholder="${escapeHtml(_t("ui_card_own_amount_short", "Eigene ml"))}"
             value="${escapeHtml(this._amountDraft || "")}"${busy ? " disabled" : ""} />
-          <button data-action="book-custom" aria-label="Eigene Menge buchen"${
+          <button data-action="book-custom" aria-label="${escapeHtml(
+            _t("ui_card_book_own", "Eigene Menge buchen")
+          )}"${
             busy ? " disabled" : ""
-          }><span>Buchen</span></button>
+          }><span>${escapeHtml(_t("ui_panel_drink_book", "Buchen"))}</span></button>
         </div>`
       : "";
     /* Eigene Live-Region nur, wenn der Getraenke-Block keine rendert (sonst
@@ -1817,12 +2446,14 @@ class HealthOMatCard extends HTMLElement {
     const drinksStatus = this._areas().drink && flags.show_drinks;
     const status =
       busy && !drinksStatus
-        ? `<div class="msg" role="status" aria-live="polite">Buchen\u2026</div>`
+        ? `<div class="msg" role="status" aria-live="polite">${escapeHtml(
+            _t("ui_card_booking", "Buchen…")
+          )}</div>`
         : "";
     const error = this._amountError
       ? `<div class="form-error" role="alert">${escapeHtml(this._amountError)}</div>`
       : "";
-    return `<div class="block"><div class="actions">${presets}</div>${custom}${status}${error}</div>`;
+    return `<div class="block">${cfg.flags.show_drinks ? "" : this._tsFieldHtml("drink-ts")}<div class="actions">${presets}</div>${custom}${status}${error}</div>`;
   }
 
   _bloodPressureInput() {
@@ -1837,31 +2468,56 @@ class HealthOMatCard extends HTMLElement {
       : "";
     const disabled = busy ? " disabled" : "";
     return `<div class="block">
+      ${this._tsFieldHtml("bp-ts")}
       <div class="form">
-        <label class="field"><span>Systolisch</span>
+        <label class="field"><span>${escapeHtml(
+          _t("ui_card_bp_systolic_short", "Systolisch")
+        )}</span>
           <input type="number" inputmode="numeric" min="${BP_SYS_MIN}" max="${BP_SYS_MAX}"
-            step="1" data-role="bp-sys" aria-label="Systolischer Wert"
+            step="1" data-role="bp-sys" aria-label="${escapeHtml(
+              _t("ui_card_bp_systolic", "Systolischer Wert")
+            )}"
             value="${escapeHtml(draft.sys)}"${disabled} />
         </label>
-        <label class="field"><span>Diastolisch</span>
+        <label class="field"><span>${escapeHtml(
+          _t("ui_card_bp_diastolic_short", "Diastolisch")
+        )}</span>
           <input type="number" inputmode="numeric" min="${BP_DIA_MIN}" max="${BP_DIA_MAX}"
-            step="1" data-role="bp-dia" aria-label="Diastolischer Wert"
+            step="1" data-role="bp-dia" aria-label="${escapeHtml(
+              _t("ui_card_bp_diastolic", "Diastolischer Wert")
+            )}"
             value="${escapeHtml(draft.dia)}"${disabled} />
         </label>
-        <label class="field"><span>Puls (optional)</span>
+        <label class="field"><span>${escapeHtml(
+          _t("ui_card_bp_pulse", "Puls (optional)")
+        )}</span>
           <input type="number" inputmode="numeric" min="${PULSE_MIN}" max="${PULSE_MAX}"
-            step="1" data-role="bp-pulse" aria-label="Puls (optional)"
+            step="1" data-role="bp-pulse" aria-label="${escapeHtml(
+              _t("ui_card_bp_pulse", "Puls (optional)")
+            )}"
             value="${escapeHtml(draft.pulse)}"${disabled} />
         </label>
-        <button data-action="save-bp" aria-label="Blutdruckmessung speichern"${disabled}>
-          <span>${busy ? "Speichern\u2026" : "Speichern"}</span>
+        <button data-action="save-bp" aria-label="${escapeHtml(
+          _t("ui_card_bp_save", "Blutdruckmessung speichern")
+        )}"${disabled}>
+          <span>${escapeHtml(
+            busy ? _t("ui_card_saving", "Speichern…") : _t("ui_common_save", "Speichern")
+          )}</span>
         </button>
       </div>
       <details class="note"${noteOpen}>
-        <summary>Notiz (optional)</summary>
-        <textarea data-role="bp-note" rows="2" aria-label="Notiz zur Messung"${disabled}>${escapeHtml(draft.note)}</textarea>
+        <summary>${escapeHtml(
+          _t("ui_card_bp_note_optional", "Notiz (optional)")
+        )}</summary>
+        <textarea data-role="bp-note" rows="2" aria-label="${escapeHtml(
+          _t("ui_card_bp_note", "Notiz zur Messung")
+        )}"${disabled}>${escapeHtml(draft.note)}</textarea>
       </details>
-      ${busy ? `<div class="msg" role="status" aria-live="polite">Speichern\u2026</div>` : ""}
+      ${busy
+        ? `<div class="msg" role="status" aria-live="polite">${escapeHtml(
+            _t("ui_card_saving", "Speichern…")
+          )}</div>`
+        : ""}
       ${error}
     </div>`;
   }
@@ -1895,7 +2551,11 @@ class HealthOMatCard extends HTMLElement {
           state.key === stagedKey ? " pending" : ""
         }"
             data-action="wellbeing" data-key="${escapeHtml(state.key)}"
-            aria-label="Wohlbefinden melden: ${escapeHtml(state.label)}"
+            aria-label="${escapeHtml(
+              _t("ui_card_wb_report_aria", "Wohlbefinden melden: {label}", {
+                label: state.label,
+              })
+            )}"
             aria-pressed="${state.key === active ? "true" : "false"}"${
               busy ? " disabled" : ""
             }>
@@ -1906,46 +2566,77 @@ class HealthOMatCard extends HTMLElement {
       .join("");
     const confirmRow = staged
       ? `<div class="wb-confirm">
-          <span class="wb-pending-hint">Ausgewählt: ${escapeHtml(staged.label)}${
-            pendingScore != null && pendingScore > 0 ? ` (${pendingScore} / ${max})` : ""
-          } \u2013 noch nicht gemeldet</span>
-          <button data-action="wellbeing-confirm" aria-label="Wohlbefinden-Auswahl übernehmen"${
+          <span class="wb-pending-hint">${escapeHtml(
+            _t("ui_card_wb_pending", "Ausgewählt: {label}{score} – noch nicht gemeldet", {
+              label: staged.label,
+              score:
+                pendingScore != null && pendingScore > 0 ? ` (${pendingScore} / ${max})` : "",
+            })
+          )}</span>
+          <button data-action="wellbeing-confirm" aria-label="${escapeHtml(
+            _t("ui_card_wb_confirm_aria", "Wohlbefinden-Auswahl übernehmen")
+          )}"${
             busy ? " disabled" : ""
-          }><span>Übernehmen</span></button>
+          }><span>${escapeHtml(_t("ui_card_wb_confirm", "Übernehmen"))}</span></button>
         </div>`
       : "";
     const numeric = this._flags().show_wellbeing_numeric
       ? `<div class="custom-amount">
           <input type="number" inputmode="numeric" min="1" max="${max}" step="1"
-            data-role="wb-score" aria-label="Wohlbefinden als Zahl (1 bis ${max})"
+            data-role="wb-score" aria-label="${escapeHtml(
+              _t("ui_card_wb_numeric_aria", "Wohlbefinden als Zahl (1 bis {max})", { max })
+            )}"
             placeholder="1\u2013${max}" value="${escapeHtml(this._wbScoreDraft || "")}"${
               busy ? " disabled" : ""
             } />
-          <button data-action="wellbeing-score" aria-label="Wohlbefinden als Zahl melden"${
+          <button data-action="wellbeing-score" aria-label="${escapeHtml(
+            _t("ui_card_wb_numeric_submit", "Wohlbefinden als Zahl melden")
+          )}"${
             busy ? " disabled" : ""
-          }><span>Zahl melden</span></button>
+          }><span>${escapeHtml(
+            _t("ui_card_numeric_report", "Zahl melden")
+          )}</span></button>
         </div>`
       : "";
     const error = this._wbError
       ? `<div class="form-error" role="alert">${escapeHtml(this._wbError)}</div>`
       : "";
     const status = busy
-      ? `<div class="msg" role="status" aria-live="polite">Melde\u2026</div>`
+      ? `<div class="msg" role="status" aria-live="polite">${escapeHtml(
+          _t("ui_card_reporting", "Melde…")
+        )}</div>`
       : "";
-    return `<div class="block"><div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
+    return `<div class="block">${this._tsFieldHtml("wb-ts")}<div class="actions wb-actions">${buttons}</div>${confirmRow}${numeric}${status}${error}</div>`;
   }
 
-  _undoAction() {
-    const busy = this._busyMl != null;
-    const canUndo = !(this._data && this._data.undo) || this._data.undo.drink !== false;
-    const disabled = busy || !canUndo ? " disabled" : "";
+  _undoAction(kind = "drinks") {
+    const busy = this._busyMl != null || !!this._undoBusyKind;
+    const canUndo = this._historyAvailable(kind);
+    // Getränke bleiben als deaktivierter Button sichtbar (bisheriges Layout);
+    // BD/WB erscheinen nur, wenn wirklich aktive Einträge existieren.
+    if (!canUndo && kind !== "drinks") return "";
+    const label =
+      kind === "blood_pressure"
+        ? _t("ui_card_undo_bp", "Letzte Blutdruckmessung rückgängig machen")
+        : kind === "wellbeing"
+          ? _t("ui_card_undo_wb", "Letzte Wohlbefinden-Meldung rückgängig machen")
+          : _t("ui_card_undo_drink", "Letzte Getränkebuchung rückgängig machen");
     const title = canUndo
       ? ""
-      : ' title="Keine Getränkebuchung zum Rückgängigmachen vorhanden"';
+      : ` title="${escapeHtml(
+          _t("ui_card_undo_none", "Keine Getränkebuchung zum Rückgängigmachen vorhanden")
+        )}"`;
+    const kindAttr = kind === "drinks" ? "" : ` data-kind="${escapeHtml(kind)}"`;
+    const text =
+      kind === "blood_pressure"
+        ? _t("ui_card_undo_bp_short", "Undo BD")
+        : kind === "wellbeing"
+          ? _t("ui_card_undo_wb_short", "Undo WB")
+          : _t("ui_card_undo_short", "Undo");
     return `<div class="actions">
-      <button class="ghost" data-action="undo" aria-label="Letzte Getränkebuchung rückgängig machen"${
+      <button class="ghost" data-action="undo"${kindAttr} aria-label="${escapeHtml(label)}"${
         canUndo ? "" : ' aria-disabled="true"'
-      }${title}${disabled}><span aria-hidden="true">\u21A9</span><span class="ml">Undo</span></button>
+      }${title}${busy || !canUndo ? " disabled" : ""}><span aria-hidden="true">\u21A9</span><span class="ml">${escapeHtml(text)}</span></button>
     </div>`;
   }
 
@@ -1953,12 +2644,36 @@ class HealthOMatCard extends HTMLElement {
     const ts = Date.parse(iso);
     if (!Number.isFinite(ts)) return "";
     const diffMin = Math.round((Date.now() - ts) / 60000);
-    if (diffMin < 1) return "gerade eben";
-    if (diffMin < 60) return `vor ${diffMin} min`;
+    if (diffMin < 1) return _relativeText(0, "minute");
+    if (diffMin < 60) return _relativeText(-diffMin, "minute");
     const hours = Math.round(diffMin / 60);
-    if (hours < 24) return `vor ${hours} h`;
+    if (hours < 24) return _relativeText(-hours, "hour");
     const days = Math.round(hours / 24);
-    return `vor ${days} d`;
+    return _relativeText(-days, "day");
+  }
+
+  /* Anzeige-Zeitpunkt (REQ-HOM-120): relativ für frische Einträge (< 24 h),
+   * sonst absolutes Datum/Uhrzeit (Intl, HA-Sprache). */
+  _timeLabel(iso) {
+    const ts = Date.parse(iso);
+    if (!Number.isFinite(ts)) return "";
+    const diff = Date.now() - ts;
+    if (diff >= 0 && diff < 24 * 60 * 60 * 1000) return this._relativeTime(iso);
+    const date = new Date(ts);
+    try {
+      return new Intl.DateTimeFormat(_intlLocale(), {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+    } catch (_error) {
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()} ${pad(
+        date.getHours()
+      )}:${pad(date.getMinutes())}`;
+    }
   }
 }
 
@@ -1997,11 +2712,22 @@ class HealthOMatCardEditor extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    this._ensureUiLanguage(hass);
     // Populate the person picker once (later hass updates just refresh state).
     if (first && hass) {
       if (this._persons === null) this._loadPersons();
       this._maybeLoadDrinks();
     }
+  }
+
+  _ensureUiLanguage(hass) {
+    const language = _normaliseLanguage(hass && hass.language);
+    if (language === _uiLanguage && _uiAttempted[language]) return;
+    const changed = language !== _uiLanguage;
+    _uiLanguage = language;
+    _loadUiTranslations(hass).then((loaded) => {
+      if (loaded || changed) this._render();
+    });
   }
 
   get hass() {
@@ -2154,7 +2880,7 @@ class HealthOMatCardEditor extends HTMLElement {
 
   _toggleFlag(key, checked) {
     const next = Object.assign({}, this._config);
-    if (key === "wellbeing_confirm") {
+    if (key === "wellbeing_confirm" || key === "show_history") {
       /* Default ist `false` (anders als die `show_*`-Schalter): an muss
        * explizit gesetzt werden, aus entfernt den Key wieder. */
       if (checked) next[key] = true;
@@ -2323,7 +3049,9 @@ class HealthOMatCardEditor extends HTMLElement {
     const options = [];
     const auto = current ? "" : " selected";
     options.push(
-      `<option value=""${auto}>Automatisch (Personenauswahl in der Karte)</option>`
+      `<option value=""${auto}>${escapeHtml(
+        _t("ui_card_person_auto", "Automatisch (Personenauswahl in der Karte)")
+      )}</option>`
     );
     let hasCurrent = !current;
     for (const person of this._persons || []) {
@@ -2353,28 +3081,36 @@ class HealthOMatCardEditor extends HTMLElement {
 
   _displaySection() {
     return `<div class="editor-group">
-      <div class="editor-group-title">Anzeige</div>
-      ${this._checkbox("show_person", "Personenauswahl")}
-      ${this._checkbox("show_hydration", "Trinkmenge (Ring und Tageswerte)")}
-      ${this._checkbox("show_blood_pressure", "Letzte Blutdruckmessung")}
-      ${this._checkbox("show_blood_pressure_history", "Blutdruck-Verlaufsgraph")}
-      ${this._checkbox("show_wellbeing", "Letztes Wohlbefinden")}
+      <div class="editor-group-title">${escapeHtml(_t("ui_editor_display", "Anzeige"))}</div>
+      ${this._checkbox("show_person", _t("ui_editor_show_person", "Personenauswahl"))}
+      ${this._checkbox("show_hydration", _t("ui_editor_drink_section", "Trinkmenge (Ring und Tageswerte)"))}
+      ${this._checkbox("show_blood_pressure", _t("ui_editor_bp_last", "Letzte Blutdruckmessung"))}
+      ${this._checkbox("show_blood_pressure_history", _t("ui_editor_bp_chart", "Blutdruck-Verlaufsgraph"))}
+      ${this._checkbox("show_wellbeing", _t("ui_editor_wb_last", "Letztes Wohlbefinden"))}
     </div>`;
   }
 
   _inputSection() {
     return `<div class="editor-group">
-      <div class="editor-group-title">Eingabe &amp; Aktionen</div>
-      ${this._checkbox("show_drinks", "Schnellbuchung Getränke")}
-      ${this._checkbox("show_manual_amounts", "Manuelle Mengen")}
-      ${this._checkbox("show_blood_pressure_input", "Blutdruck eingeben")}
-      ${this._checkbox("show_wellbeing_input", "Wohlbefinden melden")}
-      ${this._checkbox("show_wellbeing_numeric", "Wohlbefinden auch als Zahl (1–10)")}
+      <div class="editor-group-title">${escapeHtml(
+        _t("ui_editor_inputs", "Eingabe & Aktionen")
+      )}</div>
+      ${this._checkbox("show_drinks", _t("ui_editor_drinks", "Schnellbuchung Getränke"))}
+      ${this._checkbox("show_manual_amounts", _t("ui_editor_show_manual", "Manuelle Mengen"))}
+      ${this._checkbox("show_blood_pressure_input", _t("ui_editor_bp_input", "Blutdruck eingeben"))}
+      ${this._checkbox("show_wellbeing_input", _t("ui_editor_wb_input", "Wohlbefinden melden"))}
+      ${this._checkbox("show_wellbeing_numeric", _t("ui_editor_wb_numeric", "Wohlbefinden auch als Zahl (1–10)"))}
       <label class="editor-check">
         <input type="checkbox" data-key="wellbeing_confirm"${this._effectiveWellbeingConfirm() ? " checked" : ""} />
-        <span>Wohlbefinden: Bestätigung vor Übernahme</span>
+        <span>${escapeHtml(
+          _t("ui_admin_wb_confirm", "Wohlbefinden: Bestätigung vor Übernahme")
+        )}</span>
       </label>
-      ${this._checkbox("show_undo", "Letzte Buchung rückgängig")}
+      ${this._checkbox("show_undo", _t("ui_editor_undo", "Letzte Buchung rückgängig"))}
+      <label class="editor-check">
+        <input type="checkbox" data-key="show_history"${toBool(this._config.show_history, false) ? " checked" : ""} />
+        <span>${escapeHtml(_t("ui_editor_show_history", "Verlauf anzeigen (letzte 5)"))}</span>
+      </label>
     </div>`;
   }
 
@@ -2403,20 +3139,39 @@ class HealthOMatCardEditor extends HTMLElement {
       .join("");
     const filterBlock =
       mode !== "selector"
-        ? `<div class="editor-hint">Fest gebunden — der Dropdown-Filter wird ignoriert.</div>`
+        ? `<div class="editor-hint">${escapeHtml(
+            _t("ui_editor_fixed_hint", "Fest gebunden — der Dropdown-Filter wird ignoriert.")
+          )}</div>`
         : persons.length
           ? `<label class="editor-check">
               <input type="checkbox" data-role="person-filter-all"${filterIsAll ? " checked" : ""} />
-              <span>Alle Personen im Dropdown</span>
+              <span>${escapeHtml(
+                _t("ui_editor_all_persons", "Alle Personen im Dropdown")
+              )}</span>
             </label>${rows}
-            <div class="editor-hint">„Alle Personen“ abwählen, um einzelne Personen fürs Dropdown auszuwählen.</div>`
-          : `<div class="editor-hint">Personenliste wird geladen\u2026</div>`;
+            <div class="editor-hint">${escapeHtml(
+              _t(
+                "ui_editor_all_persons_hint",
+                "„Alle Personen“ abwählen, um einzelne Personen fürs Dropdown auszuwählen."
+              )
+            )}</div>`
+          : `<div class="editor-hint">${escapeHtml(
+              _t("ui_editor_loading_persons", "Personenliste wird geladen…")
+            )}</div>`;
     return `<div class="editor-group">
-      <div class="editor-group-title">Personen-Bindung</div>
+      <div class="editor-group-title">${escapeHtml(
+        _t("ui_editor_person_binding", "Personen-Bindung")
+      )}</div>
       <div class="editor-row">
-        <select data-key="person_mode" aria-label="Personen-Modus">
-          <option value="selector"${mode === "selector" ? " selected" : ""}>Dropdown (Personenauswahl)</option>
-          <option value="fixed"${mode === "fixed" ? " selected" : ""}>Fest an eine Person gebunden</option>
+        <select data-key="person_mode" aria-label="${escapeHtml(
+          _t("ui_editor_person_mode", "Personen-Modus")
+        )}">
+          <option value="selector"${mode === "selector" ? " selected" : ""}>${escapeHtml(
+            _t("ui_editor_mode_selector", "Dropdown (Personenauswahl)")
+          )}</option>
+          <option value="fixed"${mode === "fixed" ? " selected" : ""}>${escapeHtml(
+            _t("ui_editor_mode_fixed", "Fest an eine Person gebunden")
+          )}</option>
         </select>
       </div>
       ${filterBlock}
@@ -2425,27 +3180,41 @@ class HealthOMatCardEditor extends HTMLElement {
 
   _drinksSection() {
     const entryId = this._config.entry_id ? String(this._config.entry_id) : "";
-    const head = `<div class="editor-group-title">Getränke</div>`;
+    const head = `<div class="editor-group-title">${escapeHtml(
+      _t("ui_editor_group_drinks", "Getränke")
+    )}</div>`;
     if (!entryId) {
       return `<div class="editor-group">${head}
-        <div class="editor-hint">Person wählen, um Getränke zu laden. Ohne eigene Auswahl erscheinen alle Getränke der Person.</div>
+        <div class="editor-hint">${escapeHtml(
+          _t(
+            "ui_editor_drinks_pick",
+            "Person wählen, um Getränke zu laden. Ohne eigene Auswahl erscheinen alle Getränke der Person."
+          )
+        )}</div>
       </div>`;
     }
     if (this._drinksLoading) {
       return `<div class="editor-group">${head}
-        <div class="editor-hint">Getränke werden geladen\u2026</div>
+        <div class="editor-hint">${escapeHtml(
+          _t("ui_editor_drinks_loading", "Getränke werden geladen…")
+        )}</div>
       </div>`;
     }
     if (!this._drinkList.length) {
       return `<div class="editor-group">${head}
-        <div class="editor-hint">Getränke konnten nicht geladen werden — es erscheinen alle Getränke der Person.</div>
+        <div class="editor-hint">${escapeHtml(
+          _t(
+            "ui_editor_drinks_error",
+            "Getränke konnten nicht geladen werden — es erscheinen alle Getränke der Person."
+          )
+        )}</div>
       </div>`;
     }
     const selected = this._selectedDrinkKeys();
     const allSelected = selected.length === this._drinkList.length;
     const allBox = `<label class="editor-check">
       <input type="checkbox" data-role="drinks-all"${allSelected ? " checked" : ""} />
-      <span>Alle Getränke</span>
+      <span>${escapeHtml(_t("ui_editor_all_drinks", "Alle Getränke"))}</span>
     </label>`;
     const rows = this._drinkList
       .map(
@@ -2458,7 +3227,9 @@ class HealthOMatCardEditor extends HTMLElement {
       )
       .join("");
     return `<div class="editor-group">${head}${allBox}${rows}
-      <div class="editor-hint">Ohne eigene Auswahl erscheinen alle Getränke.</div>
+      <div class="editor-hint">${escapeHtml(
+        _t("ui_editor_drinks_hint", "Ohne eigene Auswahl erscheinen alle Getränke.")
+      )}</div>
     </div>`;
   }
 
@@ -2469,26 +3240,40 @@ class HealthOMatCardEditor extends HTMLElement {
         (ml, index) => `<div class="editor-row">
           <input type="number" inputmode="numeric" min="${MIN_AMOUNT_ML}"
             max="${MAX_AMOUNT_ML}" step="1" data-role="amount" data-index="${index}"
-            value="${ml}" aria-label="Menge ${index + 1} in Milliliter" />
+            value="${ml}" aria-label="${escapeHtml(
+              _t("ui_editor_amount_aria", "Menge {index} in Milliliter", { index: index + 1 })
+            )}" />
           <button class="ghost" type="button" data-role="amount-remove" data-index="${index}"
-            aria-label="Menge ${ml} Milliliter entfernen">\u2715</button>
+            aria-label="${escapeHtml(
+              _t("ui_editor_amount_remove", "Menge {ml} Milliliter entfernen", { ml })
+            )}">\u2715</button>
         </div>`
       )
       .join("");
     return `<div class="editor-group">
-      <div class="editor-group-title">Manuelle Mengen (ml)</div>
+      <div class="editor-group-title">${escapeHtml(
+        _t("ui_editor_amounts_title", "Manuelle Mengen (ml)")
+      )}</div>
       <div class="editor-list">${rows}</div>
       <div class="editor-row">
         <button class="ghost" type="button" data-role="amount-add"
-          aria-label="Weitere Menge hinzufügen"><span>Menge hinzufügen</span></button>
+          aria-label="${escapeHtml(
+            _t("ui_editor_add_amount", "Weitere Menge hinzufügen")
+          )}"><span>${escapeHtml(
+            _t("ui_editor_amount_add", "Menge hinzufügen")
+          )}</span></button>
       </div>
       <label class="editor-check">
         <input type="checkbox" data-key="allow_custom_amount"${
           this._effectiveAllowCustomAmount() ? " checked" : ""
         } />
-        <span>Freies Zahlenfeld erlauben</span>
+        <span>${escapeHtml(
+          _t("ui_editor_custom_amount", "Freies Zahlenfeld erlauben")
+        )}</span>
       </label>
-      <div class="editor-hint">Ohne eigene Mengen gelten 200 und 500 ml.</div>
+      <div class="editor-hint">${escapeHtml(
+        _t("ui_editor_amounts_hint", "Ohne eigene Mengen gelten 200 und 500 ml.")
+      )}</div>
     </div>`;
   }
 
@@ -2496,28 +3281,49 @@ class HealthOMatCardEditor extends HTMLElement {
     const current = this._config.entry_id ? String(this._config.entry_id) : "";
     let hint = "";
     if (this._persons === null) {
-      hint = this._loading ? "Personen werden geladen\u2026" : "";
+      hint = this._loading ? _t("ui_editor_loading", "Personen werden geladen…") : "";
     } else if (!this._persons.length) {
-      hint = "Keine Person eingerichtet \u2014 Karte nutzt den freien person-Anker.";
+      hint = _t(
+        "ui_editor_no_person",
+        "Keine Person eingerichtet — Karte nutzt den freien person-Anker."
+      );
     }
     const mode = String(this._config.person_mode || (current ? "fixed" : "selector"));
     const personPicker =
       mode === "fixed"
         ? `<div>
-            <label for="entry_id">Feste Person</label>
+            <label for="entry_id">${escapeHtml(
+              _t("ui_editor_fixed_person", "Feste Person")
+            )}</label>
             <select id="entry_id" data-key="entry_id">${this._personOptions(current)}</select>
             ${hint ? `<div class="editor-hint">${escapeHtml(hint)}</div>` : ""}
           </div>`
-        : `<div class="editor-hint">Dropdown-Modus: Die angezeigten Personen werden im Abschnitt „Personen-Bindung“ gefiltert.</div>`;
+        : `<div class="editor-hint">${escapeHtml(
+            _t(
+              "ui_editor_dropdown_hint",
+              "Dropdown-Modus: Die angezeigten Personen werden im Abschnitt „Personen-Bindung“ gefiltert."
+            )
+          )}</div>`;
     this.shadowRoot.innerHTML = `
       <style>${CARD_CSS}</style>
       <div class="editor">
         ${personPicker}
         <div>
-          <label for="person">person \u2014 optionaler Service-Anker</label>
+          <label for="person">${escapeHtml(
+            _t("ui_editor_person_anchor", "person — optionaler Service-Anker")
+          )}</label>
           <input id="person" data-key="person" type="text"
-            value="${escapeHtml(this._config.person || "")}" placeholder="z. B. Caro" />
-          <div class="editor-hint">Leer lassen, wenn die Karte \u00fcber die gew\u00e4hlte Person schreiben soll. Nur n\u00f6tig, wenn ein abweichender Anker (entry.data \u201eperson\u201c) angesprochen werden muss.</div>
+            value="${escapeHtml(this._config.person || "")}" placeholder="${escapeHtml(
+              _t("ui_editor_person_placeholder", "z. B. Caro")
+            )}" />
+          <div class="editor-hint">${escapeHtml(
+            _t(
+              "ui_editor_person_anchor_hint",
+              "Leer lassen, wenn die Karte über die gewählte Person schreiben soll. " +
+                "Nur nötig, wenn ein abweichender Anker (entry.data „person“) " +
+                "angesprochen werden muss."
+            )
+          )}</div>
         </div>
         ${this._personSection()}
         ${this._displaySection()}
@@ -2540,8 +3346,10 @@ if (!window.customCards.some((c) => c && c.type === CARD_TAG)) {
   window.customCards.push({
     type: CARD_TAG,
     name: "Health-O-Mat",
-    description:
-      "Trinkmenge, Blutdruck und Wohlbefinden auf einen Blick — mit Quick-Buchung und Undo.",
+    description: _t(
+      "ui_editor_description",
+      "Trinkmenge, Blutdruck und Wohlbefinden auf einen Blick — mit Quick-Buchung und Undo."
+    ),
     preview: false,
     documentationURL: "https://github.com/Popoboxxo/ha-health-o-mat",
   });
