@@ -440,7 +440,7 @@
         },
         "person_map": {
           "name": "Person mapping",
-          "description": "Mapping {source: target entry ID}. Required when the person cannot be matched unambiguously by name. Persons are never created automatically."
+          "description": "Mapping from a source to a target entry ID. Required when the person cannot be matched unambiguously by name. Persons are never created automatically."
         },
         "dry_run": {
           "name": "Dry run",

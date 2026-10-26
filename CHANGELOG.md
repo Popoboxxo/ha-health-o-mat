@@ -5,6 +5,17 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.14.1] — 2026-10-26
+
+### Fixed
+
+- Removed placeholder-like braces from the `restore_backup` person-mapping
+  service description (German and English), which Home Assistant validated as
+  invalid placeholders and logged during setup.
+- Added tests for valid placeholders and cross-language placeholder parity.
+
+[0.14.1]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.14.0...v0.14.1
+
 ## [0.14.0] — 2026-10-26
 
 ### Added
