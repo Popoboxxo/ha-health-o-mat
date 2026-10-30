@@ -40,19 +40,29 @@ nach `/config/www`.
 
 ### 2.1 Kategorien & Katalog-Marker
 
-Acht Default-Kategorien (`const.py: LAB_CATEGORIES`), aus der Recherche
-(Kapitel 3) destilliert:
+Neun Default-Kategorien (`const.py: LAB_CATEGORIES`), aus der Recherche
+(Kapitel 3) destilliert — Kategorie 9 kam aus dem Abgleich mit realen
+Laborbefunden des Maintainers (2026-10-30) hinzu:
 
 | Kategorie-Key | Name (de) | Marker (Katalog) |
 |---|---|---|
-| `liver` | Leber | `alt`, `ast`, `ggt`, `bilirubin_total` |
-| `kidney` | Niere | `creatinine`, `egfr`, `urea` |
+| `liver` | Leber | `alt`, `ast`, `ggt`, `bilirubin_total`, `total_protein` |
+| `kidney` | Niere | `creatinine`, `egfr`, `urea`, `urine_protein_creatinine_ratio` |
 | `electrolytes` | Elektrolyte | `sodium`, `potassium`, `calcium`, `magnesium`, `chloride` |
 | `lipids` | Lipide | `cholesterol_total`, `ldl`, `hdl`, `triglycerides` |
 | `thyroid` | Schilddrüse | `tsh`, `ft4`, `ft3` |
 | `blood_count` | Blutbild | `hemoglobin`, `leukocytes`, `platelets` |
 | `inflammation` | Entzündung/Immunsystem | `crp`, `esr` |
 | `digestion` | Verdauung | `lipase`, `amylase` |
+| `drug_levels` | Medikamentenspiegel | `tacrolimus` |
+
+**Abgrenzung `drug_levels` vs. Vision §5.1 „Medikamente/Supplements":** Diese
+Kategorie bildet **Blutspiegel** eines Medikaments ab (Therapeutic Drug
+Monitoring, z. B. Tacrolimus nach Organtransplantation) — ein Laborwert wie
+jeder andere. Das separate Vision-Themenfeld „Medikamente/Supplements"
+(Einnahme-Tracking: Dosis, Einnahmezeit, Adhärenz) ist ein **anderes**,
+zukünftiges Feature und bleibt unberührt — beide können später unabhängig
+voneinander existieren, ohne sich zu überlappen.
 
 Jeder Katalog-Marker (`const.py: LAB_MARKERS[key]`) trägt:
 
@@ -65,6 +75,19 @@ Jeder Katalog-Marker (`const.py: LAB_MARKERS[key]`) trägt:
     "alt_units": {},                        # {"unit": factor_to_canonical} falls nötig
 }
 ```
+
+### 2.1a Namens-Aliase (deutsche Laborsynonyme)
+
+Deutsche Laborbefunde nutzen teils andere Bezeichnungen für denselben Wert:
+**GPT = ALT**, **GOT = AST**, **Gamma-GT = GGT**. Das ist ein **Namens**-,
+kein Einheiten-Problem — `const.py: LAB_MARKER_ALIASES` ist eine kleine
+feste Lookup-Tabelle (`{"gpt": "alt", "got": "ast", "gamma_gt": "ggt"}`),
+die der Service (`add_lab_value`, §5.1) **vor** dem Katalog-/Custom-Abgleich
+auflöst — ein Laborgerät/-skript, das „GPT" statt „ALT" sendet, bekommt
+keinen `unknown_marker`-Fehler mehr. Anzeige in UI/Doku bleibt wie bisher
+unter dem primären Namen mit Synonym in Klammern (z. B. „ALT (GPT)").
+Gespeichert wird immer unter dem **primären** `marker_key` (`alt`, nicht
+`gpt`) — kein Doppel-Eintrag, kein zweiter Marker.
 
 ### 2.2 Custom-Marker (pro Person)
 
@@ -80,9 +103,14 @@ Jeder Katalog-Marker (`const.py: LAB_MARKERS[key]`) trägt:
   (Kollision → Suffix `_2`, `_3`, ... oder Fehlermeldung im Admin-Formular).
 - Kategorie `other` ("Sonstige") ist immer wählbar zusätzlich zu den 8
   Default-Kategorien — freie Marker ohne Themenbezug landen dort.
-- Kein Konvertierungsfaktor (`alt_units`) für Custom-Marker — Nutzer pflegt
-  eine Einheit, Konvertierung ist Katalog-Exklusiv (begrenzter, gepflegter
-  Umfang statt generischem Einheiten-Framework — YAGNI).
+- **Optionales Alt-Unit-Paar** (`alt_unit: {"unit": ..., "factor_to_canonical":
+  ...} | None`): deckt den üblichen Fall „zwei Labore berichten in zwei
+  Einheiten" ab, ohne ein offenes Mehrfach-Einheiten-Framework zu bauen —
+  bewusst **genau ein** Paar pro Custom-Marker, kein Katalog-Umfang
+  (begrenzt, YAGNI). Service/Card/Admin akzeptieren dann sowohl `unit`
+  als auch `alt_unit.unit` für diesen Marker, rechnen beim Schreiben in
+  die Haupt-`unit` um (gleicher `convert_lab_value`-Pfad wie Katalog-Marker,
+  §3). Ohne gesetztes `alt_unit` bleibt der Marker einheitig wie bisher.
 
 ### 2.3 Referenzbereich-Overrides (pro Person, nur Katalog)
 
@@ -162,9 +190,9 @@ einen vernünftigen Startwert, **nicht** die Wahrheit für jede Person.
 
 | Marker | Default-Referenz | Kanon. Einheit | Alt.-Einheit + Faktor | Quelle (Kurzbeleg) |
 |---|---|---|---|---|
-| ALT | 10–50 U/L | U/L | — | Klinische Studienprotokolle, Laborkataloge |
-| AST | 10–50 U/L | U/L | — | dto. |
-| GGT | 10–60 U/L | U/L | — | dto. (geschlechtsabhängig, Override empfohlen) |
+| ALT (Syn. GPT) | 10–50 U/L | U/L | — | Klinische Studienprotokolle, Laborkataloge |
+| AST (Syn. GOT) | 10–50 U/L | U/L | — | dto. |
+| GGT (Syn. Gamma-GT) | 10–60 U/L | U/L | — | dto. (geschlechtsabhängig, Override empfohlen) |
 | Bilirubin gesamt | 5–21 µmol/L | µmol/L | mg/dL × 17.1 → µmol/L | PMC-Tabellen, UK-Kidney-Appendix |
 | Kreatinin | 53–106 µmol/L | µmol/L | mg/dL × 88.4 → µmol/L | Laborkataloge |
 | eGFR | ≥ 90 mL/min/1.73m² | mL/min/1.73m² | — (keine Umrechnung) | KDIGO-Staging-Quellen |
@@ -188,6 +216,18 @@ einen vernünftigen Startwert, **nicht** die Wahrheit für jede Person.
 | BSG/ESR | ≤ 20 mm/h | mm/h | — (keine Umrechnung) | Haematology-Quellen |
 | Lipase | 13–60 U/L | U/L | — | Laborkataloge |
 | Amylase | 30–110 U/L | U/L | — | dto. |
+| Gesamteiweiß | 64–83 g/L | g/L | — (bereits SI) | Klinische Chemie-Referenztabellen |
+| Protein/Kreatinin-Quotient (Urin) | < 15 mg/g | mg/g | g/g × 1000 → mg/g | Nephrologie-Referenzwerte — **⚠ bekannte Verwechslungsgefahr:** reale Befunde beschriften den Wert oft als „g/g", meinen aber „mg/g" (Faktor 1000). Deshalb **kein** automatischer Default — Einheit muss bei jeder Eingabe explizit gewählt werden (§5.1). |
+| Tacrolimus (Talspiegel) | 5–15 ng/mL (Richtwert, stark indikationsabhängig) | ng/mL | — | Transplantationsmedizin-Referenzwerte — Override hier **besonders** wichtig: der Zielbereich hängt von Zeit seit Transplantation und Organ ab, keine sinnvolle „Standard"-Zahl |
+
+**Bidirektional, nie eine „richtige" Eingabe-Einheit:** Der Anwender trägt
+die Einheit ein, die auf seinem Laborbericht steht — Haupt-Einheit **oder**
+Alt-Einheit, beides ist gültige Eingabe. `convert_lab_value()` erkennt die
+mitgeschickte `unit` und rechnet die jeweils andere automatisch korrekt aus;
+gespeichert/als Sensor-Einheit angezeigt wird immer die kanonische Form, die
+Original-Eingabe bleibt zusätzlich als `reported_value`/`reported_unit`
+erhalten und erscheint als Subzeile in Card/Panel (§7). Niemand muss sich
+merken, welche Einheit „die richtige" ist.
 
 **Konvertierungstabelle** (`logic.py: LAB_UNIT_CONVERSIONS`) ist eine simple
 Lookup-Struktur `{marker_key: {unit: factor_to_canonical}}` — nur für die
@@ -235,10 +275,22 @@ stillschweigend falsch zu rechnen.
 | `ts` | datetime | optional | wie bestehend: ≤ 5 Min Zukunft, nicht vor 1900 |
 | `report_ref` | string | optional | Link oder externe ID des Laborberichts (§2.4a), max. 500 Zeichen |
 
-Unbekannter `marker` (kein Katalog-Key, kein Custom-Key der Person) →
-`ServiceValidationError("unknown_marker")` — **kein** automatisches Anlegen
-(verhindert Tippfehler-Entity-Müll; Custom-Marker entstehen bewusst nur über
-das Admin-Formular, §6.2).
+Auflösungsreihenfolge für `marker`: **(1)** `LAB_MARKER_ALIASES`-Lookup
+(§2.1a, z. B. `gpt` → `alt`), **(2)** Katalog-Key, **(3)** Custom-Key der
+Person. Kein Treffer in allen drei Schritten → `ServiceValidationError
+("unknown_marker")` — **kein** automatisches Anlegen (verhindert
+Tippfehler-Entity-Müll; Custom-Marker entstehen bewusst nur über das
+Admin-Formular, §6.2).
+
+**Marker ohne Einheiten-Default:** Für Marker mit bekannter
+Verwechslungsgefahr zwischen zwei Einheiten (aktuell nur
+`urine_protein_creatinine_ratio`, §3) ist `unit` **Pflichtfeld** — kein
+impliziter Fallback auf `canonical_unit`. Fehlt `unit` bei einem solchen
+Marker → `ServiceValidationError("unit_required")`. Das Flag
+(`LAB_MARKERS[key]["require_explicit_unit"]: bool`) ist eine Katalog-
+Eigenschaft, kein Sonderfall im Service-Code — jeder künftige Marker mit
+derselben Gefahrenklasse (z. B. ein weiterer g/g-vs-mg/g-Quotient) setzt
+einfach dasselbe Flag.
 
 Extern erreichbar über HAs bestehende REST-API (`POST
 /api/services/health_o_mat/add_lab_value`) + Long-Lived-Token — **kein**
@@ -288,9 +340,11 @@ und dem Export-Block:
 │ │ Einheit:   [ng/mL                                  ]  │   │
 │ │ Kategorie: [Sonstige                             ▾ ]  │   │
 │ │ Referenz:  [30     ] bis [100                      ]  │   │
+│ │ ▸ Alternative Einheit (optional)                        │   │
+│ │   Einheit: [nmol/L  ]  Faktor → ng/mL: [ 0.4        ]  │   │
 │ │                                   [ + Hinzufügen    ]  │   │
 │ │ ──────────────────────────────────────────────────    │   │
-│ │ • Vitamin D (vitamin_d) — ng/mL, 30–100          [✕]  │   │
+│ │ • Vitamin D (vitamin_d) — ng/mL (alt: nmol/L)    [✕]  │   │
 │ └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │ ┌──────────────────────────────────────────────────────┐   │
@@ -336,6 +390,8 @@ HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
 │ │ ALT         32 U/L   ✓     ▁▂▃▂▁  vor 3 Tagen        │   │
 │ │ AST         28 U/L   ✓     ▁▁▂▂▁  vor 3 Tagen        │   │
 │ │ GGT         71 U/L   ⚠     ▂▃▅▇█  vor 3 Tagen        │   │
+│ │ Kreatinin   97 µmol/L ✓    ▁▂▁▁▁  vor 3 Tagen        │   │
+│ │   ⤷ eingegeben als 1.1 mg/dL                          │   │ ← NEU: Subzeile bei abweichender Eingabe-Einheit
 │ │ Bilirubin   —        –     –      noch nie erfasst   │   │
 │ └────────────────────────────────────────────────────┘   │
 │                                                            │
@@ -370,6 +426,12 @@ Backend nötig.
 
 - **Badge-Logik:** ✓ (im Referenzbereich), ⚠ (außerhalb), – (kein Referenzbereich
   hinterlegt), „noch nie erfasst" ohne Badge.
+- **Eingabe-Einheit-Subzeile:** weicht `reported_unit` vom kanonischen
+  `unit` ab (§2.4, §3), erscheint unter der Marker-Zeile dezent „⤷
+  eingegeben als `<reported_value> <reported_unit>`" (Card) bzw. als
+  Tooltip auf dem Wert (Panel, Platz ist dort knapper). Stimmen beide
+  Einheiten überein (Normalfall ohne Umrechnung), entfällt die Subzeile
+  komplett — kein Rauschen bei jedem Wert.
 - **Sparkline:** letzte 14 aktive Werte je Marker, reine SVG-Pfad-Berechnung
   wie beim bestehenden Wellbeing-/BD-Chart (kein neues Rendering-Konzept).
 - **Panel-Pendant:** vollwertiger SVG-Chart je Marker (Y-Achse = Referenz-
@@ -500,7 +562,9 @@ neues Kachel-Layout:
 - **Store:** neue Tests analog zu `test_store.py`s Reading-Tests (add/void/
   restore/remove_last, Migration v4→v5 idempotent).
 - **Services:** `ServiceValidationError`-Pfade (`unknown_marker`,
-  `unsupported_unit`, ungültige `ts`) + Erfolgspfad inkl. Store-Audit-Limit.
+  `unsupported_unit`, `unit_required`, ungültige `ts`) + Erfolgspfad inkl.
+  Store-Audit-Limit. Alias-Auflösung (`gpt`/`got`/`gamma_gt` → `alt`/`ast`/
+  `ggt`) landet unter demselben `marker_key` wie der Primärname.
 - **Entities:** dynamische Erzeugung (Katalog + Custom + Area-Filter),
   Übersetzungs-Parität de/en für Katalog-Marker-Namen (Paritätstest wie
   bestehend für Services, N-10).
@@ -509,7 +573,13 @@ neues Kachel-Layout:
   Laborwerte-Tab nur bei `areas.labs` aktiv (analog bestehendem
   `enabledTabs`-Test), Kategorie-Leiste respektiert `lab_hidden_categories`,
   Swipe-Geste wechselt zur nächsten/vorherigen **sichtbaren** Kategorie
-  (Grenzfall: erste/letzte Kategorie, nur eine sichtbare Kategorie).
+  (Grenzfall: erste/letzte Kategorie, nur eine sichtbare Kategorie),
+  Eingabe-Einheit-Subzeile erscheint nur bei `reported_unit != unit` und
+  verschwindet bei Gleichheit.
+- **Konvertierung (Katalog + Custom):** `convert_lab_value` rundtrip-getestet
+  in beide Richtungen je Alt-Unit-Paar (Haupt→kanonisch **und**
+  Alt-Einheit→kanonisch liefern denselben kanonischen Wert), inkl. der
+  Custom-Marker-Variante mit nutzerdefiniertem `alt_unit`-Faktor.
 - **Backup/Restore/Export/Import:** Round-Trip-Test (Backup → Restore auf
   leere Installation → Custom-Marker + Werte vollständig da), CSV-Round-Trip.
 - **Migration:** `_migrate_v4_to_v5` auf Alt-Store-Fixture, idempotent bei
