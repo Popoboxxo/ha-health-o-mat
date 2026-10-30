@@ -104,9 +104,20 @@ Neue Liste je Person-Entry, analog zu `readings[]`:
 ```python
 entry["lab_readings"]: list[dict]
 # {"id": "...", "marker_key": "alt", "value": 32.0, "unit": "U/L",
-#  "ts": "...", "created_at": "...",
+#  "ts": "...", "created_at": "...", "report_ref": None,
 #  "voided_at": None, "voided_by": None, "void_reason": None}
 ```
+
+**`report_ref` (optional, §2.4a):** freier String — eine URL (eigenes
+Dokumentenablage-System, Cloud-Link zum Laborbericht) **oder** eine ID aus
+einem externen System (z. B. Praxis-/LIMS-Fallnummer). Rein referenzierend:
+**keine Dokumentinhalte, keine Dateien, kein Upload** — nur ein Verweis, den
+der Nutzer selbst auflösen kann. Länge gecappt (z. B. 500 Zeichen) wie andere
+Freitextfelder, keine Format-/Erreichbarkeitsprüfung (Health-O-Mat ruft die
+URL nie selbst auf — kein SSRF-Risiko, kein Tracking-Call). Mehrere Marker
+desselben Laborberichts teilen einfach denselben `report_ref`-Wert — es gibt
+bewusst **keine eigene „LabReport"-Entität/Aggregat**, das wäre für den
+Zweck „ein Tag, das Werte einem Dokument zuordnet" überdimensioniert (YAGNI).
 
 `value`/`unit` sind **immer im `canonical_unit`** des Markers gespeichert —
 Konvertierung passiert beim Schreiben (Service/Card/Admin liefern Rohwert +
@@ -222,6 +233,7 @@ stillschweigend falsch zu rechnen.
 | `value` | float | **ja** | Rohwert in `unit` |
 | `unit` | string | optional | Default = canonical/eigene Einheit des Markers |
 | `ts` | datetime | optional | wie bestehend: ≤ 5 Min Zukunft, nicht vor 1900 |
+| `report_ref` | string | optional | Link oder externe ID des Laborberichts (§2.4a), max. 500 Zeichen |
 
 Unbekannter `marker` (kein Katalog-Key, kein Custom-Key der Person) →
 `ServiceValidationError("unknown_marker")` — **kein** automatisches Anlegen
@@ -332,10 +344,18 @@ HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
 │ │ Marker:  [ GGT (Leber)                          ▾ ]  │   │
 │ │ Wert:    [ 71        ]  Einheit: [ U/L          ▾ ]  │   │
 │ │ Zeitpunkt: [ 2026-10-28  09:15 ]  (Default: jetzt)   │   │
+│ │ Bericht-Link/ID (optional): [ https://...        ]  │   │
 │ │                                   [ Speichern      ]  │   │
 │ └────────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────────┘
 ```
+
+**`report_ref`-Anzeige:** In Zeilen/Verlaufslisten mit gesetztem
+`report_ref` erscheint ein kleines 🔗-Icon. Sieht der Wert wie eine URL aus
+(`http(s)://`-Präfix) → klickbarer Link, öffnet in neuem Tab (`target="_blank"
+rel="noopener"`); sonst Klartext-Tooltip „Quelle: `<report_ref>`". Rein
+clientseitige Fallunterscheidung, keine Validierung/Normalisierung im
+Backend nötig.
 
 **Editor-Schema** (`lab-values-card-editor`, analog zur bestehenden Card):
 
@@ -460,8 +480,8 @@ neues Kachel-Layout:
   Restore-Validierungsfehler (wie bestehende Restore-Validierung heute).
 - **CSV-Export (`exporter.py`):** neue Datei `lab_values.csv` im Export-
   Verzeichnis (`ts, marker_key, category, value, unit, reported_value,
-  reported_unit`), zusätzlich zu `drinks.csv`/`readings.csv`. Nur aktive
-  (nicht-voided) Einträge, wie bestehend.
+  reported_unit, report_ref`), zusätzlich zu `drinks.csv`/`readings.csv`.
+  Nur aktive (nicht-voided) Einträge, wie bestehend.
 - **CSV-Import (`importer.py`):** `lab_values.csv` wird erkannt (gleicher
   tolerante Parser: Semikolon, UTF-8-BOM, abweichender Header), Dedup-
   Schlüssel `ts`+`marker_key`+`value` (analog `ts`+`sys`+`dia` bei BD).
