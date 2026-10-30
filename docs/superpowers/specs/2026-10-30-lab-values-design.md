@@ -123,6 +123,20 @@ Store-Funktionen (folgen 1:1 dem `readings[]`-Muster in `store.py`):
 **Migration `_migrate_v4_to_v5`:** ergänzt `lab_readings: []` je Entry,
 idempotent (prüft Existenz vor dem Setzen) wie alle bisherigen Migrationen.
 
+### 2.5 Kategorie-Sichtbarkeit (pro Person)
+
+`entry.options["lab_hidden_categories"]: list[str]` — Liste ausgeblendeter
+Kategorie-Keys (z. B. `["thyroid"]`, wenn Schilddrüse für diese Person nie
+relevant ist). Gilt **für jeden Betrachter** von Panel/Card dieser Person
+(Admin-Setting, nicht Viewer-individuell — konsistent mit dem bestehenden
+`areas`-Muster, nur eine Ebene feinkörniger: `areas.labs` schaltet die ganze
+Domäne ab, `lab_hidden_categories` blendet einzelne Kategorien innerhalb der
+Domäne aus). Ausblenden entfernt nur die Anzeige in Panel/Card/Tab-Navigation
+— Entities, Store-Werte und Referenzbereiche bleiben unverändert; Reaktivieren
+zeigt dieselben Daten wieder. Marker der ausgeblendeten Kategorie sind über
+den Service weiterhin buchbar (z. B. Backdating eines alten Laborberichts
+nach Reaktivierung) — nur die UI blendet aus, keine Schreibsperre.
+
 ---
 
 ## 3. Recherche: Referenzbereiche & Einheiten-Konvertierung
@@ -248,6 +262,15 @@ und dem Export-Block:
 │ └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │ ┌──────────────────────────────────────────────────────┐   │
+│ │ Kategorien ausblenden                                  │   │
+│ │ ☑ Leber        ☑ Niere         ☑ Elektrolyte           │   │
+│ │ ☑ Lipide       ☐ Schilddrüse   ☑ Blutbild              │   │
+│ │ ☑ Entzündung   ☑ Verdauung     ☑ Sonstige (Custom)      │   │
+│ │ (abgewählt = in Panel-Tab/Card für diese Person         │   │
+│ │  unsichtbar; Werte/Entities bleiben erhalten)           │   │
+│ └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│ ┌──────────────────────────────────────────────────────┐   │
 │ │ Eigene Marker                                          │   │
 │ │ Name:      [Vitamin D                              ]  │   │
 │ │ Einheit:   [ng/mL                                  ]  │   │
@@ -270,14 +293,19 @@ und dem Export-Block:
   schlank, §2.3).
 - „+ Hinzufügen" validiert client- **und** serverseitig (WS-Handler
   `health_o_mat/set_settings`, erweitert um `lab_custom_markers`/
-  `lab_ref_overrides`, gleiches Muster wie `wellbeing_images` heute).
+  `lab_ref_overrides`/`lab_hidden_categories`, gleiches Muster wie
+  `wellbeing_images` heute).
+- Checkbox-Raster „Kategorien ausblenden" schreibt direkt
+  `lab_hidden_categories` — kein Submit-Button nötig, Checkbox-Toggle löst
+  wie andere Settings-Felder sofort `set_settings` aus (Debounce wie
+  bestehend).
 - Feedback-Button: `<a>`-Link, URL-encodiert vorausgefüllt
   (`.../issues/new?title=Lab-Kategorie%2FMarker-Vorschlag&body=...`), öffnet
   in neuem Tab — keine eigene Feedback-Speicherung/Backend.
 
 ---
 
-## 7. Lovelace-Card (`health-o-mat-labs-card`)
+### 7.1 Lovelace-Card (`health-o-mat-labs-card`)
 
 Eigene, neue Custom-Card (nicht die bestehende `health-o-mat-card` erweitert
 — die hat schon 9 `show_*`-Flags, ein zehntes Themenfeld würde den Editor
@@ -333,14 +361,59 @@ HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
   den Service direkt, damit UI-Fehler (z. B. `unknown_marker`) als
   Karten-Fehlermeldung statt HA-Service-Fehler-Toast erscheinen.
 
+### 7.2 Panel-Integration
+
+Die Person-Detail-Ansicht im Sidebar-Panel hat heute eine Tab-Leiste
+(`renderDetail`/`enabledTabs` in `health-o-mat-panel-views.js`): **Trinken |
+Blutdruck | Wohlbefinden**, gefiltert über die bestehenden `areas`-Toggle. Das
+ist exakt der Mechanismus, in den sich Laborwerte einfügen — **kein neues
+Navigationskonzept**, sondern ein vierter Eintrag:
+
+```
+┌─ Caro ───────────────────────────────────────────────────┐
+│ [ Trinken ] [ Blutdruck ] [ Wohlbefinden ] [ Laborwerte ] │ ← bestehende Tab-Leiste, +1 Tab
+├────────────────────────────────────────────────────────────┤
+│  ‹  [ Leber ]  [ Niere ]  [ Lipide ]  [ Blutbild ]  ›      │ ← Kategorie-Leiste, swipebar
+│                                                              │
+│     ALT          32 U/L   ✓   SVG-Chart (Referenzband)     │
+│     AST          28 U/L   ✓   SVG-Chart (Referenzband)     │
+│     GGT          71 U/L   ⚠   SVG-Chart (Referenzband)     │
+│     Bilirubin    —        –   noch nie erfasst             │
+│                                                              │
+│     ▸ Neuen Wert erfassen  (wie Card, §7.1)                │
+└────────────────────────────────────────────────────────────┘
+```
+
+- **Tab „Laborwerte"** erscheint nur bei `areas.labs` aktiv (`enabledTabs`
+  bekommt den vierten Eintrag genauso wie die bestehenden drei — gleicher
+  Filter-Mechanismus, keine Parallelstruktur).
+- **Kategorie-Leiste** zeigt nur Kategorien, die (a) für die Person mindestens
+  einen Marker mit Daten/Katalog-Eintrag haben **und** (b) nicht in
+  `lab_hidden_categories` stehen (§2.5). Pfeile `‹`/`›` sind der Fallback für
+  Maus/Tastatur; **Swipe** (Touch: `touchstart`/`touchend`, Delta-X über
+  Schwellwert → vorherige/nächste sichtbare Kategorie) ist die primäre
+  mobile Interaktion — reines Vanilla-JS wie der Rest des Panels, keine
+  Geste-Bibliothek. Gleicher Aufbau wie die bestehende Tab-Leiste
+  (`data-action`-Delegation), nur zusätzlich mit Touch-Listener.
+  Zustand (aktive Kategorie) lebt wie `panel._tab` als Panel-internes Feld
+  (`panel._labCategory`), kein Server-Store nötig (reine Darstellung).
+- **Inhalt je Kategorie:** Marker-Zeilen mit Wert/Badge + vollwertigem
+  SVG-Chart (Referenzbereich als Band, wie der bestehende BD-Verlaufsgraph)
+  — Wiederverwendung der vorhandenen Panel-Chart-Helfer, kein neues
+  Rendering-Pattern.
+- **Eingabe-Block** ist identisch zum Card-Pendant (§7.1), gleicher
+  WS-Aufruf (`health_o_mat/add_lab_value`), einmal implementiert in einem
+  gemeinsamen Helper-Modul (vermeidet Card/Panel-Duplikat-Logik, wie es
+  `health-o-mat-panel-base.js` heute schon für geteilte Helfer tut).
+
 ---
 
 ## 8. Backup / Export / Import
 
 - **Backup (`backup.py`, Format-Version +1):** `lab_readings[]` je Person
-  sowie `lab_custom_markers`/`lab_ref_overrides` (aus `entry.options`)
-  zusätzlich im JSON-Dump. Additive Felder — alte Backups bleiben lesbar,
-  `format`/`version`-Check bleibt wie bisher.
+  sowie `lab_custom_markers`/`lab_ref_overrides`/`lab_hidden_categories`
+  (aus `entry.options`) zusätzlich im JSON-Dump. Additive Felder — alte
+  Backups bleiben lesbar, `format`/`version`-Check bleibt wie bisher.
 - **Restore (`restore.py`):** `lab_readings` wird als weiterer Datensatz-Typ
   neben `drinks`/`readings`/`wellbeing_entries` registriert (Merge/Replace +
   Teil-Restore nach Person/Datensatz/Zeitraum gelten automatisch mit).
@@ -377,7 +450,11 @@ HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
   Übersetzungs-Parität de/en für Katalog-Marker-Namen (Paritätstest wie
   bestehend für Services, N-10).
 - **Card/Panel (JS):** Editor-Flags, Badge-/Sparkline-Helfer, Eingabe-Block-
-  Fehlerpfad (`unknown_marker` → Karten-Fehlermeldung statt Toast).
+  Fehlerpfad (`unknown_marker` → Karten-Fehlermeldung statt Toast),
+  Laborwerte-Tab nur bei `areas.labs` aktiv (analog bestehendem
+  `enabledTabs`-Test), Kategorie-Leiste respektiert `lab_hidden_categories`,
+  Swipe-Geste wechselt zur nächsten/vorherigen **sichtbaren** Kategorie
+  (Grenzfall: erste/letzte Kategorie, nur eine sichtbare Kategorie).
 - **Backup/Restore/Export/Import:** Round-Trip-Test (Backup → Restore auf
   leere Installation → Custom-Marker + Werte vollständig da), CSV-Round-Trip.
 - **Migration:** `_migrate_v4_to_v5` auf Alt-Store-Fixture, idempotent bei
