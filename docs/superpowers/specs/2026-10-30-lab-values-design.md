@@ -314,7 +314,7 @@ Eigene, neue Custom-Card (nicht die bestehende `health-o-mat-card` erweitert
 HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
 
 ```
-┌─ Laborwerte — Caro ────────────────────────────── ⚠ 2 ──┐
+┌─ Laborwerte — Person ──────────────────────────── ⚠ 2 ──┐
 │ ⚠ Hinweis: keine medizinische Beratung — Richtwerte,     │
 │   keine Diagnose. Referenzbereiche in den Settings       │
 │   anpassen.                                               │
@@ -370,7 +370,7 @@ ist exakt der Mechanismus, in den sich Laborwerte einfügen — **kein neues
 Navigationskonzept**, sondern ein vierter Eintrag:
 
 ```
-┌─ Caro ───────────────────────────────────────────────────┐
+┌─ Person ───────────────────────────────────────────────────┐
 │ [ Trinken ] [ Blutdruck ] [ Wohlbefinden ] [ Laborwerte ] │ ← bestehende Tab-Leiste, +1 Tab
 ├────────────────────────────────────────────────────────────┤
 │  ‹  [ Leber ]  [ Niere ]  [ Lipide ]  [ Blutbild ]  ›      │ ← Kategorie-Leiste, swipebar
@@ -405,6 +405,41 @@ Navigationskonzept**, sondern ein vierter Eintrag:
   WS-Aufruf (`health_o_mat/add_lab_value`), einmal implementiert in einem
   gemeinsamen Helper-Modul (vermeidet Card/Panel-Duplikat-Logik, wie es
   `health-o-mat-panel-base.js` heute schon für geteilte Helfer tut).
+
+### 7.3 Overview-Tile (Personen-Dashboard-Grid)
+
+Die Panel-Startseite (`renderOverview`/`renderTile` in
+`health-o-mat-panel-views.js`) zeigt eine Kachel je Person mit kompakten
+Zeilen pro aktivem Bereich — heute Trinken (Ring+Ziel), Blutdruck
+(Wert + ⚠-Badge bei Schwellenüberschreitung), Wohlbefinden (Emoji+Label).
+Laborwerte fügen sich als **vierte Zeile** nach demselben Muster ein, **kein**
+neues Kachel-Layout:
+
+```
+┌─ Person ──────────────────────────── ⚠ ─┐
+│ ● Person                                 │
+│  ◔ 1200 ml        Ziel 2000 ml · Rest 800│  ← Trinken (bestehend)
+│  🩸 128/82 · 68                          │  ← Blutdruck (bestehend)
+│  🙂 Gut · vor 2 h                        │  ← Wohlbefinden (bestehend)
+│  🧪 2 Marker außerhalb Referenz  ⚠       │  ← NEU: Laborwerte-Zeile
+└───────────────────────────────────────────┘
+```
+
+- **Lab-Zeile** (`labRow`, gated by `areas.labs`): zeigt die Anzahl Marker
+  außerhalb des Referenzbereichs über alle **sichtbaren** Kategorien
+  (`lab_hidden_categories` ausgenommen) — `"🧪 Alles im Bereich"` (kein
+  Badge) oder `"🧪 N Marker außerhalb Referenz"` (mit ⚠-Badge). Keine
+  Einzelwerte in der Kachel (zu klein/zu viele Marker) — Tap öffnet wie
+  gewohnt die Detail-Ansicht → Tab „Laborwerte" (§7.2).
+- **Tile-Head-Warnbadge:** das bestehende ⚠-Badge neben dem Personennamen
+  (heute nur BD-Schwellenüberschreitung) wird **additiv** um „≥ 1
+  Lab-Marker außerhalb Referenz" erweitert — ein Tooltip-Text listet beide
+  Ursachen, falls beide zutreffen (z. B. „Blutdruck oberhalb der Schwellen;
+  2 Laborwerte außerhalb Referenz"), kein zweites Badge-Icon (Kachel bleibt
+  aufgeräumt).
+- Berechnung (`panel._labWarningCount(data)`) ist reine Darstellungslogik
+  auf den schon geladenen `panel_data`-Attributen der Lab-Sensoren
+  (`in_range`-Attribut, §4) — kein zusätzlicher WS-Request je Kachel.
 
 ---
 
