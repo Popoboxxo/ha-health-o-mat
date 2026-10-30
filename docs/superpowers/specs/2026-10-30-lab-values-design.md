@@ -103,9 +103,14 @@ Gespeichert wird immer unter dem **primären** `marker_key` (`alt`, nicht
   (Kollision → Suffix `_2`, `_3`, ... oder Fehlermeldung im Admin-Formular).
 - Kategorie `other` ("Sonstige") ist immer wählbar zusätzlich zu den 8
   Default-Kategorien — freie Marker ohne Themenbezug landen dort.
-- Kein Konvertierungsfaktor (`alt_units`) für Custom-Marker — Nutzer pflegt
-  eine Einheit, Konvertierung ist Katalog-Exklusiv (begrenzter, gepflegter
-  Umfang statt generischem Einheiten-Framework — YAGNI).
+- **Optionales Alt-Unit-Paar** (`alt_unit: {"unit": ..., "factor_to_canonical":
+  ...} | None`): deckt den üblichen Fall „zwei Labore berichten in zwei
+  Einheiten" ab, ohne ein offenes Mehrfach-Einheiten-Framework zu bauen —
+  bewusst **genau ein** Paar pro Custom-Marker, kein Katalog-Umfang
+  (begrenzt, YAGNI). Service/Card/Admin akzeptieren dann sowohl `unit`
+  als auch `alt_unit.unit` für diesen Marker, rechnen beim Schreiben in
+  die Haupt-`unit` um (gleicher `convert_lab_value`-Pfad wie Katalog-Marker,
+  §3). Ohne gesetztes `alt_unit` bleibt der Marker einheitig wie bisher.
 
 ### 2.3 Referenzbereich-Overrides (pro Person, nur Katalog)
 
@@ -214,6 +219,15 @@ einen vernünftigen Startwert, **nicht** die Wahrheit für jede Person.
 | Gesamteiweiß | 64–83 g/L | g/L | — (bereits SI) | Klinische Chemie-Referenztabellen |
 | Protein/Kreatinin-Quotient (Urin) | < 15 mg/g | mg/g | g/g × 1000 → mg/g | Nephrologie-Referenzwerte — **⚠ bekannte Verwechslungsgefahr:** reale Befunde beschriften den Wert oft als „g/g", meinen aber „mg/g" (Faktor 1000). Deshalb **kein** automatischer Default — Einheit muss bei jeder Eingabe explizit gewählt werden (§5.1). |
 | Tacrolimus (Talspiegel) | 5–15 ng/mL (Richtwert, stark indikationsabhängig) | ng/mL | — | Transplantationsmedizin-Referenzwerte — Override hier **besonders** wichtig: der Zielbereich hängt von Zeit seit Transplantation und Organ ab, keine sinnvolle „Standard"-Zahl |
+
+**Bidirektional, nie eine „richtige" Eingabe-Einheit:** Der Anwender trägt
+die Einheit ein, die auf seinem Laborbericht steht — Haupt-Einheit **oder**
+Alt-Einheit, beides ist gültige Eingabe. `convert_lab_value()` erkennt die
+mitgeschickte `unit` und rechnet die jeweils andere automatisch korrekt aus;
+gespeichert/als Sensor-Einheit angezeigt wird immer die kanonische Form, die
+Original-Eingabe bleibt zusätzlich als `reported_value`/`reported_unit`
+erhalten und erscheint als Subzeile in Card/Panel (§7). Niemand muss sich
+merken, welche Einheit „die richtige" ist.
 
 **Konvertierungstabelle** (`logic.py: LAB_UNIT_CONVERSIONS`) ist eine simple
 Lookup-Struktur `{marker_key: {unit: factor_to_canonical}}` — nur für die
@@ -326,9 +340,11 @@ und dem Export-Block:
 │ │ Einheit:   [ng/mL                                  ]  │   │
 │ │ Kategorie: [Sonstige                             ▾ ]  │   │
 │ │ Referenz:  [30     ] bis [100                      ]  │   │
+│ │ ▸ Alternative Einheit (optional)                        │   │
+│ │   Einheit: [nmol/L  ]  Faktor → ng/mL: [ 0.4        ]  │   │
 │ │                                   [ + Hinzufügen    ]  │   │
 │ │ ──────────────────────────────────────────────────    │   │
-│ │ • Vitamin D (vitamin_d) — ng/mL, 30–100          [✕]  │   │
+│ │ • Vitamin D (vitamin_d) — ng/mL (alt: nmol/L)    [✕]  │   │
 │ └──────────────────────────────────────────────────────┘   │
 │                                                              │
 │ ┌──────────────────────────────────────────────────────┐   │
@@ -374,6 +390,8 @@ HA-CSS-Variablen statt eigener Farben, kein externes Chart-Framework).
 │ │ ALT         32 U/L   ✓     ▁▂▃▂▁  vor 3 Tagen        │   │
 │ │ AST         28 U/L   ✓     ▁▁▂▂▁  vor 3 Tagen        │   │
 │ │ GGT         71 U/L   ⚠     ▂▃▅▇█  vor 3 Tagen        │   │
+│ │ Kreatinin   97 µmol/L ✓    ▁▂▁▁▁  vor 3 Tagen        │   │
+│ │   ⤷ eingegeben als 1.1 mg/dL                          │   │ ← NEU: Subzeile bei abweichender Eingabe-Einheit
 │ │ Bilirubin   —        –     –      noch nie erfasst   │   │
 │ └────────────────────────────────────────────────────┘   │
 │                                                            │
@@ -408,6 +426,12 @@ Backend nötig.
 
 - **Badge-Logik:** ✓ (im Referenzbereich), ⚠ (außerhalb), – (kein Referenzbereich
   hinterlegt), „noch nie erfasst" ohne Badge.
+- **Eingabe-Einheit-Subzeile:** weicht `reported_unit` vom kanonischen
+  `unit` ab (§2.4, §3), erscheint unter der Marker-Zeile dezent „⤷
+  eingegeben als `<reported_value> <reported_unit>`" (Card) bzw. als
+  Tooltip auf dem Wert (Panel, Platz ist dort knapper). Stimmen beide
+  Einheiten überein (Normalfall ohne Umrechnung), entfällt die Subzeile
+  komplett — kein Rauschen bei jedem Wert.
 - **Sparkline:** letzte 14 aktive Werte je Marker, reine SVG-Pfad-Berechnung
   wie beim bestehenden Wellbeing-/BD-Chart (kein neues Rendering-Konzept).
 - **Panel-Pendant:** vollwertiger SVG-Chart je Marker (Y-Achse = Referenz-
@@ -549,7 +573,13 @@ neues Kachel-Layout:
   Laborwerte-Tab nur bei `areas.labs` aktiv (analog bestehendem
   `enabledTabs`-Test), Kategorie-Leiste respektiert `lab_hidden_categories`,
   Swipe-Geste wechselt zur nächsten/vorherigen **sichtbaren** Kategorie
-  (Grenzfall: erste/letzte Kategorie, nur eine sichtbare Kategorie).
+  (Grenzfall: erste/letzte Kategorie, nur eine sichtbare Kategorie),
+  Eingabe-Einheit-Subzeile erscheint nur bei `reported_unit != unit` und
+  verschwindet bei Gleichheit.
+- **Konvertierung (Katalog + Custom):** `convert_lab_value` rundtrip-getestet
+  in beide Richtungen je Alt-Unit-Paar (Haupt→kanonisch **und**
+  Alt-Einheit→kanonisch liefern denselben kanonischen Wert), inkl. der
+  Custom-Marker-Variante mit nutzerdefiniertem `alt_unit`-Faktor.
 - **Backup/Restore/Export/Import:** Round-Trip-Test (Backup → Restore auf
   leere Installation → Custom-Marker + Werte vollständig da), CSV-Round-Trip.
 - **Migration:** `_migrate_v4_to_v5` auf Alt-Store-Fixture, idempotent bei
