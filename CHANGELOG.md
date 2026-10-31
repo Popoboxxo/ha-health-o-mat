@@ -5,6 +5,31 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.16.1] — 2026-10-31
+
+### Added
+
+- **`lab_values` in the void and restore services (REQ-HOM-122):** `void_entry`
+  and `restore_entry` accept `kind: lab_values`, so the last lab reading of a
+  person can be voided and lab datasets can be restored through the services
+  instead of the UI only.
+
+### Fixed
+
+- **Lab values missing from the restore selectors:** the `restore_backup`
+  dataset selector, the service schema and the panel restore list now offer
+  `lab_values`, matching the dataset set the backup format, CSV export and UI
+  already used.
+
+### Changed
+
+- Documentation aligned with the four data domains: the README hero, feature
+  list, options wizard, entity tables, dashboard examples, card, panel, admin,
+  backup/import and E2E chapters now cover lab values, and the unit test count
+  is stated as 1395.
+
+[0.16.1]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.16.0...v0.16.1
+
 ## [0.16.0] — 2026-10-31
 
 ### Added
