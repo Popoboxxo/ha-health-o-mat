@@ -47,6 +47,7 @@ variables:
   PLATFORM: Home Assistant (HACS Custom Integration)
   RUNTIME: Home Assistant Core
   PROJECT_LANGUAGES: Python
+  LANGUAGE: Python
   COMMUNICATION_LANGUAGE: Deutsch
   USER_INPUT_LANGUAGE: Deutsch
   DOCS_LANGUAGE: Englisch
