@@ -442,13 +442,128 @@ Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
   angepasst (dokumentierte Grenze); die Integration schreibt bei Änderungen
   keine alten Statistikwerte um.
 
+## Laborwerte (Blutwerte)
+
+Die vierte Datendomäne neben Trinken, Blutdruck und Wohlbefinden: **Laborwerte**
+aus Blut- und Urinbefunden — strukturiert, mit Referenzbereichen und ohne
+manuelle Entity-Pflege. Der Katalog umfasst **29 Marker in 9 Kategorien**:
+
+| Kategorie | Marker (Auswahl) |
+|---|---|
+| Leber | ALT (GPT), AST (GOT), GGT, Bilirubin gesamt, Gesamteiweiß |
+| Niere | Kreatinin, eGFR, Harnstoff, Protein/Kreatinin-Quotient (Urin) |
+| Elektrolyte | Natrium, Kalium, Calcium gesamt, Magnesium, Chlorid |
+| Lipide | Gesamtcholesterin, LDL, HDL, Triglyceride |
+| Schilddrüse | TSH, fT4, fT3 |
+| Blutbild | Hämoglobin, Leukozyten, Thrombozyten |
+| Entzündung/Immunsystem | CRP, BSG |
+| Verdauung | Lipase, Amylase |
+| Medikamentenspiegel | Tacrolimus (Talspiegel) |
+
+Zusätzlich gibt es die Kategorie **„Sonstige"** für **eigene Marker**. Die legt
+man pro Person im **Admin-Bereich des Panels** an (Name, Einheit, Kategorie,
+Referenzbereich, optional eine alternative Einheit mit Umrechnungsfaktor);
+dort lassen sich auch die Referenzbereiche der Katalog-Marker überschreiben und
+einzelne Kategorien ausblenden.
+
+Werte werden intern in der **kanonischen Einheit** des Markers gespeichert.
+Wird ein Wert in einer bekannten Alternativ-Einheit erfasst, rechnet die
+Integration um (z. B. `mg/dL` → `µmol/L`); der eingegebene Wert bleibt als
+`reported_value`/`reported_unit` nachvollziehbar. Bei Markern mit
+Verwechslungsgefahr (z. B. Protein/Kreatinin-Quotient: `g/g` vs. `mg/g`) ist
+`unit` deshalb Pflicht. Ein optionales `report_ref` (Link oder externe ID des
+Laborberichts, **max. 500 Zeichen**) verweist auf den Befund — die Integration
+ruft die Referenz **nie selbst auf**.
+
+> ⚠️ Die Integration klassifiziert nicht medizinisch und diagnostiziert nicht —
+> Referenzbereiche sind typische Erwachsenen-Richtwerte, keine klinische Norm.
+> Bitte individuell in den Settings anpassen.
+
+### Laborwert-Entities
+
+- **Ein Sensor je Katalog- und Custom-Marker** — Entity-ID aus dem englischen
+  Markernamen (Katalog) bzw. dem vergebenen Namen (Custom), z. B.
+  `sensor.…_creatinine` oder `sensor.…_crp`, mit
+  `state_class: measurement`; Zustand = letzter aktiver Wert in der kanonischen
+  Einheit. Attribute: `ts`, `category`, `ref_min`, `ref_max`, `in_range`.
+  Gelöschte (voided) Werte erscheinen nicht als Zustand; der stabile
+  `unique_id`-Suffix lautet `lab_<marker>`.
+- **Ein Warn-Binary je Kategorie** — `binary_sensor.…_<category>_warning`
+  (z. B. `…_liver_warning`, `…_kidney_warning`; ohne „Sonstige"),
+  `device_class: problem`: `on`, sobald mindestens ein aktiver Marker der
+  Kategorie außerhalb seines Referenzbereichs liegt.
+
+### Services: Laborwerte erfassen und korrigieren
+
+```yaml
+action: health_o_mat.add_lab_value
+data:
+  person: "Caro"            # optional — ohne Angabe die einzige konfigurierte Person
+  marker: "alt"             # Katalog-Key oder eigener Marker-Key
+  value: 32.0
+  unit: "U/L"               # optional — Default ist die kanonische Einheit
+  ts: "2026-10-31T08:00:00" # optional — leer = jetzt
+  report_ref: "https://example.com/laborbericht/123"  # optional, max. 500 Zeichen
+```
+
+- `marker` akzeptiert deutsche Laborsynonyme (`gpt` → `alt`, `got` → `ast`,
+  `gamma_gt` → `ggt`). Unbekannte Marker werden mit
+  `ServiceValidationError` abgelehnt und **nie** automatisch als Custom-Marker
+  angelegt.
+- `ts` folgt derselben Regel wie die übrigen Schreib-Services (ISO 8601, leer =
+  jetzt, höchstens 5 Minuten in der Zukunft).
+
+```yaml
+action: health_o_mat.remove_last_lab_value
+data:
+  person: "Caro"   # optional — ohne Angabe die einzige konfigurierte Person
+  marker: "alt"    # letzter aktiver Wert genau dieses Markers
+```
+
+`remove_last_lab_value` **voidet** den letzten aktiven Wert des Markers (kein
+Hard-Delete); der Eintrag bleibt im Verlauf wiederherstellbar.
+
+### Laborwerte-Karte (Custom Card)
+
+Die Integration liefert eine eigene Lovelace-Karte mit:
+
+- Kategorie-Reiter mit allen sichtbaren Kategorien,
+- je Marker Wert + Einheit, **In-Range-Badge**, optional eine Sparkline (Trend)
+  und der Zeitpunkt der letzten Erfassung,
+- Bericht-Link aus `report_ref`,
+- ein Eingabeformular (Marker, Wert, Einheit, Zeitpunkt, Bericht-Link/ID).
+
+```yaml
+type: custom:health-o-mat-labs-card
+entry_id: <config-entry-id>   # optional — ohne Angabe erscheint eine Personenauswahl
+```
+
+Die Karte wird beim Setup automatisch als Lovelace-Ressource registriert
+(idempotent) — kein manuelles Hinzufügen nötig. Alle Schlüssel sind optional:
+`person_mode` (`fixed` | `selector`), `person_filter`, `default_person`,
+`show_categories` (Auswahl/Reihenfolge der Kategorien), `show_trend`,
+`allow_manual_entry` und `show_disclaimer`; ohne Angabe sind Trend, Eingabe und
+Disclaimer aktiv. Die Karte ist unabhängig vom Panel; das Panel zeigt die
+Laborwerte als vierten Tab (mit Kategorie-Wischgeste).
+
+### Migration & Export
+
+- **Store-Schema v4 → v5:** Beim Update ergänzt die Migration je Person die
+  Liste `lab_readings` — automatisch und idempotent, bestehende Daten bleiben
+  unverändert. Ein manueller Schritt ist nicht nötig.
+- **Backup v3** enthält Laborwerte und die Labor-Optionen (eigene Marker,
+  Referenz-Overrides, ausgeblendete Kategorien); ältere Backups bleiben lesbar.
+- **CSV-Export/-Import:** Datensatz `lab_values` (Datei
+  `health_o_mat_labvalues_<Person>_<YYYYMMDD-HHMM>.csv`). `all` schließt
+  Laborwerte mit ein.
+
 ## Services
 
-Alle Schreib-Services (`add_drink`, `add_blood_pressure`, `set_wellbeing`)
-akzeptieren ein optionales **`ts`** (ISO 8601, z. B. `2026-10-24T18:30` oder mit
-Offset). Leer = jetzt. Werte höchstens 5 Minuten in der Zukunft und nicht vor
-1900 werden akzeptiert; naive Zeitstempel gelten als lokale Zeit. Ohne `person`
-wird die einzige konfigurierte Person verwendet.
+Alle Schreib-Services (`add_drink`, `add_blood_pressure`, `set_wellbeing`,
+`add_lab_value`) akzeptieren ein optionales **`ts`** (ISO 8601, z. B.
+`2026-10-24T18:30` oder mit Offset). Leer = jetzt. Werte höchstens 5 Minuten in
+der Zukunft und nicht vor 1900 werden akzeptiert; naive Zeitstempel gelten als
+lokale Zeit. Ohne `person` wird die einzige konfigurierte Person verwendet.
 
 ```yaml
 action: health_o_mat.add_drink
@@ -488,11 +603,11 @@ data: { person: "Caro", kind: "drinks", id: "3f2b8c1e-0a4d-4f5e-9a76-1b2c3d4e5f6
 
 # nur Admin
 action: health_o_mat.export_csv
-data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | all
+data: { person: "Caro", dataset: "all" }   # drinks | blood_pressure | lab_values | all
 
 action: health_o_mat.import_csv
 data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
-# optional: dataset: drinks | blood_pressure | all (default: all = auto-detect)
+# optional: dataset: drinks | blood_pressure | lab_values | all (default: all = auto-detect)
 
 action: health_o_mat.backup
 
@@ -513,7 +628,9 @@ wiederherstellbar. `void_entry`/`restore_entry` benötigen `kind` und die `id`
 aus dem Panel-Verlauf (WS `health_o_mat/list_history`). `set_wellbeing` ist im
 Abschnitt [Wohlbefinden melden (Service)](#wohlbefinden-melden-service)
 ausführlich beschrieben — Karten-Buttons und Service nutzen denselben
-Store-/Refresh-Pfad wie das Panel.
+Store-/Refresh-Pfad wie das Panel. Die Laborwert-Services `add_lab_value` und
+`remove_last_lab_value` sind im Abschnitt
+[Laborwerte](#laborwerte-blutwerte) beschrieben.
 
 ## Import & Backup
 

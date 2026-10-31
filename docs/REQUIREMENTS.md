@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-26 (UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`
+**Stand:** 2026-10-31 (Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -12,7 +12,10 @@ Korrigierbarkeit/Verlauf/Void-Restore/Audit-Log (115), Backup-Restore inkl. Teil
 und Dry-Run (116), UI-Internationalisierung de/en (117), Erinnerungen/Wochenbericht/
 Blueprints (118), Onboarding-/Options-Wizard (119), unbegrenztes Rückdatieren (120) ·
 **REQ-HOM-121** erledigt und mit **Release 0.15.0 veröffentlicht (2026-10-26)** (Wohlbefinden-Zahleneingabe als Number-Entity, Branch `feat/wellbeing-number-entity`) ·
-Belege: **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
+**REQ-HOM-122 umgesetzt** (Feature, Laborwerte/Blutwerte als vierte Datendomäne, Branch `feat/lab-values`, 2026-10-31; noch kein Release/Tag) ·
+Belege (REQ-HOM-122): **1356 Unit-Tests**, **19 E2E-Tests** (realer HA-Docker-Stack),
+`ruff check .` + `ruff format --check .` clean (63 Dateien) ·
+Belege (UX-P1/0.14.0): **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
 `ruff check .` + `ruff format --check .` clean ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 **`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
@@ -21,7 +24,7 @@ Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…120: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…122: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
    Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
@@ -31,7 +34,10 @@ Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
    **REQ-HOM-114** (Wohlbefinden-Bestätigung vor Übernahme, Branch
    `feat/wellbeing-confirm`) nach REQ-HOM-113. Nach REQ-HOM-114 folgen
    **REQ-HOM-115…120** (UX-P1, Branch `feat/ux-p1`) — der Arbeitsplan dazu liegt
-   in **`docs/PLAN-UX-P1.md`** und ist der Release-Schnitt **0.14.0**.
+   in **`docs/PLAN-UX-P1.md`** und ist der Release-Schnitt **0.14.0**. Danach
+   **REQ-HOM-121** (Wohlbefinden-Zahleneingabe als Number-Entity, Branch
+   `feat/wellbeing-number-entity`, Release 0.15.0) und **REQ-HOM-122**
+   (Laborwerte/Blutwerte als vierte Datendomäne, Branch `feat/lab-values`).
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -1171,6 +1177,52 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   - [x] de/en-Übersetzungen (Name „Wohlbefinden-Eingabe" / „Wellbeing input")
     und README/Entity-Tabelle aktualisiert.
 
+#### REQ-HOM-122 — Laborwerte (Blutwerte) als vierte Datendomäne
+- **Priorität:** P2 · **Aufwand:** L
+- **Status: Erledigt (Branch `feat/lab-values`, 2026-10-31)** — umgesetzt und
+  getestet; noch kein Release/Tag.
+- **Anforderung:** Vierte Datendomäne neben Trinken/Blutdruck/Wohlbefinden:
+  Laborwerte in 9 medizinischen Kategorien (Leber, Niere, Elektrolyte, Lipide,
+  Schilddrüse, Blutbild, Entzündung, Verdauung, Medikamentenspiegel) +
+  „Sonstige" für Custom-Marker. 29 Katalog-Marker mit Default-Referenzbereichen
+  (typische Erwachsenen-Richtwerte, keine klinische Norm, Vision §4.2),
+  per-Person Referenzbereich-Overrides, Kategorie-Sichtbarkeit, deutsche
+  Namens-Aliase (GPT/GOT/Gamma-GT), bidirektionale Einheiten-Konvertierung
+  (Katalog + genau ein Alt-Unit-Paar pro Custom-Marker), optionale
+  `report_ref` (Link/ID des Laborberichts, rein referenzierend). Zwei neue
+  Services (`add_lab_value`, `remove_last_lab_value`), ein Sensor je Marker +
+  ein Warn-Binary-Sensor je Kategorie, Admin-UI-Abschnitt, eigene
+  Lovelace-Card (`health-o-mat-labs-card`), Panel-Tab mit
+  Kategorie-Swipe-Leiste, Overview-Tile-Zeile, vollständige
+  Backup/Restore/Export/Import-Integration (Backup v3, Restore-Dataset
+  `lab_values`, CSV `lab_values.csv`). Store Schema v4 → v5
+  (`lab_readings[]`). Über den ursprünglichen Plan hinaus mitgeliefert:
+  `areas.labs` inkl. Toggle im Config-Flow und Admin-Area-Checkbox im Panel,
+  `lab_values`-Datensatz in Service-Schemata/WS-Export/UI-Selector,
+  zweisprachige Katalog-Namen (`name_de`/`name_en`) sowie Panel-CSS für die
+  Lab-UI.
+- **Akzeptanzkriterien:**
+  - [x] 9 Katalog-Kategorien + „Sonstige", 29 Katalog-Marker mit Referenzbereichen
+  - [x] Custom-Marker pro Person (eigene Kategorie/Einheit/Referenz, optional 1 Alt-Unit-Paar)
+  - [x] Bidirektionale Einheiten-Konvertierung, kanonische Speicherung, Original als `reported_value`/`reported_unit`
+  - [x] `add_lab_value`/`remove_last_lab_value` Services inkl. Alias-Auflösung, `unknown_marker`/`unit_required`/`unsupported_unit`-Validierung
+  - [x] Sensor je Marker, Warn-Binary-Sensor je Kategorie, `areas.labs`-Schalter
+  - [x] Admin-UI: Referenzbereich-Overrides, Kategorien ausblenden, Custom-Marker-Formular, Feedback-Link
+  - [x] Lovelace-Card `health-o-mat-labs-card` + Panel-Tab + Overview-Tile-Zeile
+  - [x] Backup v3, Restore-Dataset `lab_values` inkl. Custom-Marker-Merge + Validierung, CSV-Export/-Import
+  - [x] Medizin-Disclaimer in Card/Panel/README (Vision §4.2)
+  - **Belege:** `tests/test_logic.py`, `tests/test_store.py`,
+    `tests/test_lab_services.py`, `tests/test_sensor.py`,
+    `tests/test_binary_sensor.py`, `tests/test_ws_api.py`,
+    `tests/test_panel_js.py`, `tests/test_card_js.py`, `tests/test_restore.py`,
+    `tests/test_import_backup.py`, `tests/test_translations.py`,
+    `tests/test_frontend.py`, `tests/test_areas.py`,
+    `tests/test_config_flow.py` (alle `test_req_hom_122_*` bzw. die
+    Lab-Bereichs-Toggle-Fälle) sowie `tests_e2e/test_lab_values_e2e.py`.
+    **Messwerte:** `pytest -q` → **1356 passed** (0 failed, 1 vorbestehende
+    DeprecationWarning); E2E `tests_e2e/` → **19 passed** (0 failed);
+    `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert.
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -1212,3 +1264,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-26 | **v0.14.0 veröffentlicht** (PR #44, Merge-Commit `618bda8`, Tag `v0.14.0`): Release-Dreiklang abgeschlossen; Tag ↔ `manifest.version` 0.14.0 synchron, alle `?v=`-Cache-Buster auf 0.14.0. CI auf dem Branch-Head: lint, tests, validate (hassfest/HACS) und E2E grün; 1159 Unit-Tests, 18 E2E-Tests, ruff clean. Release-Notes (de/en) unter `docs/RELEASE-NOTES-0.14.0.md`, GitHub-Release: <https://github.com/Popoboxxo/ha-health-o-mat/releases/tag/v0.14.0>. Feature-Branch `feat/ux-p1` bleibt erhalten; HACS-Update-Test und Alt-Entity-Cleanup auf der Dev-Instanz stehen als Betriebs-Follow-up aus. |
 | 2026-10-26 | **Neu angelegt: REQ-HOM-121 — Wohlbefinden-Zahleneingabe als Number-Entity** (Branch `feat/wellbeing-number-entity`) — **erledigt und mit Release 0.15.0 veröffentlicht (2026-10-26)**. Neue Number-Entity `number.…_wellbeing_input` (1…10, `step=1`, `mode=BOX`) als UI-loser Gegenpart zu Select und Melden-Buttons: `native_value` liefert den aktuellen Score, eine Eingabe wird über `logic.wellbeing_key_for_score` auf den Status-Key abgebildet und über `store.set_wellbeing` (inkl. Audit-Limit) gemeldet. Bereichs-Filter `wellbeing: false` erzeugt keine Entity; de/en-Übersetzungen und README ergänzt. **Belege:** `tests/test_number.py` (Wellbeing-Input-Fälle + Bereichs-Filter), `pytest -q` → **1167 passed**, `ruff check .` + `ruff format --check .` clean. **Release:** v0.15.0 veröffentlicht (MINOR, keine Migration; Release-Notes: `docs/RELEASE-NOTES-0.15.0.md`). |
 | 2026-10-26 | **v0.14.1 — Übersetzungs-Platzhalter-Fix + Dev-Instanz-Upgrade-Test:** Auf `ha-test` (HA 2026.9.1) wurde **HACS 2.0.5 temporär installiert**, `Popoboxxo/ha-health-o-mat` als Custom-Repository (`integration`) registriert und der echte **HACS-Install/Update-Pfad** getestet: Installation **v0.14.0** (HACS `installed_version=v0.14.0`, `pending_upgrade=true`) → Update **v0.14.1** (`pending_upgrade=false`), jeweils mit Neustart/Verifikation; danach HACS + GitHub-Token wieder entfernt. Zusätzlich Upgrade **0.10.2 → 0.14.0** per `bin/sync`: Store-Schema **v3 → v4** migriert (17 Einträge, keine Datenverluste), 4 Config-Entries geladen, **172 Entities** vollständig vorhanden, **keine verwaisten Entities/Devices** (Registry vs. States und Device-Registry geprüft); HACS-Test-Entities nach Entfernen ebenfalls bereinigt. Im Setup-Log fiel ein HA-Übersetzungsfehler auf: `restore_backup.fields.person_map.description` enthielt `{Quelle: Ziel-Entry-ID}` bzw. `{source: target entry ID}` und wurde als ungültiger Platzhalter validiert. **Fix:** Beschreibungen in `services.yaml`, `strings.json`, `de.json`, `en.json` ohne Platzhalter-Klammern; neue Tests für gültige Platzhalter und sprachübergreifende Platzhalter-Parität. **Belege:** `pytest -q` → **1161 passed**, `ruff check .` + `ruff format --check .` clean; Dev-Instanz nach Sync auf 0.14.1 ohne den Übersetzungsfehler. Patch-Release v0.14.1 (keine Migration, keine Entity-Änderungen). |
+| 2026-10-31 | **Neu angelegt und umgesetzt: REQ-HOM-122 — Laborwerte (Blutwerte) als vierte Datendomäne** (Branch `feat/lab-values`): Spec `docs/superpowers/specs/2026-10-30-lab-values-design.md`, Implementierungsplan `docs/superpowers/plans/2026-10-31-lab-values.md`. 9 Kategorien, 29 Katalog-Marker, Custom-Marker mit optionalem Alt-Unit-Paar, bidirektionale Einheiten-Konvertierung, zwei neue Services, Sensor je Marker + Warn-Binary je Kategorie, Admin-UI, eigene Lovelace-Card, Panel-Tab mit Swipe, Overview-Tile-Zeile, Backup v3/Restore/CSV-Export/-Import; ergänzend `areas.labs` mit Config-Flow-Toggle und Admin-Area-Checkbox, `lab_values` in Service-Schemata/WS-Export/UI-Selector, zweisprachige Katalog-Namen (`name_de`/`name_en`) und Lab-Panel-CSS. Store Schema v4 → v5. **Belege:** `pytest -q` → **1356 passed** (0 failed, 1 vorbestehende DeprecationWarning), E2E `tests_e2e/` → **19 passed**, `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert. Noch kein Release/Tag. |
