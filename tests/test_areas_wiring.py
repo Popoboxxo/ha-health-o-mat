@@ -308,20 +308,67 @@ def test_options_updated_removed_custom_marker_triggers_reload(monkeypatch):
 
 
 def test_options_updated_lab_changes_trigger_reload_for_each_key(monkeypatch):
-    """[REQ-HOM-122/B-1] Auch Overrides und verborgene Kategorien laden neu."""
-    init, entry, hass = _lab_setup(monkeypatch, {})
+    """[REQ-HOM-122/B-1, N-2] Nur der Marker-Satz lädt neu — je Option präzisiert.
 
-    entry.options = {"lab_ref_overrides": {"alt": {"ref_max": 40}}}
+    Der Test hielt ursprünglich fest, dass JEDE Lab-Option einen Reload auslöst
+    (B-1-Überbreite, Fund N-2). Präzisiert: ``lab_custom_markers`` bestimmt die
+    Entity-Menge (Reload); ``lab_ref_overrides`` wird von sensor.py/
+    binary_sensor.py live aus ``entry.options`` gelesen und
+    ``lab_hidden_categories`` ist ein reines Anzeige-Flag des Panels — beide
+    brauchen nur ein Refresh-Signal. Ein Reload würde dort alle States unnötig
+    auf ``unavailable`` setzen.
+    """
+    init, entry, hass = _lab_setup(monkeypatch, {})
+    refresh = MagicMock()
+    monkeypatch.setattr(init, "signal_refresh", refresh)
+
+    # (1) Marker-Key: entity-relevant → Reload, kein zusätzlicher Refresh.
+    entry.options = {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}]}
     _run(init._options_updated(hass, entry))
     hass.config_entries.async_reload.assert_called_once_with("e1")
+    refresh.assert_not_called()
 
-    # Verborgenes Kategorie-Set ändert den Warn-Sensor-Satz ebenfalls.
+    # (2) Overrides-Key: live gelesen → kein Reload, aber Refresh.
     entry.options = {
+        "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}],
+        "lab_ref_overrides": {"alt": {"ref_max": 40}},
+    }
+    _run(init._options_updated(hass, entry))
+    assert hass.config_entries.async_reload.call_count == 1
+    refresh.assert_called_once_with(hass, "e1")
+    # Der gespiegelte Stand wird auch ohne Reload nachgezogen, damit ein
+    # späterer Marker-Vergleich ausschließlich die Entity-Menge bewertet.
+    assert entry.runtime_data.lab_options.overrides == (("alt", {"ref_max": 40.0}),)
+
+    # (3) Hidden-Key: reines Anzeige-Flag (kein Entity) → kein Reload, Refresh.
+    entry.options = {
+        "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}],
         "lab_ref_overrides": {"alt": {"ref_max": 40}},
         "lab_hidden_categories": ["liver"],
     }
     _run(init._options_updated(hass, entry))
-    assert hass.config_entries.async_reload.call_count == 2
+    assert hass.config_entries.async_reload.call_count == 1
+    assert refresh.call_count == 2
+
+
+def test_options_updated_marker_change_after_refresh_only_still_reloads(monkeypatch):
+    """[REQ-HOM-122/N-2] Ein Override-Refresh darf einen späteren Marker-Reload
+    nicht verschlucken: der gespiegelte Stand wird ohne Reload nachgezogen, der
+    Marker-Vergleich bleibt aber wirksam.
+    """
+    init, entry, hass = _lab_setup(monkeypatch, {})
+
+    entry.options = {"lab_ref_overrides": {"alt": {"ref_max": 40}}}
+    _run(init._options_updated(hass, entry))
+    hass.config_entries.async_reload.assert_not_called()
+
+    entry.options = {
+        "lab_ref_overrides": {"alt": {"ref_max": 40}},
+        "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}],
+    }
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_called_once_with("e1")
 
 
 def test_options_updated_unchanged_lab_options_do_not_reload(monkeypatch):

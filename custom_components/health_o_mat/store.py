@@ -698,7 +698,11 @@ class HealthOMatStore:
         Bewusst NICHT "der zuletzt eingetragene": nachgetragene alte Befunde
         (rückdatierter `ts`) dürfen den aktuellen Wert nicht überschreiben.
         Bei identischem `ts`/`created_at` gewinnt der zuletzt eingetragene
-        (stabiler Sort, Muster wie `_sync_wellbeing_mirrors`).
+        (Tiebreaker = Listen-Index, vgl. stabiler Sort).
+
+        N-6: ``max`` statt ``sorted(...)[-1]`` — O(n) statt O(n log n); die
+        Methode läuft pro Refresh ~30-mal (ein Aufruf je Marker in
+        ``ws_api._labs_block``).
         """
         items = self.entry(entry_id).get("lab_readings", [])
         if not isinstance(items, list):
@@ -712,7 +716,13 @@ class HealthOMatStore:
         ]
         if not candidates:
             return None
-        return sorted(candidates, key=lab_reading_chrono_key)[-1]
+        # Der Index als letzter Schlüsselteil macht die Ordnung total und
+        # bewahrt die Semantik der Sortier-Variante: bei Gleichstand gewinnt
+        # der zuletzt eingetragene Eintrag.
+        return max(
+            enumerate(candidates),
+            key=lambda pair: (lab_reading_chrono_key(pair[1]), pair[0]),
+        )[1]
 
     async def void_lab_reading(
         self,

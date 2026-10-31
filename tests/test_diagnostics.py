@@ -387,3 +387,69 @@ def test_async_diagnostics_redacts_lab_options_from_entry():
     blob = _blob(out)
     assert "Vitamin-D-Mangel" not in blob
     assert "vitamin_d" not in blob
+
+
+# ============================================================================
+# REQ-HOM-122, Fund N-1 — Labor-Entity-IDs maskieren (Freitext-Markername)
+# ============================================================================
+
+
+def _registry_fake(monkeypatch, entries):
+    """Entity-Registry-Fake mit expliziten ``unique_id``-Werten installieren."""
+    registry_module = types.ModuleType("homeassistant.helpers.entity_registry")
+    registry_module.async_get = lambda hass: "registry"
+    registry_module.async_entries_for_config_entry = lambda registry, entry_id: list(entries)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", registry_module)
+    helpers_module = sys.modules.get("homeassistant.helpers")
+    if helpers_module is not None:
+        monkeypatch.setattr(helpers_module, "entity_registry", registry_module, raising=False)
+    return registry_module
+
+
+def test_async_diagnostics_masks_custom_lab_entity_ids(monkeypatch):
+    """[REQ-HOM-122/N-1] Custom-Marker-Freitext leakt nicht über die Entity-ID.
+
+    Ein Custom-Labor-Sensor heißt ``sensor.<person>_<marker-name>`` — der Name
+    ist Nutzer-Freitext (potenziell eine Diagnose) und darf im öffentlich
+    teilbaren Diagnostics-Download nicht auftauchen. Katalog-Marker bleiben als
+    öffentlicher Katalog-Key lesbar, Custom-Marker werden durchnummeriert.
+    """
+    _registry_fake(
+        monkeypatch,
+        [
+            SimpleNamespace(entity_id="sensor.max_hiv_test", unique_id="e1_lab_hiv_test"),
+            SimpleNamespace(entity_id="sensor.max_alt", unique_id="e1_lab_alt"),
+            SimpleNamespace(
+                entity_id="sensor.max_borreliose_titer", unique_id="e1_lab_borreliose_titer"
+            ),
+            SimpleNamespace(entity_id="sensor.max_drinks_today", unique_id="e1_drinks_today"),
+            SimpleNamespace(
+                entity_id="binary_sensor.max_lab_warning_liver",
+                unique_id="e1_binary_lab_warning_liver",
+            ),
+        ],
+    )
+
+    hass = MagicMock()
+    hass.data = {DOMAIN: {}}
+    entry = SimpleNamespace(entry_id="e1", version=5, options={})
+
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+
+    assert out["entities"] == [
+        "binary_sensor.max_lab_warning_liver",
+        "sensor.***_lab_alt",
+        "sensor.***_lab_custom_1",
+        "sensor.***_lab_custom_2",
+        "sensor.max_drinks_today",
+    ]
+    blob = _blob(out)
+    for token in ("hiv_test", "borreliose_titer", "max_hiv"):
+        assert token not in blob, f"geleakt: {token!r}"
+
+
+def test_redact_entity_ids_without_registry_metadata_keeps_ids():
+    """[REQ-HOM-122/N-1] Ohne Marker-Key (reine IDs) bleibt die Liste unverändert."""
+    out = diagnostics.redact_diagnostics({"entity_ids": ["sensor.a", "sensor.b"]})
+
+    assert out["entities"] == ["sensor.a", "sensor.b"]

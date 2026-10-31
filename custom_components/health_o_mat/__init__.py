@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import NamedTuple
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -81,18 +82,30 @@ _SERVICE_NAMES = (
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
 
+
 # Vergleichbarer Stand der Lab-Options: (Custom-Marker nach `key` sortiert,
 # Ref-Overrides nach Marker sortiert, verborgene Kategorien als Set).
-type LabOptionsSnapshot = tuple[tuple[dict, ...], tuple[tuple[str, dict], ...], frozenset[str]]
+class LabOptionsSnapshot(NamedTuple):
+    """Normalisierter Stand der drei Lab-Options eines Entries.
+
+    ``markers`` entscheidet über die **Entity-Menge** (ein Sensor je Marker) und
+    löst damit als einziges Feld einen Reload aus. ``overrides`` wird von den
+    Entities live aus ``entry.options`` gelesen (nur ein Refresh nötig),
+    ``hidden`` ist ein reines Anzeige-Flag des Panels (ws_api, kein Entity).
+    """
+
+    markers: tuple[dict, ...]
+    overrides: tuple[tuple[str, dict], ...]
+    hidden: frozenset[str]
 
 
 def _lab_options_snapshot(options: dict) -> LabOptionsSnapshot:
-    """Vergleichbarer Snapshot der Lab-Options (Review-Fix B-1).
+    """Vergleichbarer Snapshot der Lab-Options (Review-Fix B-1, geschärft N-2).
 
-    Die Lab-Entities (ein Sensor je Marker, ein Warn-Sensor je Kategorie)
-    entstehen beim Setup aus diesen drei Optionen. Ändert sich ihr Inhalt,
-    muss der Entry neu geladen werden — deshalb wird der Stand, aus dem die
-    Entities gebaut wurden, in `HealthOMatData.lab_options` gespiegelt.
+    Die Lab-Entities (ein Sensor je Marker) entstehen beim Setup aus
+    ``lab_custom_markers``. Ändert sich dieser Satz, muss der Entry neu geladen
+    werden — deshalb wird der Stand, aus dem die Entities gebaut wurden, in
+    ``HealthOMatData.lab_options`` gespiegelt.
 
     Normalisiert über die `logic.*`-Normalisierer und reihenfolge-unabhängig
     (Custom-Marker nach ihrem stabilen `key`, verborgene Kategorien als Set):
@@ -102,10 +115,10 @@ def _lab_options_snapshot(options: dict) -> LabOptionsSnapshot:
     markers = logic.normalize_lab_custom_markers(options.get(OPTION_LAB_CUSTOM_MARKERS))
     overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
     hidden = logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES))
-    return (
-        tuple(sorted(markers, key=lambda marker: marker["key"])),
-        tuple(sorted(overrides.items())),
-        frozenset(hidden),
+    return LabOptionsSnapshot(
+        markers=tuple(sorted(markers, key=lambda marker: marker["key"])),
+        overrides=tuple(sorted(overrides.items())),
+        hidden=frozenset(hidden),
     )
 
 
@@ -373,8 +386,15 @@ async def _options_updated(hass, entry) -> None:
 
     Ein Reload ist genau dann nötig, wenn sich die **Entity-Menge** ändert:
     Personen-Umbenennung (Device-Name), Bereichs-Auswahl und — seit REQ-HOM-122
-    (Review-Fix B-1) — die Lab-Options (ein Sensor je Marker, ein Warn-Sensor je
-    Kategorie). Alles andere wird am laufenden Entry nachgezogen.
+    (Review-Fix B-1) — die Menge der Custom-Lab-Marker (ein Sensor je Marker).
+    Alles andere wird am laufenden Entry nachgezogen.
+
+    Review-Fix N-2: Die übrigen Lab-Options lösen KEINEN Reload mehr aus:
+    ``lab_ref_overrides`` lesen sensor.py/binary_sensor.py live über die
+    Entity-Properties (ein ``signal_refresh`` genügt), ``lab_hidden_categories``
+    ist ein reines Anzeige-Flag des Panels (ws_api._labs_block liest es pro
+    Request) und berührt keine Entity. Ein Reload würde dort alle States
+    unnötig auf ``unavailable`` setzen.
     """
     rt = entry.runtime_data
     opts = entry.options or {}
@@ -390,8 +410,9 @@ async def _options_updated(hass, entry) -> None:
     # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
     current_person = store.all_entries().get(entry.entry_id, {}).get("person")
     person_changed = current_person != effective_person(entry)
-    lab_options_changed = new_lab_options != rt.lab_options
-    if person_changed or new_areas != rt.areas or lab_options_changed:
+    # N-2: Nur der Marker-Satz bestimmt die Entity-Menge.
+    markers_changed = new_lab_options.markers != rt.lab_options.markers
+    if person_changed or new_areas != rt.areas or markers_changed:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
@@ -404,6 +425,11 @@ async def _options_updated(hass, entry) -> None:
         await async_setup_reminders(hass, entry, store)
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
+
+    # Kein Reload: Overrides/Hidden sind live gelesen bzw. reine Anzeige —
+    # den gespiegelten Stand trotzdem nachziehen, damit ein späterer
+    # Marker-Vergleich nur die Entity-Menge bewertet.
+    rt.lab_options = new_lab_options
 
     wanted = int(opts.get("set_lifetime_ml") or 0)
     seen = getattr(rt, "lifetime_setting_seen", None)
@@ -784,11 +810,15 @@ def _register_services(hass: HomeAssistant) -> None:
         signal_refresh(hass, entry_id)
 
     async def remove_last_lab_value(call: ServiceCall) -> None:
-        """Letzten aktiven Laborwert EINES Markers voiden (Undo, §5.2).
+        """Zeitlich neuesten aktiven Laborwert EINES Markers voiden (Undo, §5.2).
 
         Bewusst marker-spezifisch: Laborwerte kommen befundweise, ein globales
-        "letzter Eintrag" wäre mehrdeutig. `remove_last_lab_reading` voidet
-        (kein Pop) und liefert `False`, wenn kein aktiver Wert existiert.
+        "letzter Eintrag" wäre mehrdeutig. Entfernt wird der aktive Wert mit
+        dem größten `ts` — also der zeitlich neueste, NICHT zwingend der
+        zuletzt eingegebene (nachgetragene alte Befunde bleiben unberührt;
+        genau das verhindert, dass ein Undo einen älteren Befund trifft).
+        `remove_last_lab_reading` voidet (kein Pop) und liefert `False`, wenn
+        kein aktiver Wert existiert.
         """
         entry_id, _info = get_runtime_data(hass, call)
         options = _entry_options(hass, entry_id)

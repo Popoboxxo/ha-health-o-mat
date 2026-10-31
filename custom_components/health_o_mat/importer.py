@@ -429,7 +429,9 @@ def plan_import(
     Laborwerte werden nach der Marker-Auflösung über
     ``logic.convert_lab_value`` in den ``canonical_unit`` des Markers umgerechnet
     (Spec-Invariante: ``value``/``unit`` sind immer kanonisch). Die Rohwerte
-    bleiben als ``reported_value``/``reported_unit`` erhalten.
+    bleiben als ``reported_value``/``reported_unit`` erhalten. Eine leere
+    Einheitsspalte bedeutet "keine Angabe" → kanonische Einheit (N-4); nur
+    Marker mit ``require_explicit_unit`` lehnen sie ab.
     """
     rows, header_kind = parse_csv_text(text)
     resolved = dataset
@@ -451,8 +453,17 @@ def plan_import(
                 plan.errors.append(f"Unbekannter Marker: {record['marker_raw']!r}")
                 continue
             marker_key, marker_def = resolved_marker
+            # N-4: Eine leere Einheitsspalte ist "keine Angabe" — analog zu
+            # `convert_lab_value(unit=None)` und zum Service `add_lab_value`
+            # (unit optional) wird die kanonische Einheit angenommen. Nur Marker
+            # mit `require_explicit_unit` verlangen zwingend eine Einheit.
+            raw_unit = record["unit"] or None
+            if raw_unit is None and marker_def.get("require_explicit_unit"):
+                plan.rejected += 1
+                plan.errors.append(f"Einheit erforderlich für Marker {marker_key!r}")
+                continue
             try:
-                value, unit = convert_lab_value(marker_def, record["value"], record["unit"])
+                value, unit = convert_lab_value(marker_def, record["value"], raw_unit)
             except ValueError:
                 plan.rejected += 1
                 plan.errors.append(f"Nicht unterstützte Einheit: {record['unit']!r}")
@@ -460,6 +471,9 @@ def plan_import(
             record["marker_key"] = marker_key
             record["value"] = value
             record["unit"] = unit
+            # Ohne gedruckte Einheit bleibt `reported_unit` leer — dann gilt die
+            # kanonische Einheit (gleiche Invariante wie im Service).
+            record["reported_unit"] = record["reported_unit"] or unit
             del record["marker_raw"]
             key = (record["ts"], marker_key, record["value"])
             if key in seen_labs:

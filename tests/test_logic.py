@@ -1534,6 +1534,39 @@ def test_req_hom_122_convert_lab_value_unit_match_is_case_and_space_insensitive(
     assert round(value, 2) == 97.24
 
 
+def test_req_hom_122_convert_lab_value_accepts_greek_mu_variant():
+    """[REQ-HOM-122/N-5] ``μmol/L`` (U+03BC) ist dieselbe Einheit wie ``µmol/L`` (U+00B5).
+
+    Fremd-CSVs liefern das griechische My statt des Mikro-Zeichens; die
+    NFKC-Normalisierung des Vergleichs faltet beide Formen. Die gespeicherte
+    Anzeige-Einheit bleibt unverändert die kanonische Schreibweise.
+    """
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["creatinine"]
+    assert marker["canonical_unit"] == "µmol/L"  # U+00B5, unverändert gespeichert
+
+    value, unit = logic.convert_lab_value(marker, 97.24, "\u03bcmol/L")
+
+    assert unit == "µmol/L"
+    assert value == 97.24
+
+
+def test_req_hom_122_convert_lab_value_alt_unit_matches_across_mu_variants():
+    """[REQ-HOM-122/N-5] Alt-Einheit mit Mikro-Zeichen trifft Eingabe mit My."""
+    from custom_components.health_o_mat import logic
+
+    marker = {
+        "canonical_unit": "U/L",
+        "alt_units": {"µmol/L": 2.0},  # U+00B5 im Katalog
+    }
+
+    value, unit = logic.convert_lab_value(marker, 10.0, "\u03bcmol/L")  # U+03BC
+
+    assert unit == "U/L"
+    assert value == 20.0
+
+
 def test_req_hom_122_convert_lab_value_unsupported_unit_raises():
     from custom_components.health_o_mat import logic
 

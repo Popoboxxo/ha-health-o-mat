@@ -2040,6 +2040,30 @@ def test_req_hom_122_nb1_last_active_lab_reading_skips_voided_newest(mock_store_
     assert last["value"] == 25
 
 
+def test_req_hom_122_n6_last_active_lab_reading_tiebreak_is_last_inserted(mock_store_fixture):
+    """[N-6] `max` statt `sorted()[-1]`: bei exakt gleichem ts/created_at gewinnt der
+    zuletzt eingetragene Eintrag (Semantik der vorherigen Sortier-Variante)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    for value in (20.0, 30.0):
+        _async_test(
+            store.add_lab_reading(
+                "e1",
+                "2026-11-03T09:00:00+01:00",
+                "alt",
+                value,
+                "U/L",
+                value,
+                "U/L",
+                created_ts_iso="2026-11-03T09:05:00+01:00",
+            )
+        )
+
+    last = store.last_active_lab_reading("e1", "alt")
+
+    assert last["value"] == 30.0
+
+
 def test_req_hom_122_nb1_remove_last_lab_reading_voids_chronologically_newest(mock_store_fixture):
     """[NB-1] Undo trifft den zeitlich neuesten Wert, nicht den zuletzt erfassten."""
     store, _ = mock_store_fixture

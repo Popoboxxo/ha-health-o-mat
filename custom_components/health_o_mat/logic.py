@@ -9,6 +9,7 @@ import calendar
 import csv
 import io
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any
@@ -977,8 +978,15 @@ def _slugify_lab_marker_name(name: str) -> str:
 
 
 def _norm_unit(value: Any) -> str:
-    """Einheiten-Vergleich case-/whitespace-insensitiv (HA-frei)."""
-    return str(value if value is not None else "").strip().lower()
+    """Einheiten-Vergleich case-/whitespace-/kompatibilitäts-insensitiv (HA-frei).
+
+    ``NFKC`` faltet typografische Varianten derselben Einheit auf dieselbe Form —
+    insbesondere ``µ`` (U+00B5, Mikro-Zeichen) auf ``μ`` (U+03BC, griechisches My),
+    wie es Labor-CSVs aus Fremdsystemen liefern. Betrifft ausschließlich den
+    VERGLEICH; gespeichert/angezeigt wird weiterhin die kanonische Einheit.
+    """
+    text = unicodedata.normalize("NFKC", str(value if value is not None else ""))
+    return text.strip().lower()
 
 
 def normalize_lab_custom_markers(raw: Any) -> list[dict]:

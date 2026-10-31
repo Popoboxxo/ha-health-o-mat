@@ -1342,6 +1342,39 @@ def test_req_hom_122_plan_import_lab_values_rejects_unsupported_unit():
     assert "furlongs" in plan.errors[0]
 
 
+def test_req_hom_122_plan_import_lab_values_empty_unit_falls_back_to_canonical():
+    """[REQ-HOM-122/N-4] Leere Einheitsspalte = "keine Angabe" → kanonische Einheit.
+
+    Konsistent zu ``convert_lab_value(unit=None)`` und zum Service
+    ``add_lab_value`` (``unit`` optional): eine leere Spalte ist kein Fehler.
+    """
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;;32.0;;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.rejected == 0
+    assert plan.errors == []
+    record = plan.lab_readings[0]
+    assert record["marker_key"] == "alt"
+    assert record["unit"] == "U/L"
+    assert record["value"] == 32.0
+    # Ohne gedruckte Einheit gilt die kanonische (nie eine leere Zeichenkette).
+    assert record["reported_unit"] == "U/L"
+
+
+def test_req_hom_122_plan_import_lab_values_empty_unit_rejected_if_required():
+    """[REQ-HOM-122/N-4] Marker mit ``require_explicit_unit`` verlangt eine Einheit."""
+    marker = "urine_protein_creatinine_ratio"
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;{marker};kidney;10;;10;;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.lab_readings == []
+    assert plan.rejected == 1
+    assert marker in plan.errors[0]
+    assert "Einheit erforderlich" in plan.errors[0]
+
+
 def test_req_hom_122_async_import_csv_writes_lab_readings(tmp_path):
     """[REQ-HOM-122] Service legt Laborwerte über den Store an."""
     folder = _import_dir(tmp_path)
