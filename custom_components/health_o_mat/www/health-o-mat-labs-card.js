@@ -399,6 +399,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this._activeCategory = "";
     this._draft = EMPTY_DRAFT();
     this._reportDraft = EMPTY_REPORT_DRAFT();
+    this._reportOpen = false;
     this._fillNote = "";
     this._loading = false;
     this._saving = false;
@@ -409,6 +410,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this._onClick = this._onClick.bind(this);
     this._onInput = this._onInput.bind(this);
     this._onChange = this._onChange.bind(this);
+    this._onToggle = this._onToggle.bind(this);
   }
 
   /* ---- Lovelace card API -------------------------------------------------- */
@@ -439,6 +441,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this._activeCategory = "";
     this._draft = EMPTY_DRAFT();
     this._reportDraft = EMPTY_REPORT_DRAFT();
+    this._reportOpen = false;
     this._fillNote = "";
     this._error = null;
     this._actionError = "";
@@ -471,6 +474,8 @@ class HealthOMatLabsCard extends HTMLElement {
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("input", this._onInput);
     this.shadowRoot.addEventListener("change", this._onChange);
+    // `toggle` bubbelt nicht — Capture-Phase faengt es am Shadow-Root ab.
+    this.shadowRoot.addEventListener("toggle", this._onToggle, true);
     this._listenersAttached = true;
   }
 
@@ -478,6 +483,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this.shadowRoot.removeEventListener("click", this._onClick);
     this.shadowRoot.removeEventListener("input", this._onInput);
     this.shadowRoot.removeEventListener("change", this._onChange);
+    this.shadowRoot.removeEventListener("toggle", this._onToggle, true);
     this._listenersAttached = false;
   }
 
@@ -550,6 +556,7 @@ class HealthOMatLabsCard extends HTMLElement {
         this._activeCategory = "";
         this._draft = EMPTY_DRAFT();
         this._reportDraft = EMPTY_REPORT_DRAFT();
+        this._reportOpen = false;
         this._fillNote = "";
       }
       this._activeEntry = entryId;
@@ -1119,6 +1126,8 @@ class HealthOMatLabsCard extends HTMLElement {
       // Bericht-Kontext (ts/reportRef) bleibt für Nachtrag-Korrekturen stehen
       // (§6.4) — geleert werden nur Wert-Felder und die Zeilenliste.
       this._reportDraft = { ...this._reportDraft, rows: [EMPTY_REPORT_ROW()] };
+      // Der Dialog startet nach dem Absenden wieder im Startzustand (zugeklappt).
+      this._reportOpen = false;
       this._fillNote = "";
       await this._loadData(true);
     } catch (err) {
@@ -1212,6 +1221,16 @@ class HealthOMatLabsCard extends HTMLElement {
     }
     if (action === "lab-report-save") this._saveReport();
     if (action === "lab-save") this._saveValue();
+  }
+
+  /* Offen-Zustand des Bericht-Dialogs merken: strukturelle Aenderungen (Zeile,
+   * Marker, Einheit) rendern den Shadow-Root neu — ohne diesen Zustand faellt
+   * das `<details>` bei jedem Klick zu (E2E-Befund Batch-Dialog). */
+  _onToggle(ev) {
+    const el = ev.target;
+    if (!el || typeof el.matches !== "function") return;
+    if (!el.matches("details.labs-report")) return;
+    this._reportOpen = el.open === true;
   }
 
   _onInput(ev) {
@@ -1320,6 +1339,10 @@ class HealthOMatLabsCard extends HTMLElement {
         </div>
       </ha-card>
     `;
+    // Offen-Zustand nach dem Re-Render wiederherstellen: innerHTML ersetzt das
+    // `<details>`-Element, der gemerkte Zustand haelt den Dialog offen.
+    const reportEl = this.shadowRoot.querySelector("details.labs-report");
+    if (reportEl) reportEl.open = this._reportOpen === true;
   }
 }
 

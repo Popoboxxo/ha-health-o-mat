@@ -1110,15 +1110,21 @@ export function labReportForm(panel, labs, entryId) {
         t("ui_panel_lab_report_limit", "Höchstens 60 Zeilen pro Bericht.")
       )}</div>`
     : "";
-  return `<details class="lab-report-form">
+  // Offen-Zustand ueberlebt die Re-Renders bei strukturellen Aenderungen
+  // (Zeile anlegen/entfernen, Marker/Einheit wechseln) — sonst klappt der
+  // Dialog bei jedem Klick zu (E2E-Befund Batch-Dialog).
+  const open = panel._labReportOpen && panel._labReportOpen[entryId] ? " open" : "";
+  return `<details class="lab-report-form" data-entry="${escapeHtml(entryId)}"${open}>
       <summary>${escapeHtml(t("ui_panel_lab_report_title", "Laborbericht erfassen"))}</summary>
       <div class="lab-report-fill">
-        <button class="btn ghost" type="button" data-action="lab-report-fill-visible"${disabled}>${escapeHtml(
-          t("ui_panel_lab_fill_visible", "Alle sichtbaren Marker anlegen")
-        )}</button>
-        <button class="btn ghost" type="button" data-action="lab-report-fill-last"${disabled}>${escapeHtml(
-          t("ui_panel_lab_fill_last", "Zuletzt verwendete Marker anlegen")
-        )}</button>
+        <button class="btn ghost" type="button" data-action="lab-report-fill-visible"
+          data-entry="${escapeHtml(entryId)}"${disabled}>${escapeHtml(
+            t("ui_panel_lab_fill_visible", "Alle sichtbaren Marker anlegen")
+          )}</button>
+        <button class="btn ghost" type="button" data-action="lab-report-fill-last"
+          data-entry="${escapeHtml(entryId)}"${disabled}>${escapeHtml(
+            t("ui_panel_lab_fill_last", "Zuletzt verwendete Marker anlegen")
+          )}</button>
       </div>
       <label class="field">${escapeHtml(t("ui_panel_lab_report_ts", "Zeitpunkt"))}
         <input type="datetime-local" data-field="lab-report-ts" value="${attrValue(draft.ts)}" />
@@ -1286,6 +1292,8 @@ async function submitLabReport(panel, entryId) {
     }
     // ts/reportRef bleiben stehen (§6.4) — nur Werte + Zeilen werden geleert.
     panel._labReportDraft[entryId] = { ...draft, rows: [emptyLabReportRow()] };
+    // Der Dialog startet nach dem Absenden wieder im Startzustand (zugeklappt).
+    if (panel._labReportOpen) panel._labReportOpen[entryId] = false;
     await panel._reloadEntry(entryId);
   } catch (err) {
     panel._formError = errMsg(err);
@@ -1329,6 +1337,24 @@ function ensureLabGestures(panel) {
   const root = panel.shadowRoot;
   if (!root || typeof root.addEventListener !== "function") return;
   panel[LAB_GESTURES_INSTALLED] = true;
+
+  // `toggle` bubbelt nicht — Capture-Phase faengt es trotzdem am Shadow-Root
+  // ab. Der Offen-Zustand wird pro Entry gemerkt, damit `labReportForm` ihn
+  // nach einem Re-Render wieder auf das `open`-Attribut abbilden kann.
+  root.addEventListener(
+    "toggle",
+    (ev) => {
+      const target = ev.target;
+      if (!target || typeof target.closest !== "function") return;
+      const form = target.closest("details.lab-report-form");
+      if (!form) return;
+      const entryId = form.getAttribute("data-entry") || "";
+      if (!entryId) return;
+      if (!panel._labReportOpen) panel._labReportOpen = {};
+      panel._labReportOpen[entryId] = form.open === true;
+    },
+    true
+  );
 
   let startX = null;
   let startY = null;

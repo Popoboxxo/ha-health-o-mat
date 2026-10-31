@@ -141,6 +141,7 @@ class HealthOMatPanel extends HTMLElement {
     this._quickDraft = []; // working copy of the 4 quick-drink slots
     this._labCustomDraft = {}; // entry_id -> working copy of custom lab markers
     this._labReportDraft = {}; // entry_id -> working copy of a lab report dialog
+    this._labReportOpen = {}; // entry_id -> report dialog stays open across re-renders
     this._settingsBusy = false;
     this._settingsStatus = null; // { ok: boolean, text: string }
     this._exportBusy = false;

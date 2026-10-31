@@ -2263,6 +2263,26 @@ def test_req_hom_123_labs_card_report_single_flight_and_error_envelope():
     assert "rows: [EMPTY_REPORT_ROW()]" in body
     assert 'ts: ""' not in body
     assert 'reportRef: ""' not in body
+    # Der Dialog startet nach dem Absenden wieder im Startzustand (zugeklappt).
+    assert "this._reportOpen = false;" in body
+
+
+def test_req_hom_123_labs_card_report_dialog_keeps_open_state():
+    """[REQ-HOM-123] `_reportOpen` ueberlebt Re-Renders (E2E-Befund Batch-Dialog).
+
+    Ohne den gemerkten Zustand rendert jede strukturelle Aenderung (Zeile,
+    Marker, Einheit) den Shadow-Root neu und klappt den Dialog zu.
+    """
+    source = _labs_card_source()
+
+    assert 'return `<details class="labs-report">' in source
+    assert 'const reportEl = this.shadowRoot.querySelector("details.labs-report");' in source
+    assert "if (reportEl) reportEl.open = this._reportOpen === true;" in source
+    assert "this._reportOpen = el.open === true;" in source
+    assert 'addEventListener("toggle", this._onToggle, true)' in source
+    assert 'removeEventListener("toggle", this._onToggle, true)' in source
+    # Zustand wird beim Konfigurieren und beim Personenwechsel zurueckgesetzt.
+    assert source.count("this._reportOpen = false;") >= 3
 
 
 _NODE_LABS_REPORT_RUNNER = """import { readFileSync } from "node:fs";

@@ -3628,10 +3628,57 @@ def test_req_hom_123_panel_views_renders_report_form():
     assert "LAB_REPORT_MAX_ROWS_UI" in views
 
 
+def test_req_hom_123_panel_hybrid_buttons_send_entry_id():
+    """[REQ-HOM-123] Beide Hybrid-Buttons tragen `data-entry` (E2E-Befund Batch-Dialog).
+
+    Die Klick-Delegation liest `getAttribute("data-entry") || ""`; ohne das
+    Attribut landet der Fuellvorgang unter einem leeren Entry-Key und legt keine
+    Zeile an (§6.1).
+    """
+    views = _panel_views_source()
+    for action in ("lab-report-fill-visible", "lab-report-fill-last"):
+        match = re.search(rf'<button[^>]*data-action="{re.escape(action)}"[^>]*>', views)
+        assert match is not None, f"Button {action} fehlt im Bericht-Dialog"
+        assert 'data-entry="${escapeHtml(entryId)}"' in match.group(0), (
+            f"{action} ohne data-entry — der Fuellvorgang laeuft ins Leere"
+        )
+
+
+def test_req_hom_123_panel_report_buttons_all_carry_entry_id():
+    """[REQ-HOM-123] Jeder Bericht-Button sendet seine Person mit (§6.3)."""
+    views = _panel_views_source()
+    body = (
+        _js_function_block(views, "labReportForm")
+        + _js_function_block(views, "labReportRowHtml")
+        + _js_function_block(views, "labReportDiscardHtml")
+    )
+    buttons = re.findall(r"<button[^>]*data-action=\"lab-report-[^\"]*\"[^>]*>", body)
+    assert buttons, "keine Bericht-Buttons gefunden"
+    for button in buttons:
+        assert 'data-entry="${escapeHtml(entryId)}"' in button, button
+
+
+def test_req_hom_123_panel_report_form_maps_open_state_per_entry():
+    """[REQ-HOM-123] Der Offen-Zustand ueberlebt Re-Renders (E2E-Befund Batch-Dialog)."""
+    views = _panel_views_source()
+    body = _js_function_block(views, "labReportForm")
+
+    assert 'data-entry="${escapeHtml(entryId)}"${open}' in body
+    assert 'panel._labReportOpen && panel._labReportOpen[entryId] ? " open" : ""' in body
+
+    gestures = _js_function_block(views, "ensureLabGestures")
+    assert "details.lab-report-form" in gestures
+    assert "panel._labReportOpen[entryId] = form.open === true;" in gestures
+
+    submit = _js_function_block(views, "submitLabReport")
+    assert "panel._labReportOpen[entryId] = false;" in submit
+
+
 def test_req_hom_123_panel_entry_module_initialises_report_draft_and_delegates_changes():
     entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
 
     assert re.search(r"this\._labReportDraft\s*=\s*\{\s*\}", entry)
+    assert re.search(r"this\._labReportOpen\s*=\s*\{\s*\}", entry)
     assert "handleLabReportChange" in entry
 
 
@@ -3709,6 +3756,55 @@ def test_req_hom_123_panel_report_form_and_change_handler(tmp_path):
     assert out["changed"] is True
     assert out["draft"]["rows"][0]["marker"] == "creatinine"
     assert out["draft"]["rows"][0]["unit"] == ""
+
+
+_NODE_PANEL_REPORT_OPEN_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+base.setUiLanguage("de");
+
+const labs = { categories: [], markers: { creatinine: { unit: "mg/dL" } } };
+
+function render(openState) {
+  const panel = {
+    _labReportDraft: {
+      "entry-1": { ts: "", reportRef: "", rows: [{ marker: "", value: "", unit: "" }] },
+    },
+  };
+  if (openState !== null) panel._labReportOpen = { "entry-1": openState };
+  return views.labReportForm(panel, labs, "entry-1");
+}
+
+process.stdout.write(
+  JSON.stringify({ open: render(true), closed: render(false), missing: render(null) })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_123_panel_report_form_maps_open_state_to_attribute(tmp_path):
+    """[REQ-HOM-123] `_labReportOpen[entryId]` steuert das `open`-Attribut des Dialogs."""
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+    (tmp_path / "health-o-mat-panel-base.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    views_path = tmp_path / "health-o-mat-panel-views.js"
+    views_path.write_bytes((_WWW_DIR / "health-o-mat-panel-views.js").read_bytes())
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_REPORT_OPEN_RUNNER,
+            [str(tmp_path / "health-o-mat-panel-base.js"), str(views_path)],
+            "runner_panel_report_open",
+        )
+    )
+
+    assert '<details class="lab-report-form" data-entry="entry-1" open>' in out["open"]
+    assert '<details class="lab-report-form" data-entry="entry-1">' in out["closed"]
+    # Ohne Zustandsmap (defensiver Pfad) startet der Dialog zugeklappt.
+    assert '<details class="lab-report-form" data-entry="entry-1">' in out["missing"]
 
 
 def test_req_hom_128_panel_discard_action_guarded_by_last_report():
