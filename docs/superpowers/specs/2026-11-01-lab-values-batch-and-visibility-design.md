@@ -517,10 +517,14 @@ Archiv) bleibt unberührt.
   `voided_at`, `void_reason` (bisher nur aktive Zeilen: `exporter.py:75, 141-156`,
   Header `exporter.py:15-25`). Sortierung bleibt nach `ts`. **Nur** das Lab-CSV ändert sich —
   `drinks.csv`/`readings.csv` bleiben „nur aktive" (`exporter.py:60-61`, M2a).
-- **Import:** voidete Zeilen werden **übersprungen** und als `skipped` gezählt (keine
-  Wiederbelebung). Das ist heute schon so, weil die Dedupe-Schlüssel gegen die **rohen**
-  Listen inkl. voided laufen (`importer.py:443, 478-482, 545-548`) — die neuen Spalten
-  werden vom toleranten Parser ignoriert. Kein Verhaltenswechsel nötig, nur Doku + Test.
+- **Import:** Zeilen mit gefüllter `voided_at`-Spalte werden **übersprungen** und als
+  `skipped` gezählt (keine Wiederbelebung) — **header-basiert** erkannt und damit
+  **unabhängig vom Bestand**: auch ein leerer Store importiert voidete Zeilen nicht als
+  aktive Werte. Die Spalte wird positions-unabhängig über die Kopfzeile gefunden
+  (`importer.py`, `_LAB_HEADER_ALIASES` / `_is_voided_lab_row`); die Dedupe gegen die
+  **rohen** Listen inkl. voided (`importer.py:443, 478-482, 545-548`) bleibt zusätzlich
+  bestehen. Fehlt die Spalte in einer Altdatei, gilt weiterhin die Positions-Konvention
+  (0…8) — dort gibt es keine voideten Zeilen, das Verhalten bleibt unverändert.
 
 ### 2.16 Backup / Restore
 
@@ -938,7 +942,7 @@ Labs-Card-Abschnitt (README 576-577).
 | `ws_api.py` | zwei neue Kommandos + Fehler-Envelope; `panel_data` +3 Felder; Settings um `lab_hide_panel_disclaimer` (Admin-Schreibpfad) |
 | `config_flow.py` | `lab_retention_months` im Schritt `basics` neben `retention_months` |
 | `exporter.py` | `lab_values.csv`: alle Zeilen (inkl. voided) + `voided_at`/`void_reason` |
-| `importer.py` | **keine** Logikänderung; neue Spalten ignoriert, voidete Zeilen = `skipped` |
+| `importer.py` | `voided_at`/`void_reason` **header-basiert** erkennen (positions-unabhängig) und voidete Zeilen als `skipped` zählen — unabhängig vom Bestand, also auch im leeren Store; Altdateien ohne die Spalten behalten das Positionsverhalten |
 | `backup.py` | `lab_options` + `lab_hide_panel_disclaimer` + `lab_retention_months` |
 | `restore.py` | unverändert (Lab-Options-Merge bleibt nur `lab_custom_markers`) |
 | `diagnostics.py` | zwei neue Optionsschlüssel in die Redaktionsliste |
