@@ -4,7 +4,9 @@
     "agent-meta-manager",
     "developer",
     "devops-engineer",
+    "junior-developer",
     "release",
+    "senior-developer",
     "tester"
   ],
   "file_count_threshold": 5,
