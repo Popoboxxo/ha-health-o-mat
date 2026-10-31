@@ -23,7 +23,9 @@ from .const import (
     DOMAIN,
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_HIDE_PANEL_DISCLAIMER,
     OPTION_LAB_REF_OVERRIDES,
+    OPTION_LAB_RETENTION_MONTHS,
 )
 from .store import HealthOMatStore
 
@@ -169,6 +171,12 @@ async def async_backup(
             OPTION_LAB_CUSTOM_MARKERS: entry.options.get(OPTION_LAB_CUSTOM_MARKERS, []),
             OPTION_LAB_REF_OVERRIDES: entry.options.get(OPTION_LAB_REF_OVERRIDES, {}),
             OPTION_LAB_HIDDEN_CATEGORIES: entry.options.get(OPTION_LAB_HIDDEN_CATEGORIES, []),
+            OPTION_LAB_HIDE_PANEL_DISCLAIMER: bool(
+                entry.options.get(OPTION_LAB_HIDE_PANEL_DISCLAIMER, False)
+            ),
+            OPTION_LAB_RETENTION_MONTHS: int(
+                entry.options.get(OPTION_LAB_RETENTION_MONTHS, 0) or 0
+            ),
         }
         for entry in hass.config_entries.async_entries(DOMAIN)
     }

@@ -391,7 +391,9 @@ def test_translation_placeholders_match_across_languages() -> None:
 
 _LAB_SERVICE_FIELDS = {
     "add_lab_value": {"person", "marker", "value", "unit", "ts", "report_ref"},
+    "add_lab_report": {"person", "values", "ts", "report_ref"},
     "remove_last_lab_value": {"person", "marker"},
+    "remove_lab_report": {"person", "ts", "report_ref"},
 }
 
 # Minimal-Override-Konvention (wie `add_blood_pressure`): in den JSON-Dateien
@@ -399,7 +401,9 @@ _LAB_SERVICE_FIELDS = {
 # Felder aus `services.yaml`.
 _LAB_TRANSLATED_FIELDS = {
     "add_lab_value": {"marker", "unit", "ts", "report_ref"},
+    "add_lab_report": {"values", "ts", "report_ref"},
     "remove_last_lab_value": {"marker"},
+    "remove_lab_report": {"ts", "report_ref"},
 }
 
 

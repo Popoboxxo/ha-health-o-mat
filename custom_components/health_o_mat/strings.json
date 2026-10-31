@@ -40,6 +40,7 @@
           "person_display": "Display name",
           "daily_reset_hour": "Daily reset hour (0-23)",
           "retention_months": "History retention in months (0 = off)",
+          "lab_retention_months": "Lab value retention in months (0 = off)",
           "enable_sidebar_panel": "Show sidebar panel",
           "area_drink": "Track drinking",
           "area_bp": "Track blood pressure",
@@ -609,6 +610,38 @@
         "report_ref": {
           "name": "Report reference",
           "description": "Optional link or external ID of the lab report (max 500 characters). Reference only, Health-O-Mat never fetches the URL itself."
+        }
+      }
+    },
+    "add_lab_report": {
+      "name": "Record lab report",
+      "description": "Records several lab values of one report in a single operation — same timestamp, same report reference, all-or-nothing: one invalid row rejects the whole report. Empty rows are ignored. Calling it again writes the values again (not idempotent).",
+      "fields": {
+        "values": {
+          "name": "Values",
+          "description": "Rows of marker, value and (optional) unit."
+        },
+        "ts": {
+          "name": "Timestamp",
+          "description": "Time of the report (ISO 8601, e.g. 2026-11-01T09:15 or with offset). Empty = now. At most 5 minutes in the future, not before 1900."
+        },
+        "report_ref": {
+          "name": "Report reference",
+          "description": "Optional link or external ID of the lab report (max 500 characters). Reference only, Health-O-Mat never fetches the URL itself."
+        }
+      }
+    },
+    "remove_lab_report": {
+      "name": "Discard lab report",
+      "description": "Discards all active lab values of one report (shared timestamp). With a report reference only entries carrying exactly that tag are discarded. No match is an error. Discarded values are marked as deleted and stay individually restorable via restore_entry.",
+      "fields": {
+        "ts": {
+          "name": "Timestamp",
+          "description": "Timestamp of the report (ISO 8601) — the same value used when recording it (e.g. from panel_data.labs.last_report.ts). Required."
+        },
+        "report_ref": {
+          "name": "Report reference",
+          "description": "Optional: limits the discard to exactly this tag (max 500 characters). Without it all active values of that timestamp are discarded."
         }
       }
     },

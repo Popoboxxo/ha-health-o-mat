@@ -1041,13 +1041,43 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
             "lab_custom_markers": [{"key": "vitamin_d"}],
             "lab_ref_overrides": {"alt": {"ref_min": 5}},
             "lab_hidden_categories": ["thyroid"],
+            "lab_hide_panel_disclaimer": False,
+            "lab_retention_months": 0,
         },
         "e2": {
             "lab_custom_markers": [],
             "lab_ref_overrides": {},
             "lab_hidden_categories": [],
+            "lab_hide_panel_disclaimer": False,
+            "lab_retention_months": 0,
         },
     }
+
+
+def test_req_hom_129_backup_collects_lab_retention_and_disclaimer(tmp_path, monkeypatch):
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {
+        const_module.OPTION_LAB_RETENTION_MONTHS: 24,
+        const_module.OPTION_LAB_HIDE_PANEL_DISCLAIMER: True,
+    }
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[entry])
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document["lab_options"]["e1"]["lab_retention_months"] == 24
+    assert document["lab_options"]["e1"]["lab_hide_panel_disclaimer"] is True
 
 
 # ============================================================================
