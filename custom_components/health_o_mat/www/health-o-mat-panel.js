@@ -88,7 +88,7 @@ import {
 } from "./health-o-mat-panel-admin.js?v=0.16.0";
 
 const PANEL_TAG = "health-o-mat-panel";
-const PANEL_VERSION = "0.2.0";
+const PANEL_VERSION = "0.16.0";
 
 /* Single translation source: the i18n module owns the cache, the base module
  * owns the `t()` used by every renderer. Injecting once at module load keeps

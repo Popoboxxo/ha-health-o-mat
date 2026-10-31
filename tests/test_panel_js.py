@@ -89,6 +89,50 @@ def test_every_version_query_matches_manifest_version():
     assert not mismatches, f"Cache-Buster != manifest.version {version!r}: {mismatches}"
 
 
+# Branding-Version je JS-Modul (`console.info`-Ausgabe). Sie beeinflusst den
+# Cache-Buster NICHT — der entsteht aus `frontend.integration_version()` —,
+# Driftet aber genauso still auseinander wie die `?v=`-Query oben. Deshalb
+# dasselbe Guard-Muster: jede Konstante == manifest.version.
+_JS_VERSION_CONSTANTS: dict[str, str] = {
+    "health-o-mat-panel.js": "PANEL_VERSION",
+    "health-o-mat-card.js": "CARD_VERSION",
+    "health-o-mat-labs-card.js": "CARD_VERSION",
+}
+
+# `const <NAME>_VERSION = "<version>";` am Zeilenanfang (auch in einer Datei mit
+# mehreren Modulen/mehreren Konstanten).
+_JS_VERSION_CONST_RE = re.compile(
+    r"^const\s+([A-Z][A-Z0-9_]*_VERSION)\s*=\s*[\"']([^\"']*)[\"']", re.MULTILINE
+)
+
+
+def test_js_version_constants_match_manifest_version():
+    """`PANEL_VERSION`/`CARD_VERSION` aller ausgelieferten JS-Module == manifest.version.
+
+    Prüft zusätzlich, dass die Liste der Versionskonstanten vollständig ist:
+    ein neues Modul mit eigener `*_VERSION`-Konstante muss hier eingetragen
+    werden, sonst schlägt der Test fehl (kein stiller Drift bei neuen Modulen).
+    """
+    version = frontend.integration_version()
+    assert version and version != "0", "manifest.json lieferte keine brauchbare Version"
+
+    declared: list[tuple[str, str, str]] = []
+    for path in sorted(_WWW_DIR.glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        for match in _JS_VERSION_CONST_RE.finditer(text):
+            declared.append((path.name, match.group(1), match.group(2)))
+
+    found = {(filename, constant_name) for filename, constant_name, _ in declared}
+    expected = set(_JS_VERSION_CONSTANTS.items())
+    assert found == expected, (
+        "JS-Versionskonstanten weichen von der Erwartung ab: "
+        f"fehlend={sorted(expected - found)}, unerwartet={sorted(found - expected)}"
+    )
+
+    mismatches = [(name, const, value) for name, const, value in declared if value != version]
+    assert not mismatches, f"JS-Versionskonstante != manifest.version {version!r}: {mismatches}"
+
+
 # --- REQ-HOM-112: Wohlbefinden-Score-Chart im Panel -------------------------
 
 # Chart-Helper des Basis-Moduls (Wohlbefinden-Tab).
