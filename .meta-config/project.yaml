@@ -44,6 +44,22 @@ variables:
     bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst, als native HA-Entities
     zur Verfügung stellt — unter konsequenter Beachtung der aus vorherigen HACS-Integrationen
     gelernten Lektionen (Releases, unique_id-Stabilität, Setup-Architektur, Config/Options-Flow).
+  PROJECT_STRUCTURE: |-
+    custom_components/health_o_mat/   # Integration (HA-frei: logic.py, parser.py)
+    tests/                            # Unit-Tests ohne HA-Paket (Fake-Package in conftest.py)
+    tests_e2e/                        # E2E-Tests gegen die HA-Testinstanz
+    scripts/                          # E2E-/Bootstrap-Hilfsskripte
+    docs/                             # Konzepte, Pläne, Requirement-Traceability
+    .meta-config/project.yaml         # deklarative Projekt-Konfiguration (agent-meta)
+  ENTRY_POINT_PATTERN: custom_components/health_o_mat/__init__.py — async_setup_entry/async_unload_entry, Services, Entry-Registry unter hass.data[DOMAIN][entry_id]
+  KEY_PATTERNS: |-
+    - Ein Config-Entry = eine Person (kein Singleton, dynamisch beliebig viele Entries; Duplikat-Schutz über async_set_unique_id + _abort_if_unique_id_configured)
+    - Gemeinsamer Store unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry unter hass.data[DOMAIN][entry_id]
+    - Ein DataUpdateCoordinator pro Config-Entry mit update_interval=None; Refresh via async_set_updated_data() bei Events statt Polling
+    - Heute-Fenster und Summen on-read berechnen — kein Reset-Job (neustart- und DST-fest)
+    - unique_id = f"{entry_id}_{key}" stabil + device_info ab Entity #1; has_entity_name + translation_key, keine Namens-Literale
+    - Plattform-Name == Dateiname (sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py)
+    - Options-Flow für nachträglich Korrigierbares; strukturelle Daten explizit in entry.data
   PLATFORM: Home Assistant (HACS Custom Integration)
   RUNTIME: Home Assistant Core
   PROJECT_LANGUAGES: Python
@@ -58,9 +74,13 @@ variables:
   GIT_MAIN_BRANCH: main
   BUILD_COMMAND: ''
   TEST_COMMAND: pytest
-  DEV_COMMANDS: |
-    # HA-Konfiguration prüfen (via CLI im HA-Container):
-    # ha core check
+  DEV_COMMANDS: |-
+    python3 -m pytest -q
+    python3 -m compileall -q custom_components/health_o_mat
+    # HA-Konfiguration prüfen (Dev-Instanz): /home/hermes/ha-test/bin/ha core check
+  DEV_STACK_RELOAD: |-
+    /home/hermes/ha-test/bin/sync <repo-dir>
+    /home/hermes/ha-test/bin/ha GET /api/states
   TEST_COMMANDS: |-
     pytest tests/
     # E2E gegen geteilte HA-Testinstanz (Etikette: /home/hermes/ha-test/README.md)
@@ -86,14 +106,28 @@ variables:
   ARCHITECTURE: |-
     custom_components/health_o_mat/
       __init__.py         # Setup/Unload, Services, Options-Handling, Entry-Registry
+      const.py            # Domain/Keys/Konstanten
       store.py            # HealthOMatStore (Storage-Persistenz je Person)
       logic.py            # reine Logik (Tagesfenster on-read, Summen), HA-frei
       parser.py           # Freitext-Parser für Getränke-Eingaben
+      statistics.py       # Aggregation/Auswertungen (HA-frei wo möglich)
+      reminders.py        # Erinnerungs-Logik
       entity.py           # gemeinsame HealthOMatEntity-Basis (unique_id, device_info)
       sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py
+      config_flow.py      # Config-/Options-Flow (Duplikat-Schutz, Update-Listener)
+      services.yaml       # Service-Definitionen (voluptuous-Schema in __init__.py)
       exporter.py         # CSV-Export-Service (privater Ordner, nie /config/www)
-      config_flow.py      # Config-/Options-Flow
-    tests/                 # isolierte Tests für logic.py/parser.py (importlib, ohne HA-Paket)
+      importer.py, backup.py, restore.py   # Import/Backup/Restore
+      diagnostics.py      # Diagnostics (keine Secrets/Gesundheitsdaten)
+      ui_store.py         # Store für UI-/Panel-Präferenzen
+      panel.py, frontend.py, ws_api.py     # Web-Panel, Frontend-Ressourcen, WS-API
+      areas.py            # Area-Zuordnung pro Person
+      strings.json, translations/{de,en}.json  # Master (en) + Übersetzungen
+      www/health-o-mat-*.js                # Lovelace-Card + Panels (E2E-getestet)
+    tests/                 # isolierte Unit-Tests (importlib, ohne HA-Paket)
+    tests_e2e/             # E2E gegen geteilte HA-Testinstanz
+    scripts/               # E2E-/Bootstrap-Hilfsskripte
+    docs/                  # Konzepte, Pläne, REQUIREMENTS.md, E2E-Belege
   CODE_CONVENTIONS: |-
     - `from __future__ import annotations` + vollständige Type-Hints
     - unique_id + device_info ab Entity #1; unique_id stabil & entry-spezifisch ({entry_id}_{key}), NIE nachträglich ändern
@@ -125,7 +159,10 @@ variables:
     - Erst Unit-Tests der HA-freien Logik (Fake-Package/importlib wie in tests/), dann E2E auf Dev-Instanz, erst danach Release
     - translations/strings.json als Master, de/en synchron halten
     - Debugging-Reihenfolge bei "geht nicht": 1) Entity-Generation prüfen (Device-Seite, nicht nur Entitätsliste) 2) HA-Log auf ModuleNotFoundError (Plattform-Datei fehlt) oder "Migration handler not found" (VERSION ohne Migrator) 3) HACS zeigt kein Update? Release vs. Tag + Tag↔manifest-Sync prüfen 4) Setup bricht sofort komplett ab? Syntax/Import-Fehler in EINER Plattform-Datei killt alle 5) Services finden nichts? hass.data-Registry-Befüllung prüfen
-  REQ_CATEGORIES: ''
+  REQ_CATEGORIES: |-
+    - **Kernfunktionalität** — Kernfeatures des Projekts
+    - **Lifecycle** — Startup, Shutdown, Fehlerbehandlung
+    - **Nichtfunktionale Anforderungen** — Performance, Sicherheit, Wartbarkeit
   TESTER_SNIPPETS_PATH: ''
   DEVELOPER_SNIPPETS_PATH: ''
   AGENT_META_REPO: Popoboxxo/agent-meta
@@ -144,10 +181,9 @@ allow-committed-secrets: false
 gitignore:
   generated: true
   settings: true
+  ignore-provider-dirs: true
   custom_entries:
-  - .claude/
-  - .gemini/
-  - .opencode/
+  - .meta-config/platform-defaults.resolved.yaml
   - AGENTS.md
   - opencode.json
   - CLAUDE.md
