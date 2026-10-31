@@ -47,6 +47,7 @@ _AREA_FORM_FIELDS: dict[str, str] = {
     "area_drink": areas.AREA_DRINK,
     "area_bp": areas.AREA_BP,
     "area_wellbeing": areas.AREA_WELLBEING,
+    "area_labs": areas.AREA_LABS,
 }
 
 
@@ -449,6 +450,10 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         "area_wellbeing",
                         default=current_areas[areas.AREA_WELLBEING],
+                    ): bool,
+                    vol.Optional(
+                        "area_labs",
+                        default=current_areas[areas.AREA_LABS],
                     ): bool,
                     vol.Optional("skip", default=False): bool,
                 }

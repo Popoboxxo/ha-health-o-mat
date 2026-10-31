@@ -86,7 +86,7 @@ def test_health_o_mat_data_defaults_all_areas_active():
     """[REQ-HOM-009] Runtime-Daten starten mit allen Bereichen aktiv."""
     init = _load_init()
     rt = init.HealthOMatData()
-    assert rt.areas == {"drink": True, "bp": True, "wellbeing": True}
+    assert rt.areas == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
     assert rt.areas is not init.HealthOMatData().areas  # frische Kopie je Instanz
 
 
@@ -98,7 +98,7 @@ def test_apply_options_mirrors_areas_from_options():
 
     init._apply_options(MagicMock(), entry)
 
-    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": False}
+    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": False, "labs": True}
 
 
 def test_apply_options_missing_areas_keeps_all_active():
@@ -109,7 +109,7 @@ def test_apply_options_missing_areas_keeps_all_active():
 
     init._apply_options(MagicMock(), entry)
 
-    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": True}
+    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
 
 
 def test_options_updated_area_change_triggers_reload(monkeypatch):
@@ -124,7 +124,7 @@ def test_options_updated_area_change_triggers_reload(monkeypatch):
 
     _run(init._options_updated(hass, entry))
 
-    assert entry.runtime_data.areas == {"drink": False, "bp": True, "wellbeing": True}
+    assert entry.runtime_data.areas == {"drink": False, "bp": True, "wellbeing": True, "labs": True}
     hass.config_entries.async_reload.assert_called_once_with("e1")
 
 
@@ -141,7 +141,7 @@ def test_options_updated_unchanged_areas_does_not_reload(monkeypatch):
     _run(init._options_updated(hass, entry))
 
     hass.config_entries.async_reload.assert_not_called()
-    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": True}
+    assert entry.runtime_data.areas == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
 
 
 def test_options_updated_person_rename_still_reloads(monkeypatch):

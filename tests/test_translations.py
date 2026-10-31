@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 _COMPONENT_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "health_o_mat"
 _MASTER = _COMPONENT_DIR / "strings.json"
@@ -382,3 +383,43 @@ def test_translation_placeholders_match_across_languages() -> None:
                 f"translations/{lang}.json: Platzhalter bei {key!r} weichen ab: "
                 f"{sorted(actual)} != {sorted(expected)}"
             )
+
+
+# --- Laborwerte (REQ-HOM-122) ----------------------------------------------
+
+_LAB_SERVICE_FIELDS = {
+    "add_lab_value": {"person", "marker", "value", "unit", "ts", "report_ref"},
+    "remove_last_lab_value": {"person", "marker"},
+}
+
+# Minimal-Override-Konvention (wie `add_blood_pressure`): in den JSON-Dateien
+# stehen nur die Felder, deren Text übersetzt wird — nicht zwingend alle
+# Felder aus `services.yaml`.
+_LAB_TRANSLATED_FIELDS = {
+    "add_lab_value": {"marker", "unit", "ts", "report_ref"},
+    "remove_last_lab_value": {"marker"},
+}
+
+
+def test_req_hom_122_lab_services_have_translation_parity() -> None:
+    """[REQ-HOM-122] Laborwert-Services sind in services.yaml + allen Übersetzungen."""
+    services_yaml = yaml.safe_load((_COMPONENT_DIR / "services.yaml").read_text(encoding="utf-8"))
+
+    for service, expected_fields in _LAB_SERVICE_FIELDS.items():
+        assert service in services_yaml, f"services.yaml: {service} fehlt"
+        assert set(services_yaml[service]["fields"]) == expected_fields, (
+            f"services.yaml: {service}-Felder weichen ab"
+        )
+
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service, translated_fields in _LAB_TRANSLATED_FIELDS.items():
+            block = data["services"][service]
+            assert block["name"], f"{path}: {service}.name fehlt"
+            assert block["description"], f"{path}: {service}.description fehlt"
+            assert set(block["fields"]) == translated_fields, (
+                f"{path}: {service}-Felder weichen ab"
+            )
+            for field, meta in block["fields"].items():
+                assert meta["name"], f"{path}: {service}.{field}.name fehlt"
+                assert meta["description"], f"{path}: {service}.{field}.description fehlt"

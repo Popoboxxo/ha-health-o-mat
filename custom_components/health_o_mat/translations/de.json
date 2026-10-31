@@ -44,6 +44,7 @@
           "area_drink": "Trinken erfassen",
           "area_bp": "Blutdruck erfassen",
           "area_wellbeing": "Wohlbefinden erfassen",
+          "area_labs": "Laborwerte erfassen",
           "skip": "Diesen Schritt überspringen"
         }
       },
@@ -466,6 +467,38 @@
         "person": {
           "name": "Person",
           "description": "Name der Person (leer = jede eingerichtete Person erhält einen eigenen Bericht)."
+        }
+      }
+    },
+    "add_lab_value": {
+      "name": "Laborwert erfassen",
+      "description": "Speichert einen Laborwert (Katalog- oder eigener Marker) für eine Person.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stabiler Marker-Schlüssel (z. B. alt, creatinine, crp) oder ein eigener Marker-Key aus dem Admin-Panel. Deutsche Laborsynonyme (gpt, got, gamma_gt) werden automatisch aufgelöst."
+        },
+        "unit": {
+          "name": "Einheit",
+          "description": "Einheit des Werts (optional, Default = kanonische Einheit des Markers). Für Marker mit Verwechslungsgefahr (z. B. das Protein/Kreatinin-Quotient) ist dieses Feld Pflicht."
+        },
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt der Erfassung (ISO 8601, z. B. 2026-10-24T18:30 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
+        },
+        "report_ref": {
+          "name": "Berichts-Referenz",
+          "description": "Optionaler Link oder externe ID des Laborberichts (max. 500 Zeichen). Nur Referenz, Health-O-Mat ruft die URL nie selbst auf."
+        }
+      }
+    },
+    "remove_last_lab_value": {
+      "name": "Letzten Laborwert löschen",
+      "description": "Entfernt den letzten aktiven Laborwert eines bestimmten Markers (Undo). Der Eintrag wird als gelöscht markiert und bleibt wiederherstellbar.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stabiler Marker-Schlüssel, dessen letzter Wert entfernt wird."
         }
       }
     }

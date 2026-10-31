@@ -169,6 +169,7 @@ def test_basics_step_defaults_from_options_and_store():
     assert defaults["area_drink"] is False
     assert defaults["area_bp"] is True
     assert defaults["area_wellbeing"] is True
+    assert defaults["area_labs"] is True
     assert defaults["skip"] is False
     assert (
         result["data_schema"].schema[
@@ -267,7 +268,7 @@ def test_basics_step_area_toggles_default_all_true():
     options_flow = _make_flow(options={})
     schema = _async_test(options_flow.async_step_basics(None))["data_schema"]
 
-    for field in ("area_drink", "area_bp", "area_wellbeing"):
+    for field in ("area_drink", "area_bp", "area_wellbeing", "area_labs"):
         key = next(k for k in schema.schema if str(k) == field)
         assert key.default() is True
         assert schema.schema[key] is bool
@@ -299,9 +300,50 @@ def test_basics_submit_stores_nested_areas_and_returns_to_menu():
         "drink": False,
         "bp": True,
         "wellbeing": False,
+        "labs": True,
     }
     assert not any(key.startswith("area_") for key in options_flow._pending)
     assert "skip" not in options_flow._pending
+
+
+def test_basics_step_offers_lab_area_toggle():
+    """[REQ-HOM-122] Das Grundlagen-Formular enthält den Laborwerte-Toggle."""
+    options_flow = _make_flow(options={})
+    schema = _async_test(options_flow.async_step_basics(None))["data_schema"]
+
+    key = next(k for k in schema.schema if str(k) == "area_labs")
+    assert key.default() is True
+    assert schema.schema[key] is bool
+
+
+def test_basics_submit_disabled_labs_area_stores_false():
+    """[REQ-HOM-122] Deaktivierter Toggle speichert ``labs: False`` (kein stilles Reaktivieren)."""
+    options_flow = _make_flow(options={})
+
+    result = _async_test(
+        options_flow.async_step_basics(
+            {
+                "daily_goal_ml": 2250,
+                "set_lifetime_ml": 0,
+                "person_display": "Max",
+                "daily_reset_hour": 3,
+                "retention_months": 0,
+                "enable_sidebar_panel": False,
+                "area_drink": True,
+                "area_bp": True,
+                "area_wellbeing": True,
+                "area_labs": False,
+            }
+        )
+    )
+
+    assert result["type"] == "menu"
+    assert options_flow._pending["areas"] == {
+        "drink": True,
+        "bp": True,
+        "wellbeing": True,
+        "labs": False,
+    }
 
 
 def test_basics_skip_returns_to_menu_without_changes():
@@ -317,11 +359,12 @@ def test_basics_skip_returns_to_menu_without_changes():
 
 def test_areas_from_user_input_keeps_current_for_missing_fields():
     """[REQ-HOM-009] Fehlt ein Feld, bleibt der bisherige Wert (kein Kipp auf True)."""
-    current = {"drink": False, "bp": True, "wellbeing": False}
+    current = {"drink": False, "bp": True, "wellbeing": False, "labs": False}
     assert config_flow_module.areas_from_user_input({"area_drink": True}, current) == {
         "drink": True,
         "bp": True,
         "wellbeing": False,
+        "labs": False,
     }
 
 
@@ -828,7 +871,7 @@ def test_full_menu_flow_creates_merged_entry():
     assert data["daily_reset_hour"] == 4
     assert data["retention_months"] == 6
     assert data["enable_sidebar_panel"] is True
-    assert data["areas"] == {"drink": True, "bp": False, "wellbeing": True}
+    assert data["areas"] == {"drink": True, "bp": False, "wellbeing": True, "labs": True}
     assert len(data["quick_drinks"]) == 4
     assert data["quick_drinks"][0]["label"] == "Drink 0"
     assert data["drink_lexicon"] == {"kaffee": ("Kaffee", 250)}

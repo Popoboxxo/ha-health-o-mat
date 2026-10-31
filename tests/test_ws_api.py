@@ -340,14 +340,14 @@ def test_list_persons_returns_entries_sorted_with_device_id(monkeypatch):
             "display_name": "Caro",
             "device_id": "dev-e1",
             "person_slug": "caro",
-            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
         },
         {
             "entry_id": "e2",
             "display_name": "Max",
             "device_id": "dev-e2",
             "person_slug": "Max",
-            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
         },
     ]
 
@@ -363,7 +363,7 @@ def test_list_persons_includes_slug_and_areas(monkeypatch):
 
     assert person["person_slug"] == "caro"  # entry.data["person"], NICHT der Anzeigename
     assert person["person_slug"] != person["display_name"]
-    assert person["areas"] == {"drink": True, "bp": False, "wellbeing": True}
+    assert person["areas"] == {"drink": True, "bp": False, "wellbeing": True, "labs": True}
 
 
 def test_list_persons_without_device(monkeypatch):
@@ -461,7 +461,7 @@ def test_panel_data_full_payload(monkeypatch):
     assert payload["entry_id"] == "e1"
     assert payload["person"] == "Caro"
     assert payload["person_slug"] == "Caro"
-    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
     assert payload["goal_ml"] == 2000
     assert payload["reset_hour"] == 4
 
@@ -609,7 +609,7 @@ def test_panel_data_carries_slug_and_areas(monkeypatch):
 
     assert payload is not None
     assert payload["person_slug"] == "caro"
-    assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True, "labs": True}
 
 
 # Top-Level-Vertrag des Panel-Payloads (additiv erweitert um `quick_drinks`).
@@ -1070,7 +1070,7 @@ def test_list_persons_handler_sends_result(monkeypatch):
                         "display_name": "Caro",
                         "device_id": None,
                         "person_slug": "Caro",
-                        "areas": {"drink": True, "bp": True, "wellbeing": True},
+                        "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
                     }
                 ]
             },
@@ -1832,7 +1832,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "enable_sidebar_panel": True,
                 "wellbeing_confirm": False,
                 "audit_limit": 1000,
-                "areas": {"drink": True, "bp": True, "wellbeing": True},
+                "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
             },
         )
     ]
@@ -1878,6 +1878,7 @@ def test_get_settings_includes_areas_default_all_active():
         "drink": True,
         "bp": True,
         "wellbeing": True,
+        "labs": True,
     }
 
 
@@ -1889,6 +1890,7 @@ def test_get_settings_reflects_disabled_area():
         "drink": True,
         "bp": True,
         "wellbeing": False,
+        "labs": True,
     }
 
 
@@ -1912,11 +1914,12 @@ def test_set_settings_persists_areas():
 
     assert connection.errors == []
     stored = hass.config_entries.updates[0]["options"]["areas"]
-    assert stored == {"drink": False, "bp": True, "wellbeing": True}
+    assert stored == {"drink": False, "bp": True, "wellbeing": True, "labs": True}
     assert connection.results[0][1]["areas"] == {
         "drink": False,
         "bp": True,
         "wellbeing": True,
+        "labs": True,
     }
 
 
@@ -3221,7 +3224,7 @@ def test_m2a_panel_data_keeps_contract_keys_with_voided_entries(monkeypatch):
         "entities",
     }
     assert payload["goal_ml"] == 2000
-    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
     assert payload["today"]["percent"] == 15.0
 
 
@@ -3874,5 +3877,5 @@ def test_set_settings_partial_areas_keeps_disabled_keys():
 
     assert connection.errors == []
     stored = hass.config_entries.updates[0]["options"]["areas"]
-    assert stored == {"drink": False, "bp": True, "wellbeing": False}
+    assert stored == {"drink": False, "bp": True, "wellbeing": False, "labs": True}
     assert connection.results[0][1]["areas"] == stored

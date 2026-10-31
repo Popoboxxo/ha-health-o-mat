@@ -35,7 +35,7 @@ def _load(name: str):
 
 areas = _load("areas")
 
-ALL_ON = {"drink": True, "bp": True, "wellbeing": True}
+ALL_ON = {"drink": True, "bp": True, "wellbeing": True, "labs": True}
 
 
 def test_constants():
@@ -43,7 +43,8 @@ def test_constants():
     assert areas.AREA_DRINK == "drink"
     assert areas.AREA_BP == "bp"
     assert areas.AREA_WELLBEING == "wellbeing"
-    assert areas.AREAS == ("drink", "bp", "wellbeing")
+    assert areas.AREA_LABS == "labs"
+    assert areas.AREAS == ("drink", "bp", "wellbeing", "labs")
     assert areas.OPTION_AREAS == "areas"
     assert areas.DEFAULT_AREAS == ALL_ON
 
@@ -72,20 +73,21 @@ def test_active_areas_explicit_drink_false_keeps_others_true():
         "drink": False,
         "bp": True,
         "wellbeing": True,
+        "labs": True,
     }
 
 
 def test_active_areas_missing_sub_key_stays_true():
     """[REQ-HOM-009] Fehlender Unter-Schlüssel bedeutet aktiv, nicht inaktiv."""
     result = areas.active_areas({"areas": {"bp": False}})
-    assert result == {"drink": True, "bp": False, "wellbeing": True}
+    assert result == {"drink": True, "bp": False, "wellbeing": True, "labs": True}
     assert result["wellbeing"] is True
 
 
 def test_active_areas_unknown_keys_ignored():
     """Unbekannte Schlüssel werden weder übernommen noch als Fehler gewertet."""
     result = areas.active_areas({"areas": {"drink": False, "bogus": True, "x": False}})
-    assert set(result) == {"drink", "bp", "wellbeing"}
+    assert set(result) == {"drink", "bp", "wellbeing", "labs"}
     assert result["drink"] is False
     assert "bogus" not in result
 
@@ -118,3 +120,23 @@ def test_areas_equal_normalizes():
     assert areas.areas_equal({"drink": False}, {"drink": False}) is True
     assert areas.areas_equal({"drink": False}, {"drink": True}) is False
     assert areas.areas_equal({"drink": True}, {}) is True
+
+
+def test_req_hom_122_lab_area_defaults_active():
+    from custom_components.health_o_mat import areas
+
+    assert areas.active_areas(None)[areas.AREA_LABS] is True
+
+
+def test_req_hom_122_lab_area_can_be_disabled():
+    from custom_components.health_o_mat import areas
+
+    assert areas.active_areas({"areas": {"labs": False}})[areas.AREA_LABS] is False
+
+
+def test_req_hom_122_lab_area_missing_subkey_stays_active():
+    from custom_components.health_o_mat import areas
+
+    # Existing options written before this feature never mention "labs" —
+    # a missing sub-key must mean "active" (REQ-HOM-009 migration semantics).
+    assert areas.active_areas({"areas": {"drink": False}})[areas.AREA_LABS] is True

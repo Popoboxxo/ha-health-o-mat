@@ -44,6 +44,7 @@
           "area_drink": "Track drinking",
           "area_bp": "Track blood pressure",
           "area_wellbeing": "Track wellbeing",
+          "area_labs": "Track lab values",
           "skip": "Skip this section"
         }
       },
@@ -466,6 +467,38 @@
         "person": {
           "name": "Person",
           "description": "Person name (empty = every configured person gets their own report)."
+        }
+      }
+    },
+    "add_lab_value": {
+      "name": "Record lab value",
+      "description": "Stores a lab value (catalog or custom marker) for a person.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stable marker key (e.g. alt, creatinine, crp) or a custom marker key from the admin panel. German lab synonyms (gpt, got, gamma_gt) are resolved automatically."
+        },
+        "unit": {
+          "name": "Unit",
+          "description": "Unit of the value (optional, defaults to the marker's canonical unit). Required for markers with a known mix-up risk (e.g. the urine protein/creatinine ratio)."
+        },
+        "ts": {
+          "name": "Timestamp",
+          "description": "Time of the entry (ISO 8601, e.g. 2026-10-24T18:30 or with offset). Empty = now. At most 5 minutes in the future, not before 1900."
+        },
+        "report_ref": {
+          "name": "Report reference",
+          "description": "Optional link or external ID of the lab report (max 500 characters). Reference only, Health-O-Mat never fetches the URL itself."
+        }
+      }
+    },
+    "remove_last_lab_value": {
+      "name": "Remove last lab value",
+      "description": "Removes the last active lab value of a given marker (undo). The entry is marked deleted and stays restorable.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stable marker key whose last value is removed."
         }
       }
     }

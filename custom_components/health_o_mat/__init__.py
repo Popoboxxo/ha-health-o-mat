@@ -20,6 +20,8 @@ from .const import (
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    LAB_REPORT_REF_MAX_LEN,
+    OPTION_LAB_CUSTOM_MARKERS,
     OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
@@ -71,6 +73,8 @@ _SERVICE_NAMES = (
     "restore_backup",
     "set_wellbeing",
     "weekly_report",
+    "add_lab_value",
+    "remove_last_lab_value",
 )
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
@@ -504,6 +508,15 @@ def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+def _entry_options(hass: HomeAssistant, entry_id: str) -> dict:
+    """`entry.options` eines Entries (leeres Dict bei unbekannter ID)."""
+    try:
+        entry = hass.config_entries.async_get_entry(entry_id)
+    except Exception:  # noqa: BLE001 - Options-Lesen ist nie service-kritisch
+        entry = None
+    return dict(getattr(entry, "options", None) or {})
+
+
 def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
     """Optionales Service-Feld `ts` validieren (REQ-HOM-120).
 
@@ -630,6 +643,49 @@ def _register_services(hass: HomeAssistant) -> None:
         )
         signal_refresh(hass, entry_id)
 
+    async def add_lab_value(call: ServiceCall) -> None:
+        """Laborwert erfassen (Katalog- oder Custom-Marker, REQ-HOM-122).
+
+        Der Wert wird in die kanonische Einheit umgerechnet; der gedruckte
+        Befundwert bleibt als `reported_*` erhalten. Unbekannte Marker/Einheiten
+        sind ein `ServiceValidationError` — es wird NIE stillschweigend
+        uminterpretiert oder ein Custom-Marker automatisch angelegt.
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        options = _entry_options(hass, entry_id)
+        resolved = logic.resolve_lab_marker(
+            call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
+        )
+        if resolved is None:
+            raise ServiceValidationError("unknown_marker")
+        marker_key, marker_def = resolved
+        raw_unit = call.data.get("unit")
+        if raw_unit is None and marker_def.get("require_explicit_unit"):
+            raise ServiceValidationError("unit_required")
+        value = float(call.data["value"])
+        try:
+            canonical_value, canonical_unit = logic.convert_lab_value(marker_def, value, raw_unit)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        await store.add_lab_reading(
+            entry_id,
+            ts_iso,
+            marker_key,
+            canonical_value,
+            canonical_unit,
+            value,
+            raw_unit or canonical_unit,
+            report_ref=report_ref,
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        signal_refresh(hass, entry_id)
+
     async def set_wellbeing(call: ServiceCall) -> None:
         """Wohlbefinden melden — per Status-Key ODER numerischem Score (1..N)."""
         entry_id, _info = get_runtime_data(hass, call)
@@ -679,6 +735,34 @@ def _register_services(hass: HomeAssistant) -> None:
         )
         if not removed:
             raise ServiceValidationError(f"Keine {_KIND_LABELS[kind]} zum Entfernen")
+        signal_refresh(hass, entry_id)
+
+    async def remove_last_lab_value(call: ServiceCall) -> None:
+        """Letzten aktiven Laborwert EINES Markers voiden (Undo, §5.2).
+
+        Bewusst marker-spezifisch: Laborwerte kommen befundweise, ein globales
+        "letzter Eintrag" wäre mehrdeutig. `remove_last_lab_reading` voidet
+        (kein Pop) und liefert `False`, wenn kein aktiver Wert existiert.
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        options = _entry_options(hass, entry_id)
+        resolved = logic.resolve_lab_marker(
+            call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
+        )
+        if resolved is None:
+            raise ServiceValidationError("unknown_marker")
+        marker_key, _marker_def = resolved
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        changed = await store.remove_last_lab_reading(
+            entry_id,
+            marker_key,
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        if not changed:
+            raise ServiceValidationError(
+                f"Kein aktiver Wert für Marker '{marker_key}' zum Entfernen"
+            )
         signal_refresh(hass, entry_id)
 
     async def void_entry(call: ServiceCall) -> None:
@@ -813,6 +897,21 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        "add_lab_value",
+        schema=vol.Schema(
+            {
+                vol.Required("marker"): str,
+                vol.Required("value"): vol.Coerce(float),
+                vol.Optional("unit"): str,
+                vol.Optional("person"): str,
+                vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+            }
+        ),
+        service_func=add_lab_value,
+    )
+    hass.services.async_register(
+        DOMAIN,
         "set_wellbeing",
         schema=vol.Schema(
             {
@@ -836,6 +935,17 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=remove_last_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "remove_last_lab_value",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("marker"): str,
+            }
+        ),
+        service_func=remove_last_lab_value,
     )
     hass.services.async_register(
         DOMAIN,
