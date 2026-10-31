@@ -623,6 +623,10 @@ export const PANEL_CSS = `
   .restore-result li { overflow-wrap: anywhere; }
 
   /* --- Laborwerte (REQ-HOM-122) ------------------------------------------ */
+  .labs-disclaimer {
+    padding: 8px 10px; border-radius: 8px; font-size: .9rem; margin-bottom: 8px;
+    background: var(--warning-color, #ff9800); color: #fff;
+  }
   .lab-category-bar { display: flex; align-items: center; gap: 6px;
     overflow-x: auto; padding: 2px 0; scrollbar-width: thin; }
   .lab-category-bar .btn { flex: none; min-width: 44px; min-height: 44px;

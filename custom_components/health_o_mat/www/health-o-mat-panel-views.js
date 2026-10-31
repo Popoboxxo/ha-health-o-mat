@@ -879,6 +879,18 @@ function _labWarningCount(data) {
   ).length;
 }
 
+/* Kontextbezogener Medizin-Hinweis (§8, REQ-HOM-125). Zustand kommt
+ * ausschließlich aus `panel_data` — `get_settings` ist admin-only und wäre für
+ * Nicht-Admins leer. Fehlendes Feld = sichtbar. */
+function labDisclaimerHtml() {
+  return `<div class="labs-disclaimer" role="note">${escapeHtml(
+    t(
+      "ui_panel_lab_disclaimer",
+      "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen."
+    )
+  )}</div>`;
+}
+
 /* Kategorien, die im Tab erscheinen: nicht ausgeblendet UND mit mindestens
  * einem Marker (Katalog oder Custom) — sonst entstuende eine leere Leiste. */
 function visibleLabCategories(labs) {
@@ -1467,11 +1479,16 @@ export function labsTab(panel, data, entryId) {
   ensureLabGestures(panel);
   const labs = (data && data.labs) || { categories: [], markers: {} };
   const categories = visibleLabCategories(labs);
+  const disclaimer =
+    data && data.lab_hide_panel_disclaimer === true ? "" : labDisclaimerHtml();
   if (!categories.length) {
-    return messageHtml(
-      t("ui_panel_lab_no_categories", "Keine Laborwert-Kategorie sichtbar."),
-      false
-    );
+    // "Alle ausgeblendet" ist ein Zustand der Einstellungen, "keine
+    // Kategorien" ein Zustand des Katalogs — der Text unterscheidet das (§8).
+    const allHidden = Array.isArray(labs.categories) && labs.categories.length > 0;
+    const emptyText = allHidden
+      ? t("ui_panel_lab_all_hidden", "Alle Kategorien ausgeblendet")
+      : t("ui_panel_lab_no_categories", "Keine Laborwert-Kategorie sichtbar.");
+    return `${disclaimer}${messageHtml(emptyText, false)}`;
   }
   let active = panel._labCategory;
   if (!categories.some((category) => category.key === active)) {
@@ -1514,7 +1531,7 @@ export function labsTab(panel, data, entryId) {
     </details>`;
   const reportForm = labReportForm(panel, labs, entryId);
 
-  return `${labCategoryBar(labs, active)}${labReportDiscardHtml(
+  return `${disclaimer}${labCategoryBar(labs, active)}${labReportDiscardHtml(
     panel,
     labs,
     entryId

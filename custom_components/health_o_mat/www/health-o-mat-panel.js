@@ -1157,6 +1157,12 @@ class HealthOMatPanel extends HTMLElement {
       })
       .map((category) => category.key);
 
+    // Missing box (section not rendered) = disclaimer stays visible.
+    const hideDisclaimerEl = this.shadowRoot.querySelector(
+      '[data-field="lab-hide-panel-disclaimer"]'
+    );
+    const labHidePanelDisclaimer = !!(hideDisclaimerEl && hideDisclaimerEl.checked);
+
     const labCustomMarkers = (
       this._labCustomDraft[this._settingsEntry] ||
       labSettings.lab_custom_markers ||
@@ -1182,6 +1188,7 @@ class HealthOMatPanel extends HTMLElement {
         lab_ref_overrides: labRefOverrides,
         lab_hidden_categories: labHiddenCategories,
         lab_custom_markers: labCustomMarkers,
+        lab_hide_panel_disclaimer: labHidePanelDisclaimer,
       },
     };
   }
@@ -1247,6 +1254,9 @@ class HealthOMatPanel extends HTMLElement {
     }
     if (stableJson(current.lab_custom_markers) !== stableJson(payload.lab_custom_markers)) {
       out.lab_custom_markers = payload.lab_custom_markers;
+    }
+    if (!!current.lab_hide_panel_disclaimer !== payload.lab_hide_panel_disclaimer) {
+      out.lab_hide_panel_disclaimer = payload.lab_hide_panel_disclaimer;
     }
     return out;
   }

@@ -16,6 +16,7 @@ Absichtlich tolerant gegenüber Formatierung: es wird nur der Dateitext gelesen.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -2505,3 +2506,132 @@ def test_req_hom_128_labs_card_discard_confirmation_and_payload(tmp_path):
         "ts": "2026-10-30T09:15:00+01:00",
         "report_ref": "Labor A",
     }
+
+
+# --- REQ-HOM-125: Karten-Disclaimer lokalisiert -----------------------------
+
+
+def test_req_hom_125_labs_card_disclaimer_uses_localized_text():
+    source = _labs_card_source()
+
+    assert "ui_card_lab_disclaimer" in source
+    assert "CARD_TEXT" in source
+    assert "cardText(" in source
+    assert "setCardLanguage" in source
+
+
+_NODE_LABS_DISCLAIMER_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+function render(language) {
+  const card = new CardClass();
+  card._config = {
+    entry_id: "entry-1",
+    person_mode: "fixed",
+    show_disclaimer: true,
+    allow_manual_entry: false,
+    show_trend: false,
+  };
+  card._normalized = null;
+  card._data = {
+    person: "Alex",
+    labs: {
+      categories: [{ key: "liver", name: "Leber", hidden: false }],
+      markers: {
+        alt: {
+          category: "liver", name: "ALT", name_de: "ALT", name_en: "ALT",
+          unit: "U/L", value: null, history: [],
+        },
+      },
+    },
+  };
+  card.hass = { language };
+  card._render();
+  return card.shadowRoot.innerHTML;
+}
+process.stdout.write(JSON.stringify({ de: render("de"), en: render("en-US") }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_125_labs_card_disclaimer_follows_card_language(tmp_path):
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_DISCLAIMER_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_disclaimer_i18n",
+        )
+    )
+
+    assert "keine medizinische Beratung" in out["de"]
+    assert "Hinweis" in out["de"]
+    assert "not medical advice" in out["en"]
+    assert "Hinweis" not in out["en"]
+
+
+_COMPONENT_DIR = Path(_REPO_ROOT) / "custom_components" / "health_o_mat"
+
+
+def _common_strings(filename: str) -> dict:
+    path = (
+        _COMPONENT_DIR / "strings.json"
+        if filename == "strings.json"
+        else _COMPONENT_DIR / "translations" / filename
+    )
+    return json.loads(path.read_text(encoding="utf-8"))["common"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_125_labs_card_disclaimer_matches_translation_files(tmp_path):
+    """[REQ-HOM-125] Karte und Übersetzungsdateien tragen denselben Wortlaut."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_DISCLAIMER_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_disclaimer_parity",
+        )
+    )
+    pattern = r'<div class="labs-disclaimer" role="note">(.*?)</div>'
+    rendered = {
+        "de": html.unescape(re.search(pattern, out["de"], re.S).group(1)),
+        "en": html.unescape(re.search(pattern, out["en"], re.S).group(1)),
+    }
+
+    for filename, language in (
+        ("strings.json", "en"),
+        ("de.json", "de"),
+        ("en.json", "en"),
+    ):
+        expected = _common_strings(filename)["ui_card_lab_disclaimer"]
+        assert rendered[language] == expected, f"{filename}: Wortlaut weicht ab"

@@ -3730,3 +3730,143 @@ def test_req_hom_128_panel_discard_sends_ts_and_optional_ref():
     assert "report_ref" in body
     assert "WS.removeLabReport" in body
     assert "resultError(result)" in body
+
+
+# --- REQ-HOM-125: Panel-Disclaimer + Admin-Schalter -------------------------
+
+
+def test_req_hom_125_panel_labs_tab_renders_disclaimer_before_empty_state():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "labsTab")
+    disclaimer = _js_function_block(views, "labDisclaimerHtml")
+
+    assert "ui_panel_lab_disclaimer" in disclaimer
+    assert "labs-disclaimer" in disclaimer
+    assert 'role="note"' in disclaimer
+    assert "lab_hide_panel_disclaimer" in body
+    assert "labDisclaimerHtml()" in body
+    assert body.index("labDisclaimerHtml()") < body.index("labCategoryBar")
+
+
+def test_req_hom_125_panel_empty_state_distinguishes_all_hidden():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "labsTab")
+
+    assert "ui_panel_lab_all_hidden" in body
+    assert "ui_panel_lab_no_categories" in body
+
+
+def test_req_hom_125_panel_lab_tab_never_reads_admin_settings():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "labsTab")
+
+    for forbidden in ("_settings", "isAdmin", "is_admin", "getSettings"):
+        assert forbidden not in body, f"Lab-Tab darf {forbidden} nicht lesen (§8)"
+
+
+def test_req_hom_125_panel_css_defines_labs_disclaimer():
+    source = _panel_base_source()
+    match = re.search(r"export const PANEL_CSS = `(.*?)`;", source, re.S)
+    assert match is not None
+    assert ".labs-disclaimer" in match.group(1)
+    assert "--warning-color" in match.group(1)
+
+
+def test_req_hom_125_admin_has_disclaimer_checkbox_and_entry_collects_it():
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert 'data-field="lab-hide-panel-disclaimer"' in admin
+    assert 't("ui_admin_lab_hide_disclaimer"' in admin
+    assert "lab-hide-panel-disclaimer" in entry
+    assert "lab_hide_panel_disclaimer" in entry
+
+
+# --- REQ-HOM-124: Admin-Umrechnungsspalte -----------------------------------
+
+
+_NODE_ADMIN_CONVERSION_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const admin = await import(pathToFileURL(process.argv[3]).href);
+const settings = {
+  lab_catalog: {
+    categories: [{ key: "kidney", name: "Niere", name_de: "Niere", name_en: "Kidney" }],
+    markers: {
+      creatinine: {
+        category: "kidney", name_de: "Kreatinin", name_en: "Creatinine",
+        canonical_unit: "µmol/L", alt_units: { "mg/dL": 88.4 },
+        require_explicit_unit: false, ref_min: 53, ref_max: 106,
+      },
+      egfr: {
+        category: "kidney", name_de: "eGFR", name_en: "eGFR",
+        canonical_unit: "mL/min/1.73m²", alt_units: {},
+        require_explicit_unit: false, ref_min: 90, ref_max: null,
+      },
+      urine_protein_creatinine_ratio: {
+        category: "kidney",
+        name_de: "Protein/Kreatinin-Quotient (Urin)",
+        name_en: "Urine protein/creatinine ratio",
+        canonical_unit: "mg/g", alt_units: { "g/g": 1000 },
+        require_explicit_unit: true, ref_min: null, ref_max: 15,
+      },
+    },
+  },
+};
+const out = {};
+for (const language of ["de", "en"]) {
+  base.setUiLanguage(language);
+  out[language] = admin.labSettingsSection({}, settings, "entry-1");
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _render_admin_with_node(tmp_path) -> dict:
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+    (tmp_path / "health-o-mat-panel-base.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    # Cache-Buster-Query entfernen (Node-ESM-Kopien, vgl. `_prepare_views_copy`):
+    # sonst laedt Node das Basis-Modul ein ZWEITES Mal (eigener Modul-Instanz)
+    # und `setUiLanguage()` aus dem Runner wirkt nicht auf den Admin-Render.
+    admin_source = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    patched, count = re.subn(
+        r'"\./health-o-mat-panel-base\.js\?v=[^"]+"',
+        '"./health-o-mat-panel-base.js"',
+        admin_source,
+    )
+    assert count == 1, "der Import-Specifier des Basis-Moduls wurde nicht gefunden"
+    admin_path = tmp_path / "health-o-mat-panel-admin.js"
+    admin_path.write_text(patched, encoding="utf-8")
+    out = _run_node(
+        tmp_path,
+        _NODE_ADMIN_CONVERSION_RUNNER,
+        [str(tmp_path / "health-o-mat-panel-base.js"), str(admin_path)],
+        "runner_admin_conversion",
+    )
+    return json.loads(out)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_124_admin_conversion_column_is_locale_aware(tmp_path):
+    rendered = _render_admin_with_node(tmp_path)
+
+    assert "mg/dL × 88,4 → µmol/L" in rendered["de"]
+    assert "mg/dL × 88.4 → µmol/L" in rendered["en"]
+    assert "g/g × 1.000 → mg/g" in rendered["de"]
+    assert "—" in rendered["de"]
+    assert "Einheit Pflicht" in rendered["de"]
+
+
+def test_req_hom_124_admin_conversion_uses_format_number():
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    body = _js_function_block(admin, "labSettingsSection")
+    imports = admin.split('} from "./health-o-mat-panel-base.js', 1)[0]
+
+    assert "formatNumber(factor)" in body
+    assert "ui_admin_lab_conversion" in body
+    assert "ui_admin_lab_conversion_required" in body
+    assert "ui_admin_lab_conversion_none" in body
+    assert "toFixed(" not in body
+    assert "formatNumber" in imports

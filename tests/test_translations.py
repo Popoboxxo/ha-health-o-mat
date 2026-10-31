@@ -513,6 +513,10 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_admin_lab_category",
     "ui_admin_lab_marker",
     "ui_admin_lab_unit",
+    # REQ-HOM-124: Admin-Umrechnungsspalte (Task 15).
+    "ui_admin_lab_conversion",
+    "ui_admin_lab_conversion_required",
+    "ui_admin_lab_conversion_none",
     "ui_admin_lab_range",
     "ui_admin_lab_reset",
     "ui_admin_lab_hide_title",
@@ -532,6 +536,10 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_lab_prev",
     "ui_panel_lab_next",
     "ui_panel_lab_no_categories",
+    # REQ-HOM-125: Panel-Disclaimer + Admin-Schalter (Task 14).
+    "ui_panel_lab_disclaimer",
+    "ui_panel_lab_all_hidden",
+    "ui_admin_lab_hide_disclaimer",
     "ui_panel_lab_add_value",
     "ui_panel_lab_marker",
     "ui_panel_lab_value_field",
@@ -556,6 +564,8 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_lab_unit_custom",
     "ui_panel_lab_report_discard",
     "ui_panel_lab_report_discard_confirm",
+    # REQ-HOM-125: Karten-Disclaimer lokalisiert (Task 16).
+    "ui_card_lab_disclaimer",
 )
 
 

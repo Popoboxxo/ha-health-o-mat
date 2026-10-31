@@ -89,6 +89,25 @@ function labDisplayName(item, fallback) {
   return fallback == null ? "" : String(fallback);
 }
 
+/* Kartenlokale Übersetzungen: die Karte lädt keine HA-Ressourcen, braucht aber
+ * den Disclaimer sprachabhängig. Die Keys sind identisch zu `common` in
+ * strings.json; ein Test pinnt die Gleichheit der Texte. */
+const CARD_TEXT = {
+  de: {
+    ui_card_lab_disclaimer:
+      "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
+  },
+  en: {
+    ui_card_lab_disclaimer:
+      "⚠️ Note: not medical advice — reference values, not a diagnosis. Adjust reference ranges in the settings.",
+  },
+};
+
+function cardText(key) {
+  const language = _language === "en" ? "en" : "de";
+  return (CARD_TEXT[language] && CARD_TEXT[language][key]) || CARD_TEXT.de[key] || "";
+}
+
 /* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
 function labBadge(inRange) {
   if (inRange === true) return `<span class="status good" aria-hidden="true">✓</span>`;
@@ -1265,7 +1284,9 @@ class HealthOMatLabsCard extends HTMLElement {
     if (!this.shadowRoot || !this._config) return;
     const cfg = this._configNorm();
     const disclaimer = cfg.showDisclaimer
-      ? `<div class="labs-disclaimer" role="note">⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.</div>`
+      ? `<div class="labs-disclaimer" role="note">${escapeHtml(
+          cardText("ui_card_lab_disclaimer")
+        )}</div>`
       : "";
     const errorBanner = this._error
       ? `<div class="labs-error" role="alert">⚠️ ${escapeHtml(this._error)}</div>`
