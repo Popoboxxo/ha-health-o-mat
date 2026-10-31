@@ -34,11 +34,16 @@ from .const import (
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
     DRINK_LEXICON,
+    LAB_CATEGORIES,
+    LAB_MARKERS,
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_REF_OVERRIDES,
     OPTION_WELLBEING_CONFIRM,
     WELLBEING_IMAGES_OPTION,
     WELLBEING_STATES,
@@ -194,6 +199,9 @@ SETTINGS_KEYS: tuple[str, ...] = (
     OPTION_ENABLE_SIDEBAR_PANEL,
     OPTION_AREAS,
     AUDIT_LIMIT_OPTION,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_REF_OVERRIDES,
+    OPTION_LAB_HIDDEN_CATEGORIES,
 )
 
 # Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
@@ -291,6 +299,15 @@ SETTINGS_SCHEMA = vol.Schema(
         vol.Optional(AUDIT_LIMIT_OPTION): vol.All(
             _strict_int, vol.Range(min=0, max=MAX_AUDIT_LIMIT)
         ),
+        # Laborwerte-Einstellungen (REQ-HOM-122): Vertrag der Container-Typen.
+        # Die konkreten Felder werden in `parse_settings_message` VOR dem
+        # Schema-Lauf abgefangen und über `logic.normalize_lab_*` normalisiert
+        # (unbekannte Marker/Kategorien fallen weg) — gleiches Muster wie bei
+        # `wellbeing_images`; diese Einträge halten die Typen an einer Stelle
+        # sichtbar und greifen, falls ein Feld doch bis zum Schema durchläuft.
+        vol.Optional(OPTION_LAB_CUSTOM_MARKERS): list,
+        vol.Optional(OPTION_LAB_REF_OVERRIDES): dict,
+        vol.Optional(OPTION_LAB_HIDDEN_CATEGORIES): list,
     }
 )
 
@@ -1417,6 +1434,20 @@ def build_settings(entry: Any) -> dict[str, Any]:
         # Audit-Cap: ungültige/negative Werte fallen auf den Default zurück,
         # 0 bleibt "unbegrenzt" (logic.audit_limit_from_options).
         AUDIT_LIMIT_OPTION: logic.audit_limit_from_options(options),
+        OPTION_LAB_CUSTOM_MARKERS: logic.normalize_lab_custom_markers(
+            options.get(OPTION_LAB_CUSTOM_MARKERS)
+        ),
+        OPTION_LAB_REF_OVERRIDES: logic.normalize_lab_ref_overrides(
+            options.get(OPTION_LAB_REF_OVERRIDES)
+        ),
+        OPTION_LAB_HIDDEN_CATEGORIES: logic.normalize_lab_hidden_categories(
+            options.get(OPTION_LAB_HIDDEN_CATEGORIES)
+        ),
+        # Read-only Referenzdaten aus const.py — die Admin-Maske baut daraus die
+        # Referenzbereich-Tabelle auf, ohne einen zweiten WS-Request. Kein
+        # Options-Schlüssel, wird von `set_settings` ignoriert (nicht in
+        # SETTINGS_KEYS) und nie zurückgeschrieben.
+        "lab_catalog": {"categories": LAB_CATEGORIES, "markers": LAB_MARKERS},
     }
 
 
@@ -1454,6 +1485,36 @@ def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str 
             updates["drink_lexicon"] = parser.parse_lexicon_text(raw_text)
         except ValueError as err:
             return {}, f"Getränke-Lexikon: {err}"
+
+    if OPTION_LAB_CUSTOM_MARKERS in raw:
+        raw_markers = raw.pop(OPTION_LAB_CUSTOM_MARKERS)
+        if not isinstance(raw_markers, list):
+            return {}, (
+                f"Ungültige Einstellung '{OPTION_LAB_CUSTOM_MARKERS}': erwartet eine Liste, "
+                f"erhalten {type(raw_markers).__name__}"
+            )
+        # Normalisierung statt Durchreichen: brauchbare Einträge bekommen einen
+        # stabilen `key` (Slug), unbrauchbare (ohne name/unit) fallen weg.
+        updates[OPTION_LAB_CUSTOM_MARKERS] = logic.normalize_lab_custom_markers(raw_markers)
+
+    if OPTION_LAB_REF_OVERRIDES in raw:
+        raw_overrides = raw.pop(OPTION_LAB_REF_OVERRIDES)
+        if not isinstance(raw_overrides, dict):
+            return {}, (
+                f"Ungültige Einstellung '{OPTION_LAB_REF_OVERRIDES}': erwartet ein Objekt, "
+                f"erhalten {type(raw_overrides).__name__}"
+            )
+        # Nur bekannte Katalog-Marker mit numerischen Grenzen bleiben erhalten.
+        updates[OPTION_LAB_REF_OVERRIDES] = logic.normalize_lab_ref_overrides(raw_overrides)
+
+    if OPTION_LAB_HIDDEN_CATEGORIES in raw:
+        raw_hidden = raw.pop(OPTION_LAB_HIDDEN_CATEGORIES)
+        if not isinstance(raw_hidden, list):
+            return {}, (
+                f"Ungültige Einstellung '{OPTION_LAB_HIDDEN_CATEGORIES}': erwartet eine Liste, "
+                f"erhalten {type(raw_hidden).__name__}"
+            )
+        updates[OPTION_LAB_HIDDEN_CATEGORIES] = logic.normalize_lab_hidden_categories(raw_hidden)
 
     try:
         updates.update(SETTINGS_SCHEMA(raw))

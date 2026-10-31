@@ -43,6 +43,9 @@ def _load(name: str):
 
 
 ws_api = _load("ws_api")
+# `ws_api` importiert `const` bereits beim Laden — dasselbe Modul-Objekt
+# weiterverwenden statt neu zu laden (sonst zwei Katalog-Objekte).
+const = sys.modules[f"{_PKG}.const"]
 
 DOMAIN = "health_o_mat"
 NOW = datetime(2026, 10, 15, 12, 0)
@@ -1833,6 +1836,14 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "wellbeing_confirm": False,
                 "audit_limit": 1000,
                 "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
+                # REQ-HOM-122: additive Lab-Felder + read-only Katalog.
+                "lab_custom_markers": [],
+                "lab_ref_overrides": {},
+                "lab_hidden_categories": [],
+                "lab_catalog": {
+                    "categories": const.LAB_CATEGORIES,
+                    "markers": const.LAB_MARKERS,
+                },
             },
         )
     ]
@@ -2052,6 +2063,11 @@ def test_set_settings_persists_via_async_update_entry_and_fires_listener():
         "drink_lexicon",
         "wellbeing_images",
         "areas",
+        # REQ-HOM-122: additive Lab-Felder + read-only Katalog.
+        "lab_custom_markers",
+        "lab_ref_overrides",
+        "lab_hidden_categories",
+        "lab_catalog",
     }
 
 
@@ -3879,3 +3895,97 @@ def test_set_settings_partial_areas_keeps_disabled_keys():
     stored = hass.config_entries.updates[0]["options"]["areas"]
     assert stored == {"drink": False, "bp": True, "wellbeing": False, "labs": True}
     assert connection.results[0][1]["areas"] == stored
+
+
+# --- REQ-HOM-122: Laborwerte-Einstellungen (Task 13) ------------------------
+
+
+def test_req_hom_122_build_settings_includes_lab_catalog():
+    """`get_settings` liefert den Referenzkatalog read-only mit (kein 2. Request)."""
+    entry = _entry("e1", person="caro")
+
+    settings = ws_api.build_settings(entry)
+
+    assert settings["lab_catalog"]["categories"] == const.LAB_CATEGORIES
+    assert "alt" in settings["lab_catalog"]["markers"]
+    assert settings["lab_custom_markers"] == []
+    assert settings["lab_ref_overrides"] == {}
+    assert settings["lab_hidden_categories"] == []
+
+
+def test_req_hom_122_build_settings_returns_normalized_overrides():
+    """Verwaiste/ungültige Overrides erscheinen nicht in der Antwort."""
+    entry = _entry(
+        "e1",
+        options={"lab_ref_overrides": {"alt": {"ref_min": 5}, "not_a_marker": {"ref_min": 1}}},
+    )
+
+    settings = ws_api.build_settings(entry)
+
+    assert settings["lab_ref_overrides"] == {"alt": {"ref_min": 5}}
+
+
+def test_req_hom_122_parse_settings_message_normalizes_custom_markers():
+    msg = {
+        "lab_custom_markers": [
+            {"name": "Vitamin D", "category": "other", "unit": "ng/mL"},
+        ]
+    }
+
+    updates, error = ws_api.parse_settings_message(msg)
+
+    assert error is None
+    assert updates["lab_custom_markers"][0]["key"] == "vitamin_d"
+
+
+def test_req_hom_122_parse_settings_message_normalizes_hidden_categories():
+    updates, error = ws_api.parse_settings_message(
+        {"lab_hidden_categories": ["thyroid", "not_a_category"]}
+    )
+
+    assert error is None
+    assert updates["lab_hidden_categories"] == ["thyroid"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"lab_custom_markers": "nope"},
+        {"lab_ref_overrides": "nope"},
+        {"lab_hidden_categories": "nope"},
+    ],
+)
+def test_req_hom_122_parse_settings_message_rejects_wrong_container_types(payload):
+    """Falscher Containertyp → Fehlermeldung im bestehenden `Ungültige Einstellung`-Stil."""
+    updates, error = ws_api.parse_settings_message(payload)
+
+    assert updates == {}
+    assert error is not None
+    assert error.startswith("Ungültige Einstellung '")
+
+
+def test_req_hom_122_set_settings_persists_normalized_lab_settings():
+    """`set_settings` schreibt die normalisierten Lab-Optionen über den Options-Pfad."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                lab_ref_overrides={"alt": {"ref_max": 40}, "bogus": {"ref_max": 1}},
+                lab_hidden_categories=["liver", "bogus"],
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]
+    assert stored["lab_ref_overrides"] == {"alt": {"ref_max": 40}}
+    assert stored["lab_hidden_categories"] == ["liver"]
+    assert "daily_goal_ml" in stored
+    assert connection.results[0][1]["lab_ref_overrides"] == {"alt": {"ref_max": 40}}
