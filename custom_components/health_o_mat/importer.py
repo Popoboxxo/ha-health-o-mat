@@ -63,6 +63,22 @@ _BP_HINTS = {
 # in fremden Getränke-/Blutdruck-Dateien auftauchen und würden `all` falsch
 # routen. Die eigene Laborwert-Kopfzeile ist über diese Keys eindeutig.
 _LAB_HINTS = {"marker", "kategorie", "berichts_referenz"}
+# Header-basierte Spaltenzuordnung für `lab_values.csv` (Reihenfolgen-tolerant).
+# Schlüssel = kanonischer Feldname, Werte = akzeptierte Kopfzellen. Ohne
+# brauchbare Kopfzeile (Altdatei) gilt weiterhin die Positions-Konvention aus
+# `exporter.py`: 0 zeitstempel … 8 berichts_referenz.
+_LAB_HEADER_ALIASES: dict[str, tuple[str, ...]] = {
+    "ts": ("zeitstempel", "timestamp", "datum", "date"),
+    "marker": ("marker",),
+    "value": ("wert", "value"),
+    "unit": ("einheit", "unit"),
+    "reported_value": ("eingegeben_als_wert", "reported_value"),
+    "reported_unit": ("eingegeben_als_einheit", "reported_unit"),
+    "report_ref": ("berichts_referenz", "report_ref"),
+    "voided_at": ("voided_at",),
+    "void_reason": ("void_reason",),
+}
+_LAB_REQUIRED_COLUMNS = frozenset({"ts", "marker", "value"})
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
 DATASETS = ("drinks", "blood_pressure", "lab_values")
@@ -227,10 +243,24 @@ def parse_csv_text(text: str) -> tuple[list[list[str]], str | None]:
     Toleriert UTF-8-BOM, ``#``-Kommentarzeilen, Leerzeilen und einen
     fehlenden bzw. abweichenden Header (Semikolon-getrennt).
     """
+    rows, kind, _header = _parse_csv_text(text)
+    return rows, kind
+
+
+def _parse_csv_text(
+    text: str,
+) -> tuple[list[list[str]], str | None, list[str] | None]:
+    """Wie :func:`parse_csv_text`, liefert zusätzlich die erkannte Kopfzeile.
+
+    Die Kopfzellen werden nur zurückgegeben, wenn eine Kopfzeile erkannt wurde;
+    sie erlauben die reihenfolgen-tolerante Spaltenzuordnung der Laborwerte
+    (``voided_at``/``void_reason``) ohne Positions-Annahmen.
+    """
     if text.startswith("\ufeff"):
         text = text[1:]
     rows: list[list[str]] = []
     kind: str | None = None
+    header: list[str] | None = None
     for raw in csv.reader(io.StringIO(text), delimiter=";"):
         cells = [c.strip() for c in raw]
         if not cells or all(c == "" for c in cells):
@@ -250,9 +280,10 @@ def parse_csv_text(text: str) -> tuple[list[list[str]], str | None]:
                     kind = "blood_pressure"
                 else:
                     kind = "drinks"
+                header = cells
             continue  # Kopfzeile
         rows.append(cells)
-    return rows, kind
+    return rows, kind, header
 
 
 def _to_int(raw: str) -> int:
@@ -313,36 +344,88 @@ def _parse_reading_row(cells: list[str]) -> dict | str:
     }
 
 
-def _parse_lab_row(cells: list[str]) -> dict | str:
+def _norm_header_cell(cell: str) -> str:
+    """Kopfzelle normalisieren: BOM-, Whitespace- und Groß-/Kleinschreibung-tolerant."""
+    return cell.strip().lstrip("\ufeff").strip().lower().replace(" ", "_")
+
+
+def _lab_column_map(header: list[str] | None) -> dict[str, int] | None:
+    """Kopfzeile → Spaltenindex je Laborwert-Feld (``None`` = Positions-Fallback).
+
+    Nur eine Kopfzeile, die alle Kernspalten (``ts``/``marker``/``value``)
+    benennt, gilt als brauchbar. Sonst bleibt es bei der bestehenden
+    Positions-Konvention (Index 0..8) — Altdateien ohne die neuen Spalten
+    importieren damit unverändert.
+    """
+    if not header:
+        return None
+    normalized = [_norm_header_cell(cell) for cell in header]
+    columns: dict[str, int] = {}
+    for field_name, aliases in _LAB_HEADER_ALIASES.items():
+        for index, cell in enumerate(normalized):
+            if cell in aliases:
+                columns[field_name] = index
+                break
+    if not _LAB_REQUIRED_COLUMNS <= columns.keys():
+        return None
+    return columns
+
+
+def _is_voided_lab_row(cells: list[str], columns: dict[str, int] | None) -> bool:
+    """True, wenn die Zeile eine gefüllte ``voided_at``-Spalte trägt.
+
+    Header-basiert: ohne erkannte ``voided_at``-Spalte (Altdatei) gibt es
+    keine voideten Zeilen — das Verhalten bleibt dort unverändert.
+    """
+    if columns is None:
+        return False
+    index = columns.get("voided_at")
+    if index is None or index >= len(cells):
+        return False
+    return bool(cells[index].strip())
+
+
+def _parse_lab_row(cells: list[str], columns: dict[str, int] | None = None) -> dict | str:
     """Laborwert-Zeile → Record-Dict (noch unaufgelöster `marker_raw`) oder Fehlermeldung.
 
     Spalten (siehe `exporter.py`): zeitstempel, person, marker, kategorie, wert,
-    einheit, eingegeben_als_wert, eingegeben_als_einheit, berichts_referenz.
-    Die Marker-Auflösung (Alias/Katalog/Custom) passiert erst in `plan_import`
-    — diese Funktion bleibt reine Zeilen-Validierung, analog zu
-    `_parse_drink_row`/`_parse_reading_row`.
+    einheit, eingegeben_als_wert, eingegeben_als_einheit, berichts_referenz,
+    voided_at, void_reason. ``columns`` ist die header-basierte Zuordnung aus
+    :func:`_lab_column_map`; fehlt sie (Altdatei ohne Kopfzeile), gilt die
+    Positions-Konvention 0..8. Die Marker-Auflösung (Alias/Katalog/Custom)
+    passiert erst in `plan_import` — diese Funktion bleibt reine
+    Zeilen-Validierung, analog zu `_parse_drink_row`/`_parse_reading_row`.
     """
     if len(cells) < 6:
         return f"Laborwert-Zeile mit zu wenigen Spalten: {';'.join(cells)}"
-    ts = _norm_ts(cells[0])
+
+    def cell(field_name: str, fallback: int) -> str:
+        index = columns.get(field_name) if columns is not None else None
+        if index is None:
+            index = fallback
+        return cells[index].strip() if 0 <= index < len(cells) else ""
+
+    ts = _norm_ts(cell("ts", 0))
     if ts is None:
-        return f"Ungültiger Zeitstempel: {cells[0]!r}"
-    marker_raw = cells[2].strip()
+        return f"Ungültiger Zeitstempel: {cell('ts', 0)!r}"
+    marker_raw = cell("marker", 2)
     if not marker_raw:
         return f"Laborwert-Zeile ohne Marker: {';'.join(cells)}"
+    raw_value = cell("value", 4)
     try:
-        value = float(cells[4].strip().replace(",", "."))
+        value = float(raw_value.replace(",", "."))
     except ValueError:
-        return f"Ungültiger Laborwert: {cells[4]!r}"
-    unit = cells[5].strip()
+        return f"Ungültiger Laborwert: {raw_value!r}"
+    unit = cell("unit", 5)
     reported_value = value
-    if len(cells) > 6 and cells[6].strip():
+    raw_reported = cell("reported_value", 6)
+    if raw_reported:
         try:
-            reported_value = float(cells[6].strip().replace(",", "."))
+            reported_value = float(raw_reported.replace(",", "."))
         except ValueError:
-            return f"Ungültiger eingegebener Wert: {cells[6]!r}"
-    reported_unit = cells[7].strip() if len(cells) > 7 and cells[7].strip() else unit
-    report_ref = cells[8].strip() if len(cells) > 8 and cells[8].strip() else None
+            return f"Ungültiger eingegebener Wert: {raw_reported!r}"
+    reported_unit = cell("reported_unit", 7) or unit
+    report_ref = cell("report_ref", 8) or None
     return {
         "ts": ts,
         "marker_raw": marker_raw,
@@ -426,6 +509,12 @@ def plan_import(
     innerhalb der Datei zählen als ``skipped``, unlesbare Zeilen, unbekannte
     Laborwert-Marker und nicht unterstützte Einheiten als ``rejected``.
 
+    Laborwerte: Zeilen mit gefüllter ``voided_at``-Spalte (Export enthält auch
+    voidete Werte) werden **übersprungen** und als ``skipped`` gezählt — das
+    gilt unabhängig vom Bestand, also auch für einen leeren Store (keine
+    Wiederbelebung gelöschter Werte). Erkannt wird die Spalte header-basiert;
+    Altdateien ohne die Spalte behalten die Positions-Konvention.
+
     Laborwerte werden nach der Marker-Auflösung über
     ``logic.convert_lab_value`` in den ``canonical_unit`` des Markers umgerechnet
     (Spec-Invariante: ``value``/``unit`` sind immer kanonisch). Die Rohwerte
@@ -433,16 +522,22 @@ def plan_import(
     Einheitsspalte bedeutet "keine Angabe" → kanonische Einheit (N-4); nur
     Marker mit ``require_explicit_unit`` lehnen sie ab.
     """
-    rows, header_kind = parse_csv_text(text)
+    rows, header_kind, header = _parse_csv_text(text)
     resolved = dataset
     if dataset == "all":
         resolved = header_kind or _detect_kind(rows)
 
     plan = ImportPlan()
     if resolved == "lab_values":
+        columns = _lab_column_map(header)
         seen_labs = _existing_lab_keys(existing_lab_readings or [])
         for cells in rows:
-            record = _parse_lab_row(cells)
+            # REQ-HOM-129: voidete Zeilen nie importieren (sonst würden sie in
+            # einem leeren Store als aktive Werte wiederauferstehen).
+            if _is_voided_lab_row(cells, columns):
+                plan.skipped += 1
+                continue
+            record = _parse_lab_row(cells, columns)
             if isinstance(record, str):
                 plan.rejected += 1
                 plan.errors.append(record)
@@ -544,8 +639,10 @@ async def async_import_csv(
 
     Die Duplikat-Erkennung arbeitet bewusst gegen die **rohen** Listen
     (aktive *und* voided Einträge): ein zuvor gelöschter Eintrag darf nicht
-    durch einen Re-Import stillschweigend wieder auferstehen. Importierte
-    Einträge werden über die Store-Pfade angelegt und sind damit aktiv.
+    durch einen Re-Import stillschweigend wieder auferstehen. Zusätzlich
+    überspringt ``plan_import`` Zeilen, die im Export ``voided_at`` tragen —
+    unabhängig davon, ob der Store sie kennt. Importierte Einträge werden über
+    die Store-Pfade angelegt und sind damit aktiv.
     """
     if store is None:
         raise ServiceValidationError("Health-O-Mat-Speicher nicht verfügbar")

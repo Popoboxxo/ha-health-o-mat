@@ -22,6 +22,8 @@ _LAB_VALUES_HEADER = [
     "eingegeben_als_wert",
     "eingegeben_als_einheit",
     "berichts_referenz",
+    "voided_at",
+    "void_reason",
 ]
 
 
@@ -57,8 +59,11 @@ async def async_export_csv(
     `archive_store` (Retention, REQ-HOM-109) wird — falls vorhanden — mit den
     aktuellen Daten zusammengeführt, damit der Export weiterhin die vollständige
     Historie enthält. Ohne Archiv (Default AUS) bleibt das Verhalten identisch.
-    Exportiert werden ausschließlich **aktive** Einträge: voided (gelöschte)
-    Buchungen/Messungen tauchen in keiner CSV auf (M2a).
+    Exportiert werden ausschließlich **aktive** Getränke/Blutdruck-Einträge:
+    voided (gelöschte) Buchungen/Messungen tauchen in keiner CSV auf (M2a).
+    Laborwerte sind die Ausnahme (REQ-HOM-129): sie werden inklusive voideter
+    Zeilen exportiert, damit Retention/Grund (`voided_at`/`void_reason`)
+    nachvollziehbar bleiben.
 
     `lab_custom_markers_by_entry` liefert die Custom-Marker je Person (sie
     liegen in `entry.options`, nicht im Store). Fehlt der Parameter, werden
@@ -69,10 +74,12 @@ async def async_export_csv(
     now = dt_util.now()
 
     def _combined(eid: str) -> tuple[list, list, list]:
-        """Aktive Getränke/Readings/Laborwerte des Haupt-Stores + Archiv je Person."""
+        """Aktive Getränke/Readings + alle Laborwerte (inkl. voided), mit Archiv."""
         drinks = list(store.active_drinks(eid))
         readings = list(store.active_readings(eid))
-        lab_readings = list(store.active_lab_readings(eid))
+        # REQ-HOM-129: Laborwerte werden inkl. voideter Zeilen exportiert
+        # (Retention/Grund nachvollziehbar). Getränke/BD bleiben "nur aktive".
+        lab_readings = list(store.entry(eid).get("lab_readings") or [])
         if archive_store is not None and eid in archive_store.all_entries():
             drinks += list(archive_store.active_drinks(eid))
             readings += list(archive_store.active_readings(eid))
@@ -152,6 +159,8 @@ async def async_export_csv(
                             str(reading.get("reported_value", "")),
                             reading.get("reported_unit", ""),
                             reading.get("report_ref") or "",
+                            reading.get("voided_at") or "",
+                            reading.get("void_reason") or "",
                         ]
                     )
                 name = csv_filename("labvalues", person, now)
