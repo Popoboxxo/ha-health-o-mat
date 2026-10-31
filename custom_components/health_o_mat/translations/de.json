@@ -195,6 +195,93 @@
       },
       "caffeine_today": {
         "name": "Koffein heute"
+      },
+      "lab_alt": {
+        "name": "ALT (GPT)"
+      },
+      "lab_ast": {
+        "name": "AST (GOT)"
+      },
+      "lab_ggt": {
+        "name": "GGT (Gamma-GT)"
+      },
+      "lab_bilirubin_total": {
+        "name": "Bilirubin gesamt"
+      },
+      "lab_total_protein": {
+        "name": "Gesamteiweiß"
+      },
+      "lab_creatinine": {
+        "name": "Kreatinin"
+      },
+      "lab_egfr": {
+        "name": "eGFR"
+      },
+      "lab_urea": {
+        "name": "Harnstoff"
+      },
+      "lab_urine_protein_creatinine_ratio": {
+        "name": "Protein/Kreatinin-Quotient (Urin)"
+      },
+      "lab_sodium": {
+        "name": "Natrium"
+      },
+      "lab_potassium": {
+        "name": "Kalium"
+      },
+      "lab_calcium": {
+        "name": "Calcium gesamt"
+      },
+      "lab_magnesium": {
+        "name": "Magnesium"
+      },
+      "lab_chloride": {
+        "name": "Chlorid"
+      },
+      "lab_cholesterol_total": {
+        "name": "Gesamtcholesterin"
+      },
+      "lab_ldl": {
+        "name": "LDL"
+      },
+      "lab_hdl": {
+        "name": "HDL"
+      },
+      "lab_triglycerides": {
+        "name": "Triglyceride"
+      },
+      "lab_tsh": {
+        "name": "TSH"
+      },
+      "lab_ft4": {
+        "name": "fT4"
+      },
+      "lab_ft3": {
+        "name": "fT3"
+      },
+      "lab_hemoglobin": {
+        "name": "Hämoglobin"
+      },
+      "lab_leukocytes": {
+        "name": "Leukozyten"
+      },
+      "lab_platelets": {
+        "name": "Thrombozyten"
+      },
+      "lab_crp": {
+        "name": "CRP"
+      },
+      "lab_esr": {
+        "name": "BSG"
+      },
+      "lab_lipase": {
+        "name": "Lipase"
+      },
+      "lab_amylase": {
+        "name": "Amylase"
+      },
+      "lab_tacrolimus": {
+        "name": "Tacrolimus (Talspiegel)"
       }
     },
     "binary_sensor": {
@@ -203,6 +290,33 @@
       },
       "bp_warning": {
         "name": "Blutdruck-Warnung"
+      },
+      "lab_warning_liver": {
+        "name": "Leber-Warnung"
+      },
+      "lab_warning_kidney": {
+        "name": "Niere-Warnung"
+      },
+      "lab_warning_electrolytes": {
+        "name": "Elektrolyte-Warnung"
+      },
+      "lab_warning_lipids": {
+        "name": "Lipide-Warnung"
+      },
+      "lab_warning_thyroid": {
+        "name": "Schilddrüse-Warnung"
+      },
+      "lab_warning_blood_count": {
+        "name": "Blutbild-Warnung"
+      },
+      "lab_warning_inflammation": {
+        "name": "Entzündung/Immunsystem-Warnung"
+      },
+      "lab_warning_digestion": {
+        "name": "Verdauung-Warnung"
+      },
+      "lab_warning_drug_levels": {
+        "name": "Medikamentenspiegel-Warnung"
       }
     },
     "button": {

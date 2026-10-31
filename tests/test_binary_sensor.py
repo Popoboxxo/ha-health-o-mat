@@ -225,6 +225,16 @@ _ENTRY_ID = "test-entry-1"
 _GOAL_REACHED_ID = "test-entry-1_binary_goal_reached"
 _BP_WARNING_ID = "test-entry-1_binary_bp_warning"
 
+_LOGIC = binary_sensor_module.logic
+_CATALOG_LAB_CATEGORIES = {
+    marker["category"]
+    for marker in _LOGIC.LAB_MARKERS.values()
+    if marker["category"] != _LOGIC.LAB_CATEGORY_OTHER
+}
+_LAB_WARNING_IDS = {
+    f"{_ENTRY_ID}_binary_lab_warning_{category}" for category in _CATALOG_LAB_CATEGORIES
+}
+
 
 def _binary_setup(options: dict) -> set[str]:
     added: list = []
@@ -250,17 +260,17 @@ def _binary_setup(options: dict) -> set[str]:
 
 def test_binary_setup_old_entry_without_options_has_all_areas():
     """[REQ-HOM-009] Alt-Entry ohne areas-Option = alle Bereiche aktiv."""
-    assert _binary_setup({}) == {_GOAL_REACHED_ID, _BP_WARNING_ID}
+    assert _binary_setup({}) == {_GOAL_REACHED_ID, _BP_WARNING_ID} | _LAB_WARNING_IDS
 
 
 def test_binary_setup_drink_disabled_keeps_bp():
-    """[REQ-HOM-009] drink AUS → nur BP-Warnung bleibt."""
-    assert _binary_setup({"areas": {"drink": False}}) == {_BP_WARNING_ID}
+    """[REQ-HOM-009] drink AUS → BP-Warnung + Lab-Warnungen bleiben."""
+    assert _binary_setup({"areas": {"drink": False}}) == {_BP_WARNING_ID} | _LAB_WARNING_IDS
 
 
 def test_binary_setup_only_drink_when_bp_disabled():
-    """[REQ-HOM-009] bp AUS → nur Tagesziel-Binary bleibt."""
-    assert _binary_setup({"areas": {"bp": False}}) == {_GOAL_REACHED_ID}
+    """[REQ-HOM-009] bp AUS → Tagesziel-Binary + Lab-Warnungen bleiben."""
+    assert _binary_setup({"areas": {"bp": False}}) == {_GOAL_REACHED_ID} | _LAB_WARNING_IDS
 
 
 def test_binary_unique_ids_stable_across_area_toggle():
@@ -330,3 +340,157 @@ def test_m2a_bp_warning_uses_latest_active_reading():
     entity = binary_sensor_module.BloodPressureWarningEntity(MagicMock(), entry, store)
 
     assert entity.is_on is True
+
+
+# ============================================================================
+# REQ-HOM-122: LabCategoryWarningEntity — Warnung je Laborwert-Kategorie
+# ============================================================================
+
+_LAB_ENTRY_ID = "e1"
+
+
+def _lab_marker_value(marker_def: dict) -> float:
+    """Repräsentativer Wert INNERHALB des Katalog-Referenzbereichs."""
+    ref_min, ref_max = marker_def.get("ref_min"), marker_def.get("ref_max")
+    if ref_min is not None and ref_max is not None:
+        return (ref_min + ref_max) / 2
+    if ref_min is not None:
+        return ref_min + 1
+    if ref_max is not None:
+        return ref_max - 1
+    return 1.0
+
+
+def _lab_store(overrides: dict[str, float] | None = None) -> MagicMock:
+    """Store-Mock: liefert je Marker den letzten aktiven Laborwert.
+
+    Default = jeweils Bereichsmitte des Katalog-Referenzbereichs (also
+    in-range); ``overrides`` setzt einzelne Marker auf einen abweichenden Wert.
+    """
+    values = {
+        marker_key: _lab_marker_value(marker_def)
+        for marker_key, marker_def in _LOGIC.LAB_MARKERS.items()
+    }
+    values.update(overrides or {})
+    store = MagicMock()
+    store.last_active_lab_reading = MagicMock(
+        side_effect=lambda entry_id, marker_key: (
+            {"value": values[marker_key]} if marker_key in values else None
+        )
+    )
+    return store
+
+
+def _lab_entity(
+    options: dict | None = None, store: MagicMock | None = None, category: str = "liver"
+):
+    entry = _bp_entry(_LAB_ENTRY_ID, options=options)
+    return binary_sensor_module.LabCategoryWarningEntity(
+        MagicMock(), entry, store if store is not None else _lab_store(), category
+    )
+
+
+def _run_binary_setup(options: dict) -> list:
+    """async_setup_entry mit aufzeichnendem async_add_entities → Entities."""
+    added: list = []
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = options
+    hass.data = {
+        "health_o_mat": {
+            _ENTRY_ID: {"coordinator": MagicMock()},
+            "shared": {"store": MagicMock()},
+        }
+    }
+    _run(binary_sensor_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents)))
+    return added
+
+
+def test_req_hom_122_lab_category_warning_off_when_in_range():
+    """[REQ-HOM-122] Alle Marker der Kategorie im Referenzbereich → Warnung AUS."""
+    entity = _lab_entity()
+
+    assert entity.is_on is False
+
+
+def test_req_hom_122_lab_category_warning_on_when_out_of_range():
+    """[REQ-HOM-122] Ein Marker (GGT) außerhalb des Bereichs → Warnung AN."""
+    entity = _lab_entity(store=_lab_store({"ggt": 999.0}))
+
+    assert entity.is_on is True
+
+
+def test_req_hom_122_lab_category_warning_off_without_any_reading():
+    """[REQ-HOM-122] Keine erfassten Werte → keine Warnung."""
+    store = MagicMock()
+    store.last_active_lab_reading = MagicMock(return_value=None)
+    entity = _lab_entity(store=store)
+
+    assert entity.is_on is False
+
+
+def test_req_hom_122_lab_category_warning_ignores_other_categories():
+    """[REQ-HOM-122] Nur Marker der eigenen Kategorie lösen die Warnung aus."""
+    # Kreatinin gehört zu "kidney", nicht zu "liver".
+    entity = _lab_entity(store=_lab_store({"creatinine": 999.0}))
+
+    assert entity.is_on is False
+
+
+def test_req_hom_122_lab_category_warning_respects_ref_overrides():
+    """[REQ-HOM-122] Options-Overrides verschieben den Referenzbereich."""
+    # ALT-Bereichsmitte (30) liegt mit Override 40..60 außerhalb.
+    entity = _lab_entity(options={"lab_ref_overrides": {"alt": {"ref_min": 40, "ref_max": 60}}})
+
+    assert entity.is_on is True
+
+
+def test_req_hom_122_lab_category_warning_reads_only_active_lab_readings():
+    """[REQ-HOM-122] Quelle ist last_active_lab_reading (voided-Werte zählen nicht)."""
+    store = _lab_store()
+    entity = _lab_entity(store=store)
+
+    assert entity.is_on is False
+    assert store.last_active_lab_reading.called
+    store.active_entry.assert_not_called()
+
+
+def test_req_hom_122_async_setup_entry_creates_one_binary_sensor_per_catalog_category():
+    """[REQ-HOM-122] Eine Warn-Entity je Katalog-Kategorie (stabile unique_id)."""
+    added = _run_binary_setup({})
+
+    lab_warnings = [
+        entity
+        for entity in added
+        if isinstance(entity, binary_sensor_module.LabCategoryWarningEntity)
+    ]
+    assert {warning._category for warning in lab_warnings} == _CATALOG_LAB_CATEGORIES
+    assert {warning._attr_unique_id for warning in lab_warnings} == _LAB_WARNING_IDS
+
+
+def test_req_hom_122_async_setup_entry_skips_other_category():
+    """[REQ-HOM-122] Kategorie "other" (nur Custom-Marker) bekommt keine Warnung."""
+    added = _run_binary_setup(
+        {"lab_custom_markers": [{"name": "Vitamin D", "category": "other", "unit": "ng/mL"}]}
+    )
+
+    lab_warnings = [
+        entity
+        for entity in added
+        if isinstance(entity, binary_sensor_module.LabCategoryWarningEntity)
+    ]
+    assert all(warning._category != _LOGIC.LAB_CATEGORY_OTHER for warning in lab_warnings)
+    assert {warning._category for warning in lab_warnings} == _CATALOG_LAB_CATEGORIES
+
+
+def test_req_hom_122_async_setup_entry_skips_lab_warnings_when_area_disabled():
+    """[REQ-HOM-122] labs AUS → keine Lab-Warn-Entities."""
+    added = _run_binary_setup({"areas": {"labs": False}})
+
+    lab_warnings = [
+        entity
+        for entity in added
+        if isinstance(entity, binary_sensor_module.LabCategoryWarningEntity)
+    ]
+    assert lab_warnings == []

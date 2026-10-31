@@ -10,8 +10,10 @@ Reiner JSON-Datei-Test: kein Home-Assistant-Import nötig.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import types
 from pathlib import Path
 
 import pytest
@@ -417,9 +419,79 @@ def test_req_hom_122_lab_services_have_translation_parity() -> None:
             block = data["services"][service]
             assert block["name"], f"{path}: {service}.name fehlt"
             assert block["description"], f"{path}: {service}.description fehlt"
-            assert set(block["fields"]) == translated_fields, (
-                f"{path}: {service}-Felder weichen ab"
-            )
+            assert set(block["fields"]) == translated_fields, f"{path}: {service}-Felder weichen ab"
             for field, meta in block["fields"].items():
                 assert meta["name"], f"{path}: {service}.{field}.name fehlt"
                 assert meta["description"], f"{path}: {service}.{field}.description fehlt"
+
+
+# --- Laborwert-Entity-Namen (REQ-HOM-122) ----------------------------------
+
+# Master + en.json sind englisch, de.json deutsch. `const.py` hat keine
+# Home-Assistant-Abhängigkeit und wird deshalb direkt aus der Datei geladen.
+_LAB_NAME_FIELDS = (
+    (_MASTER, "name_en"),
+    (_TRANSLATIONS["en"], "name_en"),
+    (_TRANSLATIONS["de"], "name_de"),
+)
+
+
+def _load_const() -> types.ModuleType:
+    """`const.py` ohne Paket-Import laden (bleibt HA-frei)."""
+    spec = importlib.util.spec_from_file_location(
+        "_hom_const_translations", _COMPONENT_DIR / "const.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_req_hom_122_lab_sensor_names_cover_every_catalog_marker() -> None:
+    """[REQ-HOM-122] Jeder Katalog-Marker hat seinen Sensor-Namen in allen Dateien.
+
+    Die Texte stammen verbindlich aus ``LAB_MARKERS[*]["name_de"/"name_en"]``;
+    der Test fängt sowohl fehlende/überzählige Keys als auch Abweichungen von
+    der Single Source of Truth ab.
+    """
+    const = _load_const()
+    expected = {f"lab_{marker_key}" for marker_key in const.LAB_MARKERS}
+
+    for path, name_field in _LAB_NAME_FIELDS:
+        sensor = _load(path)["entity"]["sensor"]
+        actual = {key for key in sensor if key.startswith("lab_")}
+        assert actual == expected, (
+            f"{path}: Sensor-Keys weichen vom Katalog ab "
+            f"(fehlt: {sorted(expected - actual)}, überzählig: {sorted(actual - expected)})"
+        )
+        for marker_key, marker_def in const.LAB_MARKERS.items():
+            key = f"lab_{marker_key}"
+            assert sensor[key]["name"] == marker_def[name_field], (
+                f"{path}: {key}.name != LAB_MARKERS[{marker_key!r}][{name_field!r}]"
+            )
+
+
+def test_req_hom_122_lab_warnings_cover_every_non_other_category() -> None:
+    """[REQ-HOM-122] Je Nicht-``other``-Kategorie existiert die Warn-Entity.
+
+    ``other`` bleibt bewusst ohne binary_sensor (dort liegen nur
+    nutzerdefinierte Marker), deshalb prüft die Key-Menge auf Abwesenheit.
+    """
+    const = _load_const()
+    warnings = [category for category in const.LAB_CATEGORIES if category["key"] != "other"]
+    expected = {f"lab_warning_{category['key']}" for category in warnings}
+
+    for path, name_field in _LAB_NAME_FIELDS:
+        binary_sensor = _load(path)["entity"]["binary_sensor"]
+        actual = {key for key in binary_sensor if key.startswith("lab_warning_")}
+        assert actual == expected, (
+            f"{path}: Warn-Keys weichen von den Kategorien ab "
+            f"(fehlt: {sorted(expected - actual)}, überzählig: {sorted(actual - expected)})"
+        )
+        for category in warnings:
+            key = f"lab_warning_{category['key']}"
+            suffix = "-Warnung" if name_field == "name_de" else " warning"
+            expected_name = f"{category[name_field]}{suffix}"
+            assert binary_sensor[key]["name"] == expected_name, (
+                f"{path}: {key}.name != '{expected_name}'"
+            )
