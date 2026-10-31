@@ -132,7 +132,7 @@ def test_static_path_registered_once_with_expected_config(tmp_path, monkeypatch)
 
 
 def test_card_resource_registered_as_lovelace_resource(tmp_path, monkeypatch):
-    """Storage-Modus: Card landet als Module-Ressource — und nur einmal."""
+    """Storage-Modus: beide Cards landen als Module-Ressource — und nur einmal."""
     monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
     hass = FakeHass()
     resources = FakeResources()
@@ -142,7 +142,10 @@ def test_card_resource_registered_as_lovelace_resource(tmp_path, monkeypatch):
     asyncio.run(frontend.async_setup_frontend(hass))
     asyncio.run(frontend.async_setup_frontend(hass))
 
-    assert resources.created == [{"res_type": "module", "url": frontend.CARD_URL}]
+    assert resources.created == [
+        {"res_type": "module", "url": frontend.CARD_URL},
+        {"res_type": "module", "url": frontend.LABS_CARD_URL},
+    ]
     # Kein Fallback, wenn die Lovelace-Ressource greift (sonst Doppel-Laden).
     assert hass.data[DATA_EXTRA_MODULE_URL] == set()
 
@@ -170,6 +173,8 @@ def test_existing_card_resource_is_deduped(tmp_path, monkeypatch):
         items=[
             {"url": frontend.CARD_BASE_URL},
             {"url": f"{frontend.CARD_BASE_URL}?v=0"},
+            {"url": frontend.LABS_CARD_BASE_URL},
+            {"url": f"{frontend.LABS_CARD_BASE_URL}?v=0"},
         ]
     )
     _with_lovelace(hass, resources)
@@ -183,7 +188,7 @@ def test_versioned_card_url_is_recognised_as_the_same_card(tmp_path, monkeypatch
     """Die eigene (versionierte) URL dedupliziert gegen die unversionierte Form."""
     monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
     hass = FakeHass()
-    resources = FakeResources(items=[{"url": frontend.CARD_URL}])
+    resources = FakeResources(items=[{"url": frontend.CARD_URL}, {"url": frontend.LABS_CARD_URL}])
     _with_lovelace(hass, resources)
 
     asyncio.run(frontend.async_setup_frontend(hass))
@@ -196,22 +201,36 @@ def test_existing_unversioned_resource_is_refreshed(tmp_path, monkeypatch):
     monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
     hass = FakeHass()
     resources = FakeResources(
-        items=[{"id": "abc", "type": "module", "url": frontend.CARD_BASE_URL}]
+        items=[
+            {"id": "abc", "type": "module", "url": frontend.CARD_BASE_URL},
+            {"id": "labs", "type": "module", "url": frontend.LABS_CARD_BASE_URL},
+        ]
     )
     _with_lovelace(hass, resources)
 
     asyncio.run(frontend.async_setup_frontend(hass))
 
     assert resources.created == []
-    assert resources.updated == [("abc", {"url": frontend.CARD_URL})]
-    assert resources.items[0]["url"] == frontend.CARD_URL
+    assert resources.updated == [
+        ("abc", {"url": frontend.CARD_URL}),
+        ("labs", {"url": frontend.LABS_CARD_URL}),
+    ]
+    assert [item["url"] for item in resources.items] == [
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    ]
 
 
 def test_existing_current_resource_is_not_refreshed(tmp_path, monkeypatch):
     """Bereits aktuelle URL → kein Update (idempotent, kein Storage-Schreibvorgang)."""
     monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
     hass = FakeHass()
-    resources = FakeResources(items=[{"id": "abc", "type": "module", "url": frontend.CARD_URL}])
+    resources = FakeResources(
+        items=[
+            {"id": "abc", "type": "module", "url": frontend.CARD_URL},
+            {"id": "labs", "type": "module", "url": frontend.LABS_CARD_URL},
+        ]
+    )
     _with_lovelace(hass, resources)
 
     asyncio.run(frontend.async_setup_frontend(hass))
@@ -269,7 +288,10 @@ def test_fallback_to_extra_js_without_lovelace(tmp_path, monkeypatch):
     asyncio.run(frontend.async_setup_frontend(hass))
     asyncio.run(frontend.async_setup_frontend(hass))
 
-    assert hass.data[DATA_EXTRA_MODULE_URL] == {frontend.CARD_URL}
+    assert hass.data[DATA_EXTRA_MODULE_URL] == {
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    }
     assert frontend.shared_data(hass)["frontend_card_registered"] == "extra_js"
 
 
@@ -282,7 +304,10 @@ def test_fallback_when_lovelace_is_yaml_mode(tmp_path, monkeypatch):
 
     asyncio.run(frontend.async_setup_frontend(hass))
 
-    assert hass.data[DATA_EXTRA_MODULE_URL] == {frontend.CARD_URL}
+    assert hass.data[DATA_EXTRA_MODULE_URL] == {
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    }
 
 
 def test_setup_survives_broken_http_layer(tmp_path, monkeypatch):
@@ -299,7 +324,10 @@ def test_setup_survives_broken_http_layer(tmp_path, monkeypatch):
     asyncio.run(frontend.async_setup_frontend(hass))
 
     assert hass.http.registered == []
-    assert hass.data[DATA_EXTRA_MODULE_URL] == {frontend.CARD_URL}
+    assert hass.data[DATA_EXTRA_MODULE_URL] == {
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    }
 
 
 def test_unregister_removes_extra_js_fallback(tmp_path, monkeypatch):
@@ -332,3 +360,98 @@ def test_unregister_keeps_lovelace_resource(tmp_path, monkeypatch):
     assert resources.created  # Ressource unangetastet
     assert frontend.shared_data(hass)["frontend_card_registered"] == "lovelace"
     assert hass.data[DATA_EXTRA_MODULE_URL] == set()
+
+
+# --- REQ-HOM-122: zweite Card (Labs) als Lovelace-Ressource -------------------
+
+
+def test_req_hom_122_labs_card_url_is_versioned():
+    """REQ-HOM-122: Labs-Card nutzt denselben Pfad/Version wie die bestehende Card."""
+    assert frontend.LABS_CARD_FILENAME == "health-o-mat-labs-card.js"
+    assert frontend.LABS_CARD_BASE_URL == f"{frontend.URL_BASE}/{frontend.LABS_CARD_FILENAME}"
+    assert frontend.LABS_CARD_URL == frontend.versioned_url(frontend.LABS_CARD_FILENAME)
+    assert frontend.LABS_CARD_URL.startswith(f"{frontend.LABS_CARD_BASE_URL}?v=")
+    # Kein eigener Cache-Buster: exakt die Version der bestehenden Card.
+    assert frontend.LABS_CARD_URL == (
+        f"{frontend.LABS_CARD_BASE_URL}?v={frontend.integration_version()}"
+    )
+
+
+def test_req_hom_122_setup_frontend_registers_both_card_resources(tmp_path, monkeypatch):
+    """REQ-HOM-122: Setup legt BEIDE Card-Ressourcen an — additiv und genau einmal."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources()
+    _with_lovelace(hass, resources)
+    _with_extra_js_store(hass)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == [
+        {"res_type": "module", "url": frontend.CARD_URL},
+        {"res_type": "module", "url": frontend.LABS_CARD_URL},
+    ]
+    # Lovelace greift für beide Cards → kein Extra-JS-Fallback.
+    assert hass.data[DATA_EXTRA_MODULE_URL] == set()
+    assert frontend.shared_data(hass)["frontend_card_registered"] == "lovelace"
+
+
+def test_req_hom_122_both_cards_deduped_when_already_present(tmp_path, monkeypatch):
+    """REQ-HOM-122: vorhandene (versionierte) Alt-Ressourcen beider Cards → nur Refresh."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources(
+        items=[
+            {"id": "card", "type": "module", "url": frontend.CARD_BASE_URL},
+            {"id": "labs", "type": "module", "url": f"{frontend.LABS_CARD_BASE_URL}?v=0"},
+        ]
+    )
+    _with_lovelace(hass, resources)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == []
+    assert resources.updated == [
+        ("card", {"url": frontend.CARD_URL}),
+        ("labs", {"url": frontend.LABS_CARD_URL}),
+    ]
+    assert [item["url"] for item in resources.items] == [
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    ]
+
+
+def test_req_hom_122_unregister_removes_both_extra_js_urls(tmp_path, monkeypatch):
+    """REQ-HOM-122: Extra-JS-Fallback wird für beide Cards zurückgebaut."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    _with_extra_js_store(hass)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+    assert hass.data[DATA_EXTRA_MODULE_URL] == {
+        frontend.CARD_URL,
+        frontend.LABS_CARD_URL,
+    }
+
+    asyncio.run(frontend.async_unregister_frontend(hass))
+
+    assert hass.data[DATA_EXTRA_MODULE_URL] == set()
+    assert frontend.shared_data(hass).get("frontend_card_registered") is None
+
+
+def test_req_hom_122_existing_card_untouched_new_card_added(tmp_path, monkeypatch):
+    """REQ-HOM-122: Upgrade-Fall — bestehende Card bleibt unverändert, Labs kommt additiv dazu."""
+    monkeypatch.setattr(frontend, "WWW_DIR", tmp_path)
+    hass = FakeHass()
+    resources = FakeResources(items=[{"id": "card", "type": "module", "url": frontend.CARD_URL}])
+    _with_lovelace(hass, resources)
+
+    asyncio.run(frontend.async_setup_frontend(hass))
+
+    assert resources.created == [{"res_type": "module", "url": frontend.LABS_CARD_URL}]
+    assert resources.updated == []
+    assert [(item["id"], item["url"]) for item in resources.items] == [
+        ("card", frontend.CARD_URL),
+        ("new", frontend.LABS_CARD_URL),
+    ]

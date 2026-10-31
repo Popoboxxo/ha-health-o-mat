@@ -2050,3 +2050,71 @@ def test_req_hom_117_card_inline_translations_and_language_switch(tmp_path):
     assert out["scale"][0]["label"] == "Good", (
         "das Server-Wellbeing-Label wird nicht per Key übersetzt"
     )
+
+
+# --- REQ-HOM-122: Laborwerte-Karte (standalone Lovelace card) ---------------
+
+_LABS_CARD_JS = os.path.join(
+    _REPO_ROOT,
+    "custom_components",
+    "health_o_mat",
+    "www",
+    "health-o-mat-labs-card.js",
+)
+
+
+def _labs_card_source() -> str:
+    with open(_LABS_CARD_JS, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_req_hom_122_labs_card_file_exists_and_defines_custom_element():
+    source = _labs_card_source()
+    assert 'customElements.define("health-o-mat-labs-card"' in source
+
+
+def test_req_hom_122_labs_card_defines_editor():
+    source = _labs_card_source()
+    assert "class HealthOMatLabsCardEditor" in source
+
+
+def test_req_hom_122_labs_card_supports_person_mode_and_filter():
+    source = _labs_card_source()
+    assert "person_mode" in source
+    assert "person_filter" in source
+    assert "default_person" in source
+
+
+def test_req_hom_122_labs_card_calls_ws_not_service():
+    source = _labs_card_source()
+    assert "sendMessagePromise" in source
+    assert "callService" not in source
+
+
+def test_req_hom_122_labs_card_has_disclaimer_flag():
+    source = _labs_card_source()
+    assert "show_disclaimer" in source
+
+
+def test_req_hom_122_labs_card_editor_schema_has_five_keys():
+    """entry_id/person_mode-family aside,
+    show_categories/show_trend/allow_manual_entry/show_disclaimer (§7.1 editor table)."""
+    source = _labs_card_source()
+    for key in ("show_categories", "show_trend", "allow_manual_entry", "show_disclaimer"):
+        assert key in source, key
+
+
+def test_req_hom_122_labs_card_is_standalone_vanilla_module():
+    """[REQ-HOM-122] Die Karte importiert das Panel-Modul NICHT (eigene Helfer)."""
+    source = _labs_card_source()
+    assert re.search(r"^\s*import\s", source, re.M) is None
+    assert "require(" not in source
+    assert "health-o-mat-panel-base" not in source
+    for name in (
+        "escapeHtml",
+        "labBadge",
+        "labReportedSubline",
+        "labSparkline",
+        "labMarkerOptionsHtml",
+    ):
+        assert re.search(rf"function\s+{name}\s*\(", source), f"{name}() fehlt in der Karte"
