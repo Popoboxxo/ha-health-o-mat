@@ -19,13 +19,19 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
+from .const import (
+    DOMAIN,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_REF_OVERRIDES,
+)
 from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
 
 BACKUP_DIR_NAME = "health_o_mat_export"
 BACKUP_FORMAT = "health_o_mat_backup"
-BACKUP_VERSION = 2
+BACKUP_VERSION = 3
 
 
 def _list_counts(items: Any) -> dict[str, int]:
@@ -62,6 +68,7 @@ def _entry_counts(entry: Any) -> dict[str, dict[str, int]]:
         "drinks": _list_counts(data.get("drinks")),
         "readings": _list_counts(data.get("readings")),
         "wellbeing": wellbeing,
+        "lab_readings": _list_counts(data.get("lab_readings")),
     }
 
 
@@ -83,7 +90,10 @@ def _archive_counts(archive_data: dict | None) -> dict[str, Any]:
 
 
 def build_backup_document(
-    raw_data: dict, created: datetime, archive_data: dict | None = None
+    raw_data: dict,
+    created: datetime,
+    archive_data: dict | None = None,
+    lab_options: dict | None = None,
 ) -> dict:
     """Versioniertes Backup-Dokument aus den rohen Store-Daten (HA-frei).
 
@@ -103,6 +113,13 @@ def build_backup_document(
     - ``archive_entries``/``archive_schema``/``archive_counts``: Inhalt des
       separaten Retention-Archivs, damit ein Restore auch die archivierten
       Zeiträume abdeckt. Ohne Archiv leer (abwärtskompatibel, additiv).
+
+    v3 ergänzt (additiv):
+
+    - ``counts[entry_id]["lab_readings"]``: wie die übrigen Datensatz-Zähler.
+    - ``lab_options``: ``{entry_id: {lab_custom_markers, lab_ref_overrides,
+      lab_hidden_categories}}`` — liegt in ``entry.options``, nicht im Store,
+      deshalb als separater Parameter statt aus ``raw_data`` abgeleitet.
     """
     entries = raw_data.get("entries", {}) if isinstance(raw_data, dict) else {}
     persons: dict[str, Any] = {}
@@ -123,6 +140,7 @@ def build_backup_document(
         "archive_schema": (archive_data.get("schema") if isinstance(archive_data, dict) else None),
         "archive_counts": _archive_counts(archive_data),
         "archive_entries": copy.deepcopy(archive_entries),
+        "lab_options": copy.deepcopy(lab_options) if isinstance(lab_options, dict) else {},
     }
 
 
@@ -146,10 +164,19 @@ async def async_backup(
         raise ServiceValidationError("Health-O-Mat-Speicher nicht verfügbar")
 
     now = dt_util.now()
+    lab_options = {
+        entry.entry_id: {
+            OPTION_LAB_CUSTOM_MARKERS: entry.options.get(OPTION_LAB_CUSTOM_MARKERS, []),
+            OPTION_LAB_REF_OVERRIDES: entry.options.get(OPTION_LAB_REF_OVERRIDES, {}),
+            OPTION_LAB_HIDDEN_CATEGORIES: entry.options.get(OPTION_LAB_HIDDEN_CATEGORIES, []),
+        }
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    }
     document = build_backup_document(
         store.raw_data(),
         now,
         archive_store.raw_data() if archive_store is not None else None,
+        lab_options=lab_options,
     )
     path = await async_write_backup_document(hass, document, prefix="backup")
 

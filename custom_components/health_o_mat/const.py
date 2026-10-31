@@ -13,7 +13,8 @@ STORE_VERSION = 1
 # v3 = +archived_counts (Retention/Archiv-Kennzahlen, REQ-HOM-109) je Person,
 # v4 = +id/created_at/voided_* je Eintrag, +wellbeing_entries, +audit_log
 #      (Korrigierbarkeit/Audit, REQ-HOM-115)
-STORE_SCHEMA_VERSION = 4
+# v5 = +lab_readings je Person (Laborwerte, REQ-HOM-122)
+STORE_SCHEMA_VERSION = 5
 
 # Audit-Log: Default-Cap an Ereignissen je Person (0 = unbegrenzt).
 DEFAULT_AUDIT_LIMIT = 1000
@@ -163,3 +164,338 @@ DEFAULT_WEEKLY_REPORT_TIME = "18:00"
 DEFAULT_REMINDER_NO_DRINK_HOURS = 3
 # Fällige Erinnerungs-Arten in stabiler Reihenfolge (Notification-Reihenfolge).
 REMINDER_KINDS: tuple[str, ...] = ("drink_goal", "no_drink", "bp", "wellbeing")
+
+# --- Laborwerte (Blutwerte, REQ-HOM-122) ------------------------------------
+# Default-Referenzen sind typische Erwachsenen-Richtwerte (Vision §4.2 "Keine
+# medizinische Beratung") — keine klinische Norm, siehe Recherche-Kapitel 3
+# der Spec (docs/superpowers/specs/2026-10-30-lab-values-design.md).
+
+LAB_CATEGORY_OTHER = "other"
+
+LAB_CATEGORIES: list[dict] = [
+    {"key": "liver", "name_de": "Leber", "name_en": "Liver"},
+    {"key": "kidney", "name_de": "Niere", "name_en": "Kidney"},
+    {"key": "electrolytes", "name_de": "Elektrolyte", "name_en": "Electrolytes"},
+    {"key": "lipids", "name_de": "Lipide", "name_en": "Lipids"},
+    {"key": "thyroid", "name_de": "Schilddrüse", "name_en": "Thyroid"},
+    {"key": "blood_count", "name_de": "Blutbild", "name_en": "Blood count"},
+    {"key": "inflammation", "name_de": "Entzündung/Immunsystem", "name_en": "Inflammation"},
+    {"key": "digestion", "name_de": "Verdauung", "name_en": "Digestion"},
+    {"key": "drug_levels", "name_de": "Medikamentenspiegel", "name_en": "Drug levels"},
+    {"key": LAB_CATEGORY_OTHER, "name_de": "Sonstige", "name_en": "Other"},
+]
+
+# marker_key -> {category, name_de, name_en, canonical_unit, ref_min, ref_max,
+#                alt_units: {unit: factor_to_canonical}, require_explicit_unit}
+# ref_min/ref_max: None = keine Grenze auf dieser Seite. alt_units leer = keine
+# Umrechnung nötig (Wert liegt schon kanonisch vor bzw. keine Alt-Einheit bekannt).
+LAB_MARKERS: dict[str, dict] = {
+    "alt": {
+        "category": "liver",
+        "name_de": "ALT (GPT)",
+        "name_en": "ALT (ALT/GPT)",
+        "canonical_unit": "U/L",
+        "ref_min": 10,
+        "ref_max": 50,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "ast": {
+        "category": "liver",
+        "name_de": "AST (GOT)",
+        "name_en": "AST (AST/GOT)",
+        "canonical_unit": "U/L",
+        "ref_min": 10,
+        "ref_max": 50,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "ggt": {
+        "category": "liver",
+        "name_de": "GGT (Gamma-GT)",
+        "name_en": "GGT",
+        "canonical_unit": "U/L",
+        "ref_min": 10,
+        "ref_max": 60,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "bilirubin_total": {
+        "category": "liver",
+        "name_de": "Bilirubin gesamt",
+        "name_en": "Total bilirubin",
+        "canonical_unit": "µmol/L",
+        "ref_min": 5,
+        "ref_max": 21,
+        "alt_units": {"mg/dL": 17.1},
+        "require_explicit_unit": False,
+    },
+    "total_protein": {
+        "category": "liver",
+        "name_de": "Gesamteiweiß",
+        "name_en": "Total protein",
+        "canonical_unit": "g/L",
+        "ref_min": 64,
+        "ref_max": 83,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "creatinine": {
+        "category": "kidney",
+        "name_de": "Kreatinin",
+        "name_en": "Creatinine",
+        "canonical_unit": "µmol/L",
+        "ref_min": 53,
+        "ref_max": 106,
+        "alt_units": {"mg/dL": 88.4},
+        "require_explicit_unit": False,
+    },
+    "egfr": {
+        "category": "kidney",
+        "name_de": "eGFR",
+        "name_en": "eGFR",
+        "canonical_unit": "mL/min/1.73m²",
+        "ref_min": 90,
+        "ref_max": None,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "urea": {
+        "category": "kidney",
+        "name_de": "Harnstoff",
+        "name_en": "Urea",
+        "canonical_unit": "mmol/L",
+        "ref_min": 2.5,
+        "ref_max": 7.5,
+        "alt_units": {"mg/dL": 0.357},
+        "require_explicit_unit": False,
+    },
+    "urine_protein_creatinine_ratio": {
+        "category": "kidney",
+        "name_de": "Protein/Kreatinin-Quotient (Urin)",
+        "name_en": "Urine protein/creatinine ratio",
+        "canonical_unit": "mg/g",
+        "ref_min": None,
+        "ref_max": 15,
+        # Bekannte Verwechslungsgefahr g/g vs. mg/g (Faktor 1000) — deshalb
+        # KEIN impliziter Default, unit ist Pflichtfeld (§5.1 der Spec).
+        "alt_units": {"g/g": 1000},
+        "require_explicit_unit": True,
+    },
+    "sodium": {
+        "category": "electrolytes",
+        "name_de": "Natrium",
+        "name_en": "Sodium",
+        "canonical_unit": "mmol/L",
+        "ref_min": 135,
+        "ref_max": 145,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "potassium": {
+        "category": "electrolytes",
+        "name_de": "Kalium",
+        "name_en": "Potassium",
+        "canonical_unit": "mmol/L",
+        "ref_min": 3.5,
+        "ref_max": 5.0,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "calcium": {
+        "category": "electrolytes",
+        "name_de": "Calcium gesamt",
+        "name_en": "Total calcium",
+        "canonical_unit": "mmol/L",
+        "ref_min": 2.10,
+        "ref_max": 2.60,
+        "alt_units": {"mg/dL": 0.25},
+        "require_explicit_unit": False,
+    },
+    "magnesium": {
+        "category": "electrolytes",
+        "name_de": "Magnesium",
+        "name_en": "Magnesium",
+        "canonical_unit": "mmol/L",
+        "ref_min": 0.70,
+        "ref_max": 1.00,
+        "alt_units": {"mg/dL": 0.411},
+        "require_explicit_unit": False,
+    },
+    "chloride": {
+        "category": "electrolytes",
+        "name_de": "Chlorid",
+        "name_en": "Chloride",
+        "canonical_unit": "mmol/L",
+        "ref_min": 98,
+        "ref_max": 107,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "cholesterol_total": {
+        "category": "lipids",
+        "name_de": "Gesamtcholesterin",
+        "name_en": "Total cholesterol",
+        "canonical_unit": "mmol/L",
+        "ref_min": None,
+        "ref_max": 5.2,
+        "alt_units": {"mg/dL": 0.0259},
+        "require_explicit_unit": False,
+    },
+    "ldl": {
+        "category": "lipids",
+        "name_de": "LDL",
+        "name_en": "LDL",
+        "canonical_unit": "mmol/L",
+        "ref_min": None,
+        "ref_max": 2.6,
+        "alt_units": {"mg/dL": 0.0259},
+        "require_explicit_unit": False,
+    },
+    "hdl": {
+        "category": "lipids",
+        "name_de": "HDL",
+        "name_en": "HDL",
+        "canonical_unit": "mmol/L",
+        "ref_min": 1.0,
+        "ref_max": None,
+        "alt_units": {"mg/dL": 0.0259},
+        "require_explicit_unit": False,
+    },
+    "triglycerides": {
+        "category": "lipids",
+        "name_de": "Triglyceride",
+        "name_en": "Triglycerides",
+        "canonical_unit": "mmol/L",
+        "ref_min": None,
+        "ref_max": 1.7,
+        "alt_units": {"mg/dL": 0.0113},
+        "require_explicit_unit": False,
+    },
+    "tsh": {
+        "category": "thyroid",
+        "name_de": "TSH",
+        "name_en": "TSH",
+        "canonical_unit": "mIU/L",
+        "ref_min": 0.4,
+        "ref_max": 4.0,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "ft4": {
+        "category": "thyroid",
+        "name_de": "fT4",
+        "name_en": "fT4",
+        "canonical_unit": "pmol/L",
+        "ref_min": 10,
+        "ref_max": 23,
+        "alt_units": {"ng/dL": 12.87},
+        "require_explicit_unit": False,
+    },
+    "ft3": {
+        "category": "thyroid",
+        "name_de": "fT3",
+        "name_en": "fT3",
+        "canonical_unit": "pmol/L",
+        "ref_min": 3,
+        "ref_max": 8,
+        "alt_units": {"pg/mL": 1.536},
+        "require_explicit_unit": False,
+    },
+    "hemoglobin": {
+        "category": "blood_count",
+        "name_de": "Hämoglobin",
+        "name_en": "Hemoglobin",
+        "canonical_unit": "g/L",
+        "ref_min": 120,
+        "ref_max": 170,
+        "alt_units": {"g/dL": 10},
+        "require_explicit_unit": False,
+    },
+    "leukocytes": {
+        "category": "blood_count",
+        "name_de": "Leukozyten",
+        "name_en": "Leukocytes",
+        "canonical_unit": "10^9/L",
+        "ref_min": 3.6,
+        "ref_max": 11.0,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "platelets": {
+        "category": "blood_count",
+        "name_de": "Thrombozyten",
+        "name_en": "Platelets",
+        "canonical_unit": "10^9/L",
+        "ref_min": 140,
+        "ref_max": 400,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "crp": {
+        "category": "inflammation",
+        "name_de": "CRP",
+        "name_en": "CRP",
+        "canonical_unit": "mg/L",
+        "ref_min": None,
+        "ref_max": 5,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "esr": {
+        "category": "inflammation",
+        "name_de": "BSG",
+        "name_en": "ESR",
+        "canonical_unit": "mm/h",
+        "ref_min": None,
+        "ref_max": 20,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "lipase": {
+        "category": "digestion",
+        "name_de": "Lipase",
+        "name_en": "Lipase",
+        "canonical_unit": "U/L",
+        "ref_min": 13,
+        "ref_max": 60,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "amylase": {
+        "category": "digestion",
+        "name_de": "Amylase",
+        "name_en": "Amylase",
+        "canonical_unit": "U/L",
+        "ref_min": 30,
+        "ref_max": 110,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "tacrolimus": {
+        "category": "drug_levels",
+        "name_de": "Tacrolimus (Talspiegel)",
+        "name_en": "Tacrolimus (trough)",
+        "canonical_unit": "ng/mL",
+        "ref_min": 5,
+        "ref_max": 15,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+}
+
+# Deutsche Laborsynonyme -> primärer marker_key (§2.1a der Spec). Wird vom
+# Service VOR dem Katalog-/Custom-Abgleich aufgelöst, kein Doppel-Eintrag.
+LAB_MARKER_ALIASES: dict[str, str] = {
+    "gpt": "alt",
+    "got": "ast",
+    "gamma_gt": "ggt",
+}
+
+# Options-Schlüssel (entry.options) für Custom-Marker/Overrides/Sichtbarkeit.
+OPTION_LAB_CUSTOM_MARKERS = "lab_custom_markers"
+OPTION_LAB_REF_OVERRIDES = "lab_ref_overrides"
+OPTION_LAB_HIDDEN_CATEGORIES = "lab_hidden_categories"
+
+# Max. Länge des optionalen `report_ref`-Freitextfelds (§2.4a der Spec).
+LAB_REPORT_REF_MAX_LEN = 500

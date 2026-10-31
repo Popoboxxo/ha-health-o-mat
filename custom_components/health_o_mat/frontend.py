@@ -1,9 +1,9 @@
-"""Frontend-Anbindung: statische Card-Ressource + automatische Registrierung.
+"""Frontend-Anbindung: statische Card-Ressourcen + automatische Registrierung.
 
-Die Integration liefert ihre eigene Custom-Card als statische Datei
-(`www/health-o-mat-card.js`) aus und registriert sie automatisch als
-Lovelace-Ressource — die Karte ist damit ohne manuelles YAML nutzbar
-(docs/CONCEPT-UI.md, Abschnitte 5.1/5.3).
+Die Integration liefert ihre eigenen Custom-Cards als statische Dateien aus
+(`www/health-o-mat-card.js`, `www/health-o-mat-labs-card.js`) und registriert
+sie automatisch als Lovelace-Ressourcen — die Karten sind damit ohne manuelles
+YAML nutzbar (docs/CONCEPT-UI.md, Abschnitte 5.1/5.3).
 
 Alle Schritte sind idempotent (prozessweiter Marker in
 `hass.data[DOMAIN]["shared"]`) und defensiv: ein fehlendes `www/`-Verzeichnis,
@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from homeassistant.core import HomeAssistant
 
@@ -37,6 +37,7 @@ _LOGGER = logging.getLogger(__name__)
 # URL-Präfix, unter dem das Verzeichnis `www/` ausgeliefert wird.
 URL_BASE = "/health_o_mat"
 CARD_FILENAME = "health-o-mat-card.js"
+LABS_CARD_FILENAME = "health-o-mat-labs-card.js"
 
 # Ausgeliefertes Verzeichnis (relativ zum Integrationspaket).
 WWW_DIR = Path(__file__).parent / "www"
@@ -76,6 +77,23 @@ def versioned_url(filename: str) -> str:
 
 CARD_BASE_URL = f"{URL_BASE}/{CARD_FILENAME}"
 CARD_URL = versioned_url(CARD_FILENAME)
+LABS_CARD_BASE_URL = f"{URL_BASE}/{LABS_CARD_FILENAME}"
+LABS_CARD_URL = versioned_url(LABS_CARD_FILENAME)
+
+
+class _CardSpec(NamedTuple):
+    """Eine auszuliefernde Custom-Card: Dedupe-Basis (ohne `?v=`) + versionierte URL."""
+
+    base_url: str
+    url: str
+
+
+# Beide Cards teilen sich EINEN Registrierungsweg und EINEN prozessweiten Marker
+# (bewusst eine feste Paar-Liste statt eines Plugin-Registry für genau zwei Dateien).
+_CARDS: tuple[_CardSpec, ...] = (
+    _CardSpec(CARD_BASE_URL, CARD_URL),
+    _CardSpec(LABS_CARD_BASE_URL, LABS_CARD_URL),
+)
 
 # Marker im prozessweiten Shared-Bereich (`hass.data[DOMAIN]["shared"]`).
 _STATIC_PATH_MARKER = "frontend_static_path"
@@ -92,7 +110,7 @@ def shared_data(hass: HomeAssistant) -> dict[str, Any]:
 
 
 async def async_setup_frontend(hass: HomeAssistant) -> None:
-    """Registriert statischen Pfad + Card-Ressource genau EINMAL pro HA-Prozess.
+    """Registriert statischen Pfad + Card-Ressourcen genau EINMAL pro HA-Prozess.
 
     Wird von jedem Config-Entry-Setup aufgerufen; die Marker im Shared-Bereich
     machen wiederholte Aufrufe zu No-ops (keine Doppel-Registrierung).
@@ -114,10 +132,11 @@ async def async_unregister_frontend(hass: HomeAssistant) -> None:
     if shared.get(_CARD_MARKER) != _METHOD_EXTRA_JS:
         return
     if remove_extra_js_url is not None:
-        try:
-            remove_extra_js_url(hass, CARD_URL)
-        except Exception:  # noqa: BLE001 - HA-internes Datenformat, nie unload-kritisch
-            _LOGGER.debug("Health-O-Mat: Extra-JS-URL %s war nicht registriert", CARD_URL)
+        for card in _CARDS:
+            try:
+                remove_extra_js_url(hass, card.url)
+            except Exception:  # noqa: BLE001 - HA-internes Datenformat, nie unload-kritisch
+                _LOGGER.debug("Health-O-Mat: Extra-JS-URL %s war nicht registriert", card.url)
     shared.pop(_CARD_MARKER, None)
 
 
@@ -147,17 +166,28 @@ async def _async_register_static_path(hass: HomeAssistant, shared: dict[str, Any
 
 
 async def _async_register_card_resource(hass: HomeAssistant, shared: dict[str, Any]) -> None:
-    """Card als Lovelace-Ressource anlegen, sonst `add_extra_js_url` als Fallback."""
+    """Alle Cards als Lovelace-Ressource anlegen, sonst `add_extra_js_url` als Fallback.
+
+    Pro Card wird bevorzugt die Lovelace-Ressource angelegt; scheitert das (z. B.
+    YAML-Modus), wird genau diese Card als Extra-JS-Modul geladen. Der Marker
+    steht auf `_METHOD_EXTRA_JS`, sobald mindestens eine Card über den Fallback
+    läuft — nur dann muss der Rückbau die Extra-JS-URLs wieder entfernen.
+    """
     if shared.get(_CARD_MARKER):
         return
-    if await _async_register_lovelace_resource(hass):
-        shared[_CARD_MARKER] = _METHOD_LOVELACE
-        return
-    if _add_extra_js_url(hass):
-        shared[_CARD_MARKER] = _METHOD_EXTRA_JS
+    method: str | None = _METHOD_LOVELACE
+    for card in _CARDS:
+        if await _async_register_lovelace_resource(hass, card.base_url, card.url):
+            continue
+        if _add_extra_js_url(hass, card.url):
+            method = _METHOD_EXTRA_JS
+        else:
+            method = None
+    if method is not None:
+        shared[_CARD_MARKER] = method
 
 
-async def _async_register_lovelace_resource(hass: HomeAssistant) -> bool:
+async def _async_register_lovelace_resource(hass: HomeAssistant, base_url: str, url: str) -> bool:
     """Card in die Lovelace-Ressourcen eintragen. True = registriert/vorhanden.
 
     Nur im Storage-Modus möglich (YAML-Modus ist nicht schreibbar) — deshalb
@@ -178,41 +208,41 @@ async def _async_register_lovelace_resource(hass: HomeAssistant) -> bool:
             await resources.async_load()
             resources.loaded = True
         items = resources.async_items() or []
-        existing = next((item for item in items if _is_card_resource(item)), None)
+        existing = next((item for item in items if _is_card_resource(item, base_url)), None)
         if existing is not None:
             # Dedupe: bereits vorhanden (auch durch HACS-Plugin). Bestands-
             # Ressourcen ohne aktuellen Cache-Buster (`?v=…`) werden auf die
             # versionierte URL nachgezogen, sonst bliebe alter JS-Cache bei
             # Upgrades hängen (die Dedupe matcht bewusst ohne Query-Teil).
-            await _async_refresh_card_resource_url(resources, existing)
+            await _async_refresh_card_resource_url(resources, existing, url)
             return True
-        await resources.async_create_item({"res_type": "module", "url": CARD_URL})
+        await resources.async_create_item({"res_type": "module", "url": url})
     except Exception:  # noqa: BLE001 - Lovelace/Dashboard-Storage ist optional
-        _LOGGER.exception("Health-O-Mat: Lovelace-Ressource %s nicht anlegbar", CARD_URL)
+        _LOGGER.exception("Health-O-Mat: Lovelace-Ressource %s nicht anlegbar", url)
         return False
     return True
 
 
-async def _async_refresh_card_resource_url(resources: Any, item: Any) -> None:
+async def _async_refresh_card_resource_url(resources: Any, item: Any, url: str) -> None:
     """Bestehende Card-Ressource auf die aktuelle versionierte URL aktualisieren.
 
     Defensiv: fehlt `async_update_item`/`id` oder schlägt das Update fehl, bleibt
     die vorhandene Ressource unverändert (nie unload-/setup-kritisch).
     """
-    if item.get("url") == CARD_URL:
+    if item.get("url") == url:
         return
     update = getattr(resources, "async_update_item", None)
     item_id = item.get("id")
     if update is None or item_id is None:
         return
     try:
-        await update(item_id, {"url": CARD_URL})
+        await update(item_id, {"url": url})
     except Exception:  # noqa: BLE001 - Ressourcen-Storage variiert je HA-Version
         _LOGGER.debug("Health-O-Mat: Lovelace-Ressource %s nicht aktualisierbar", item_id)
 
 
-def _is_card_resource(item: Any) -> bool:
-    """True, wenn ein Lovelace-Ressourcen-Eintrag unsere Card (ohne Cache-Buster) ist.
+def _is_card_resource(item: Any, base_url: str) -> bool:
+    """True, wenn ein Lovelace-Ressourcen-Eintrag die Card unter `base_url` ist.
 
     Der Query-Teil (`?v=…`) wird vor dem Vergleich abgeschnitten — dadurch sind
     die unversionierte und die versionierte URL dieselbe Card (Dedupe bleibt intakt).
@@ -222,18 +252,18 @@ def _is_card_resource(item: Any) -> bool:
     url = item.get("url")
     if not isinstance(url, str):
         return False
-    return url.split("?", 1)[0].rstrip("/") == CARD_BASE_URL
+    return url.split("?", 1)[0].rstrip("/") == base_url
 
 
-def _add_extra_js_url(hass: HomeAssistant) -> bool:
+def _add_extra_js_url(hass: HomeAssistant, url: str) -> bool:
     """Fallback: Card als Extra-JS-Modul laden (nur wenn Frontend geladen ist)."""
     if add_extra_js_url is None:
         return False
     try:
-        add_extra_js_url(hass, CARD_URL)
+        add_extra_js_url(hass, url)
     except Exception:  # noqa: BLE001 - Frontend nicht (oder anders) initialisiert
         _LOGGER.warning(
-            "Health-O-Mat: Custom-Card %s konnte nicht als Extra-JS registriert werden", CARD_URL
+            "Health-O-Mat: Custom-Card %s konnte nicht als Extra-JS registriert werden", url
         )
         return False
     return True

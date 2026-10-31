@@ -1,8 +1,9 @@
-"""Pro-Person Feature-Flächen (REQ-HOM-009) — HA-freie Auswertung.
+"""Pro-Person Feature-Flächen (REQ-HOM-009, REQ-HOM-122) — HA-freie Auswertung.
 
-Drei getrennte Bereiche können pro Config-Entry (= Person) an- oder
-abgeschaltet werden: Trinken, Blutdruck und Wohlbefinden. Die Auswahl lebt in
-``entry.options["areas"]`` als ``{drink: bool, bp: bool, wellbeing: bool}``.
+Vier getrennte Bereiche können pro Config-Entry (= Person) an- oder
+abgeschaltet werden: Trinken, Blutdruck, Wohlbefinden und Laborwerte. Die
+Auswahl lebt in ``entry.options["areas"]`` als
+``{drink: bool, bp: bool, wellbeing: bool, labs: bool}``.
 
 Semantik (Bindung, REQ-HOM-009 Migrationspfad): ein FEHLENDER Schlüssel — sowohl
 ``areas`` selbst als auch ein einzelner Unter-Schlüssel — bedeutet „aktiv". Damit
@@ -20,14 +21,16 @@ from typing import Any
 AREA_DRINK = "drink"
 AREA_BP = "bp"
 AREA_WELLBEING = "wellbeing"
+AREA_LABS = "labs"
 
-AREAS: tuple[str, ...] = (AREA_DRINK, AREA_BP, AREA_WELLBEING)
+AREAS: tuple[str, ...] = (AREA_DRINK, AREA_BP, AREA_WELLBEING, AREA_LABS)
 OPTION_AREAS = "areas"
 
 DEFAULT_AREAS: dict[str, bool] = {
     AREA_DRINK: True,
     AREA_BP: True,
     AREA_WELLBEING: True,
+    AREA_LABS: True,
 }
 
 

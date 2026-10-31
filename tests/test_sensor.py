@@ -41,6 +41,22 @@ sensor_module = _load("sensor")
 logic_module = _load("logic")
 
 
+def _load_const_module():
+    """const-Modul im selben Fake-Paket (auch bei früherem Laden wiederverwenden)."""
+    name = f"{_PKG}.const"
+    if name in sys.modules:
+        return sys.modules[name]
+    return _load("const")
+
+
+const_module = _load_const_module()
+
+
+def _run(coro):
+    """Async-Runner für Plattform-Setup-Tests (frischer Event-Loop je Aufruf)."""
+    return asyncio.run(coro)
+
+
 def _fake_store(data: dict) -> MagicMock:
     """Store-Mock: Rohsicht und aktive Sicht aus demselben Datenbestand."""
     store = MagicMock()
@@ -708,6 +724,8 @@ _BP_SENSOR_KEYS = {
     "sensor_bp_pulse",
 }
 _WELLBEING_SENSOR_KEYS = {"sensor_wellbeing_since", "sensor_wellbeing_score"}
+# REQ-HOM-122: ein Sensor je Katalog-Marker (unique_id-Key `lab_{marker_key}`).
+_LAB_SENSOR_KEYS = {f"lab_{marker_key}" for marker_key in const_module.LAB_MARKERS}
 _ENTRY_ID = "test-entry-1"
 
 
@@ -743,20 +761,22 @@ def _ids(keys: set[str]) -> set[str]:
 def test_sensor_setup_old_entry_without_options_has_all_areas():
     """[REQ-HOM-009] Migrationspfad: Alt-Entry ohne areas-Option = alle aktiv."""
     keys = _sensor_setup({})
-    assert keys == _ids(_DRINK_SENSOR_KEYS | _BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS)
+    assert keys == _ids(
+        _DRINK_SENSOR_KEYS | _BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS | _LAB_SENSOR_KEYS
+    )
 
 
 def test_sensor_setup_drink_disabled_keeps_bp_and_wellbeing():
-    """[REQ-HOM-009] drink AUS → keine Drink-Sensoren; BP + Wohlbefinden bleiben."""
+    """[REQ-HOM-009] drink AUS → keine Drink-Sensoren; BP + Wohlbefinden + Labor bleiben."""
     keys = _sensor_setup({"areas": {"drink": False}})
-    assert keys == _ids(_BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS)
+    assert keys == _ids(_BP_SENSOR_KEYS | _WELLBEING_SENSOR_KEYS | _LAB_SENSOR_KEYS)
     assert keys.isdisjoint(_ids(_DRINK_SENSOR_KEYS))
 
 
 def test_sensor_setup_only_drink_when_bp_and_wellbeing_disabled():
-    """[REQ-HOM-009] bp + wellbeing AUS → nur Drink-Sensoren."""
+    """[REQ-HOM-009] bp + wellbeing AUS → Drink- und Lab-Sensoren bleiben."""
     keys = _sensor_setup({"areas": {"bp": False, "wellbeing": False}})
-    assert keys == _ids(_DRINK_SENSOR_KEYS)
+    assert keys == _ids(_DRINK_SENSOR_KEYS | _LAB_SENSOR_KEYS)
 
 
 def test_sensor_unique_ids_stable_across_area_toggle():
@@ -1132,3 +1152,169 @@ def test_m2a_all_wellbeing_voided_yields_unknown_states(monkeypatch):
     assert since.native_value is None
     assert score.native_value is None
     assert score.extra_state_attributes["reported_at"] is None
+
+
+# --- REQ-HOM-122: Laborwert-Sensoren (ein Sensor je Marker) -----------------
+
+
+def _catalog_marker_def() -> dict:
+    """ALT-Katalogmarker als Vorlage (Form aus logic.effective_lab_markers)."""
+    return {
+        "category": "liver",
+        "name_de": "ALT (GPT)",
+        "name_en": "ALT",
+        "canonical_unit": "U/L",
+        "ref_min": 10,
+        "ref_max": 50,
+        "alt_units": {},
+        "require_explicit_unit": False,
+        "is_custom": False,
+    }
+
+
+def _make_lab_sensor(reading, marker_key="alt", marker_def=None, options=None):
+    """LabValueSensor mit gemocktem Coordinator/Entry/Store."""
+    coordinator = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = options if options is not None else {}
+    store = MagicMock()
+    store.last_active_lab_reading.return_value = reading
+
+    sensor = sensor_module.LabValueSensor(
+        coordinator, entry, store, marker_key, marker_def or _catalog_marker_def()
+    )
+    return sensor
+
+
+def _lab_setup_entities(options: dict) -> list:
+    """async_setup_entry mit aufzeichnendem async_add_entities → Entities."""
+    added: list = []
+
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = options
+    store = MagicMock()
+    coordinator = MagicMock()
+    hass.data = {
+        "health_o_mat": {
+            "e1": {"coordinator": coordinator},
+            "shared": {"store": store},
+        }
+    }
+
+    _run(sensor_module.async_setup_entry(hass, entry, lambda ents: added.extend(ents)))
+    return added
+
+
+def test_req_hom_122_lab_value_sensor_native_value_from_last_reading():
+    """[REQ-HOM-122] native_value + Einheit + Attribute stammen aus der letzten Messung."""
+    sensor = _make_lab_sensor({"value": 32.0, "ts": "2026-10-31T09:00:00"})
+
+    assert sensor.native_value == 32.0
+    assert sensor.native_unit_of_measurement == "U/L"
+    assert sensor._attr_unique_id == "e1_lab_alt"
+    attrs = sensor.extra_state_attributes
+    assert attrs["category"] == "liver"
+    assert attrs["in_range"] is True
+    assert attrs["ts"] == "2026-10-31T09:00:00"
+    assert attrs["ref_min"] == 10
+    assert attrs["ref_max"] == 50
+
+
+def test_req_hom_122_lab_value_sensor_unknown_without_reading():
+    """[REQ-HOM-122] Ohne Messung: State unknown, in_range None (nicht False)."""
+    sensor = _make_lab_sensor(None)
+
+    assert sensor.native_value is None
+    assert sensor.extra_state_attributes["in_range"] is None
+    assert sensor.extra_state_attributes["ts"] is None
+
+
+def test_req_hom_122_lab_value_sensor_catalog_marker_uses_translation_key():
+    """[REQ-HOM-122] Katalog-Marker: translation_key `lab_{marker_key}` statt Name."""
+    sensor = _make_lab_sensor(None)
+
+    assert sensor._attr_translation_key == "lab_alt"
+
+
+def test_req_hom_122_lab_value_sensor_custom_marker_uses_own_name():
+    """[REQ-HOM-122] Custom-Marker: nutzervergebener Name, kein translation_key."""
+    marker_def = {
+        "category": "other",
+        "name": "Vitamin D",
+        "canonical_unit": "ng/mL",
+        "ref_min": 30,
+        "ref_max": 100,
+        "alt_units": {},
+        "require_explicit_unit": False,
+        "is_custom": True,
+    }
+
+    sensor = _make_lab_sensor(None, marker_key="vitamin_d", marker_def=marker_def)
+
+    assert sensor._attr_name == "Vitamin D"
+    assert getattr(sensor, "_attr_translation_key", None) is None
+
+
+def test_req_hom_122_lab_value_sensor_applies_ref_override():
+    """[REQ-HOM-122] Options-Override überschreibt den Katalog-Referenzbereich."""
+    options = {"lab_ref_overrides": {"alt": {"ref_min": 5, "ref_max": 45}}}
+    sensor = _make_lab_sensor({"value": 46.0, "ts": "t1"}, options=options)
+
+    attrs = sensor.extra_state_attributes
+    assert attrs["ref_max"] == 45
+    assert attrs["in_range"] is False  # 46 > overridden max 45
+
+
+def test_req_hom_122_lab_value_sensor_ignores_voided_reading():
+    """[REQ-HOM-122] Voided Messung darf nie als State erscheinen."""
+    store = _real_store()
+    asyncio.run(store.add_lab_reading("e1", "2026-10-31T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    asyncio.run(store.add_lab_reading("e1", "2026-10-31T10:00:00", "alt", 99.0, "U/L", 99.0, "U/L"))
+    asyncio.run(store.void_lab_reading("e1", _item_id(store, "lab_readings")))
+
+    sensor = sensor_module.LabValueSensor(
+        MagicMock(), _entry(), store, "alt", _catalog_marker_def()
+    )
+
+    assert sensor.native_value == 32.0
+    assert sensor.extra_state_attributes["ts"] == "2026-10-31T09:00:00"
+
+
+def test_req_hom_122_async_setup_entry_creates_one_sensor_per_catalog_marker():
+    """[REQ-HOM-122] Setup erzeugt genau einen Sensor je Katalog-Marker."""
+    added = _lab_setup_entities({})
+
+    lab_sensors = [e for e in added if isinstance(e, sensor_module.LabValueSensor)]
+    assert len(lab_sensors) == len(const_module.LAB_MARKERS)
+    assert {e._marker_key for e in lab_sensors} == set(const_module.LAB_MARKERS)
+
+
+def test_req_hom_122_async_setup_entry_skips_lab_sensors_when_area_disabled():
+    """[REQ-HOM-122] Bereich `labs` AUS → keine Laborwert-Sensoren."""
+    added = _lab_setup_entities({"areas": {"labs": False}})
+
+    lab_sensors = [e for e in added if isinstance(e, sensor_module.LabValueSensor)]
+    assert lab_sensors == []
+
+
+def test_req_hom_122_async_setup_entry_adds_custom_marker_sensor():
+    """[REQ-HOM-122] Custom-Marker aus den Options erhält einen eigenen Sensor."""
+    added = _lab_setup_entities(
+        {
+            "lab_custom_markers": [
+                {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+            ]
+        }
+    )
+
+    custom = [
+        e
+        for e in added
+        if isinstance(e, sensor_module.LabValueSensor) and e._marker_key == "vitamin_d"
+    ]
+    assert len(custom) == 1
+    assert custom[0]._attr_name == "Vitamin D"
+    assert custom[0]._attr_unique_id == "e1_lab_vitamin_d"

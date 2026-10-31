@@ -13,7 +13,12 @@ from homeassistant.components.sensor import (
 from homeassistant.util import dt as dt_util
 
 from . import areas, logic
-from .const import DOMAIN, HISTORY_ATTRIBUTE_LIMIT
+from .const import (
+    DOMAIN,
+    HISTORY_ATTRIBUTE_LIMIT,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_REF_OVERRIDES,
+)
 from .entity import HealthOMatEntity
 
 
@@ -48,6 +53,10 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     if active[areas.AREA_WELLBEING]:
         entities.append(WellbeingSinceSensor(coord, entry, store))
         entities.append(WellbeingScoreSensor(coord, entry, store))
+    if active[areas.AREA_LABS]:
+        custom_markers = entry.options.get(OPTION_LAB_CUSTOM_MARKERS)
+        for marker_key, marker_def in logic.effective_lab_markers(custom_markers).items():
+            entities.append(LabValueSensor(coord, entry, store, marker_key, marker_def))
     async_add_entities(entities)
 
 
@@ -480,4 +489,61 @@ class WellbeingScoreSensor(HealthOMatSensor):
             # — so können Score und scale_max nicht auseinanderlaufen. Die
             # Skala kann wachsen (neue Stufe in const.WELLBEING_STATES).
             "scale_max": len(logic.WELLBEING_STATES),
+        }
+
+
+class LabValueSensor(HealthOMatSensor):
+    """Ein Sensor je Laborwert-Marker (Katalog oder Custom, REQ-HOM-122).
+
+    Der Wert kommt ausschließlich aus ``store.last_active_lab_reading`` —
+    voided Messungen dürfen nie als State erscheinen. Die rohe
+    ``entry["lab_readings"]``-Liste enthält voided Einträge weiterhin; die
+    aktive Sicht ``active_entry()`` filtert sie heraus (NB-5), und
+    ``last_active_lab_reading`` liefert je Marker den Eintrag mit dem größten
+    ``ts`` (nicht den zuletzt eingetragenen). ``unique_id`` =
+    ``{entry_id}_lab_{marker_key}`` und bleibt dauerhaft stabil (HACS-Regel).
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, entry, store, marker_key: str, marker_def: dict) -> None:
+        super().__init__(coordinator, entry, store, f"lab_{marker_key}")
+        self._marker_key = marker_key
+        self._marker_def = marker_def
+        self._attr_native_unit_of_measurement = marker_def["canonical_unit"]
+        if marker_def.get("is_custom"):
+            # Custom-Marker nutzen den nutzervergebenen Namen direkt (§4 der
+            # Spec: bewusst einsprachig) — kein translation_key nötig.
+            self._attr_name = marker_def.get("name") or marker_key
+            self._attr_translation_key = None
+        else:
+            self._attr_translation_key = f"lab_{marker_key}"
+
+    @property
+    def _reading(self) -> dict | None:
+        return self._store.last_active_lab_reading(self._entry.entry_id, self._marker_key)
+
+    @property
+    def native_value(self) -> float | None:
+        reading = self._reading
+        return reading.get("value") if reading else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        reading = self._reading
+        value = reading.get("value") if reading else None
+        ref_overrides = (
+            self._entry.options.get(OPTION_LAB_REF_OVERRIDES)
+            if not self._marker_def.get("is_custom")
+            else None
+        )
+        ref_min, ref_max = logic.resolve_lab_reference(
+            self._marker_key, self._marker_def, ref_overrides
+        )
+        return {
+            "ts": reading.get("ts") if reading else None,
+            "category": self._marker_def.get("category"),
+            "ref_min": ref_min,
+            "ref_max": ref_max,
+            "in_range": logic.lab_marker_in_range(value, ref_min, ref_max),
         }

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import sys
 import types
+from datetime import datetime
+from typing import Any
 from unittest.mock import MagicMock
 
 import voluptuous as vol
@@ -49,7 +51,51 @@ if not _USING_REAL_HA:
     # ------------------------------------------------------------------
 
     class Entity:
-        """Minimal stand-in for homeassistant.helpers.entity.Entity."""
+        """Minimal stand-in for homeassistant.helpers.entity.Entity.
+
+        Serves the *public* read side of HA's `_attr_*` convention: real HA
+        exposes every `_attr_<name>` through a (cached) property, so tests may
+        assert `entity.native_unit_of_measurement` and friends exactly as a
+        running HA would, instead of reaching for private attributes. Unset
+        attributes fall back to HA's defaults (None, `has_entity_name=False`,
+        `available=True`).
+        """
+
+        @property
+        def unique_id(self) -> str | None:
+            return getattr(self, "_attr_unique_id", None)
+
+        @property
+        def name(self) -> str | None:
+            return getattr(self, "_attr_name", None)
+
+        @property
+        def icon(self) -> str | None:
+            return getattr(self, "_attr_icon", None)
+
+        @property
+        def device_class(self) -> Any:
+            return getattr(self, "_attr_device_class", None)
+
+        @property
+        def translation_key(self) -> str | None:
+            return getattr(self, "_attr_translation_key", None)
+
+        @property
+        def has_entity_name(self) -> bool:
+            return getattr(self, "_attr_has_entity_name", False)
+
+        @property
+        def device_info(self) -> Any:
+            return getattr(self, "_attr_device_info", None)
+
+        @property
+        def available(self) -> bool:
+            return getattr(self, "_attr_available", True)
+
+        @property
+        def extra_state_attributes(self) -> Any:
+            return getattr(self, "_attr_extra_state_attributes", None)
 
     _UNDEFINED = object()  # stand-in for helpers.typing.UNDEFINED (identity sentinel)
 
@@ -69,17 +115,93 @@ if not _USING_REAL_HA:
     class NumberEntity(Entity):
         """Minimal stand-in for homeassistant.components.number.NumberEntity."""
 
+        @property
+        def native_value(self) -> float | None:
+            return getattr(self, "_attr_native_value", None)
+
+        @property
+        def native_min_value(self) -> float | None:
+            return getattr(self, "_attr_native_min_value", None)
+
+        @property
+        def native_max_value(self) -> float | None:
+            return getattr(self, "_attr_native_max_value", None)
+
+        @property
+        def native_step(self) -> float | None:
+            return getattr(self, "_attr_native_step", None)
+
+        @property
+        def native_unit_of_measurement(self) -> str | None:
+            return getattr(self, "_attr_native_unit_of_measurement", None)
+
+        @property
+        def mode(self) -> Any:
+            return getattr(self, "_attr_mode", None)
+
     class SensorEntity(Entity):
         """Minimal stand-in for homeassistant.components.sensor.SensorEntity."""
+
+        @property
+        def native_value(self) -> Any:
+            return getattr(self, "_attr_native_value", None)
+
+        @property
+        def native_unit_of_measurement(self) -> str | None:
+            return getattr(self, "_attr_native_unit_of_measurement", None)
+
+        @property
+        def state_class(self) -> Any:
+            return getattr(self, "_attr_state_class", None)
+
+        @property
+        def options(self) -> list[str] | None:
+            return getattr(self, "_attr_options", None)
+
+        @property
+        def last_reset(self) -> Any:
+            return getattr(self, "_attr_last_reset", None)
+
+        @property
+        def suggested_display_precision(self) -> int | None:
+            return getattr(self, "_attr_suggested_display_precision", None)
 
     class BinarySensorEntity(Entity):
         """Minimal stand-in for binary_sensor.BinarySensorEntity."""
 
+        @property
+        def is_on(self) -> bool | None:
+            return getattr(self, "_attr_is_on", None)
+
     class SelectEntity(Entity):
         """Minimal stand-in for homeassistant.components.select.SelectEntity."""
 
+        @property
+        def current_option(self) -> str | None:
+            return getattr(self, "_attr_current_option", None)
+
+        @property
+        def options(self) -> list[str] | None:
+            return getattr(self, "_attr_options", None)
+
     class TextEntity(Entity):
         """Minimal stand-in for homeassistant.components.text.TextEntity."""
+
+        @property
+        def native_value(self) -> str | None:
+            return getattr(self, "_attr_native_value", None)
+
+        @property
+        def native_min(self) -> int | None:
+            return getattr(self, "_attr_native_min", None)
+
+        @property
+        def native_max(self) -> int | None:
+            return getattr(self, "_attr_native_max", None)
+
+        @property
+        def mode(self) -> Any:
+            return getattr(self, "_attr_mode", None)
 
     class DataUpdateCoordinator:
         """Minimal stand-in for update_coordinator.DataUpdateCoordinator.
@@ -309,6 +431,32 @@ if not _USING_REAL_HA:
 
         return _async_response
 
+    # --- homeassistant.util.dt -------------------------------------------
+    # A real module object with both publicly used names pre-defined:
+    #
+    #   * pytest >= 8.4 remembers the pre-patch value of MonkeyPatch.setattr
+    #     from `target.__dict__` and falls back to `delattr()` when the
+    #     attribute was only created lazily by the mock (pytest #10644).
+    #     `MagicMock.__delattr__` tombstones such a name in
+    #     `_mock_children`, so every later access raises AttributeError —
+    #     the *second* `monkeypatch.setattr(dt_util, "as_local", ...)` in a
+    #     session then fails with "has no attribute 'as_local'".
+    #   * A bare `MagicMock()` module hides exactly that: the poisoning only
+    #     reaches the suite without HA installed, because with real HA
+    #     `dt_util` is a regular module.
+    #
+    # Pre-defining the attributes keeps `now` a mock (a test that forgets to
+    # freeze the clock then breaks visibly instead of depending on wall-clock
+    # time) while `as_local` behaves like HA's: convert to the local time zone.
+    # `DEFAULT_TIME_ZONE` is deliberately absent — restore.py explicitly
+    # handles that "no tz info" case for test fakes.
+    def _dt_as_local(value: datetime) -> datetime:
+        return value.astimezone()
+
+    _dt_module = types.ModuleType("homeassistant.util.dt")
+    _dt_module.now = MagicMock(name="dt_util.now")  # frozen per test
+    _dt_module.as_local = _dt_as_local
+
     _FAKE_MODULES: dict[str, types.ModuleType] = {
         "homeassistant": _module("homeassistant"),
         "homeassistant.core": _module(
@@ -323,7 +471,7 @@ if not _USING_REAL_HA:
             ServiceValidationError=ServiceValidationError,
         ),
         "homeassistant.util": _module("homeassistant.util"),
-        "homeassistant.util.dt": MagicMock(),  # dt_util.now()/.as_local() mocked per-test
+        "homeassistant.util.dt": _dt_module,
         "homeassistant.config_entries": _module(
             "homeassistant.config_entries",
             ConfigEntry=ConfigEntry,

@@ -30,7 +30,9 @@ def test_req_hom_117_panel_renders_english_labels(english_page, hass_base_url, p
 
     tabs = panel.locator(TAB)
     labels = [tabs.nth(index).inner_text().strip() for index in range(tabs.count())]
-    assert labels == ["Drinking", "Blood pressure", "Wellbeing"], (
+    # `panel_person` enables every area; the lab area is also default-enabled,
+    # so its tab (`ui_panel_tab_labs`) belongs to the expected label set.
+    assert labels == ["Drinking", "Blood pressure", "Wellbeing", "Lab values"], (
         f"expected English tab labels, got {labels!r}"
     )
     # A couple of body labels follow the same translation source. The panel is a

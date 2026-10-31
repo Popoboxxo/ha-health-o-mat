@@ -186,11 +186,13 @@ export_csv:
               value: "drinks"
             - label: Blutdruck
               value: "blood_pressure"
+            - label: Laborwerte
+              value: "lab_values"
 
 import_csv:
   name: CSV-Import
   description: >-
-    Importiert Getränke- oder Blutdruckdaten aus /config/health_o_mat_import/
+    Importiert Getränke-, Blutdruck- oder Laborwertdaten aus /config/health_o_mat_import/
     (nur dieses Verzeichnis, niemals /config/www).
   fields:
     filename:
@@ -215,6 +217,8 @@ import_csv:
               value: "drinks"
             - label: Blutdruck
               value: "blood_pressure"
+            - label: Laborwerte
+              value: "lab_values"
 
 backup:
   name: Backup
@@ -315,3 +319,125 @@ weekly_report:
         Name der Person (leer = jede eingerichtete Person erhält einen eigenen
         Bericht).
       example: "Caro"
+
+add_lab_value:
+  name: Laborwert erfassen
+  description: Speichert einen Laborwert (Katalog- oder eigener Marker) für eine Person.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    marker:
+      name: Marker
+      description: >-
+        Stabiler Marker-Schlüssel (z. B. alt, creatinine, crp) oder ein eigener
+        Marker-Key aus dem Admin-Panel. Deutsche Laborsynonyme (gpt, got,
+        gamma_gt) werden automatisch aufgelöst.
+      example: "alt"
+      selector:
+        select:
+          custom_value: true
+          options:
+            - label: ALT (GPT)
+              value: "alt"
+            - label: AST (GOT)
+              value: "ast"
+            - label: GGT (Gamma-GT)
+              value: "ggt"
+            - label: Bilirubin gesamt
+              value: "bilirubin_total"
+            - label: Gesamteiweiß
+              value: "total_protein"
+            - label: Kreatinin
+              value: "creatinine"
+            - label: eGFR
+              value: "egfr"
+            - label: Harnstoff
+              value: "urea"
+            - label: Protein/Kreatinin-Quotient (Urin)
+              value: "urine_protein_creatinine_ratio"
+            - label: Natrium
+              value: "sodium"
+            - label: Kalium
+              value: "potassium"
+            - label: Calcium gesamt
+              value: "calcium"
+            - label: Magnesium
+              value: "magnesium"
+            - label: Chlorid
+              value: "chloride"
+            - label: Gesamtcholesterin
+              value: "cholesterol_total"
+            - label: LDL
+              value: "ldl"
+            - label: HDL
+              value: "hdl"
+            - label: Triglyceride
+              value: "triglycerides"
+            - label: TSH
+              value: "tsh"
+            - label: fT4
+              value: "ft4"
+            - label: fT3
+              value: "ft3"
+            - label: Hämoglobin
+              value: "hemoglobin"
+            - label: Leukozyten
+              value: "leukocytes"
+            - label: Thrombozyten
+              value: "platelets"
+            - label: CRP
+              value: "crp"
+            - label: BSG
+              value: "esr"
+            - label: Lipase
+              value: "lipase"
+            - label: Amylase
+              value: "amylase"
+            - label: Tacrolimus (Talspiegel)
+              value: "tacrolimus"
+    value:
+      name: Wert
+      description: Messwert in der angegebenen (oder Standard-)Einheit.
+      example: 32.0
+      required: true
+    unit:
+      name: Einheit
+      description: >-
+        Einheit des Werts (optional, Default = kanonische Einheit des
+        Markers). Für Marker mit Verwechslungsgefahr (z. B. das
+        Protein/Kreatinin-Quotient) ist dieses Feld Pflicht.
+      example: "U/L"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt der Erfassung als ISO 8601 (z. B. 2026-10-24T18:30 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-10-24T18:30:00+02:00"
+    report_ref:
+      name: Berichts-Referenz
+      description: >-
+        Optionaler Link oder externe ID des Laborberichts (max. 500 Zeichen).
+        Nur Referenz, Health-O-Mat ruft die URL nie selbst auf.
+      example: "https://example.com/laborbericht/123"
+
+remove_last_lab_value:
+  name: Letzten Laborwert löschen
+  description: >-
+    Entfernt den zeitlich neuesten aktiven Laborwert eines bestimmten Markers
+    (Undo) — nicht zwingend den zuletzt eingegebenen. Nachgetragene alte
+    Befunde (rückdatierter Zeitstempel) werden dadurch nicht getroffen; der
+    entfernte Eintrag wird als gelöscht markiert und bleibt über
+    restore_entry wiederherstellbar.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+    marker:
+      name: Marker
+      description: >-
+        Stabiler Marker-Schlüssel; entfernt wird dessen zeitlich neuester
+        aktiver Wert (größter Zeitstempel, nicht der zuletzt eingegebene).
+      example: "alt"
+      required: true

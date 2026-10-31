@@ -25,8 +25,15 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 
 from .backup import BACKUP_DIR_NAME
-from .const import DEFAULT_AUDIT_LIMIT, MAX_AMOUNT_ML, NO_TYPE_LABEL
+from .const import (
+    DEFAULT_AUDIT_LIMIT,
+    DOMAIN,
+    MAX_AMOUNT_ML,
+    NO_TYPE_LABEL,
+    OPTION_LAB_CUSTOM_MARKERS,
+)
 from .entity import signal_refresh
+from .logic import convert_lab_value, resolve_lab_marker
 from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,9 +59,13 @@ _BP_HINTS = {
     "notiz",
     "note",
 }
+# Nur eindeutige Spaltennamen: generische Wie "wert"/"einheit" könnten auch
+# in fremden Getränke-/Blutdruck-Dateien auftauchen und würden `all` falsch
+# routen. Die eigene Laborwert-Kopfzeile ist über diese Keys eindeutig.
+_LAB_HINTS = {"marker", "kategorie", "berichts_referenz"}
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
-DATASETS = ("drinks", "blood_pressure")
+DATASETS = ("drinks", "blood_pressure", "lab_values")
 
 
 def safe_import_path(config_dir: str, filename: str) -> str:
@@ -228,10 +239,17 @@ def parse_csv_text(text: str) -> tuple[list[list[str]], str | None]:
         if first.startswith("#"):
             continue
         joined = {c.lower() for c in cells}
-        is_header = first in _HEADER_FIRST and bool(joined & (_DRINKS_HINTS | _BP_HINTS))
+        is_header = first in _HEADER_FIRST and bool(
+            joined & (_DRINKS_HINTS | _BP_HINTS | _LAB_HINTS)
+        )
         if is_header:
             if kind is None:
-                kind = "blood_pressure" if joined & _BP_HINTS else "drinks"
+                if joined & _LAB_HINTS:
+                    kind = "lab_values"
+                elif joined & _BP_HINTS:
+                    kind = "blood_pressure"
+                else:
+                    kind = "drinks"
             continue  # Kopfzeile
         rows.append(cells)
     return rows, kind
@@ -295,19 +313,61 @@ def _parse_reading_row(cells: list[str]) -> dict | str:
     }
 
 
+def _parse_lab_row(cells: list[str]) -> dict | str:
+    """Laborwert-Zeile → Record-Dict (noch unaufgelöster `marker_raw`) oder Fehlermeldung.
+
+    Spalten (siehe `exporter.py`): zeitstempel, person, marker, kategorie, wert,
+    einheit, eingegeben_als_wert, eingegeben_als_einheit, berichts_referenz.
+    Die Marker-Auflösung (Alias/Katalog/Custom) passiert erst in `plan_import`
+    — diese Funktion bleibt reine Zeilen-Validierung, analog zu
+    `_parse_drink_row`/`_parse_reading_row`.
+    """
+    if len(cells) < 6:
+        return f"Laborwert-Zeile mit zu wenigen Spalten: {';'.join(cells)}"
+    ts = _norm_ts(cells[0])
+    if ts is None:
+        return f"Ungültiger Zeitstempel: {cells[0]!r}"
+    marker_raw = cells[2].strip()
+    if not marker_raw:
+        return f"Laborwert-Zeile ohne Marker: {';'.join(cells)}"
+    try:
+        value = float(cells[4].strip().replace(",", "."))
+    except ValueError:
+        return f"Ungültiger Laborwert: {cells[4]!r}"
+    unit = cells[5].strip()
+    reported_value = value
+    if len(cells) > 6 and cells[6].strip():
+        try:
+            reported_value = float(cells[6].strip().replace(",", "."))
+        except ValueError:
+            return f"Ungültiger eingegebener Wert: {cells[6]!r}"
+    reported_unit = cells[7].strip() if len(cells) > 7 and cells[7].strip() else unit
+    report_ref = cells[8].strip() if len(cells) > 8 and cells[8].strip() else None
+    return {
+        "ts": ts,
+        "marker_raw": marker_raw,
+        "value": value,
+        "unit": unit,
+        "reported_value": reported_value,
+        "reported_unit": reported_unit,
+        "report_ref": report_ref,
+    }
+
+
 @dataclass
 class ImportPlan:
     """Ergebnis der reinen Import-Planung (Records + Zähler)."""
 
     drinks: list[dict] = field(default_factory=list)
     readings: list[dict] = field(default_factory=list)
+    lab_readings: list[dict] = field(default_factory=list)
     skipped: int = 0
     rejected: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
     def imported(self) -> int:
-        return len(self.drinks) + len(self.readings)
+        return len(self.drinks) + len(self.readings) + len(self.lab_readings)
 
 
 def _existing_drink_keys(existing: list[dict]) -> set[tuple[str, int]]:
@@ -336,18 +396,42 @@ def _existing_reading_keys(existing: list[dict]) -> set[tuple[str, int, int]]:
     return keys
 
 
+def _existing_lab_keys(existing: list[dict]) -> set[tuple[str, str, float]]:
+    """``(ts, marker_key, value)`` — dieselbe Dedup-Logik wie in ``restore.py``."""
+    keys: set[tuple[str, str, float]] = set()
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        ts = _norm_ts(item.get("ts")) or str(item.get("ts"))
+        try:
+            keys.add((ts, str(item.get("marker_key") or ""), float(item.get("value", 0))))
+        except (TypeError, ValueError):
+            continue
+    return keys
+
+
 def plan_import(
     text: str,
     dataset: str,
     existing_drinks: list[dict] | None = None,
     existing_readings: list[dict] | None = None,
+    existing_lab_readings: list[dict] | None = None,
+    lab_custom_markers: list[dict] | None = None,
 ) -> ImportPlan:
     """Plant den Import HA-frei: parst, prüft und filtert Duplikate.
 
-    ``dataset`` ist ``drinks``, ``blood_pressure`` oder ``all`` (auto-erkennen).
-    Duplikate werden über ``(ts, ml)`` bzw. ``(ts, sys, dia)`` erkannt —
-    bestehende Einträge und Wiederholungen innerhalb der Datei zählen als
-    ``skipped``, unlesbare Zeilen als ``rejected``.
+    ``dataset`` ist ``drinks``, ``blood_pressure``, ``lab_values`` oder ``all``
+    (auto-erkennen). Duplikate werden über ``(ts, ml)``, ``(ts, sys, dia)`` bzw.
+    ``(ts, marker_key, value)`` erkannt — bestehende Einträge und Wiederholungen
+    innerhalb der Datei zählen als ``skipped``, unlesbare Zeilen, unbekannte
+    Laborwert-Marker und nicht unterstützte Einheiten als ``rejected``.
+
+    Laborwerte werden nach der Marker-Auflösung über
+    ``logic.convert_lab_value`` in den ``canonical_unit`` des Markers umgerechnet
+    (Spec-Invariante: ``value``/``unit`` sind immer kanonisch). Die Rohwerte
+    bleiben als ``reported_value``/``reported_unit`` erhalten. Eine leere
+    Einheitsspalte bedeutet "keine Angabe" → kanonische Einheit (N-4); nur
+    Marker mit ``require_explicit_unit`` lehnen sie ab.
     """
     rows, header_kind = parse_csv_text(text)
     resolved = dataset
@@ -355,7 +439,49 @@ def plan_import(
         resolved = header_kind or _detect_kind(rows)
 
     plan = ImportPlan()
-    if resolved == "blood_pressure":
+    if resolved == "lab_values":
+        seen_labs = _existing_lab_keys(existing_lab_readings or [])
+        for cells in rows:
+            record = _parse_lab_row(cells)
+            if isinstance(record, str):
+                plan.rejected += 1
+                plan.errors.append(record)
+                continue
+            resolved_marker = resolve_lab_marker(record["marker_raw"], lab_custom_markers)
+            if resolved_marker is None:
+                plan.rejected += 1
+                plan.errors.append(f"Unbekannter Marker: {record['marker_raw']!r}")
+                continue
+            marker_key, marker_def = resolved_marker
+            # N-4: Eine leere Einheitsspalte ist "keine Angabe" — analog zu
+            # `convert_lab_value(unit=None)` und zum Service `add_lab_value`
+            # (unit optional) wird die kanonische Einheit angenommen. Nur Marker
+            # mit `require_explicit_unit` verlangen zwingend eine Einheit.
+            raw_unit = record["unit"] or None
+            if raw_unit is None and marker_def.get("require_explicit_unit"):
+                plan.rejected += 1
+                plan.errors.append(f"Einheit erforderlich für Marker {marker_key!r}")
+                continue
+            try:
+                value, unit = convert_lab_value(marker_def, record["value"], raw_unit)
+            except ValueError:
+                plan.rejected += 1
+                plan.errors.append(f"Nicht unterstützte Einheit: {record['unit']!r}")
+                continue
+            record["marker_key"] = marker_key
+            record["value"] = value
+            record["unit"] = unit
+            # Ohne gedruckte Einheit bleibt `reported_unit` leer — dann gilt die
+            # kanonische Einheit (gleiche Invariante wie im Service).
+            record["reported_unit"] = record["reported_unit"] or unit
+            del record["marker_raw"]
+            key = (record["ts"], marker_key, record["value"])
+            if key in seen_labs:
+                plan.skipped += 1
+                continue
+            seen_labs.add(key)
+            plan.lab_readings.append(record)
+    elif resolved == "blood_pressure":
         seen = _existing_reading_keys(existing_readings or [])
         for cells in rows:
             record = _parse_reading_row(cells)
@@ -386,12 +512,28 @@ def plan_import(
     return plan
 
 
+def _entry_lab_custom_markers(hass: HomeAssistant, entry_id: str) -> list[dict] | None:
+    """`entry.options["lab_custom_markers"]` einer Person (nicht im Store)."""
+    try:
+        entries = hass.config_entries.async_entries(DOMAIN)
+    except (AttributeError, TypeError):
+        return None
+    for config_entry in entries:
+        if getattr(config_entry, "entry_id", None) != entry_id:
+            continue
+        options = getattr(config_entry, "options", None)
+        custom = options.get(OPTION_LAB_CUSTOM_MARKERS) if hasattr(options, "get") else None
+        return custom if isinstance(custom, list) else None
+    return None
+
+
 async def async_import_csv(
     hass: HomeAssistant,
     store: HealthOMatStore,
     entry_id: str,
     call: ServiceCall,
     audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    lab_custom_markers: list[dict] | None = None,
 ) -> dict:
     """Service ``health_o_mat.import_csv`` — liest und übernimmt eine CSV-Datei.
 
@@ -428,8 +570,17 @@ async def async_import_csv(
         raise ServiceValidationError(f"Import-Datei nicht lesbar: {filename}") from err
 
     entry = store.entry(entry_id)
+    if lab_custom_markers is None:
+        lab_custom_markers = _entry_lab_custom_markers(hass, entry_id)
     # Rohe Listen (inkl. voided) — gelöschte Einträge gelten als Duplikat.
-    plan = plan_import(text, dataset, entry.get("drinks", []), entry.get("readings", []))
+    plan = plan_import(
+        text,
+        dataset,
+        entry.get("drinks", []),
+        entry.get("readings", []),
+        existing_lab_readings=entry.get("lab_readings", []),
+        lab_custom_markers=lab_custom_markers,
+    )
 
     for drink in plan.drinks:
         await store.add_drink(
@@ -449,6 +600,18 @@ async def async_import_csv(
             reading["pulse"],
             reading["note"],
             reading["src"],
+            audit_limit=audit_limit,
+        )
+    for lab_reading in plan.lab_readings:
+        await store.add_lab_reading(
+            entry_id,
+            lab_reading["ts"],
+            lab_reading["marker_key"],
+            lab_reading["value"],
+            lab_reading["unit"],
+            lab_reading["reported_value"],
+            lab_reading["reported_unit"],
+            report_ref=lab_reading["report_ref"],
             audit_limit=audit_limit,
         )
     signal_refresh(hass, entry_id)

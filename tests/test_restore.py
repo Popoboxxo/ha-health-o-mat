@@ -114,17 +114,43 @@ def _wellbeing(ts: str, key: str, **extra) -> dict:
     return record
 
 
-def _entry(person: str, *, drinks=None, readings=None, wellbeing=None, total=0, audit=None):
+def _entry(
+    person: str,
+    *,
+    drinks=None,
+    readings=None,
+    wellbeing=None,
+    lab=None,
+    total=0,
+    audit=None,
+):
     return {
         "person": person,
         "drinks": copy.deepcopy(drinks or []),
         "readings": copy.deepcopy(readings or []),
         "wellbeing_entries": copy.deepcopy(wellbeing or []),
+        "lab_readings": copy.deepcopy(lab or []),
         "audit_log": copy.deepcopy(audit or []),
         "total_ml_lifetime": total,
         "inputs": {},
         "archived_counts": {"drinks": 0, "readings": 0},
     }
+
+
+def _lab(ts: str, marker_key: str, value: float, *, unit: str = "U/L", **extra) -> dict:
+    record = {
+        "id": str(uuid.uuid4()),
+        "ts": ts,
+        "marker_key": marker_key,
+        "value": value,
+        "unit": unit,
+        "created_at": ts,
+        "voided_at": None,
+        "voided_by": None,
+        "void_reason": None,
+    }
+    record.update(extra)
+    return record
 
 
 def _doc(entries: dict, *, version: int = 2, schema: int = 4, archive: dict | None = None):
@@ -875,7 +901,7 @@ def test_replace_with_explicit_all_datasets_is_full_scope():
         backup,
         current,
         mode="replace",
-        datasets=["drinks", "blood_pressure", "wellbeing"],
+        datasets=["drinks", "blood_pressure", "wellbeing", "lab_values"],
     )
 
     assert plan.target_entries["t1"]["total_ml_lifetime"] == 250
@@ -1364,3 +1390,201 @@ def test_restore_command_on_demand_archive_is_written(tmp_path, monkeypatch):
     assert store.entry("t1")["drinks"][0]["ml"] == 250
     assert archive.entry("t1")["drinks"][0]["ml"] == 500
     assert store.entry("t1")["total_ml_lifetime"] == 750
+
+
+# ============================================================================
+# Laborwerte (REQ-HOM-122)
+# ============================================================================
+
+
+def test_req_hom_122_dedup_key_lab_values_uses_ts_marker_value():
+    from custom_components.health_o_mat.restore import _dedup_key
+
+    record = {"ts": "2026-10-31T09:00:00", "marker_key": "alt", "value": 32.0}
+    assert _dedup_key("lab_values", record) == ("2026-10-31T09:00:00", "alt", 32.0)
+
+
+def test_req_hom_122_lab_values_in_datasets_and_dataset_list():
+    from custom_components.health_o_mat import restore
+
+    assert "lab_values" in restore.DATASETS
+    assert restore.DATASET_LIST["lab_values"] == "lab_readings"
+
+
+def test_req_hom_122_dataset_alias_lab_readings_resolves_to_lab_values():
+    from custom_components.health_o_mat.restore import _normalize_datasets
+
+    assert _normalize_datasets(["lab_readings"]) == ("lab_values",)
+
+
+def test_req_hom_122_merge_lab_custom_markers_appends_new_keys():
+    from custom_components.health_o_mat.restore import merge_lab_custom_markers
+
+    current = [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    incoming = [{"key": "ferritin", "name": "Ferritin", "category": "other", "unit": "µg/L"}]
+    merged = merge_lab_custom_markers(current, incoming)
+    assert {m["key"] for m in merged} == {"vitamin_d", "ferritin"}
+
+
+def test_req_hom_122_merge_lab_custom_markers_keeps_existing_definition_on_key_clash():
+    """Merge semantics (REQ-HOM-116): existing wins, no silent overwrite."""
+    from custom_components.health_o_mat.restore import merge_lab_custom_markers
+
+    current = [
+        {
+            "key": "vitamin_d",
+            "name": "Vitamin D (eigene Def.)",
+            "category": "other",
+            "unit": "ng/mL",
+        }
+    ]
+    incoming = [
+        {
+            "key": "vitamin_d",
+            "name": "Vitamin D (Backup-Def.)",
+            "category": "other",
+            "unit": "nmol/L",
+        }
+    ]
+    merged = merge_lab_custom_markers(current, incoming)
+    assert len(merged) == 1
+    assert merged[0]["name"] == "Vitamin D (eigene Def.)"
+
+
+def test_req_hom_122_unknown_lab_marker_keys_flags_missing_marker():
+    from custom_components.health_o_mat.restore import unknown_lab_marker_keys
+
+    records = [{"marker_key": "alt"}, {"marker_key": "not_a_marker"}]
+    assert unknown_lab_marker_keys(records, []) == ["not_a_marker"]
+
+
+def test_req_hom_122_unknown_lab_marker_keys_accepts_merged_custom_marker():
+    from custom_components.health_o_mat.restore import unknown_lab_marker_keys
+
+    records = [{"marker_key": "vitamin_d"}]
+    custom = [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    assert unknown_lab_marker_keys(records, custom) == []
+
+
+def test_req_hom_122_plan_restore_adds_lab_values_and_merges_markers():
+    """Restore bringt Messwerte UND die zugehörigen Custom-Marker mit (§8)."""
+    incoming = [{"key": "ferritin", "name": "Ferritin", "category": "other", "unit": "µg/L"}]
+    backup = _doc({"src": _entry("Max", lab=[_lab("2026-10-31T09:00:00", "ferritin", 120.0)])})
+    backup["lab_options"] = {"src": {"lab_custom_markers": incoming}}
+    current = _current_entries(("t1", _entry("Max")))
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        datasets=["lab_values"],
+        lab_options=backup["lab_options"],
+        current_lab_custom_markers={"t1": []},
+    )
+
+    assert plan.counts["t1"]["lab_values"]["added"] == 1
+    assert plan.target_entries["t1"]["lab_readings"][0]["marker_key"] == "ferritin"
+    assert [marker["key"] for marker in plan.lab_custom_markers_by_target["t1"]] == ["ferritin"]
+    assert plan.warnings == []
+
+
+def test_req_hom_122_plan_restore_warns_and_skips_unknown_marker():
+    backup = _doc(
+        {
+            "src": _entry(
+                "Max",
+                lab=[
+                    _lab("2026-10-31T09:00:00", "alt", 32.0),
+                    _lab("2026-10-31T10:00:00", "not_a_marker", 1.0),
+                ],
+            )
+        }
+    )
+    current = _current_entries(("t1", _entry("Max")))
+
+    plan = restore.plan_restore(backup, current, datasets=["lab_values"])
+
+    assert plan.counts["t1"]["lab_values"]["added"] == 1
+    assert plan.counts["t1"]["lab_values"]["errors"] == 1
+    assert any("not_a_marker" in warning for warning in plan.warnings)
+    assert [record["marker_key"] for record in plan.target_entries["t1"]["lab_readings"]] == ["alt"]
+
+
+def test_req_hom_122_lab_values_are_never_written_to_archive():
+    """Das Retention-Archiv kennt nur Getränke/Messungen, keine Laborwerte."""
+    backup = _doc({"src": _entry("Max", lab=[_lab("2026-10-31T09:00:00", "alt", 32.0)])})
+    current = _current_entries(("t1", _entry("Max")))
+    archive = {"t1": {"drinks": [], "readings": []}}
+
+    plan = restore.plan_restore(
+        backup,
+        current,
+        datasets=["lab_values"],
+        current_archive_entries=archive,
+    )
+
+    assert plan.counts["t1"]["lab_values"]["added"] == 1
+    assert plan.target_archive_entries["t1"] == {"drinks": [], "readings": []}
+
+
+def test_req_hom_122_apply_merges_custom_markers_into_options(tmp_path, monkeypatch):
+    """Nach erfolgreichem Store-Save landen die gemergten Marker in entry.options."""
+    current_marker = {
+        "key": "vitamin_d",
+        "name": "Vitamin D",
+        "category": "other",
+        "unit": "ng/mL",
+    }
+    incoming_marker = {"key": "ferritin", "name": "Ferritin", "category": "other", "unit": "µg/L"}
+    hass, store, _archive = _apply_setup(tmp_path, monkeypatch, {"t1": _entry("Max")})
+    target_entry = types.SimpleNamespace(
+        entry_id="t1", options={"lab_custom_markers": [current_marker]}
+    )
+    hass.config_entries.async_get_entry = MagicMock(return_value=target_entry)
+    hass.config_entries.async_entries = MagicMock(return_value=[target_entry])
+    hass.config_entries.async_update_entry = MagicMock()
+    document = _doc({"src": _entry("Max", lab=[_lab("2026-10-31T09:00:00", "ferritin", 120.0)])})
+    document["lab_options"] = {"src": {"lab_custom_markers": [incoming_marker]}}
+    filename = _write_import_file(tmp_path, document)
+
+    result = _run(
+        restore.async_restore_from_file(
+            hass,
+            store,
+            None,
+            {"filename": filename, "datasets": ["lab_values"]},
+        )
+    )
+
+    assert result["applied"] is True
+    assert store.entry("t1")["lab_readings"][0]["marker_key"] == "ferritin"
+    hass.config_entries.async_update_entry.assert_called_once()
+    args, kwargs = hass.config_entries.async_update_entry.call_args
+    assert args[0] is target_entry
+    merged = kwargs["options"]["lab_custom_markers"]
+    assert {marker["key"] for marker in merged} == {"vitamin_d", "ferritin"}
+
+
+def test_req_hom_122_apply_does_not_touch_options_when_save_fails(tmp_path, monkeypatch):
+    """Kein halb-angewandter Restore: Options erst nach erfolgreichem Store-Save."""
+    incoming_marker = {"key": "ferritin", "name": "Ferritin", "category": "other", "unit": "µg/L"}
+    hass, store, _archive = _apply_setup(tmp_path, monkeypatch, {"t1": _entry("Max")})
+    target_entry = types.SimpleNamespace(entry_id="t1", options={"lab_custom_markers": []})
+    hass.config_entries.async_get_entry = MagicMock(return_value=target_entry)
+    hass.config_entries.async_entries = MagicMock(return_value=[target_entry])
+    hass.config_entries.async_update_entry = MagicMock()
+    store._store.async_save = AsyncMock(side_effect=RuntimeError("disk full"))
+    document = _doc({"src": _entry("Max", lab=[_lab("2026-10-31T09:00:00", "ferritin", 120.0)])})
+    document["lab_options"] = {"src": {"lab_custom_markers": [incoming_marker]}}
+    filename = _write_import_file(tmp_path, document)
+
+    with pytest.raises(restore.RestoreError):
+        _run(
+            restore.async_restore_from_file(
+                hass,
+                store,
+                None,
+                {"filename": filename, "datasets": ["lab_values"]},
+            )
+        )
+
+    hass.config_entries.async_update_entry.assert_not_called()

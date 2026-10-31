@@ -43,6 +43,9 @@ def _load(name: str):
 
 
 ws_api = _load("ws_api")
+# `ws_api` importiert `const` bereits beim Laden — dasselbe Modul-Objekt
+# weiterverwenden statt neu zu laden (sonst zwei Katalog-Objekte).
+const = sys.modules[f"{_PKG}.const"]
 
 DOMAIN = "health_o_mat"
 NOW = datetime(2026, 10, 15, 12, 0)
@@ -185,6 +188,9 @@ def _store(data: dict):
     store = MagicMock()
     store.all_entries.return_value = data
     store.active_entry.side_effect = lambda entry_id: data.get(entry_id, {})
+    # Aktive Lab-Sicht: der generische Panel-Fake hat keine Lab-Daten.
+    store.last_active_lab_reading.return_value = None
+    store.active_lab_readings.return_value = []
     return store
 
 
@@ -196,6 +202,8 @@ def _write_store() -> MagicMock:
     store.add_drink = AsyncMock()
     store.add_reading = AsyncMock()
     store.set_wellbeing = AsyncMock()
+    store.add_lab_reading = AsyncMock()
+    store.remove_last_lab_reading = AsyncMock(return_value=True)
     store.remove_last_drink = AsyncMock(return_value=True)
     store.remove_last_reading = AsyncMock(return_value=True)
     store.remove_last_wellbeing = AsyncMock(return_value=True)
@@ -340,14 +348,14 @@ def test_list_persons_returns_entries_sorted_with_device_id(monkeypatch):
             "display_name": "Caro",
             "device_id": "dev-e1",
             "person_slug": "caro",
-            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
         },
         {
             "entry_id": "e2",
             "display_name": "Max",
             "device_id": "dev-e2",
             "person_slug": "Max",
-            "areas": {"drink": True, "bp": True, "wellbeing": True},
+            "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
         },
     ]
 
@@ -363,7 +371,7 @@ def test_list_persons_includes_slug_and_areas(monkeypatch):
 
     assert person["person_slug"] == "caro"  # entry.data["person"], NICHT der Anzeigename
     assert person["person_slug"] != person["display_name"]
-    assert person["areas"] == {"drink": True, "bp": False, "wellbeing": True}
+    assert person["areas"] == {"drink": True, "bp": False, "wellbeing": True, "labs": True}
 
 
 def test_list_persons_without_device(monkeypatch):
@@ -461,7 +469,7 @@ def test_panel_data_full_payload(monkeypatch):
     assert payload["entry_id"] == "e1"
     assert payload["person"] == "Caro"
     assert payload["person_slug"] == "Caro"
-    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
     assert payload["goal_ml"] == 2000
     assert payload["reset_hour"] == 4
 
@@ -609,7 +617,7 @@ def test_panel_data_carries_slug_and_areas(monkeypatch):
 
     assert payload is not None
     assert payload["person_slug"] == "caro"
-    assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": False, "bp": True, "wellbeing": True, "labs": True}
 
 
 # Top-Level-Vertrag des Panel-Payloads (additiv erweitert um `quick_drinks`).
@@ -628,6 +636,7 @@ _PANEL_TOP_LEVEL_KEYS = {
     "wellbeing_scale",
     "quick_drinks",
     "wellbeing_confirm",
+    "labs",
     "entities",
 }
 
@@ -781,6 +790,8 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_VOID_ENTRY,
     ws_api.COMMAND_RESTORE_ENTRY,
     ws_api.COMMAND_SAVE_MEASUREMENT,
+    ws_api.COMMAND_ADD_LAB_VALUE,
+    ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
     ws_api.COMMAND_SET_WELLBEING,
     ws_api.COMMAND_SUBSCRIBE,
     ws_api.COMMAND_GET_UI_SETTINGS,
@@ -1070,7 +1081,7 @@ def test_list_persons_handler_sends_result(monkeypatch):
                         "display_name": "Caro",
                         "device_id": None,
                         "person_slug": "Caro",
-                        "areas": {"drink": True, "bp": True, "wellbeing": True},
+                        "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
                     }
                 ]
             },
@@ -1832,7 +1843,15 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "enable_sidebar_panel": True,
                 "wellbeing_confirm": False,
                 "audit_limit": 1000,
-                "areas": {"drink": True, "bp": True, "wellbeing": True},
+                "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
+                # REQ-HOM-122: additive Lab-Felder + read-only Katalog.
+                "lab_custom_markers": [],
+                "lab_ref_overrides": {},
+                "lab_hidden_categories": [],
+                "lab_catalog": {
+                    "categories": const.LAB_CATEGORIES,
+                    "markers": const.LAB_MARKERS,
+                },
             },
         )
     ]
@@ -1878,6 +1897,7 @@ def test_get_settings_includes_areas_default_all_active():
         "drink": True,
         "bp": True,
         "wellbeing": True,
+        "labs": True,
     }
 
 
@@ -1889,6 +1909,7 @@ def test_get_settings_reflects_disabled_area():
         "drink": True,
         "bp": True,
         "wellbeing": False,
+        "labs": True,
     }
 
 
@@ -1912,11 +1933,12 @@ def test_set_settings_persists_areas():
 
     assert connection.errors == []
     stored = hass.config_entries.updates[0]["options"]["areas"]
-    assert stored == {"drink": False, "bp": True, "wellbeing": True}
+    assert stored == {"drink": False, "bp": True, "wellbeing": True, "labs": True}
     assert connection.results[0][1]["areas"] == {
         "drink": False,
         "bp": True,
         "wellbeing": True,
+        "labs": True,
     }
 
 
@@ -2049,6 +2071,11 @@ def test_set_settings_persists_via_async_update_entry_and_fires_listener():
         "drink_lexicon",
         "wellbeing_images",
         "areas",
+        # REQ-HOM-122: additive Lab-Felder + read-only Katalog.
+        "lab_custom_markers",
+        "lab_ref_overrides",
+        "lab_hidden_categories",
+        "lab_catalog",
     }
 
 
@@ -2409,6 +2436,36 @@ def test_export_csv_unknown_dataset_sends_error():
     assert connection.results == []
     assert connection.errors[0][1] == "invalid_format"
     hass.services.async_call.assert_not_called()
+
+
+def test_req_hom_122_export_datasets_include_lab_values():
+    """[REQ-HOM-122] Der WS-Export kennt den `lab_values`-Datensatz."""
+    assert "lab_values" in ws_api.EXPORT_DATASETS
+    assert set(ws_api.EXPORT_DATASETS) == {"drinks", "blood_pressure", "lab_values", "all"}
+
+
+def test_req_hom_122_export_csv_forwards_lab_values_dataset():
+    """[REQ-HOM-122] `dataset=lab_values` wird unverändert an den Service gereicht."""
+    entry = _entry("e1", person="caro", display="Caro (Privat)")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1", dataset="lab_values"),
+        )
+    )
+
+    assert connection.errors == []
+    hass.services.async_call.assert_awaited_once_with(
+        ws_api.DOMAIN,
+        "export_csv",
+        {"dataset": "lab_values", "person": "Caro (Privat)"},
+        blocking=True,
+    )
+    assert connection.results[0][1]["dataset"] == "lab_values"
 
 
 def test_export_csv_unknown_entry_sends_error():
@@ -3218,10 +3275,11 @@ def test_m2a_panel_data_keeps_contract_keys_with_voided_entries(monkeypatch):
         "wellbeing_scale",
         "quick_drinks",
         "wellbeing_confirm",
+        "labs",
         "entities",
     }
     assert payload["goal_ml"] == 2000
-    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True}
+    assert payload["areas"] == {"drink": True, "bp": True, "wellbeing": True, "labs": True}
     assert payload["today"]["percent"] == 15.0
 
 
@@ -3874,5 +3932,577 @@ def test_set_settings_partial_areas_keeps_disabled_keys():
 
     assert connection.errors == []
     stored = hass.config_entries.updates[0]["options"]["areas"]
-    assert stored == {"drink": False, "bp": True, "wellbeing": False}
+    assert stored == {"drink": False, "bp": True, "wellbeing": False, "labs": True}
     assert connection.results[0][1]["areas"] == stored
+
+
+# --- REQ-HOM-122: Laborwerte-Einstellungen (Task 13) ------------------------
+
+
+def test_req_hom_122_build_settings_includes_lab_catalog():
+    """`get_settings` liefert den Referenzkatalog read-only mit (kein 2. Request)."""
+    entry = _entry("e1", person="caro")
+
+    settings = ws_api.build_settings(entry)
+
+    assert settings["lab_catalog"]["categories"] == const.LAB_CATEGORIES
+    assert "alt" in settings["lab_catalog"]["markers"]
+    assert settings["lab_custom_markers"] == []
+    assert settings["lab_ref_overrides"] == {}
+    assert settings["lab_hidden_categories"] == []
+
+
+def test_req_hom_122_build_settings_returns_normalized_overrides():
+    """Verwaiste/ungültige Overrides erscheinen nicht in der Antwort."""
+    entry = _entry(
+        "e1",
+        options={"lab_ref_overrides": {"alt": {"ref_min": 5}, "not_a_marker": {"ref_min": 1}}},
+    )
+
+    settings = ws_api.build_settings(entry)
+
+    assert settings["lab_ref_overrides"] == {"alt": {"ref_min": 5}}
+
+
+def test_req_hom_122_parse_settings_message_normalizes_custom_markers():
+    msg = {
+        "lab_custom_markers": [
+            {"name": "Vitamin D", "category": "other", "unit": "ng/mL"},
+        ]
+    }
+
+    updates, error = ws_api.parse_settings_message(msg)
+
+    assert error is None
+    assert updates["lab_custom_markers"][0]["key"] == "vitamin_d"
+
+
+def test_req_hom_122_parse_settings_message_normalizes_hidden_categories():
+    updates, error = ws_api.parse_settings_message(
+        {"lab_hidden_categories": ["thyroid", "not_a_category"]}
+    )
+
+    assert error is None
+    assert updates["lab_hidden_categories"] == ["thyroid"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"lab_custom_markers": "nope"},
+        {"lab_ref_overrides": "nope"},
+        {"lab_hidden_categories": "nope"},
+    ],
+)
+def test_req_hom_122_parse_settings_message_rejects_wrong_container_types(payload):
+    """Falscher Containertyp → Fehlermeldung im bestehenden `Ungültige Einstellung`-Stil."""
+    updates, error = ws_api.parse_settings_message(payload)
+
+    assert updates == {}
+    assert error is not None
+    assert error.startswith("Ungültige Einstellung '")
+
+
+def test_req_hom_122_set_settings_persists_normalized_lab_settings():
+    """`set_settings` schreibt die normalisierten Lab-Optionen über den Options-Pfad."""
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                lab_ref_overrides={"alt": {"ref_max": 40}, "bogus": {"ref_max": 1}},
+                lab_hidden_categories=["liver", "bogus"],
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    stored = hass.config_entries.updates[0]["options"]
+    assert stored["lab_ref_overrides"] == {"alt": {"ref_max": 40}}
+    assert stored["lab_hidden_categories"] == ["liver"]
+    assert "daily_goal_ml" in stored
+    assert connection.results[0][1]["lab_ref_overrides"] == {"alt": {"ref_max": 40}}
+
+
+# --- Laborwerte (REQ-HOM-122) ----------------------------------------------
+
+
+def _lab_panel_hass(entry, monkeypatch, store_data: dict | None = None):
+    """`_panel_hass` plus konfigurierte aktive Lab-Sicht am Store-Fake."""
+    hass = _panel_hass(store_data or {"e1": {}}, entry, _registry_entries(), monkeypatch)
+    store = hass.data[DOMAIN]["shared"]["store"]
+    store.last_active_lab_reading.return_value = None
+    store.active_lab_readings.return_value = []
+    return hass, store
+
+
+def test_req_hom_122_panel_data_includes_labs_block(monkeypatch):
+    """`panel_data["labs"]` liefert alle Kategorien und alle effektiven Marker."""
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch)
+
+    data = ws_api.build_panel_data(hass, "e1", NOW)
+
+    assert "labs" in data
+    assert [category["key"] for category in data["labs"]["categories"]] == [
+        "liver",
+        "kidney",
+        "electrolytes",
+        "lipids",
+        "thyroid",
+        "blood_count",
+        "inflammation",
+        "digestion",
+        "drug_levels",
+        "other",
+    ]
+    assert "alt" in data["labs"]["markers"]
+    alt = data["labs"]["markers"]["alt"]
+    assert alt["value"] is None
+    assert alt["ts"] is None
+    assert alt["in_range"] is None
+    assert alt["history"] == []
+    assert (alt["ref_min"], alt["ref_max"]) == (10, 50)
+    assert alt["is_custom"] is False
+
+
+def test_req_hom_122_panel_data_labs_names_carry_both_languages(monkeypatch):
+    """Kategorien/Marker tragen `name_de` UND `name_en` (i18n-UI), `name` bleibt."""
+    entry = _entry(
+        options={
+            "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL", "ref_min": 30}],
+        }
+    )
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    labs = ws_api.build_panel_data(hass, "e1", NOW)["labs"]
+
+    liver = next(c for c in labs["categories"] if c["key"] == "liver")
+    assert liver["name"] == "Leber", "`name` muss als deutscher Kompatibilitätswert bleiben"
+    assert liver["name_de"] == "Leber"
+    assert liver["name_en"] == "Liver"
+
+    alt = labs["markers"]["alt"]
+    assert alt["name_de"] == "ALT (GPT)"
+    assert alt["name_en"] == "ALT (ALT/GPT)"
+    assert alt["name"] == "ALT (GPT)"
+
+    # Custom-Marker haben keine Sprachvarianten — beide Keys fallen auf den
+    # nutzervergebenen Namen zurück.
+    custom = labs["markers"]["vitamin_d"]
+    assert custom["name_de"] == "Vitamin D"
+    assert custom["name_en"] == "Vitamin D"
+
+
+def test_req_hom_122_panel_data_labs_marker_includes_history_and_subline(monkeypatch):
+    """Letzter aktiver Wert, Befund-Zusatzzeile und Verlauf landen im Marker."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    reading = {
+        "ts": "2026-10-31T09:00:00+01:00",
+        "value": 97.24,
+        "unit": "µmol/L",
+        "reported_value": 1.1,
+        "reported_unit": "mg/dL",
+        "report_ref": None,
+    }
+    store.last_active_lab_reading.return_value = reading
+    store.active_lab_readings.return_value = [reading]
+
+    data = ws_api.build_panel_data(hass, "e1", NOW)
+
+    marker = data["labs"]["markers"]["creatinine"]
+    assert marker["value"] == 97.24
+    assert marker["ts"] == "2026-10-31T09:00:00+01:00"
+    assert marker["in_range"] is True
+    assert marker["reported_value"] == 1.1
+    assert marker["reported_unit"] == "mg/dL"
+    assert marker["history"] == [{"ts": "2026-10-31T09:00:00+01:00", "value": 97.24}]
+    store.last_active_lab_reading.assert_any_call("e1", "creatinine")
+    store.active_lab_readings.assert_any_call("e1", marker_key="creatinine")
+
+
+def test_req_hom_122_panel_data_labs_history_is_capped(monkeypatch):
+    """Der Verlauf je Marker ist auf die letzten 14 aktiven Werte begrenzt (N-1)."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    items = [
+        {"ts": f"2026-10-{day:02d}T09:00:00+01:00", "value": float(day)} for day in range(1, 21)
+    ]
+    store.active_lab_readings.return_value = items
+
+    history = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]["history"]
+
+    assert len(history) == 14
+    assert history[0]["value"] == 7.0
+    assert history[-1]["value"] == 20.0
+
+
+def test_req_hom_122_panel_data_labs_history_is_chronological(monkeypatch):
+    """[NB-1] Der Verlauf ist nach `ts` aufsteigend sortiert, nicht nach Eingabe."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    # Erfassungs-Reihenfolge: neuer Wert zuerst, danach der nachgetragene alte.
+    items = [
+        {"ts": "2026-11-03T09:00:00+01:00", "value": 40.0},
+        {"ts": "2026-10-30T09:00:00+01:00", "value": 25.0},
+        {"ts": "2026-10-20T09:00:00+01:00", "value": 20.0},
+    ]
+    store.active_lab_readings.return_value = items
+
+    history = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]["history"]
+
+    assert [item["value"] for item in history] == [20.0, 25.0, 40.0]
+
+
+def test_req_hom_122_panel_data_labs_history_cap_keeps_newest(monkeypatch):
+    """[NB-1] Die 14er-Grenze schneidet die ÄLTESTEN Werte ab (unsortierter Input)."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    items = [
+        {"ts": f"2026-10-{day:02d}T09:00:00+01:00", "value": float(day)}
+        for day in range(20, 0, -1)  # absteigend erfasst/nachgetragen
+    ]
+    store.active_lab_readings.return_value = items
+
+    history = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]["history"]
+
+    assert len(history) == 14
+    assert history[0]["value"] == 7.0
+    assert history[-1]["value"] == 20.0
+
+
+def test_req_hom_122_panel_data_labs_category_hidden_flag(monkeypatch):
+    """`lab_hidden_categories` setzt nur das `hidden`-Flag, filtert nichts weg."""
+    entry = _entry(options={"lab_hidden_categories": ["thyroid"]})
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    data = ws_api.build_panel_data(hass, "e1", NOW)
+
+    thyroid = next(c for c in data["labs"]["categories"] if c["key"] == "thyroid")
+    liver = next(c for c in data["labs"]["categories"] if c["key"] == "liver")
+    assert thyroid["hidden"] is True
+    assert liver["hidden"] is False
+
+
+def test_req_hom_122_panel_data_labs_applies_reference_overrides(monkeypatch):
+    """Referenz-Overrides wirken auf Katalog-Marker, nicht auf Custom-Marker."""
+    entry = _entry(
+        options={
+            "lab_ref_overrides": {"alt": {"ref_max": 40}},
+            "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL", "ref_min": 30}],
+        }
+    )
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    markers = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]
+
+    assert markers["alt"]["ref_max"] == 40
+    assert markers["vitamin_d"]["is_custom"] is True
+    assert markers["vitamin_d"]["ref_min"] == 30
+
+
+def test_req_hom_122_panel_data_labs_ignores_voided_raw_readings(monkeypatch):
+    """Voided Rohdaten bleiben unsichtbar — Quelle ist die aktive Store-Sicht."""
+    store_data = {
+        "e1": {
+            "lab_readings": [
+                {
+                    "marker_key": "alt",
+                    "value": 99.0,
+                    "ts": "2026-10-15T08:00:00",
+                    "voided_at": "2026-10-15T09:00:00",
+                }
+            ]
+        }
+    }
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch, store_data)
+
+    marker = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]
+
+    assert marker["value"] is None
+    assert marker["history"] == []
+
+
+def test_req_hom_122_panel_data_labs_area_disabled_is_empty_block(monkeypatch):
+    """Deaktivierte Lab-Fläche → leerer Block (additiver Vertrag bleibt stabil)."""
+    entry = _entry(options={"areas": {"labs": False}})
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    labs = ws_api.build_panel_data(hass, "e1", NOW)["labs"]
+
+    assert labs == {"categories": [], "markers": {}}
+
+
+def test_req_hom_122_websocket_add_lab_value_converts_and_stores(monkeypatch):
+    """Alt-Einheit wird in die kanonische Einheit umgerechnet, Befundwert bleibt."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 11,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+                "value": 1.1,
+                "unit": "mg/dL",
+                "report_ref": "  Labor 10/2026  ",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [(11, None)]
+    store.add_lab_reading.assert_awaited_once()
+    call = store.add_lab_reading.await_args
+    assert call.args == ("e1", NOW.isoformat(), "creatinine", 97.24, "µmol/L", 1.1, "mg/dL")
+    assert call.kwargs["report_ref"] == "Labor 10/2026"
+    assert call.kwargs["created_ts_iso"] == NOW.isoformat()
+
+
+def test_req_hom_122_websocket_add_lab_value_resolves_marker_alias(monkeypatch):
+    """Alias (`gpt`) wird auf den Katalog-Key (`alt`) abgebildet."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 12,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "gpt",
+                "value": 32.0,
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.add_lab_reading.await_args.args[2] == "alt"
+    assert store.add_lab_reading.await_args.args[3:5] == (32.0, "U/L")
+
+
+def test_req_hom_122_websocket_add_lab_value_unknown_marker_sends_error(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 13,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "not_a_marker",
+                "value": 1,
+            },
+        )
+    )
+
+    assert connection.errors == [(13, "invalid_format", "unknown_marker")]
+    assert connection.results == []
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_122_websocket_add_lab_value_requires_explicit_unit(monkeypatch):
+    """Marker mit `require_explicit_unit` ohne `unit` → `unit_required`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 14,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "urine_protein_creatinine_ratio",
+                "value": 10,
+            },
+        )
+    )
+
+    assert connection.errors == [(14, "invalid_format", "unit_required")]
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_122_websocket_add_lab_value_rejects_unsupported_unit(monkeypatch):
+    """Unbekannte Einheit wird NIE stillschweigend als kanonisch interpretiert."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 15,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "alt",
+                "value": 32,
+                "unit": "furlong",
+            },
+        )
+    )
+
+    assert connection.errors == [(15, "invalid_format", "unsupported_unit")]
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_122_websocket_add_lab_value_unloaded_person_sends_not_found(monkeypatch):
+    """Unbekannte/nicht geladene Person → bestehender `_send_entry_error`-Pfad."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 16,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "alt",
+                "value": 32,
+            },
+        )
+    )
+
+    assert len(connection.errors) == 1
+    assert connection.errors[0][1] == "not_found"
+    assert connection.results == []
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_122_websocket_remove_last_lab_value_calls_store(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_last_lab_value(
+            hass,
+            connection,
+            {
+                "id": 21,
+                "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "gpt",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [(21, None)]
+    store.remove_last_lab_reading.assert_awaited_once()
+    assert store.remove_last_lab_reading.await_args.args == ("e1", "alt")
+    assert coordinator.updated == [NOW.isoformat()]
+
+
+def test_req_hom_122_websocket_remove_last_lab_value_unknown_marker_sends_error(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_last_lab_value(
+            hass,
+            connection,
+            {
+                "id": 22,
+                "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "not_a_marker",
+            },
+        )
+    )
+
+    assert connection.errors == [(22, "invalid_format", "unknown_marker")]
+    store.remove_last_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_122_websocket_remove_last_lab_value_without_active_value(monkeypatch):
+    """Kein aktiver Wert → `no_active_value` statt stillem Erfolg."""
+    _now(monkeypatch)
+    store = _write_store()
+    store.remove_last_lab_reading.return_value = False
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_last_lab_value(
+            hass,
+            connection,
+            {
+                "id": 23,
+                "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "alt",
+            },
+        )
+    )
+
+    assert connection.errors == [(23, "invalid_format", "no_active_value")]
+    assert connection.results == []
+
+
+def test_req_hom_122_lab_commands_are_registered(monkeypatch):
+    """Beide Kommandos werden neben `save_measurement` registriert."""
+    registered: list[tuple] = []
+    hass = FakeHass()
+    monkeypatch.setattr(
+        ws_api.websocket_api,
+        "async_register_command",
+        lambda *args: registered.append(args),
+    )
+
+    asyncio.run(ws_api.async_register_ws_api(hass))
+
+    commands = {args[1] for args in registered}
+    assert ws_api.COMMAND_ADD_LAB_VALUE in commands
+    assert ws_api.COMMAND_REMOVE_LAST_LAB_VALUE in commands
+    assert ws_api.COMMAND_SAVE_MEASUREMENT in commands
+
+    schemas = {args[1]: args[3] for args in registered}
+    add_schema = schemas[ws_api.COMMAND_ADD_LAB_VALUE]
+    parsed = add_schema(
+        {
+            "id": 1,
+            "type": ws_api.COMMAND_ADD_LAB_VALUE,
+            "entry_id": "e1",
+            "marker": "alt",
+            "value": "32.5",
+        }
+    )
+    assert parsed["value"] == 32.5
+    with pytest.raises(vol.Invalid):
+        add_schema({"id": 2, "type": ws_api.COMMAND_ADD_LAB_VALUE, "entry_id": "e1", "value": 32})
+    with pytest.raises(vol.Invalid):
+        schemas[ws_api.COMMAND_REMOVE_LAST_LAB_VALUE](
+            {"id": 3, "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE, "entry_id": "e1"}
+        )

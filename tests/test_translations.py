@@ -10,11 +10,14 @@ Reiner JSON-Datei-Test: kein Home-Assistant-Import nötig.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import types
 from pathlib import Path
 
 import pytest
+import yaml
 
 _COMPONENT_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "health_o_mat"
 _MASTER = _COMPONENT_DIR / "strings.json"
@@ -382,3 +385,182 @@ def test_translation_placeholders_match_across_languages() -> None:
                 f"translations/{lang}.json: Platzhalter bei {key!r} weichen ab: "
                 f"{sorted(actual)} != {sorted(expected)}"
             )
+
+
+# --- Laborwerte (REQ-HOM-122) ----------------------------------------------
+
+_LAB_SERVICE_FIELDS = {
+    "add_lab_value": {"person", "marker", "value", "unit", "ts", "report_ref"},
+    "remove_last_lab_value": {"person", "marker"},
+}
+
+# Minimal-Override-Konvention (wie `add_blood_pressure`): in den JSON-Dateien
+# stehen nur die Felder, deren Text übersetzt wird — nicht zwingend alle
+# Felder aus `services.yaml`.
+_LAB_TRANSLATED_FIELDS = {
+    "add_lab_value": {"marker", "unit", "ts", "report_ref"},
+    "remove_last_lab_value": {"marker"},
+}
+
+
+def test_req_hom_122_lab_services_have_translation_parity() -> None:
+    """[REQ-HOM-122] Laborwert-Services sind in services.yaml + allen Übersetzungen."""
+    services_yaml = yaml.safe_load((_COMPONENT_DIR / "services.yaml").read_text(encoding="utf-8"))
+
+    for service, expected_fields in _LAB_SERVICE_FIELDS.items():
+        assert service in services_yaml, f"services.yaml: {service} fehlt"
+        assert set(services_yaml[service]["fields"]) == expected_fields, (
+            f"services.yaml: {service}-Felder weichen ab"
+        )
+
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        data = _load(path)
+        for service, translated_fields in _LAB_TRANSLATED_FIELDS.items():
+            block = data["services"][service]
+            assert block["name"], f"{path}: {service}.name fehlt"
+            assert block["description"], f"{path}: {service}.description fehlt"
+            assert set(block["fields"]) == translated_fields, f"{path}: {service}-Felder weichen ab"
+            for field, meta in block["fields"].items():
+                assert meta["name"], f"{path}: {service}.{field}.name fehlt"
+                assert meta["description"], f"{path}: {service}.{field}.description fehlt"
+
+
+# --- Laborwert-Entity-Namen (REQ-HOM-122) ----------------------------------
+
+# Master + en.json sind englisch, de.json deutsch. `const.py` hat keine
+# Home-Assistant-Abhängigkeit und wird deshalb direkt aus der Datei geladen.
+_LAB_NAME_FIELDS = (
+    (_MASTER, "name_en"),
+    (_TRANSLATIONS["en"], "name_en"),
+    (_TRANSLATIONS["de"], "name_de"),
+)
+
+
+def _load_const() -> types.ModuleType:
+    """`const.py` ohne Paket-Import laden (bleibt HA-frei)."""
+    spec = importlib.util.spec_from_file_location(
+        "_hom_const_translations", _COMPONENT_DIR / "const.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_req_hom_122_lab_sensor_names_cover_every_catalog_marker() -> None:
+    """[REQ-HOM-122] Jeder Katalog-Marker hat seinen Sensor-Namen in allen Dateien.
+
+    Die Texte stammen verbindlich aus ``LAB_MARKERS[*]["name_de"/"name_en"]``;
+    der Test fängt sowohl fehlende/überzählige Keys als auch Abweichungen von
+    der Single Source of Truth ab.
+    """
+    const = _load_const()
+    expected = {f"lab_{marker_key}" for marker_key in const.LAB_MARKERS}
+
+    for path, name_field in _LAB_NAME_FIELDS:
+        sensor = _load(path)["entity"]["sensor"]
+        actual = {key for key in sensor if key.startswith("lab_")}
+        assert actual == expected, (
+            f"{path}: Sensor-Keys weichen vom Katalog ab "
+            f"(fehlt: {sorted(expected - actual)}, überzählig: {sorted(actual - expected)})"
+        )
+        for marker_key, marker_def in const.LAB_MARKERS.items():
+            key = f"lab_{marker_key}"
+            assert sensor[key]["name"] == marker_def[name_field], (
+                f"{path}: {key}.name != LAB_MARKERS[{marker_key!r}][{name_field!r}]"
+            )
+
+
+def test_req_hom_122_lab_warnings_cover_every_non_other_category() -> None:
+    """[REQ-HOM-122] Je Nicht-``other``-Kategorie existiert die Warn-Entity.
+
+    ``other`` bleibt bewusst ohne binary_sensor (dort liegen nur
+    nutzerdefinierte Marker), deshalb prüft die Key-Menge auf Abwesenheit.
+    """
+    const = _load_const()
+    warnings = [category for category in const.LAB_CATEGORIES if category["key"] != "other"]
+    expected = {f"lab_warning_{category['key']}" for category in warnings}
+
+    for path, name_field in _LAB_NAME_FIELDS:
+        binary_sensor = _load(path)["entity"]["binary_sensor"]
+        actual = {key for key in binary_sensor if key.startswith("lab_warning_")}
+        assert actual == expected, (
+            f"{path}: Warn-Keys weichen von den Kategorien ab "
+            f"(fehlt: {sorted(expected - actual)}, überzählig: {sorted(actual - expected)})"
+        )
+        for category in warnings:
+            key = f"lab_warning_{category['key']}"
+            suffix = "-Warnung" if name_field == "name_de" else " warning"
+            expected_name = f"{category[name_field]}{suffix}"
+            assert binary_sensor[key]["name"] == expected_name, (
+                f"{path}: {key}.name != '{expected_name}'"
+            )
+
+
+# --- Laborwert-UI-Texte im Web-Panel (REQ-HOM-122) -------------------------
+
+# Statische Liste der in `www/health-o-mat-panel-*.js` per `t("<key>", …)`
+# referenzierten Laborwert-Texte. Der dynamische Test
+# `test_req_hom_117_every_js_key_exists_in_both_languages` prüft zusätzlich,
+# dass kein weiterer Key verwendet wird, ohne übersetzt zu sein.
+_REQ_HOM_122_UI_KEYS = (
+    "ui_admin_lab_title",
+    "ui_admin_lab_ref_title",
+    "ui_admin_lab_category",
+    "ui_admin_lab_marker",
+    "ui_admin_lab_unit",
+    "ui_admin_lab_range",
+    "ui_admin_lab_reset",
+    "ui_admin_lab_hide_title",
+    "ui_admin_lab_custom_title",
+    "ui_admin_lab_custom_name",
+    "ui_admin_lab_custom_unit",
+    "ui_admin_lab_custom_category",
+    "ui_admin_lab_custom_range",
+    "ui_admin_lab_custom_alt_unit",
+    "ui_admin_lab_custom_alt_unit_name",
+    "ui_admin_lab_custom_alt_factor",
+    "ui_admin_lab_custom_submit",
+    "ui_admin_lab_feedback",
+    "ui_panel_lab_reported_as",
+    "ui_panel_chart_lab_empty",
+    "ui_panel_tab_labs",
+    "ui_panel_lab_prev",
+    "ui_panel_lab_next",
+    "ui_panel_lab_no_categories",
+    "ui_panel_lab_add_value",
+    "ui_panel_lab_marker",
+    "ui_panel_lab_value_field",
+    "ui_panel_lab_unit_field",
+    "ui_panel_lab_report_ref",
+    "ui_panel_lab_save",
+    "ui_panel_tile_lab_warning",
+    "ui_panel_tile_lab_ok",
+    "ui_panel_lab_threshold_title",
+    "ui_panel_val_lab_value",
+)
+
+
+def test_req_hom_122_common_ui_keys_exist_in_all_three_files() -> None:
+    """[REQ-HOM-122] Laborwert-UI-Texte stehen in Master, de und en."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        common = _common(path)
+        missing = [key for key in _REQ_HOM_122_UI_KEYS if key not in common]
+        assert not missing, f"{path}: fehlende Laborwert-UI-Keys: {missing}"
+        empty = [key for key in _REQ_HOM_122_UI_KEYS if not str(common[key]).strip()]
+        assert not empty, f"{path}: leere Laborwert-UI-Werte: {empty}"
+
+
+def test_req_hom_122_labs_area_label_translated() -> None:
+    """[REQ-HOM-122] Die vierte Fläche hat ein eigenes Label in Master + de + en."""
+    expected = {
+        "strings.json": "Lab values",
+        "de.json": "Laborwerte",
+        "en.json": "Lab values",
+    }
+    for filename, value in expected.items():
+        path = _MASTER if filename == "strings.json" else _TRANSLATIONS[filename[:2]]
+        common = _common(path)
+        assert common.get("ui_common_area_labs") == value, (
+            f"{filename}: ui_common_area_labs fehlt oder ist falsch"
+        )

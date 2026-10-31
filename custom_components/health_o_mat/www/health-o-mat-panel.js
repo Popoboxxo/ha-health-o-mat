@@ -47,6 +47,7 @@
 import {
   PANEL_CSS,
   WS,
+  AREA_KEYS,
   SETTINGS_LIMITS,
   SETTINGS_FALLBACKS,
   REFRESH_DEBOUNCE_MS,
@@ -71,20 +72,20 @@ import {
   t,
   setUiTranslator,
   setUiLanguage,
-} from "./health-o-mat-panel-base.js?v=0.15.0";
+} from "./health-o-mat-panel-base.js?v=0.16.0";
 import {
   loadUiTranslations,
   t as uiTranslate,
   currentLanguage as uiCurrentLanguage,
-} from "./health-o-mat-i18n.js?v=0.15.0";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.15.0";
+} from "./health-o-mat-i18n.js?v=0.16.0";
+import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.16.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
   collectRestorePayload,
-} from "./health-o-mat-panel-admin.js?v=0.15.0";
+} from "./health-o-mat-panel-admin.js?v=0.16.0";
 
 const PANEL_TAG = "health-o-mat-panel";
 const PANEL_VERSION = "0.2.0";
@@ -134,6 +135,7 @@ class HealthOMatPanel extends HTMLElement {
     this._settings = {}; // entry_id -> get_settings payload
     this._settingsErrors = {}; // entry_id -> load error text
     this._quickDraft = []; // working copy of the 4 quick-drink slots
+    this._labCustomDraft = {}; // entry_id -> working copy of custom lab markers
     this._settingsBusy = false;
     this._settingsStatus = null; // { ok: boolean, text: string }
     this._exportBusy = false;
@@ -880,6 +882,8 @@ class HealthOMatPanel extends HTMLElement {
         this._settings[entryId] = res;
         delete this._settingsErrors[entryId];
         if (this._settingsEntry === entryId) this._syncQuickDrafts(res);
+        // Custom lab markers re-seed from the authoritative server list.
+        delete this._labCustomDraft[entryId];
       } else {
         this._settingsErrors[entryId] = t(
           "ui_panel_empty_settings",
@@ -974,11 +978,16 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   _readAreaCheckboxes() {
-    const read = (field) => {
-      const el = this.shadowRoot.querySelector(`[data-field="${field}"]`);
-      return !!(el && el.checked);
-    };
-    return { drink: read("area-drink"), bp: read("area-bp"), wellbeing: read("area-wellbeing") };
+    // Generisch über AREA_KEYS (spiegelt areas.py): eine neue Fläche darf nie
+    // durch eine vergessene Hardcodierung aus dem Settings-Payload fallen.
+    const areas = {};
+    AREA_KEYS.forEach((key) => {
+      const el = this.shadowRoot.querySelector(`[data-field="area-${key}"]`);
+      // Fehlt die Checkbox im DOM, gilt die Fläche als aktiv (wie
+      // normalizeAreas für unbekannte/ältere Payloads).
+      areas[key] = el ? !!el.checked : true;
+    });
+    return areas;
   }
 
   /* Validate + normalise the whole form. Returns { payload, errors }. */
@@ -1109,6 +1118,46 @@ class HealthOMatPanel extends HTMLElement {
       );
     }
 
+    // --- Laborwerte (REQ-HOM-122) ---
+    // `lab_catalog` is read-only reference data from the settings payload; only
+    // values that differ from the catalog default become a ref override.
+    const labSettings = this._settings[this._settingsEntry] || {};
+    const labCatalog =
+      labSettings.lab_catalog && typeof labSettings.lab_catalog === "object"
+        ? labSettings.lab_catalog
+        : { categories: [], markers: {} };
+    const labRefOverrides = {};
+    Object.keys(labCatalog.markers || {}).forEach((key) => {
+      const marker = labCatalog.markers[key] || {};
+      const minEl = this.shadowRoot.querySelector(`[data-field="lab-ref-min-${key}"]`);
+      const maxEl = this.shadowRoot.querySelector(`[data-field="lab-ref-max-${key}"]`);
+      const minVal = minEl && minEl.value !== "" ? toNumber(minEl.value, NaN) : null;
+      const maxVal = maxEl && maxEl.value !== "" ? toNumber(maxEl.value, NaN) : null;
+      const entry = {};
+      if (minVal != null && Number.isFinite(minVal) && minVal !== marker.ref_min) {
+        entry.ref_min = minVal;
+      }
+      if (maxVal != null && Number.isFinite(maxVal) && maxVal !== marker.ref_max) {
+        entry.ref_max = maxVal;
+      }
+      if (Object.keys(entry).length) labRefOverrides[key] = entry;
+    });
+
+    // Unchecked box = category hidden. A missing box (section not rendered)
+    // must never be read as "hidden".
+    const labHiddenCategories = (labCatalog.categories || [])
+      .filter((category) => {
+        const el = this.shadowRoot.querySelector(`[data-field="lab-hide-${category.key}"]`);
+        return el ? el.checked === false : false;
+      })
+      .map((category) => category.key);
+
+    const labCustomMarkers = (
+      this._labCustomDraft[this._settingsEntry] ||
+      labSettings.lab_custom_markers ||
+      []
+    ).slice();
+
     return {
       errors,
       payload: {
@@ -1125,6 +1174,9 @@ class HealthOMatPanel extends HTMLElement {
         enable_sidebar_panel: sidebar,
         wellbeing_confirm: wellbeingConfirm,
         areas,
+        lab_ref_overrides: labRefOverrides,
+        lab_hidden_categories: labHiddenCategories,
+        lab_custom_markers: labCustomMarkers,
       },
     };
   }
@@ -1182,6 +1234,15 @@ class HealthOMatPanel extends HTMLElement {
     ) {
       out.areas = payload.areas;
     }
+    if (stableJson(current.lab_ref_overrides) !== stableJson(payload.lab_ref_overrides)) {
+      out.lab_ref_overrides = payload.lab_ref_overrides;
+    }
+    if (stableJson(current.lab_hidden_categories) !== stableJson(payload.lab_hidden_categories)) {
+      out.lab_hidden_categories = payload.lab_hidden_categories;
+    }
+    if (stableJson(current.lab_custom_markers) !== stableJson(payload.lab_custom_markers)) {
+      out.lab_custom_markers = payload.lab_custom_markers;
+    }
     return out;
   }
 
@@ -1217,6 +1278,7 @@ class HealthOMatPanel extends HTMLElement {
         await this._loadSettings(entryId);
       }
       this._syncQuickDrafts(this._settings[entryId]);
+      delete this._labCustomDraft[entryId];
       await this._reloadPersons();
       this._settingsBusy = false;
       this._settingsStatus = {
@@ -1992,6 +2054,55 @@ class HealthOMatPanel extends HTMLElement {
         case "qd-remove":
           this._removeQuickSlot(toNumber(el.getAttribute("data-index"), -1));
           break;
+        case "lab-custom-add": {
+          const entryId = this._settingsEntry;
+          if (!entryId) break;
+          const name = String(this._readField("lab-custom-name", "") || "").trim();
+          const unit = String(this._readField("lab-custom-unit", "") || "").trim();
+          if (!name || !unit) break;
+          const category = String(
+            this._readField("lab-custom-category", "") || "other"
+          ).trim() || "other";
+          const refMin = toNumber(this._readField("lab-custom-ref-min", ""), NaN);
+          const refMax = toNumber(this._readField("lab-custom-ref-max", ""), NaN);
+          const altUnit = String(this._readField("lab-custom-alt-unit", "") || "").trim();
+          const altFactor = toNumber(this._readField("lab-custom-alt-factor", ""), NaN);
+          const marker = { name, unit, category };
+          if (Number.isFinite(refMin)) marker.ref_min = refMin;
+          if (Number.isFinite(refMax)) marker.ref_max = refMax;
+          if (altUnit && Number.isFinite(altFactor)) {
+            marker.alt_unit = { unit: altUnit, factor_to_canonical: altFactor };
+          }
+          const list =
+            this._labCustomDraft[entryId] ||
+            (this._settings[entryId] || {}).lab_custom_markers ||
+            [];
+          this._labCustomDraft[entryId] = list.concat([marker]);
+          this._render();
+          break;
+        }
+        case "lab-custom-remove": {
+          const entryId = this._settingsEntry;
+          if (!entryId) break;
+          const index = toNumber(el.getAttribute("data-index"), -1);
+          const list =
+            this._labCustomDraft[entryId] ||
+            (this._settings[entryId] || {}).lab_custom_markers ||
+            [];
+          if (!Number.isFinite(index) || index < 0 || index >= list.length) break;
+          this._labCustomDraft[entryId] = list.filter((_item, i) => i !== index);
+          this._render();
+          break;
+        }
+        case "lab-ref-reset": {
+          const marker = el.getAttribute("data-marker") || "";
+          if (!marker) break;
+          const minEl = this.shadowRoot.querySelector(`[data-field="lab-ref-min-${marker}"]`);
+          const maxEl = this.shadowRoot.querySelector(`[data-field="lab-ref-max-${marker}"]`);
+          if (minEl) minEl.value = "";
+          if (maxEl) maxEl.value = "";
+          break;
+        }
         case "export":
           this._runExport();
           break;

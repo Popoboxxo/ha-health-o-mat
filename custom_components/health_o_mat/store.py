@@ -6,6 +6,7 @@ Schema-Stufen (STORE_SCHEMA_VERSION in const.py):
 - v3: + `archived_counts` je Person (Retention/Archiv-Kennzahlen, REQ-HOM-109)
 - v4: + `id`/`created_at`/`voided_*` je Eintrag, + `wellbeing_entries`,
   + `audit_log` je Person (Korrigierbarkeit/Audit, REQ-HOM-115)
+- v5: + `lab_readings` je Person (Laborwerte, REQ-HOM-122)
 
 Ab v4 ist das Wohlbefinden eine Ereignisliste (`wellbeing_entries`); die
 Legacy-Felder `wellbeing`/`wellbeing_history` bleiben als abgeleitete
@@ -14,9 +15,9 @@ Person optional gekappt (Default 1000, `0` = unbegrenzt).
 
 Lesepfade für Anzeige/Auswertung nutzen die **aktive Sicht**
 (`active_entry`/`active_entries`): voided Einträge (`voided_at` gesetzt) sind
-dort herausgefiltert und die Wellbeing-Spiegel aus den aktiven Ereignissen neu
-aufgebaut. `entry()`/`all_entries()` bleiben bewusst **roh** (Schreibpfad,
-Backup, Diagnostics-Rohzahlen).
+dort herausgefiltert (inkl. `lab_readings`) und die Wellbeing-Spiegel aus den
+aktiven Ereignissen neu aufgebaut. `entry()`/`all_entries()` bleiben bewusst
+**roh** (Schreibpfad, Backup, Diagnostics-Rohzahlen).
 
 Die Klasse bedient sowohl den Haupt-Store (`MAIN_STORE_KEY`) als auch den
 separaten Archiv-Store (`ARCHIVE_STORE_KEY`); beide teilen sich dieselbe
@@ -160,10 +161,19 @@ def _migrate_v3_to_v4(data: dict) -> dict:
     return data
 
 
+def _migrate_v4_to_v5(data: dict) -> dict:
+    """v4 → v5: `lab_readings`-Liste je Person ergänzen (idempotent)."""
+    for entry in data.get("entries", {}).values():
+        if isinstance(entry, dict):
+            entry.setdefault("lab_readings", [])
+    return data
+
+
 _MIGRATIONS: dict[int, Callable[[dict], dict]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 
@@ -284,6 +294,7 @@ class HealthOMatStore:
                 "archived_counts": {"drinks": 0, "readings": 0},
                 "wellbeing_entries": [],
                 "audit_log": [],
+                "lab_readings": [],
             },
         )
 
@@ -624,6 +635,159 @@ class HealthOMatStore:
         await self._async_save()
         return True
 
+    # ------------------------------------------------------------------
+    # Laborwerte (REQ-HOM-122)
+    # ------------------------------------------------------------------
+    async def add_lab_reading(
+        self,
+        entry_id: str,
+        ts_iso: str,
+        marker_key: str,
+        value: float,
+        unit: str,
+        reported_value: float,
+        reported_unit: str,
+        report_ref: str | None = None,
+        created_ts_iso: str | None = None,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> None:
+        """Laborwert erfassen; `reported_*` ist der Wert wie im Befund gedruckt."""
+        reading: dict = {
+            "id": str(uuid.uuid4()),
+            "ts": ts_iso,
+            "marker_key": marker_key,
+            "value": float(value),
+            "unit": unit,
+            "reported_value": float(reported_value),
+            "reported_unit": reported_unit,
+            "report_ref": report_ref,
+            "created_at": created_ts_iso or _now_iso(),
+            "voided_at": None,
+            "voided_by": None,
+            "void_reason": None,
+        }
+        self.entry(entry_id).setdefault("lab_readings", []).append(reading)
+        self._append_audit(
+            entry_id,
+            "lab_value_added",
+            "lab_readings",
+            reading["id"],
+            actor,
+            {"marker_key": marker_key},
+            audit_limit,
+        )
+        await self._async_save()
+
+    def active_lab_readings(self, entry_id: str, marker_key: str | None = None) -> list[dict]:
+        """Nur nicht-gelöschte Laborwerte, optional auf einen Marker gefiltert."""
+        items = self.entry(entry_id).get("lab_readings", [])
+        if not isinstance(items, list):
+            return []
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and not item.get("voided_at")
+            and (marker_key is None or item.get("marker_key") == marker_key)
+        ]
+
+    def last_active_lab_reading(self, entry_id: str, marker_key: str) -> dict | None:
+        """Aktueller aktiver Wert EINES Markers — der mit dem größten `ts`.
+
+        Bewusst NICHT "der zuletzt eingetragene": nachgetragene alte Befunde
+        (rückdatierter `ts`) dürfen den aktuellen Wert nicht überschreiben.
+        Bei identischem `ts`/`created_at` gewinnt der zuletzt eingetragene
+        (Tiebreaker = Listen-Index, vgl. stabiler Sort).
+
+        N-6: ``max`` statt ``sorted(...)[-1]`` — O(n) statt O(n log n); die
+        Methode läuft pro Refresh ~30-mal (ein Aufruf je Marker in
+        ``ws_api._labs_block``).
+        """
+        items = self.entry(entry_id).get("lab_readings", [])
+        if not isinstance(items, list):
+            return None
+        candidates = [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and item.get("marker_key") == marker_key
+            and not item.get("voided_at")
+        ]
+        if not candidates:
+            return None
+        # Der Index als letzter Schlüsselteil macht die Ordnung total und
+        # bewahrt die Semantik der Sortier-Variante: bei Gleichstand gewinnt
+        # der zuletzt eingetragene Eintrag.
+        return max(
+            enumerate(candidates),
+            key=lambda pair: (lab_reading_chrono_key(pair[1]), pair[0]),
+        )[1]
+
+    async def void_lab_reading(
+        self,
+        entry_id: str,
+        reading_id: str,
+        actor: str | None = None,
+        reason: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Laborwert als gelöscht markieren (kein Hard-Delete)."""
+        e = self.entry(entry_id)
+        reading = _find_by_id(e.get("lab_readings"), reading_id)
+        if reading is None or reading.get("voided_at"):
+            return False
+        reading["voided_at"] = _now_iso()
+        reading["voided_by"] = actor
+        reading["void_reason"] = reason
+        self._append_audit(
+            entry_id,
+            "entry_voided",
+            "lab_readings",
+            reading_id,
+            actor,
+            {"reason": reason} if reason else {},
+            audit_limit,
+        )
+        await self._async_save()
+        return True
+
+    async def restore_lab_reading(
+        self,
+        entry_id: str,
+        reading_id: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Gelöschten Laborwert wiederherstellen."""
+        e = self.entry(entry_id)
+        reading = _find_by_id(e.get("lab_readings"), reading_id)
+        if reading is None or not reading.get("voided_at"):
+            return False
+        reading["voided_at"] = None
+        reading["voided_by"] = None
+        reading["void_reason"] = None
+        self._append_audit(
+            entry_id, "entry_restored", "lab_readings", reading_id, actor, {}, audit_limit
+        )
+        await self._async_save()
+        return True
+
+    async def remove_last_lab_reading(
+        self,
+        entry_id: str,
+        marker_key: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> bool:
+        """Undo: letzten AKTIVEN Wert EINES Markers voiden (kein Pop, §5.2)."""
+        reading = self.last_active_lab_reading(entry_id, marker_key)
+        if reading is None:
+            return False
+        return await self.void_lab_reading(
+            entry_id, reading.get("id"), actor=actor, audit_limit=audit_limit
+        )
+
     async def set_person(self, entry_id: str, person: str) -> None:
         self.entry(entry_id)["person"] = person
         await self._async_save()
@@ -701,7 +865,7 @@ class HealthOMatStore:
             for item in self.entry(entry_id).get("wellbeing_entries", [])
             if isinstance(item, dict) and not item.get("voided_at")
         ]
-        return sorted(active, key=_wellbeing_chrono_key)
+        return sorted(active, key=_event_chrono_key)
 
     def current_wellbeing(self, entry_id: str) -> dict | None:
         """Aktueller Wohlbefindenswert = letzter nicht-gelöschter Eintrag."""
@@ -991,6 +1155,9 @@ def _active_view(entry: dict) -> dict:
     view = dict(entry)
     view["drinks"] = _active_items(entry.get("drinks"))
     view["readings"] = _active_items(entry.get("readings"))
+    # NB-5: `active_entry()` verspricht "ohne voided" — das gilt auch für die
+    # Laborwerte (sonst tauchen gelöschte Befunde in Auswertungen auf).
+    view["lab_readings"] = _active_items(entry.get("lab_readings"))
     if isinstance(entry.get("wellbeing_entries"), list):
         view["wellbeing_entries"] = _active_items(entry.get("wellbeing_entries"))
         _sync_wellbeing_mirrors(view)
@@ -1020,9 +1187,14 @@ def _chrono_sort_key(value: Any) -> datetime:
     return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
-def _wellbeing_chrono_key(item: dict) -> tuple[datetime, datetime]:
-    """Sortierschlüssel eines Wellbeing-Ereignisses: `ts`, dann `created_at`."""
+def _event_chrono_key(item: dict) -> tuple[datetime, datetime]:
+    """Sortierschlüssel eines Ereignisses: `ts`, dann `created_at`."""
     return (_chrono_sort_key(item.get("ts")), _chrono_sort_key(item.get("created_at")))
+
+
+# Öffentlicher Alias: auch `ws_api._labs_block` sortiert den Laborverlauf damit —
+# ein zweiter (abweichender) Sortierpfad wäre eine Fehlerquelle.
+lab_reading_chrono_key = _event_chrono_key
 
 
 def _sync_wellbeing_mirrors(entry: dict) -> None:
@@ -1043,7 +1215,7 @@ def _sync_wellbeing_mirrors(entry: dict) -> None:
             for item in entries
             if isinstance(item, dict) and item.get("key") and not item.get("voided_at")
         ),
-        key=_wellbeing_chrono_key,
+        key=_event_chrono_key,
     )
     if not active:
         entry["wellbeing"] = {}

@@ -44,6 +44,7 @@
           "area_drink": "Trinken erfassen",
           "area_bp": "Blutdruck erfassen",
           "area_wellbeing": "Wohlbefinden erfassen",
+          "area_labs": "Laborwerte erfassen",
           "skip": "Diesen Schritt überspringen"
         }
       },
@@ -194,6 +195,93 @@
       },
       "caffeine_today": {
         "name": "Koffein heute"
+      },
+      "lab_alt": {
+        "name": "ALT (GPT)"
+      },
+      "lab_ast": {
+        "name": "AST (GOT)"
+      },
+      "lab_ggt": {
+        "name": "GGT (Gamma-GT)"
+      },
+      "lab_bilirubin_total": {
+        "name": "Bilirubin gesamt"
+      },
+      "lab_total_protein": {
+        "name": "Gesamteiweiß"
+      },
+      "lab_creatinine": {
+        "name": "Kreatinin"
+      },
+      "lab_egfr": {
+        "name": "eGFR"
+      },
+      "lab_urea": {
+        "name": "Harnstoff"
+      },
+      "lab_urine_protein_creatinine_ratio": {
+        "name": "Protein/Kreatinin-Quotient (Urin)"
+      },
+      "lab_sodium": {
+        "name": "Natrium"
+      },
+      "lab_potassium": {
+        "name": "Kalium"
+      },
+      "lab_calcium": {
+        "name": "Calcium gesamt"
+      },
+      "lab_magnesium": {
+        "name": "Magnesium"
+      },
+      "lab_chloride": {
+        "name": "Chlorid"
+      },
+      "lab_cholesterol_total": {
+        "name": "Gesamtcholesterin"
+      },
+      "lab_ldl": {
+        "name": "LDL"
+      },
+      "lab_hdl": {
+        "name": "HDL"
+      },
+      "lab_triglycerides": {
+        "name": "Triglyceride"
+      },
+      "lab_tsh": {
+        "name": "TSH"
+      },
+      "lab_ft4": {
+        "name": "fT4"
+      },
+      "lab_ft3": {
+        "name": "fT3"
+      },
+      "lab_hemoglobin": {
+        "name": "Hämoglobin"
+      },
+      "lab_leukocytes": {
+        "name": "Leukozyten"
+      },
+      "lab_platelets": {
+        "name": "Thrombozyten"
+      },
+      "lab_crp": {
+        "name": "CRP"
+      },
+      "lab_esr": {
+        "name": "BSG"
+      },
+      "lab_lipase": {
+        "name": "Lipase"
+      },
+      "lab_amylase": {
+        "name": "Amylase"
+      },
+      "lab_tacrolimus": {
+        "name": "Tacrolimus (Talspiegel)"
       }
     },
     "binary_sensor": {
@@ -202,6 +290,33 @@
       },
       "bp_warning": {
         "name": "Blutdruck-Warnung"
+      },
+      "lab_warning_liver": {
+        "name": "Leber-Warnung"
+      },
+      "lab_warning_kidney": {
+        "name": "Niere-Warnung"
+      },
+      "lab_warning_electrolytes": {
+        "name": "Elektrolyte-Warnung"
+      },
+      "lab_warning_lipids": {
+        "name": "Lipide-Warnung"
+      },
+      "lab_warning_thyroid": {
+        "name": "Schilddrüse-Warnung"
+      },
+      "lab_warning_blood_count": {
+        "name": "Blutbild-Warnung"
+      },
+      "lab_warning_inflammation": {
+        "name": "Entzündung/Immunsystem-Warnung"
+      },
+      "lab_warning_digestion": {
+        "name": "Verdauung-Warnung"
+      },
+      "lab_warning_drug_levels": {
+        "name": "Medikamentenspiegel-Warnung"
       }
     },
     "button": {
@@ -389,7 +504,13 @@
     },
     "export_csv": {
       "name": "CSV-Export",
-      "description": "Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/. Nur für Administratoren."
+      "description": "Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/. Nur für Administratoren.",
+      "fields": {
+        "dataset": {
+          "name": "Datensatz",
+          "description": "Welche Daten exportiert werden: Getränke, Blutdruck, Laborwerte oder alles."
+        }
+      }
     },
     "import_csv": {
       "name": "CSV-Import",
@@ -405,7 +526,7 @@
         },
         "dataset": {
           "name": "Datensatz",
-          "description": "Welche Daten importiert werden: Getränke, Blutdruck oder alles (automatisch)."
+          "description": "Welche Daten importiert werden: Getränke, Blutdruck, Laborwerte oder alles (automatisch)."
         }
       }
     },
@@ -468,6 +589,38 @@
           "description": "Name der Person (leer = jede eingerichtete Person erhält einen eigenen Bericht)."
         }
       }
+    },
+    "add_lab_value": {
+      "name": "Laborwert erfassen",
+      "description": "Speichert einen Laborwert (Katalog- oder eigener Marker) für eine Person.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stabiler Marker-Schlüssel (z. B. alt, creatinine, crp) oder ein eigener Marker-Key aus dem Admin-Panel. Deutsche Laborsynonyme (gpt, got, gamma_gt) werden automatisch aufgelöst."
+        },
+        "unit": {
+          "name": "Einheit",
+          "description": "Einheit des Werts (optional, Default = kanonische Einheit des Markers). Für Marker mit Verwechslungsgefahr (z. B. das Protein/Kreatinin-Quotient) ist dieses Feld Pflicht."
+        },
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt der Erfassung (ISO 8601, z. B. 2026-10-24T18:30 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
+        },
+        "report_ref": {
+          "name": "Berichts-Referenz",
+          "description": "Optionaler Link oder externe ID des Laborberichts (max. 500 Zeichen). Nur Referenz, Health-O-Mat ruft die URL nie selbst auf."
+        }
+      }
+    },
+    "remove_last_lab_value": {
+      "name": "Letzten Laborwert löschen",
+      "description": "Entfernt den letzten aktiven Laborwert eines bestimmten Markers (Undo). Der Eintrag wird als gelöscht markiert und bleibt wiederherstellbar.",
+      "fields": {
+        "marker": {
+          "name": "Marker",
+          "description": "Stabiler Marker-Schlüssel, dessen letzter Wert entfernt wird."
+        }
+      }
     }
   },
   "common": {
@@ -499,11 +652,13 @@
     "ui_common_area_drink": "Trinken",
     "ui_common_area_bp": "Blutdruck",
     "ui_common_area_wellbeing": "Wohlbefinden",
+    "ui_common_area_labs": "Laborwerte",
     "ui_common_kind_drinks": "Getränke",
     "ui_common_kind_blood_pressure": "Blutdruck",
     "ui_common_kind_wellbeing": "Wohlbefinden",
     "ui_common_dataset_drinks": "Getränke",
     "ui_common_dataset_blood_pressure": "Blutdruck",
+    "ui_common_dataset_lab_values": "Laborwerte",
     "ui_common_dataset_wellbeing": "Wohlbefinden",
     "ui_common_dataset_all": "Alles",
     "ui_common_mode_merge": "Zusammenführen",
@@ -817,6 +972,40 @@
     "ui_panel_history_loading": "Lade Verlauf…",
     "ui_panel_refresh_aria": "Aktualisieren",
     "ui_panel_saving": "Speichere…",
-    "ui_editor_person_placeholder": "z. B. Caro"
+    "ui_editor_person_placeholder": "z. B. Caro",
+    "ui_admin_lab_title": "Laborwerte",
+    "ui_admin_lab_ref_title": "Referenzbereiche anpassen",
+    "ui_admin_lab_category": "Kategorie",
+    "ui_admin_lab_marker": "Marker",
+    "ui_admin_lab_unit": "Einheit",
+    "ui_admin_lab_range": "Referenz",
+    "ui_admin_lab_reset": "Auf Katalog-Default zurücksetzen",
+    "ui_admin_lab_hide_title": "Kategorien ausblenden",
+    "ui_admin_lab_custom_title": "Eigene Marker",
+    "ui_admin_lab_custom_name": "Name",
+    "ui_admin_lab_custom_unit": "Einheit",
+    "ui_admin_lab_custom_category": "Kategorie",
+    "ui_admin_lab_custom_range": "Referenz min – max",
+    "ui_admin_lab_custom_alt_unit": "Alternative Einheit (optional)",
+    "ui_admin_lab_custom_alt_unit_name": "Einheit",
+    "ui_admin_lab_custom_alt_factor": "Faktor → Haupteinheit",
+    "ui_admin_lab_custom_submit": "Hinzufügen",
+    "ui_admin_lab_feedback": "Fehlt eine Kategorie oder ein Marker? Vorschlag/Feedback auf GitHub",
+    "ui_panel_lab_reported_as": "eingegeben als {value} {unit}",
+    "ui_panel_chart_lab_empty": "Noch zu wenige Werte – der Verlauf erscheint ab zwei Messungen.",
+    "ui_panel_tab_labs": "Laborwerte",
+    "ui_panel_lab_prev": "Vorherige Kategorie",
+    "ui_panel_lab_next": "Nächste Kategorie",
+    "ui_panel_lab_no_categories": "Keine Laborwert-Kategorie sichtbar.",
+    "ui_panel_lab_add_value": "Neuen Wert erfassen",
+    "ui_panel_lab_marker": "Marker",
+    "ui_panel_lab_value_field": "Wert",
+    "ui_panel_lab_unit_field": "Einheit (optional)",
+    "ui_panel_lab_report_ref": "Bericht-Link/ID (optional)",
+    "ui_panel_lab_save": "Speichern",
+    "ui_panel_tile_lab_warning": "{count} Marker außerhalb Referenz",
+    "ui_panel_tile_lab_ok": "Alles im Bereich",
+    "ui_panel_lab_threshold_title": "{count} Laborwerte außerhalb Referenz",
+    "ui_panel_val_lab_value": "Bitte Marker und einen numerischen Wert angeben."
   }
 }

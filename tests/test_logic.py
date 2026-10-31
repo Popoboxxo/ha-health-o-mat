@@ -1448,3 +1448,269 @@ def test_req_hom_120_parse_entry_timestamp_defaults_to_local_reference():
         "2026-10-25T10:00:00", now=datetime(2026, 10, 25, 12, 0)
     )
     assert parsed_naive_now is not None and parsed_naive_now.tzinfo is not None
+
+
+# --- REQ-HOM-122: Laborwerte — Marker-Auflösung + Einheiten-Konvertierung ---
+
+
+def test_req_hom_122_resolve_lab_marker_catalog_key():
+    from custom_components.health_o_mat import logic
+
+    resolved = logic.resolve_lab_marker("alt", [])
+    assert resolved is not None
+    key, marker = resolved
+    assert key == "alt"
+    assert marker["canonical_unit"] == "U/L"
+    assert marker["is_custom"] is False
+
+
+def test_req_hom_122_resolve_lab_marker_resolves_german_alias():
+    from custom_components.health_o_mat import logic
+
+    key, marker = logic.resolve_lab_marker("gpt", [])
+    assert key == "alt"
+    assert marker["canonical_unit"] == "U/L"
+
+
+def test_req_hom_122_resolve_lab_marker_alias_is_case_insensitive():
+    from custom_components.health_o_mat import logic
+
+    key, _marker = logic.resolve_lab_marker("GPT", [])
+    assert key == "alt"
+
+
+def test_req_hom_122_resolve_lab_marker_unknown_returns_none():
+    from custom_components.health_o_mat import logic
+
+    assert logic.resolve_lab_marker("not_a_marker", []) is None
+
+
+def test_req_hom_122_resolve_lab_marker_custom_key():
+    from custom_components.health_o_mat import logic
+
+    custom = [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    key, marker = logic.resolve_lab_marker("vitamin_d", custom)
+    assert key == "vitamin_d"
+    assert marker["is_custom"] is True
+    assert marker["canonical_unit"] == "ng/mL"
+
+
+def test_req_hom_122_convert_lab_value_same_unit_passes_through():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    value, unit = logic.convert_lab_value(marker, 32.0, "U/L")
+    assert value == 32.0
+    assert unit == "U/L"
+
+
+def test_req_hom_122_convert_lab_value_defaults_to_canonical_when_unit_missing():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    value, unit = logic.convert_lab_value(marker, 32.0, None)
+    assert value == 32.0
+    assert unit == "U/L"
+
+
+def test_req_hom_122_convert_lab_value_converts_alt_unit_bidirectionally():
+    """Creatinine: 1.1 mg/dL and 97.24 µmol/L round-trip to the same canonical value."""
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["creatinine"]
+    from_mgdl, unit1 = logic.convert_lab_value(marker, 1.1, "mg/dL")
+    from_canonical, unit2 = logic.convert_lab_value(marker, from_mgdl, "µmol/L")
+    assert unit1 == unit2 == "µmol/L"
+    assert from_canonical == from_mgdl  # same unit in -> no change
+    assert round(from_mgdl, 2) == 97.24
+
+
+def test_req_hom_122_convert_lab_value_unit_match_is_case_and_space_insensitive():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["creatinine"]
+    value, unit = logic.convert_lab_value(marker, 1.1, "  MG/DL  ")
+    assert unit == "µmol/L"
+    assert round(value, 2) == 97.24
+
+
+def test_req_hom_122_convert_lab_value_accepts_greek_mu_variant():
+    """[REQ-HOM-122/N-5] ``μmol/L`` (U+03BC) ist dieselbe Einheit wie ``µmol/L`` (U+00B5).
+
+    Fremd-CSVs liefern das griechische My statt des Mikro-Zeichens; die
+    NFKC-Normalisierung des Vergleichs faltet beide Formen. Die gespeicherte
+    Anzeige-Einheit bleibt unverändert die kanonische Schreibweise.
+    """
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["creatinine"]
+    assert marker["canonical_unit"] == "µmol/L"  # U+00B5, unverändert gespeichert
+
+    value, unit = logic.convert_lab_value(marker, 97.24, "\u03bcmol/L")
+
+    assert unit == "µmol/L"
+    assert value == 97.24
+
+
+def test_req_hom_122_convert_lab_value_alt_unit_matches_across_mu_variants():
+    """[REQ-HOM-122/N-5] Alt-Einheit mit Mikro-Zeichen trifft Eingabe mit My."""
+    from custom_components.health_o_mat import logic
+
+    marker = {
+        "canonical_unit": "U/L",
+        "alt_units": {"µmol/L": 2.0},  # U+00B5 im Katalog
+    }
+
+    value, unit = logic.convert_lab_value(marker, 10.0, "\u03bcmol/L")  # U+03BC
+
+    assert unit == "U/L"
+    assert value == 20.0
+
+
+def test_req_hom_122_convert_lab_value_unsupported_unit_raises():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    import pytest
+
+    with pytest.raises(ValueError, match="unsupported_unit"):
+        logic.convert_lab_value(marker, 32.0, "mg/dL")
+
+
+def test_req_hom_122_convert_lab_value_custom_marker_alt_unit():
+    from custom_components.health_o_mat import logic
+
+    custom = [
+        {
+            "key": "vitamin_d",
+            "name": "Vitamin D",
+            "category": "other",
+            "unit": "ng/mL",
+            "alt_unit": {"unit": "nmol/L", "factor_to_canonical": 0.4},
+        }
+    ]
+    _key, marker = logic.resolve_lab_marker("vitamin_d", custom)
+    value, unit = logic.convert_lab_value(marker, 100.0, "nmol/L")
+    assert unit == "ng/mL"
+    assert value == 40.0
+
+
+def test_req_hom_122_normalize_lab_custom_markers_generates_key_from_name():
+    from custom_components.health_o_mat import logic
+
+    result = logic.normalize_lab_custom_markers(
+        [{"name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    )
+    assert result[0]["key"] == "vitamin_d"
+
+
+def test_req_hom_122_normalize_lab_custom_markers_dedupes_key_collisions():
+    from custom_components.health_o_mat import logic
+
+    result = logic.normalize_lab_custom_markers(
+        [
+            {"name": "Vitamin D", "category": "other", "unit": "ng/mL"},
+            {"name": "Vitamin D", "category": "other", "unit": "nmol/L"},
+        ]
+    )
+    keys = [item["key"] for item in result]
+    assert keys == ["vitamin_d", "vitamin_d_2"]
+
+
+def test_req_hom_122_normalize_lab_custom_markers_rejects_catalog_key_collision():
+    from custom_components.health_o_mat import logic
+
+    # "alt" is a catalog key — a custom marker with that generated key must
+    # not shadow it; it gets suffixed instead.
+    result = logic.normalize_lab_custom_markers(
+        [{"name": "ALT", "category": "other", "unit": "U/L"}]
+    )
+    assert result[0]["key"] == "alt_2"
+
+
+# --- REQ-HOM-122: Laborwerte — Referenzbereich + In-Range-Prüfung ---
+
+
+def test_req_hom_122_resolve_lab_reference_uses_catalog_default():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    ref_min, ref_max = logic.resolve_lab_reference("alt", marker, {})
+    assert (ref_min, ref_max) == (10, 50)
+
+
+def test_req_hom_122_resolve_lab_reference_applies_override():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    overrides = {"alt": {"ref_min": 5, "ref_max": 45}}
+    ref_min, ref_max = logic.resolve_lab_reference("alt", marker, overrides)
+    assert (ref_min, ref_max) == (5, 45)
+
+
+def test_req_hom_122_resolve_lab_reference_partial_override_keeps_other_bound():
+    from custom_components.health_o_mat import logic
+
+    marker = logic.LAB_MARKERS["alt"]
+    overrides = {"alt": {"ref_min": 5}}
+    ref_min, ref_max = logic.resolve_lab_reference("alt", marker, overrides)
+    assert (ref_min, ref_max) == (5, 50)
+
+
+def test_req_hom_122_lab_marker_in_range_within_bounds():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(30, 10, 50) is True
+
+
+def test_req_hom_122_lab_marker_in_range_below_min():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(5, 10, 50) is False
+
+
+def test_req_hom_122_lab_marker_in_range_above_max():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(60, 10, 50) is False
+
+
+def test_req_hom_122_lab_marker_in_range_one_sided_bound():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(100, 90, None) is True
+    assert logic.lab_marker_in_range(80, 90, None) is False
+
+
+def test_req_hom_122_lab_marker_in_range_no_reference_is_none():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(30, None, None) is None
+
+
+def test_req_hom_122_lab_marker_in_range_no_value_is_none():
+    from custom_components.health_o_mat import logic
+
+    assert logic.lab_marker_in_range(None, 10, 50) is None
+
+
+def test_req_hom_122_normalize_lab_ref_overrides_drops_unknown_markers():
+    from custom_components.health_o_mat import logic
+
+    result = logic.normalize_lab_ref_overrides(
+        {"alt": {"ref_min": 5}, "not_a_marker": {"ref_min": 1}}
+    )
+    assert result == {"alt": {"ref_min": 5}}
+
+
+def test_req_hom_122_normalize_lab_hidden_categories_drops_unknown_keys():
+    from custom_components.health_o_mat import logic
+
+    result = logic.normalize_lab_hidden_categories(["thyroid", "not_a_category"])
+    assert result == ["thyroid"]
+
+
+def test_req_hom_122_normalize_lab_hidden_categories_non_list_is_empty():
+    from custom_components.health_o_mat import logic
+
+    assert logic.normalize_lab_hidden_categories(None) == []

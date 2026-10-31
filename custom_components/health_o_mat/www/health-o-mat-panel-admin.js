@@ -24,11 +24,12 @@ import {
   escapeHtml,
   attrValue,
   datasetLabel,
+  labDisplayName,
   normalizeAreas,
   personSlug,
   messageHtml,
   t,
-} from "./health-o-mat-panel-base.js?v=0.15.0";
+} from "./health-o-mat-panel-base.js?v=0.16.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 
@@ -148,7 +149,13 @@ function settingsForm(panel, settings, entryId, loadError) {
           <input type="checkbox" data-field="area-wellbeing"${areas.wellbeing ? " checked" : ""} />
           <span>${escapeHtml(t("ui_common_area_wellbeing", "Wohlbefinden"))}</span>
         </label>
+        <label class="check">
+          <input type="checkbox" data-field="area-labs"${areas.labs ? " checked" : ""} />
+          <span>${escapeHtml(t("ui_common_area_labs", "Laborwerte"))}</span>
+        </label>
       </div>
+
+      ${labSettingsSection(panel, s, entryId)}
 
       <div class="card">
         <div class="card-title">${escapeHtml(
@@ -317,6 +324,175 @@ function quickSlotsHtml(panel) {
       </div>`
     )
     .join("");
+}
+
+/* ---- Laborwerte (REQ-HOM-122) ------------------------------------------- */
+
+/* Reference ranges / category visibility / custom markers (admin only).
+ *
+ * `settings.lab_catalog` is read-only (built from `const.py`) and carries the
+ * default reference ranges; the three option fields hold the user's deltas.
+ * The editor state for custom markers lives in `panel._labCustomDraft[entryId]`
+ * (same working-copy pattern as `panel._quickDraft`); collected back into the
+ * settings payload by the entry module. */
+export function labSettingsSection(panel, settings, entryId) {
+  const s = settings || {};
+  const catalog = s.lab_catalog || { categories: [], markers: {} };
+  const categories = Array.isArray(catalog.categories) ? catalog.categories : [];
+  const markers = catalog.markers && typeof catalog.markers === "object" ? catalog.markers : {};
+  const overrides = s.lab_ref_overrides && typeof s.lab_ref_overrides === "object"
+    ? s.lab_ref_overrides
+    : {};
+  const hidden = new Set(Array.isArray(s.lab_hidden_categories) ? s.lab_hidden_categories : []);
+  const draft = panel._labCustomDraft && panel._labCustomDraft[entryId];
+  const custom = Array.isArray(draft)
+    ? draft
+    : Array.isArray(s.lab_custom_markers)
+      ? s.lab_custom_markers
+      : [];
+
+  // Catalog markers use `name_de`/`name_en` + `alt_units` (unit -> factor);
+  // a custom marker carries a single `alt_unit` object instead.
+  const categoryName = (key) => {
+    const hit = categories.find((category) => category.key === key);
+    return hit ? labDisplayName(hit, hit.key) : String(key == null ? "" : key);
+  };
+  const altUnitText = (marker) => {
+    const altUnit = marker && marker.alt_unit;
+    return altUnit && altUnit.unit ? String(altUnit.unit) : "";
+  };
+
+  const refRows = Object.entries(markers)
+    .map(([key, marker]) => {
+      const definition = marker && typeof marker === "object" ? marker : {};
+      const override = overrides[key] && typeof overrides[key] === "object" ? overrides[key] : {};
+      const refMin = override.ref_min != null ? override.ref_min : definition.ref_min;
+      const refMax = override.ref_max != null ? override.ref_max : definition.ref_max;
+      return `<tr>
+          <td>${escapeHtml(categoryName(definition.category))}</td>
+          <td>${escapeHtml(labDisplayName(definition, key))}</td>
+          <td>${escapeHtml(definition.canonical_unit || "")}</td>
+          <td>
+            <input type="number" step="any" data-field="lab-ref-min-${escapeHtml(key)}"
+              value="${attrValue(refMin)}" />
+            –
+            <input type="number" step="any" data-field="lab-ref-max-${escapeHtml(key)}"
+              value="${attrValue(refMax)}" />
+          </td>
+          <td><button class="btn ghost" type="button" data-action="lab-ref-reset"
+            data-marker="${escapeHtml(key)}"
+            title="${escapeHtml(
+              t("ui_admin_lab_reset", "Auf Katalog-Default zurücksetzen")
+            )}">\u21BA</button></td>
+        </tr>`;
+    })
+    .join("");
+
+  const hideCheckboxes = categories
+    .map(
+      (category) => `<label class="check">
+          <input type="checkbox" data-field="lab-hide-${escapeHtml(category.key)}"${
+        hidden.has(category.key) ? "" : " checked"
+      } />
+          <span>${escapeHtml(labDisplayName(category, category.key))}</span>
+        </label>`
+    )
+    .join("");
+
+  const customRows = custom
+    .map(
+      (marker, index) => `<li>
+          ${escapeHtml(marker.name || "")} (${escapeHtml(marker.key || "?")}) —
+          ${escapeHtml(marker.unit || "")} · ${escapeHtml(categoryName(marker.category))}${
+        altUnitText(marker) ? ` · ${escapeHtml(altUnitText(marker))}` : ""
+      }
+          <button class="btn ghost" type="button" data-action="lab-custom-remove"
+            data-index="${index}">\u2715</button>
+        </li>`
+    )
+    .join("");
+
+  const categoryOptions = categories
+    .map(
+      (category) =>
+        `<option value="${escapeHtml(category.key)}">${escapeHtml(
+          labDisplayName(category, category.key)
+        )}</option>`
+    )
+    .join("");
+
+  return `<div class="card">
+      <div class="card-title">${escapeHtml(t("ui_admin_lab_title", "Laborwerte"))}</div>
+      <div class="muted">${escapeHtml(
+        t("ui_admin_lab_ref_title", "Referenzbereiche anpassen")
+      )}</div>
+      <table class="lab-ref-table">
+        <thead><tr>
+          <th>${escapeHtml(t("ui_admin_lab_category", "Kategorie"))}</th>
+          <th>${escapeHtml(t("ui_admin_lab_marker", "Marker"))}</th>
+          <th>${escapeHtml(t("ui_admin_lab_unit", "Einheit"))}</th>
+          <th>${escapeHtml(t("ui_admin_lab_range", "Referenz"))}</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${refRows}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">${escapeHtml(
+        t("ui_admin_lab_hide_title", "Kategorien ausblenden")
+      )}</div>
+      <div class="settings-grid">${hideCheckboxes}</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">${escapeHtml(t("ui_admin_lab_custom_title", "Eigene Marker"))}</div>
+      <div class="settings-grid">
+        <label class="field">${escapeHtml(t("ui_admin_lab_custom_name", "Name"))}
+          <input type="text" data-field="lab-custom-name" autocomplete="off" />
+        </label>
+        <label class="field">${escapeHtml(t("ui_admin_lab_custom_unit", "Einheit"))}
+          <input type="text" data-field="lab-custom-unit" autocomplete="off" />
+        </label>
+        <label class="field">${escapeHtml(t("ui_admin_lab_custom_category", "Kategorie"))}
+          <select data-field="lab-custom-category">${categoryOptions}</select>
+        </label>
+        <label class="field">${escapeHtml(t("ui_admin_lab_custom_range", "Referenz min – max"))}
+          <input type="number" step="any" data-field="lab-custom-ref-min" />
+          –
+          <input type="number" step="any" data-field="lab-custom-ref-max" />
+        </label>
+      </div>
+      <details>
+        <summary>${escapeHtml(
+          t("ui_admin_lab_custom_alt_unit", "Alternative Einheit (optional)")
+        )}</summary>
+        <div class="settings-grid">
+          <label class="field">${escapeHtml(t("ui_admin_lab_custom_alt_unit_name", "Einheit"))}
+            <input type="text" data-field="lab-custom-alt-unit" autocomplete="off" />
+          </label>
+          <label class="field">${escapeHtml(
+            t("ui_admin_lab_custom_alt_factor", "Faktor → Haupteinheit")
+          )}
+            <input type="number" step="any" data-field="lab-custom-alt-factor" />
+          </label>
+        </div>
+      </details>
+      <button class="btn ghost" type="button" data-action="lab-custom-add">
+        \uFF0B ${escapeHtml(t("ui_admin_lab_custom_submit", "Hinzufügen"))}
+      </button>
+      <ul class="lab-custom-list">${customRows}</ul>
+    </div>
+
+    <div class="card">
+      <a href="https://github.com/Popoboxxo/ha-health-o-mat/issues/new" target="_blank"
+        rel="noopener">${escapeHtml(
+          t(
+            "ui_admin_lab_feedback",
+            "Fehlt eine Kategorie oder ein Marker? Vorschlag/Feedback auf GitHub"
+          )
+        )}</a>
+    </div>`;
 }
 
 export function settingsStatusHtml(panel) {

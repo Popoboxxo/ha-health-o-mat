@@ -33,8 +33,15 @@ import {
   wellbeingScale,
   wellbeingVisual,
   bpHistoryChartHtml,
+  labBadge,
+  labReportedSubline,
+  labChartHtml,
+  labMarkerOptionsHtml,
+  labDisplayName,
   t,
-} from "./health-o-mat-panel-base.js?v=0.15.0";
+  WS,
+  errMsg,
+} from "./health-o-mat-panel-base.js?v=0.16.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -82,6 +89,35 @@ export function renderTile(panel, person) {
   const wbState = wellbeingView(panel, data);
   const wbAt = wb.at ? entryTime(wb.at) : "";
 
+  /* Laborwerte (REQ-HOM-122): Zaehler + Kachelzeile rein aus dem bereits
+   * geladenen `panel_data`-Block — kein zusaetzlicher Request (§7.3). */
+  const labCount = areas.labs ? _labWarningCount(data) : 0;
+  const labWarn = labCount > 0;
+  const labRow = areas.labs
+    ? `<div class="tile-row lab-row-tile"><span class="em" aria-hidden="true">\u{1F9EA}</span><span>${
+        labWarn
+          ? escapeHtml(
+              t("ui_panel_tile_lab_warning", "{count} Marker außerhalb Referenz", {
+                count: labCount,
+              })
+            )
+          : escapeHtml(t("ui_panel_tile_lab_ok", "Alles im Bereich"))
+      }</span>${labWarn ? `<span class="muted">\u00B7 \u26A0\uFE0F</span>` : ""}</div>`
+    : "";
+
+  /* Ein einziges ⚠-Badge, Tooltip nennt beide Ursachen, wenn beide zutreffen. */
+  const warnTitleParts = [];
+  if (warn) {
+    warnTitleParts.push(t("ui_panel_bp_threshold_title", "Blutdruck oberhalb der Schwellen"));
+  }
+  if (labWarn) {
+    warnTitleParts.push(
+      t("ui_panel_lab_threshold_title", "{count} Laborwerte außerhalb Referenz", {
+        count: labCount,
+      })
+    );
+  }
+
   const rest = goal > 0 ? Math.max(0, Math.round(goal - ml)) : null;
   const sub = goal > 0
     ? `${t("ui_panel_tile_goal", "Ziel {ml}", { ml: fmtMl(goal) })}${
@@ -109,13 +145,18 @@ export function renderTile(panel, person) {
       <div class="tile-head">
         <span class="dot"></span>
         <span class="tile-name">${escapeHtml(person.display_name)}</span>
-        ${warn ? `<span class="status bad" title="${escapeHtml(
-          t("ui_panel_bp_threshold_title", "Blutdruck oberhalb der Schwellen")
-        )}">\u26A0\uFE0F</span>` : ""}
+        ${
+          warn || labWarn
+            ? `<span class="status bad" title="${escapeHtml(
+                warnTitleParts.join("; ")
+              )}">\u26A0\uFE0F</span>`
+            : ""
+        }
       </div>
       ${drinkSection}
       ${bpRow}
       ${wbRow}
+      ${labRow}
     </button>`;
 }
 
@@ -159,6 +200,7 @@ export function renderDetail(panel) {
   let content;
   if (activeTab === "bp") content = bpTab(panel, data, entryId);
   else if (activeTab === "wellbeing") content = wellbeingTab(panel, data, entryId);
+  else if (activeTab === "labs") content = labsTab(panel, data, entryId);
   else if (activeTab === "drink") content = drinkTab(panel, data, entryId);
   else {
     content = messageHtml(
@@ -817,4 +859,260 @@ function wellbeingTab(panel, data, entryId) {
       ${last}
       ${undo}
     </div>${scoreForm}${chartHtml}${historySection(panel, entryId, "wellbeing")}`;
+}
+
+/* ---- Tab: Laborwerte (REQ-HOM-122) ---------------------------------------- */
+
+/* Marker ausserhalb des Referenzbereichs ueber alle SICHTBAREN Kategorien
+ * (`hidden`-Kategorien ausgenommen) — reine Darstellungslogik auf den bereits
+ * geladenen `panel_data`-Attributen, kein zusaetzlicher Request (§7.3). */
+function _labWarningCount(data) {
+  const labs = (data && data.labs) || { categories: [], markers: {} };
+  const hiddenCategories = new Set(
+    (labs.categories || [])
+      .filter((category) => category && category.hidden)
+      .map((category) => category.key)
+  );
+  return Object.values(labs.markers || {}).filter(
+    (marker) => marker && !hiddenCategories.has(marker.category) && marker.in_range === false
+  ).length;
+}
+
+/* Kategorien, die im Tab erscheinen: nicht ausgeblendet UND mit mindestens
+ * einem Marker (Katalog oder Custom) — sonst entstuende eine leere Leiste. */
+function visibleLabCategories(labs) {
+  const markers = Object.values((labs && labs.markers) || {});
+  return ((labs && labs.categories) || []).filter((category) => {
+    if (!category || category.hidden) return false;
+    return markers.some((marker) => marker && marker.category === category.key);
+  });
+}
+
+/* Kategorie-Leiste mit ‹/›-Knoepfen; der aktive Eintrag ist per
+ * `aria-selected` markiert (role=tablist). */
+function labCategoryBar(labs, activeCategory) {
+  const categories = visibleLabCategories(labs);
+  if (!categories.length) return "";
+  return `<div class="lab-category-bar" role="tablist">
+      <button class="btn ghost" type="button" data-action="lab-category-prev" aria-label="${escapeHtml(
+        t("ui_panel_lab_prev", "Vorherige Kategorie")
+      )}">\u2039</button>
+      ${categories
+        .map(
+          (category) =>
+            `<button class="lab-category${category.key === activeCategory ? " active" : ""}" type="button" data-action="lab-category" data-category="${escapeHtml(
+              category.key
+            )}" role="tab" aria-selected="${category.key === activeCategory ? "true" : "false"}">${escapeHtml(
+              labDisplayName(category, category.key)
+            )}</button>`
+        )
+        .join("")}
+      <button class="btn ghost" type="button" data-action="lab-category-next" aria-label="${escapeHtml(
+        t("ui_panel_lab_next", "Nächste Kategorie")
+      )}">\u203A</button>
+    </div>`;
+}
+
+/* Ein Marker mit Wert, Badge, Eingabe-Subzeile und Verlaufsgraph. `value`
+ * und `unit` sind Nutzerdaten und laufen durch `escapeHtml`. */
+function labMarkerRow(marker, markerKey) {
+  const value =
+    marker && marker.value != null
+      ? `${escapeHtml(marker.value)} ${escapeHtml(marker.unit)}`
+      : "\u2013";
+  return `<div class="lab-row" data-marker="${escapeHtml(markerKey)}">
+      <div class="lab-row-main">
+        <span class="lab-row-name">${escapeHtml(labDisplayName(marker, markerKey))}</span>
+        <span class="lab-row-value">${value}</span>
+        ${labBadge(marker.in_range)}
+      </div>
+      ${labReportedSubline(marker)}
+      ${labChartHtml(marker.history, {
+        title: "",
+        refMin: marker.ref_min,
+        refMax: marker.ref_max,
+      })}
+    </div>`;
+}
+
+/* Speichern des Erfassungs-Formulars. Der Tab liegt in diesem Modul, der
+ * Panel-Klick-Switch liegt in `health-o-mat-panel.js`; deshalb haengt der
+ * Handler an der eigenen Delegation (siehe `ensureLabGestures`). */
+async function submitLabValue(panel, entryId) {
+  if (!panel || !entryId || panel._busy || typeof panel._ws !== "function") return;
+  const read = (field) => {
+    const el = panel.shadowRoot.querySelector(`[data-field="${field}"]`);
+    return el && el.value != null ? String(el.value).trim() : "";
+  };
+  const marker = read("lab-add-marker");
+  const rawValue = read("lab-add-value");
+  const value = toNumber(rawValue, NaN);
+  if (!marker || !rawValue || !Number.isFinite(value)) {
+    panel._formError = t(
+      "ui_panel_val_lab_value",
+      "Bitte Marker und einen numerischen Wert angeben."
+    );
+    panel._render();
+    return;
+  }
+  const unit = read("lab-add-unit");
+  const reportRef = read("lab-add-report-ref");
+
+  panel._busy = true;
+  panel._actionError = null;
+  panel._formError = null;
+  panel._render();
+  try {
+    const message = { type: WS.addLabValue, entry_id: entryId, marker, value };
+    if (unit) message.unit = unit;
+    if (reportRef) message.report_ref = reportRef;
+    await panel._ws(message);
+    await panel._reloadEntry(entryId);
+  } catch (err) {
+    panel._actionError = errMsg(err);
+  } finally {
+    panel._busy = false;
+    panel._render();
+  }
+}
+
+/* Kategorie schrittweise wechseln (Knoepfe + Wischgeste). Faellt die gemerkte
+ * Kategorie weg (Flaeche neu konfiguriert), beginnt die Suche beim ersten
+ * sichtbaren Eintrag. */
+function stepLabCategory(panel, direction) {
+  if (!panel) return;
+  const data = (panel._data || {})[panel._selectedEntry];
+  const categories = visibleLabCategories((data && data.labs) || {});
+  if (!categories.length) return;
+  const index = categories.findIndex((category) => category.key === panel._labCategory);
+  const next =
+    index < 0 ? 0 : (index + direction + categories.length) % categories.length;
+  panel._labCategory = categories[next].key;
+  if (typeof panel._render === "function") panel._render();
+}
+
+/* Swipe + Klick-Delegation EINMAL je Panel-Element registrieren. Bewusst ohne
+ * Gesture-Library: horizontales Delta-X ab Schwelle, `passive`-Listener, damit
+ * vertikales Scrollen und die bestehenden Tab-Gesten unberuehrt bleiben. */
+const LAB_GESTURES_INSTALLED = "__homLabGesturesInstalled";
+const LAB_SWIPE_THRESHOLD = 40;
+
+function ensureLabGestures(panel) {
+  if (!panel || panel[LAB_GESTURES_INSTALLED]) return;
+  const root = panel.shadowRoot;
+  if (!root || typeof root.addEventListener !== "function") return;
+  panel[LAB_GESTURES_INSTALLED] = true;
+
+  let startX = null;
+  let startY = null;
+  root.addEventListener(
+    "touchstart",
+    (ev) => {
+      const touch = ev.touches && ev.touches[0];
+      startX = touch ? touch.clientX : null;
+      startY = touch ? touch.clientY : null;
+    },
+    { passive: true }
+  );
+  root.addEventListener(
+    "touchend",
+    (ev) => {
+      if (startX == null) return;
+      const touch = ev.changedTouches && ev.changedTouches[0];
+      const fromX = startX;
+      const fromY = startY == null ? null : startY;
+      startX = null;
+      startY = null;
+      if (!touch) return;
+      // Nur im Detail-View auf dem Laborwerte-Tab — andere Tabs haben kein
+      // Kategorie-Konzept.
+      if (panel._view && panel._view !== "detail") return;
+      if (panel._tab !== "labs") return;
+      // Eingabefelder (Zahl/Slider) nie als Wischflaeche interpretieren.
+      const target = ev.target;
+      if (target && typeof target.closest === "function" && target.closest("input, select, textarea")) {
+        return;
+      }
+      const deltaX = touch.clientX - fromX;
+      const deltaY = fromY == null ? 0 : touch.clientY - fromY;
+      if (Math.abs(deltaX) < LAB_SWIPE_THRESHOLD) return;
+      // Vertikales Scrollen nie kapern: nur klar horizontale Gesten.
+      if (Math.abs(deltaY) > Math.abs(deltaX)) return;
+      stepLabCategory(panel, deltaX < 0 ? 1 : -1);
+    },
+    { passive: true }
+  );
+  root.addEventListener("click", (ev) => {
+    const target = ev.target;
+    if (!target || typeof target.closest !== "function") return;
+    const categoryEl = target.closest('[data-action^="lab-category"]');
+    if (categoryEl) {
+      const action = categoryEl.getAttribute("data-action");
+      if (action === "lab-category") {
+        panel._labCategory = categoryEl.getAttribute("data-category");
+        if (typeof panel._render === "function") panel._render();
+      } else if (action === "lab-category-prev") {
+        stepLabCategory(panel, -1);
+      } else if (action === "lab-category-next") {
+        stepLabCategory(panel, 1);
+      }
+      return;
+    }
+    const saveEl = target.closest('[data-action="lab-add-value"]');
+    if (saveEl) submitLabValue(panel, saveEl.getAttribute("data-entry") || "");
+  });
+}
+
+export function labsTab(panel, data, entryId) {
+  ensureLabGestures(panel);
+  const labs = (data && data.labs) || { categories: [], markers: {} };
+  const categories = visibleLabCategories(labs);
+  if (!categories.length) {
+    return messageHtml(
+      t("ui_panel_lab_no_categories", "Keine Laborwert-Kategorie sichtbar."),
+      false
+    );
+  }
+  let active = panel._labCategory;
+  if (!categories.some((category) => category.key === active)) {
+    active = categories[0].key;
+  }
+  panel._labCategory = active;
+
+  const markersInCategory = Object.entries(labs.markers || {}).filter(
+    ([, marker]) => marker && marker.category === active
+  );
+  const rows = markersInCategory
+    .map(([key, marker]) => labMarkerRow(marker, key))
+    .join("");
+
+  const formError = panel._formError
+    ? `<div class="msg error">${escapeHtml(panel._formError)}</div>`
+    : "";
+  const disabled = panel._busy ? " disabled" : "";
+  const entryForm = `<details class="lab-entry-form">
+      <summary>${escapeHtml(t("ui_panel_lab_add_value", "Neuen Wert erfassen"))}</summary>
+      <label class="field">${escapeHtml(t("ui_panel_lab_marker", "Marker"))}
+        <select data-field="lab-add-marker">${labMarkerOptionsHtml(labs.markers, null)}</select>
+      </label>
+      <label class="field">${escapeHtml(t("ui_panel_lab_value_field", "Wert"))}
+        <input type="number" step="any" data-field="lab-add-value" />
+      </label>
+      <label class="field">${escapeHtml(t("ui_panel_lab_unit_field", "Einheit (optional)"))}
+        <input type="text" data-field="lab-add-unit" placeholder="${escapeHtml(
+          t("ui_common_optional", "optional")
+        )}" autocomplete="off" />
+      </label>
+      <label class="field">${escapeHtml(t("ui_panel_lab_report_ref", "Bericht-Link/ID (optional)"))}
+        <input type="text" data-field="lab-add-report-ref" placeholder="${escapeHtml(
+          t("ui_common_optional", "optional")
+        )}" autocomplete="off" />
+      </label>
+      <button class="btn" type="button" data-action="lab-add-value" data-entry="${escapeHtml(
+        entryId
+      )}"${disabled}>\u{1F4BE} ${escapeHtml(t("ui_panel_lab_save", "Speichern"))}</button>
+      ${formError}
+    </details>`;
+
+  return `${labCategoryBar(labs, active)}<div class="lab-rows">${rows}</div>${entryForm}`;
 }

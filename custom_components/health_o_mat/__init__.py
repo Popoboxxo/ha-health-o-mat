@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import NamedTuple
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -20,6 +21,10 @@ from .const import (
     DEFAULT_QUICK_DRINKS,
     DEFAULT_SYS_THRESHOLD,
     DOMAIN,
+    LAB_REPORT_REF_MAX_LEN,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_REF_OVERRIDES,
     OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
@@ -71,9 +76,50 @@ _SERVICE_NAMES = (
     "restore_backup",
     "set_wellbeing",
     "weekly_report",
+    "add_lab_value",
+    "remove_last_lab_value",
 )
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
+
+
+# Vergleichbarer Stand der Lab-Options: (Custom-Marker nach `key` sortiert,
+# Ref-Overrides nach Marker sortiert, verborgene Kategorien als Set).
+class LabOptionsSnapshot(NamedTuple):
+    """Normalisierter Stand der drei Lab-Options eines Entries.
+
+    ``markers`` entscheidet über die **Entity-Menge** (ein Sensor je Marker) und
+    löst damit als einziges Feld einen Reload aus. ``overrides`` wird von den
+    Entities live aus ``entry.options`` gelesen (nur ein Refresh nötig),
+    ``hidden`` ist ein reines Anzeige-Flag des Panels (ws_api, kein Entity).
+    """
+
+    markers: tuple[dict, ...]
+    overrides: tuple[tuple[str, dict], ...]
+    hidden: frozenset[str]
+
+
+def _lab_options_snapshot(options: dict) -> LabOptionsSnapshot:
+    """Vergleichbarer Snapshot der Lab-Options (Review-Fix B-1, geschärft N-2).
+
+    Die Lab-Entities (ein Sensor je Marker) entstehen beim Setup aus
+    ``lab_custom_markers``. Ändert sich dieser Satz, muss der Entry neu geladen
+    werden — deshalb wird der Stand, aus dem die Entities gebaut wurden, in
+    ``HealthOMatData.lab_options`` gespiegelt.
+
+    Normalisiert über die `logic.*`-Normalisierer und reihenfolge-unabhängig
+    (Custom-Marker nach ihrem stabilen `key`, verborgene Kategorien als Set):
+    reines Format-Rauschen (Whitespace, Zahlen als Strings, Listen-Reihenfolge)
+    darf keinen Reload auslösen.
+    """
+    markers = logic.normalize_lab_custom_markers(options.get(OPTION_LAB_CUSTOM_MARKERS))
+    overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
+    hidden = logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES))
+    return LabOptionsSnapshot(
+        markers=tuple(sorted(markers, key=lambda marker: marker["key"])),
+        overrides=tuple(sorted(overrides.items())),
+        hidden=frozenset(hidden),
+    )
 
 
 class HealthOMatData:
@@ -85,6 +131,11 @@ class HealthOMatData:
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
         self.areas: dict[str, bool] = dict(areas.DEFAULT_AREAS)
+        # B-1: Lab-Options, aus denen die Entities beim Setup gebaut wurden.
+        # Startwert = "keine Lab-Options" (das ist der Entity-Satz eines
+        # frischen Setups ohne Custom-Marker/Overrides), damit ein Entry ohne
+        # Lab-Options keinen Reload auslöst.
+        self.lab_options: LabOptionsSnapshot = _lab_options_snapshot({})
         # S-4: zuletzt gesehener `set_lifetime_ml`-Optionswert. Nur eine
         # explizite Änderung darf den Lebenszähler setzen — sonst würde jede
         # Options-Änderung (z. B. Tagesziel) den gewachsenen Zähler zurücksetzen.
@@ -308,6 +359,7 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     rt = entry.runtime_data
     opts = entry.options or {}
     rt.areas = areas.active_areas(opts)
+    rt.lab_options = _lab_options_snapshot(opts)
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
@@ -331,6 +383,18 @@ async def _options_updated(hass, entry) -> None:
     DailyGoalNumber.async_set_native_value, siehe number.py — beide schreiben nur
     noch in entry.options, dieser Listener ist der einzige Sync-Punkt zurück in
     den Runtime-Spiegel rt.daily_goal_ml).
+
+    Ein Reload ist genau dann nötig, wenn sich die **Entity-Menge** ändert:
+    Personen-Umbenennung (Device-Name), Bereichs-Auswahl und — seit REQ-HOM-122
+    (Review-Fix B-1) — die Menge der Custom-Lab-Marker (ein Sensor je Marker).
+    Alles andere wird am laufenden Entry nachgezogen.
+
+    Review-Fix N-2: Die übrigen Lab-Options lösen KEINEN Reload mehr aus:
+    ``lab_ref_overrides`` lesen sensor.py/binary_sensor.py live über die
+    Entity-Properties (ein ``signal_refresh`` genügt), ``lab_hidden_categories``
+    ist ein reines Anzeige-Flag des Panels (ws_api._labs_block liest es pro
+    Request) und berührt keine Entity. Ein Reload würde dort alle States
+    unnötig auf ``unavailable`` setzen.
     """
     rt = entry.runtime_data
     opts = entry.options or {}
@@ -340,20 +404,32 @@ async def _options_updated(hass, entry) -> None:
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
 
     new_areas = areas.active_areas(opts)
+    new_lab_options = _lab_options_snapshot(opts)
 
     # Anzeige-Name geändert → Store synchron halten + Entities neu laden
     # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
     current_person = store.all_entries().get(entry.entry_id, {}).get("person")
     person_changed = current_person != effective_person(entry)
-    if person_changed or new_areas != rt.areas:
+    # N-2: Nur der Marker-Satz bestimmt die Entity-Menge.
+    markers_changed = new_lab_options.markers != rt.lab_options.markers
+    if person_changed or new_areas != rt.areas or markers_changed:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
+        # Snapshot VOR dem Reload setzen: der Reload baut die Entities aus
+        # genau diesen Optionen neu auf, ein erneuter Listener-Lauf darf also
+        # keinen weiteren Reload auslösen (kein Reload-Loop).
+        rt.lab_options = new_lab_options
         # Vor dem Reload: Timer neu aufsetzen (der Reload löst zwar erneut
         # Setup aus, aber bis dahin soll die neue Options-Wahl schon gelten).
         await async_setup_reminders(hass, entry, store)
         hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
         return  # Reload baut Entities neu auf — kein weiterer Refresh nötig
+
+    # Kein Reload: Overrides/Hidden sind live gelesen bzw. reine Anzeige —
+    # den gespiegelten Stand trotzdem nachziehen, damit ein späterer
+    # Marker-Vergleich nur die Entity-Menge bewertet.
+    rt.lab_options = new_lab_options
 
     wanted = int(opts.get("set_lifetime_ml") or 0)
     seen = getattr(rt, "lifetime_setting_seen", None)
@@ -504,6 +580,15 @@ def _entry_audit_limit(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+def _entry_options(hass: HomeAssistant, entry_id: str) -> dict:
+    """`entry.options` eines Entries (leeres Dict bei unbekannter ID)."""
+    try:
+        entry = hass.config_entries.async_get_entry(entry_id)
+    except Exception:  # noqa: BLE001 - Options-Lesen ist nie service-kritisch
+        entry = None
+    return dict(getattr(entry, "options", None) or {})
+
+
 def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
     """Optionales Service-Feld `ts` validieren (REQ-HOM-120).
 
@@ -630,6 +715,49 @@ def _register_services(hass: HomeAssistant) -> None:
         )
         signal_refresh(hass, entry_id)
 
+    async def add_lab_value(call: ServiceCall) -> None:
+        """Laborwert erfassen (Katalog- oder Custom-Marker, REQ-HOM-122).
+
+        Der Wert wird in die kanonische Einheit umgerechnet; der gedruckte
+        Befundwert bleibt als `reported_*` erhalten. Unbekannte Marker/Einheiten
+        sind ein `ServiceValidationError` — es wird NIE stillschweigend
+        uminterpretiert oder ein Custom-Marker automatisch angelegt.
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        options = _entry_options(hass, entry_id)
+        resolved = logic.resolve_lab_marker(
+            call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
+        )
+        if resolved is None:
+            raise ServiceValidationError("unknown_marker")
+        marker_key, marker_def = resolved
+        raw_unit = call.data.get("unit")
+        if raw_unit is None and marker_def.get("require_explicit_unit"):
+            raise ServiceValidationError("unit_required")
+        value = float(call.data["value"])
+        try:
+            canonical_value, canonical_unit = logic.convert_lab_value(marker_def, value, raw_unit)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+        now = dt_util.now()
+        ts_iso = _service_entry_ts(call, now) or now.isoformat()
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        await store.add_lab_reading(
+            entry_id,
+            ts_iso,
+            marker_key,
+            canonical_value,
+            canonical_unit,
+            value,
+            raw_unit or canonical_unit,
+            report_ref=report_ref,
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        signal_refresh(hass, entry_id)
+
     async def set_wellbeing(call: ServiceCall) -> None:
         """Wohlbefinden melden — per Status-Key ODER numerischem Score (1..N)."""
         entry_id, _info = get_runtime_data(hass, call)
@@ -679,6 +807,38 @@ def _register_services(hass: HomeAssistant) -> None:
         )
         if not removed:
             raise ServiceValidationError(f"Keine {_KIND_LABELS[kind]} zum Entfernen")
+        signal_refresh(hass, entry_id)
+
+    async def remove_last_lab_value(call: ServiceCall) -> None:
+        """Zeitlich neuesten aktiven Laborwert EINES Markers voiden (Undo, §5.2).
+
+        Bewusst marker-spezifisch: Laborwerte kommen befundweise, ein globales
+        "letzter Eintrag" wäre mehrdeutig. Entfernt wird der aktive Wert mit
+        dem größten `ts` — also der zeitlich neueste, NICHT zwingend der
+        zuletzt eingegebene (nachgetragene alte Befunde bleiben unberührt;
+        genau das verhindert, dass ein Undo einen älteren Befund trifft).
+        `remove_last_lab_reading` voidet (kein Pop) und liefert `False`, wenn
+        kein aktiver Wert existiert.
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        options = _entry_options(hass, entry_id)
+        resolved = logic.resolve_lab_marker(
+            call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
+        )
+        if resolved is None:
+            raise ServiceValidationError("unknown_marker")
+        marker_key, _marker_def = resolved
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        changed = await store.remove_last_lab_reading(
+            entry_id,
+            marker_key,
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        if not changed:
+            raise ServiceValidationError(
+                f"Kein aktiver Wert für Marker '{marker_key}' zum Entfernen"
+            )
         signal_refresh(hass, entry_id)
 
     async def void_entry(call: ServiceCall) -> None:
@@ -813,6 +973,21 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN,
+        "add_lab_value",
+        schema=vol.Schema(
+            {
+                vol.Required("marker"): str,
+                vol.Required("value"): vol.Coerce(float),
+                vol.Optional("unit"): str,
+                vol.Optional("person"): str,
+                vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+            }
+        ),
+        service_func=add_lab_value,
+    )
+    hass.services.async_register(
+        DOMAIN,
         "set_wellbeing",
         schema=vol.Schema(
             {
@@ -836,6 +1011,17 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=remove_last_entry,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "remove_last_lab_value",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("marker"): str,
+            }
+        ),
+        service_func=remove_last_lab_value,
     )
     hass.services.async_register(
         DOMAIN,
@@ -867,7 +1053,9 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+                vol.Optional("dataset", default="all"): vol.In(
+                    ["drinks", "blood_pressure", "lab_values", "all"]
+                ),
             }
         ),
         service_func=export_csv,
@@ -879,7 +1067,9 @@ def _register_services(hass: HomeAssistant) -> None:
             {
                 vol.Required("filename"): str,
                 vol.Optional("person"): str,
-                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+                vol.Optional("dataset", default="all"): vol.In(
+                    ["drinks", "blood_pressure", "lab_values", "all"]
+                ),
             }
         ),
         service_func=import_csv,
