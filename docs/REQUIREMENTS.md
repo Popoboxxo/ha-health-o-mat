@@ -1222,6 +1222,18 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     **Messwerte:** `pytest -q` → **1356 passed** (0 failed, 1 vorbestehende
     DeprecationWarning); E2E `tests_e2e/` → **19 passed** (0 failed);
     `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert.
+- **Anmerkung (bewusste Scope-Entscheidung v1, dokumentierte Grenzen NB-4/NB-6):**
+  - **Retention/Archiv gilt nicht für Laborwerte:** `_apply_retention` und
+    `restore.py` umfassen ausschließlich `drinks`/`readings`; `lab_readings`
+    wächst daher unbegrenzt und bleibt vollständig erhalten. Die Admin-Option
+    „Aufbewahrung" (`retention_months`) bezieht sich nur auf Getränke und
+    Blutdruckmessungen.
+  - **Unbekannter Marker im Restore:** Abweichend von Spec §8 bricht der Restore
+    nicht ab — der betroffene Record wird mit einer Warnung übersprungen, der
+    `errors`-Zähler erhöht sich, der Restore läuft weiter.
+    `merge_lab_custom_markers` arbeitet **first-wins** pro `key`: bei mehreren
+    Quellen mit demselben Custom-Marker-Key gewinnt die erste Definition (inkl.
+    `unit`/`alt_unit`), spätere abweichende Definitionen werden ignoriert.
 
 ---
 

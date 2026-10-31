@@ -556,6 +556,15 @@ Laborwerte als vierten Tab (mit Kategorie-Wischgeste).
 - **CSV-Export/-Import:** Datensatz `lab_values` (Datei
   `health_o_mat_labvalues_<Person>_<YYYYMMDD-HHMM>.csv`). `all` schließt
   Laborwerte mit ein.
+- **Aufbewahrung (Retention):** Die optionale Aufbewahrung/Archivierung gilt
+  derzeit **nicht** für Laborwerte — `lab_readings` wandert nicht ins Archiv und
+  bleibt vollständig erhalten. Das ist bewusster v1-Scope; die Einstellung
+  „Aufbewahrung" bezieht sich nur auf Getränke und Blutdruckmessungen.
+- **Restore:** Ein unbekannter Marker wird mit einer Warnung **übersprungen**
+  (der betroffene Record zählt als Fehler, der Restore läuft weiter — kein
+  Abbruch des gesamten Vorgangs). Definieren mehrere Quellen denselben
+  Custom-Marker-Key unterschiedlich (z. B. abweichende `unit`/`alt_unit`), gilt
+  **first-wins**: die erste Definition gewinnt, spätere werden ignoriert.
 
 ## Services
 
