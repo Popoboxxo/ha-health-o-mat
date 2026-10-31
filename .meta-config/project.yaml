@@ -2,12 +2,9 @@ project:
   name: ha-health-o-mat
   prefix: hom
   short: health-o-mat
-agent-meta-version: 1.0.0
-# Orchestrator recommended, user-override allowed (default would be 'strict': mandatory, no override).
+agent-meta-version: 2.0.0-beta.5
 orchestrator:
   mode: advisory
-# Issue #694: write-capable agents commit directly on a task-boundary trigger instead of
-# always delegating to the 'git' role. secret_scan stays at its default (true).
 auto_commit:
   mode: auto
   triggers:
@@ -29,8 +26,10 @@ roles:
 - documenter
 - git
 - ideation
+- junior-developer
 - meta-feedback
 - orchestrator
+- principal-developer
 - release
 - requirements
 - senior-developer
@@ -45,9 +44,26 @@ variables:
     bereitstellen, die tägliche Trink-/Gesundheitswerte erfasst, als native HA-Entities
     zur Verfügung stellt — unter konsequenter Beachtung der aus vorherigen HACS-Integrationen
     gelernten Lektionen (Releases, unique_id-Stabilität, Setup-Architektur, Config/Options-Flow).
+  PROJECT_STRUCTURE: |-
+    custom_components/health_o_mat/   # Integration (HA-frei: logic.py, parser.py)
+    tests/                            # Unit-Tests ohne HA-Paket (Fake-Package in conftest.py)
+    tests_e2e/                        # E2E-Tests gegen die HA-Testinstanz
+    scripts/                          # E2E-/Bootstrap-Hilfsskripte
+    docs/                             # Konzepte, Pläne, Requirement-Traceability
+    .meta-config/project.yaml         # deklarative Projekt-Konfiguration (agent-meta)
+  ENTRY_POINT_PATTERN: custom_components/health_o_mat/__init__.py — async_setup_entry/async_unload_entry, Services, Entry-Registry unter hass.data[DOMAIN][entry_id]
+  KEY_PATTERNS: |-
+    - Ein Config-Entry = eine Person (kein Singleton, dynamisch beliebig viele Entries; Duplikat-Schutz über async_set_unique_id + _abort_if_unique_id_configured)
+    - Gemeinsamer Store unter hass.data[DOMAIN]["shared"]["store"]; Runtime-/Coordinator-Daten pro Entry unter hass.data[DOMAIN][entry_id]
+    - Ein DataUpdateCoordinator pro Config-Entry mit update_interval=None; Refresh via async_set_updated_data() bei Events statt Polling
+    - Heute-Fenster und Summen on-read berechnen — kein Reset-Job (neustart- und DST-fest)
+    - unique_id = f"{entry_id}_{key}" stabil + device_info ab Entity #1; has_entity_name + translation_key, keine Namens-Literale
+    - Plattform-Name == Dateiname (sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py)
+    - Options-Flow für nachträglich Korrigierbares; strukturelle Daten explizit in entry.data
   PLATFORM: Home Assistant (HACS Custom Integration)
   RUNTIME: Home Assistant Core
   PROJECT_LANGUAGES: Python
+  LANGUAGE: Python
   COMMUNICATION_LANGUAGE: Deutsch
   USER_INPUT_LANGUAGE: Deutsch
   DOCS_LANGUAGE: Englisch
@@ -58,11 +74,13 @@ variables:
   GIT_MAIN_BRANCH: main
   BUILD_COMMAND: ''
   TEST_COMMAND: pytest
-  DEV_COMMANDS: '# HA-Konfiguration prüfen (via CLI im HA-Container):
-
-    # ha core check
-
-    '
+  DEV_COMMANDS: |-
+    python3 -m pytest -q
+    python3 -m compileall -q custom_components/health_o_mat
+    # HA-Konfiguration prüfen (Dev-Instanz): /home/hermes/ha-test/bin/ha core check
+  DEV_STACK_RELOAD: |-
+    /home/hermes/ha-test/bin/sync <repo-dir>
+    /home/hermes/ha-test/bin/ha GET /api/states
   TEST_COMMANDS: |-
     pytest tests/
     # E2E gegen geteilte HA-Testinstanz (Etikette: /home/hermes/ha-test/README.md)
@@ -88,14 +106,28 @@ variables:
   ARCHITECTURE: |-
     custom_components/health_o_mat/
       __init__.py         # Setup/Unload, Services, Options-Handling, Entry-Registry
+      const.py            # Domain/Keys/Konstanten
       store.py            # HealthOMatStore (Storage-Persistenz je Person)
       logic.py            # reine Logik (Tagesfenster on-read, Summen), HA-frei
       parser.py           # Freitext-Parser für Getränke-Eingaben
+      statistics.py       # Aggregation/Auswertungen (HA-frei wo möglich)
+      reminders.py        # Erinnerungs-Logik
       entity.py           # gemeinsame HealthOMatEntity-Basis (unique_id, device_info)
       sensor.py, binary_sensor.py, button.py, number.py, select.py, text.py
+      config_flow.py      # Config-/Options-Flow (Duplikat-Schutz, Update-Listener)
+      services.yaml       # Service-Definitionen (voluptuous-Schema in __init__.py)
       exporter.py         # CSV-Export-Service (privater Ordner, nie /config/www)
-      config_flow.py      # Config-/Options-Flow
-    tests/                 # isolierte Tests für logic.py/parser.py (importlib, ohne HA-Paket)
+      importer.py, backup.py, restore.py   # Import/Backup/Restore
+      diagnostics.py      # Diagnostics (keine Secrets/Gesundheitsdaten)
+      ui_store.py         # Store für UI-/Panel-Präferenzen
+      panel.py, frontend.py, ws_api.py     # Web-Panel, Frontend-Ressourcen, WS-API
+      areas.py            # Area-Zuordnung pro Person
+      strings.json, translations/{de,en}.json  # Master (en) + Übersetzungen
+      www/health-o-mat-*.js                # Lovelace-Card + Panels (E2E-getestet)
+    tests/                 # isolierte Unit-Tests (importlib, ohne HA-Paket)
+    tests_e2e/             # E2E gegen geteilte HA-Testinstanz
+    scripts/               # E2E-/Bootstrap-Hilfsskripte
+    docs/                  # Konzepte, Pläne, REQUIREMENTS.md, E2E-Belege
   CODE_CONVENTIONS: |-
     - `from __future__ import annotations` + vollständige Type-Hints
     - unique_id + device_info ab Entity #1; unique_id stabil & entry-spezifisch ({entry_id}_{key}), NIE nachträglich ändern
@@ -127,39 +159,37 @@ variables:
     - Erst Unit-Tests der HA-freien Logik (Fake-Package/importlib wie in tests/), dann E2E auf Dev-Instanz, erst danach Release
     - translations/strings.json als Master, de/en synchron halten
     - Debugging-Reihenfolge bei "geht nicht": 1) Entity-Generation prüfen (Device-Seite, nicht nur Entitätsliste) 2) HA-Log auf ModuleNotFoundError (Plattform-Datei fehlt) oder "Migration handler not found" (VERSION ohne Migrator) 3) HACS zeigt kein Update? Release vs. Tag + Tag↔manifest-Sync prüfen 4) Setup bricht sofort komplett ab? Syntax/Import-Fehler in EINER Plattform-Datei killt alle 5) Services finden nichts? hass.data-Registry-Befüllung prüfen
-  REQ_CATEGORIES: ''
+  REQ_CATEGORIES: |-
+    - **Kernfunktionalität** — Kernfeatures des Projekts
+    - **Lifecycle** — Startup, Shutdown, Fehlerbehandlung
+    - **Nichtfunktionale Anforderungen** — Performance, Sicherheit, Wartbarkeit
   TESTER_SNIPPETS_PATH: ''
   DEVELOPER_SNIPPETS_PATH: ''
   AGENT_META_REPO: Popoboxxo/agent-meta
-# Which rules are active: default (all), minimal (situational off), silent (only essentials)
 rules-preset: default
-# Communication style for all agents. Copied as .claude/rules/speech-mode.md — loaded automatically by Claude Code into every agent context. 'full' = default behavior, no rule generated. 'short' = facts only, no filler. 'childish' = playful, simple language with animal/toy analogies. 'caveman' = brutally short, caveman speech. 'asozial' = technically correct but dripping with contempt — New Kids style, insults the user's intelligence. 'submissive' = completely devoted and submissive, no contradiction, no own opinion, addresses user as master/mistress. 'business' = formal corporate tone. 'bullshit-bingo' = management speak, buzzwords. 'linkedin' = LinkedIn influencer style, inspirational.
 speech-mode: full
-# The active tier preset mapped against config/tier-presets.yaml. Adjusts model selection globally. Use se-focus: true instead of the deprecated '(SE)' suffix variants.
 tier-preset: Normal
-# When true, SE roles (se-architect, se-critic, se-developer, etc.) are upgraded one tier before preset mapping is applied. Replaces the deprecated '(SE)' suffix in tier-preset names.
 se-focus: false
-# When a provider is set to true, sync.py omits the generated agent's `model:` field entirely — every agent of that provider inherits the model of the main chat at runtime. Mutually exclusive with model-override-all per provider (sync.py fails fast on conflict).
 model-inherit-main-chat:
   Claude: true
   Gemini: true
   Opencode: true
-# Maximum number of agents that a coordinator (orchestrator, feature) may run in parallel via run_in_background. Default: 2. Set to 1 to disable parallelism.
 max-parallel-agents: 2
-# The active naming/versioning conventions preset, matched against config/conventions-presets.yaml. Individual overrides via 'conventions' block. Precedence: conventions > conventions-preset > 'default'.
 conventions-preset: default
-# When true, sync.py injects a debug block into every generated agent. Active agents announce themselves ([Agent: <name>]), log every delegation (→ Delegiere an: ...), and confirm completion (✓ [Agent: <name>] fertig). Default: false — no change to any agent file.
 debug-mode: false
-# Allow sync.py to write files containing detected secrets to committed (non-gitignored) paths. Default: false — sync aborts with an error when a secret is detected in a committed file. Set to true only when you deliberately commit secret-looking values (e.g. static demo tokens). NOT recommended for production projects.
 allow-committed-secrets: false
-# Generated files and provider-specific directories should not be committed
 gitignore:
   generated: true
   settings: true
+  ignore-provider-dirs: true
   custom_entries:
-    - .claude/
-    - .gemini/
-    - .opencode/
-    - AGENTS.md
-    - opencode.json
-    - CLAUDE.md
+  - .meta-config/platform-defaults.resolved.yaml
+  - opencode.json
+# Repo-Containment ('Gefängnis-Modus'): confines agent WRITE access to the project root (plus the tmp-sink). Opt-out: enabled: false.
+repo_containment:
+  enabled: true
+  tmp-sink:
+    enabled: true
+    path: .tmp
+    gitignore: true
+    cleanup: manual
