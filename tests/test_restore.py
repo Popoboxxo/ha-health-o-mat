@@ -1617,3 +1617,24 @@ def test_req_hom_122_apply_does_not_touch_options_when_save_fails(tmp_path, monk
         )
 
     hass.config_entries.async_update_entry.assert_not_called()
+
+
+def test_req_hom_130_restore_inherits_key_from_current():
+    """[REQ-HOM-130] A keyless backup never shifts existing keys (A-2)."""
+    current = [{"key": "vitamin_d", "name": "Vitamin D", "unit": "ng/mL"}]
+    incoming = [{"name": "Vitamin D", "unit": "ng/mL"}]
+    merged = restore.merge_lab_custom_markers(current, incoming)
+    assert [marker["key"] for marker in merged] == ["vitamin_d"]
+
+
+def test_req_hom_130_restore_inherits_explicit_key_from_current():
+    """[REQ-HOM-130] A keyless backup marker with a non-slug local key (A-2).
+
+    The local key was pinned explicitly (or inherited earlier); re-deriving it
+    from the name in the backup would register a second marker with a new key —
+    that key is part of the `unique_id`, so the entity would shift.
+    """
+    current = [{"key": "vit_d3", "name": "Vitamin D", "unit": "ng/mL"}]
+    incoming = [{"name": "Vitamin D", "unit": "ng/mL"}]
+    merged = restore.merge_lab_custom_markers(current, incoming)
+    assert [marker["key"] for marker in merged] == ["vit_d3"]

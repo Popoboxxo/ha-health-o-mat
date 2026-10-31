@@ -4903,3 +4903,47 @@ def test_req_hom_129_settings_merge_keeps_lab_retention(monkeypatch):
 
     stored = hass.config_entries.updates[0]["options"]
     assert stored["lab_retention_months"] == 24
+
+
+def test_req_hom_130_set_settings_keeps_key_for_previous_name():
+    """[REQ-HOM-130] A keyless re-save inherits the stored marker key (A-2)."""
+    previous = [{"key": "vitamin_d", "name": "Vitamin D", "unit": "ng/mL", "category": "other"}]
+    updates, error = ws_api.parse_settings_message(
+        {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL", "category": "other"}]},
+        previous_markers=previous,
+    )
+    assert error is None
+    assert updates["lab_custom_markers"][0]["key"] == "vitamin_d"
+
+
+def test_req_hom_130_set_settings_call_site_feeds_previous_markers():
+    """[REQ-HOM-130] `websocket_set_settings` passes the stored markers (A-2).
+
+    The call site — not only the pure parser — has to supply the previous
+    markers, otherwise a keyless admin re-save would re-derive the key.
+    """
+    entry = _entry(
+        "e1",
+        options={
+            "lab_custom_markers": [
+                {"key": "vit_d3", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+            ]
+        },
+    )
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS,
+                entry_id="e1",
+                lab_custom_markers=[{"name": "Vitamin D", "category": "other", "unit": "ng/mL"}],
+            ),
+        )
+    )
+
+    stored = hass.config_entries.updates[0]["options"]["lab_custom_markers"]
+    assert [marker["key"] for marker in stored] == ["vit_d3"]

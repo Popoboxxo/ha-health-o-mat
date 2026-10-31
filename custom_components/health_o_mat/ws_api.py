@@ -1836,7 +1836,9 @@ def build_settings(entry: Any) -> dict[str, Any]:
     }
 
 
-def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
+def parse_settings_message(
+    msg: Mapping[str, Any], *, previous_markers: Any = None
+) -> tuple[dict[str, Any], str | None]:
     """WS-Payload → (Options-Updates, Fehlermeldung). Reine Funktion.
 
     Es werden ausschließlich bekannte Settings-Schlüssel übernommen. Skalare
@@ -1844,6 +1846,11 @@ def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str 
     `drink_lexicon` durch `parser.parse_lexicon_text()` — dieselbe Funktion, die
     der Options-Flow benutzt, also exakt dieselbe Dict-Repräsentation
     (`{wort: (Typ, ml)}`). Lexikon-Fehler tragen die Zeilennummer mit.
+
+    `previous_markers` sind die aktuell gespeicherten Custom-Marker: ein
+    eingehender Marker ohne `key`, dessen `name` exakt einem gespeicherten
+    entspricht, erbt dessen `key` (REQ-HOM-130, A-2) — der `key` ist Teil der
+    `unique_id`, ein Neu-Slug würde die Entity verschieben.
     """
     raw = {key: msg[key] for key in SETTINGS_KEYS if key in msg}
     if not raw:
@@ -1879,8 +1886,11 @@ def parse_settings_message(msg: Mapping[str, Any]) -> tuple[dict[str, Any], str 
                 f"erhalten {type(raw_markers).__name__}"
             )
         # Normalisierung statt Durchreichen: brauchbare Einträge bekommen einen
-        # stabilen `key` (Slug), unbrauchbare (ohne name/unit) fallen weg.
-        updates[OPTION_LAB_CUSTOM_MARKERS] = logic.normalize_lab_custom_markers(raw_markers)
+        # stabilen `key` (Slug), unbrauchbare (ohne name/unit) fallen weg. Die
+        # gespeicherten Marker schützen einen fehlenden `key` vor Drift (A-2).
+        updates[OPTION_LAB_CUSTOM_MARKERS] = logic.normalize_lab_custom_markers(
+            raw_markers, previous_markers
+        )
 
     if OPTION_LAB_REF_OVERRIDES in raw:
         raw_overrides = raw.pop(OPTION_LAB_REF_OVERRIDES)
@@ -1937,7 +1947,10 @@ async def websocket_set_settings(hass: HomeAssistant, connection: Any, msg: dict
     if entry is None:
         _send_entry_error(connection, msg, entry_id)
         return
-    updates, error = parse_settings_message(msg)
+    updates, error = parse_settings_message(
+        msg,
+        previous_markers=(getattr(entry, "options", None) or {}).get(OPTION_LAB_CUSTOM_MARKERS),
+    )
     if error is not None:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, error)
         return
