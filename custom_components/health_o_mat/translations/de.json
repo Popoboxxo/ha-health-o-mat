@@ -1039,6 +1039,19 @@
     "ui_panel_tile_lab_warning": "{count} Marker außerhalb Referenz",
     "ui_panel_tile_lab_ok": "Alles im Bereich",
     "ui_panel_lab_threshold_title": "{count} Laborwerte außerhalb Referenz",
+    "ui_panel_lab_report_title": "Laborbericht erfassen",
+    "ui_panel_lab_report_add_row": "Zeile",
+    "ui_panel_lab_report_remove_row": "Zeile entfernen",
+    "ui_panel_lab_report_save": "Bericht speichern",
+    "ui_panel_lab_report_ts": "Zeitpunkt",
+    "ui_panel_lab_marker_choose": "— bitte wählen —",
+    "ui_panel_lab_fill_visible": "Alle sichtbaren Marker anlegen",
+    "ui_panel_lab_fill_last": "Zuletzt verwendete Marker anlegen",
+    "ui_panel_lab_report_limit": "Höchstens 60 Zeilen pro Bericht.",
+    "ui_panel_lab_report_empty": "Bitte mindestens einen Wert erfassen.",
+    "ui_panel_lab_unit_custom": "Andere …",
+    "ui_panel_lab_report_discard": "Diesen Bericht verwerfen",
+    "ui_panel_lab_report_discard_confirm": "Diesen Bericht mit {count} Werten verwerfen?",
     "ui_panel_val_lab_value": "Bitte Marker und einen numerischen Wert angeben."
   }
 }

@@ -1039,6 +1039,19 @@
     "ui_panel_tile_lab_warning": "{count} markers outside reference",
     "ui_panel_tile_lab_ok": "All within range",
     "ui_panel_lab_threshold_title": "{count} lab values outside reference",
+    "ui_panel_lab_report_title": "Record lab report",
+    "ui_panel_lab_report_add_row": "Row",
+    "ui_panel_lab_report_remove_row": "Remove row",
+    "ui_panel_lab_report_save": "Save report",
+    "ui_panel_lab_report_ts": "Timestamp",
+    "ui_panel_lab_marker_choose": "— choose —",
+    "ui_panel_lab_fill_visible": "Fill all visible markers",
+    "ui_panel_lab_fill_last": "Fill last used markers",
+    "ui_panel_lab_report_limit": "At most 60 rows per report.",
+    "ui_panel_lab_report_empty": "Record at least one value.",
+    "ui_panel_lab_unit_custom": "Other …",
+    "ui_panel_lab_report_discard": "Discard this report",
+    "ui_panel_lab_report_discard_confirm": "Discard this report with {count} values?",
     "ui_panel_val_lab_value": "Please enter a marker and a numeric value."
   }
 }

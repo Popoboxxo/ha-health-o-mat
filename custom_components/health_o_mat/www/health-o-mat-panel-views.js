@@ -18,6 +18,7 @@ import {
   HISTORY_KIND_LABELS,
   HISTORY_KIND_KEYS,
   escapeHtml,
+  attrValue,
   toNumber,
   clamp,
   fmtMl,
@@ -976,6 +977,320 @@ async function submitLabValue(panel, entryId) {
   }
 }
 
+/* ---- Laborbericht (REQ-HOM-123) ------------------------------------------
+ *
+ * Panel-lokale Zweitimplementierung des Dialogs (§6.3): die Karte ist
+ * standalone; ein Shared-Modul lohnte erst beim dritten Konsumenten.
+ */
+
+const LAB_REPORT_MAX_ROWS_UI = 60;
+
+function emptyLabReportRow() {
+  return { marker: "", value: "", unit: "" };
+}
+
+function labReportDraft(panel, entryId) {
+  // Defensiv: Panel-Instanzen überleben Hot-Reloads nicht garantiert (§6.3).
+  const existing = panel._labReportDraft && panel._labReportDraft[entryId];
+  if (existing) return existing;
+  if (!panel._labReportDraft) panel._labReportDraft = {};
+  panel._labReportDraft[entryId] = { ts: "", reportRef: "", rows: [emptyLabReportRow()] };
+  return panel._labReportDraft[entryId];
+}
+
+function collectLabReportDraft(panel, entryId) {
+  const draft = labReportDraft(panel, entryId);
+  const read = (field) => {
+    const el = panel.shadowRoot.querySelector(`[data-field="${field}"]`);
+    return el && el.value != null ? String(el.value) : "";
+  };
+  draft.ts = read("lab-report-ts");
+  draft.reportRef = read("lab-report-ref");
+  draft.rows = draft.rows.map((_row, index) => ({
+    marker: read(`lab-report-marker-${index}`),
+    value: read(`lab-report-value-${index}`),
+    unit: read(`lab-report-unit-${index}`),
+  }));
+  return draft;
+}
+
+function validLabReportTs(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return { iso: "" };
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    return { error: t("ui_panel_lab_report_ts", "Zeitpunkt") + ": ungültig" };
+  }
+  return { iso: parsed.toISOString() };
+}
+
+function reportMarkerOptions(markers, selectedKey) {
+  const placeholder = selectedKey
+    ? ""
+    : `<option value="" selected>${escapeHtml(
+        t("ui_panel_lab_marker_choose", "— bitte wählen —")
+      )}</option>`;
+  return `${placeholder}${labMarkerOptionsHtml(markers, selectedKey)}`;
+}
+
+function unitOptions(marker, selectedUnit) {
+  const canonical = (marker && marker.unit) || "";
+  const altUnits = Object.keys((marker && marker.alt_units) || {});
+  const known = [canonical, ...altUnits].filter(
+    (unit, index, all) => unit && all.indexOf(unit) === index
+  );
+  const current = selectedUnit
+    ? known.includes(selectedUnit)
+      ? selectedUnit
+      : "__custom__"
+    : canonical;
+  const options = known
+    .map(
+      (unit) =>
+        `<option value="${escapeHtml(unit)}"${
+          unit === current ? " selected" : ""
+        }>${escapeHtml(unit)}</option>`
+    )
+    .join("");
+  return `${options}<option value="__custom__"${
+    current === "__custom__" ? " selected" : ""
+  }>${escapeHtml(t("ui_panel_lab_unit_custom", "Andere …"))}</option>`;
+}
+
+function labReportRowHtml(markers, row, index, entryId) {
+  const marker = markers[row.marker];
+  return `<div class="lab-report-row">
+      <select data-field="lab-report-marker-${index}" aria-label="${escapeHtml(
+        t("ui_panel_lab_marker", "Marker")
+      )}">${reportMarkerOptions(markers, row.marker)}</select>
+      <input type="number" step="any" inputmode="decimal"
+        data-field="lab-report-value-${index}" aria-label="${escapeHtml(
+          t("ui_panel_lab_value_field", "Wert")
+        )}" value="${attrValue(row.value)}" />
+      <select data-field="lab-report-unit-pick-${index}" aria-label="${escapeHtml(
+        t("ui_panel_lab_unit_field", "Einheit (optional)")
+      )}">${unitOptions(marker, row.unit)}</select>
+      <input type="text" data-field="lab-report-unit-${index}" aria-label="${escapeHtml(
+        t("ui_panel_lab_unit_field", "Einheit (optional)")
+      )}" value="${attrValue(row.unit)}" placeholder="${escapeHtml(
+        (marker && marker.unit) || t("ui_common_optional", "optional")
+      )}" autocomplete="off" />
+      <button class="btn ghost" type="button" data-action="lab-report-remove"
+        data-entry="${escapeHtml(entryId)}" data-index="${index}" aria-label="${escapeHtml(
+          t("ui_panel_lab_report_remove_row", "Zeile entfernen")
+        )}">\u2715</button>
+    </div>`;
+}
+
+export function labReportForm(panel, labs, entryId) {
+  // Ohne Marker gibt es nichts zu erfassen — kein leerer Dialog (Parität zur Karte).
+  const markers = labs.markers || {};
+  if (!Object.keys(markers).length) return "";
+  const draft = labReportDraft(panel, entryId);
+  const atLimit = draft.rows.length >= LAB_REPORT_MAX_ROWS_UI;
+  const disabled = panel._busy ? " disabled" : "";
+  const addDisabled = panel._busy || atLimit ? " disabled" : "";
+  const rows = draft.rows
+    .map((row, index) => labReportRowHtml(markers, row, index, entryId))
+    .join("");
+  const note = atLimit
+    ? `<div class="muted">${escapeHtml(
+        t("ui_panel_lab_report_limit", "Höchstens 60 Zeilen pro Bericht.")
+      )}</div>`
+    : "";
+  return `<details class="lab-report-form">
+      <summary>${escapeHtml(t("ui_panel_lab_report_title", "Laborbericht erfassen"))}</summary>
+      <div class="lab-report-fill">
+        <button class="btn ghost" type="button" data-action="lab-report-fill-visible"${disabled}>${escapeHtml(
+          t("ui_panel_lab_fill_visible", "Alle sichtbaren Marker anlegen")
+        )}</button>
+        <button class="btn ghost" type="button" data-action="lab-report-fill-last"${disabled}>${escapeHtml(
+          t("ui_panel_lab_fill_last", "Zuletzt verwendete Marker anlegen")
+        )}</button>
+      </div>
+      <label class="field">${escapeHtml(t("ui_panel_lab_report_ts", "Zeitpunkt"))}
+        <input type="datetime-local" data-field="lab-report-ts" value="${attrValue(draft.ts)}" />
+      </label>
+      <label class="field">${escapeHtml(
+        t("ui_panel_lab_report_ref", "Bericht-Link/ID (optional)")
+      )}
+        <input type="text" data-field="lab-report-ref" value="${attrValue(draft.reportRef)}"
+          placeholder="${escapeHtml(t("ui_common_optional", "optional"))}" autocomplete="off" />
+      </label>
+      <div class="lab-report-rows">${rows}</div>
+      ${note}
+      <div class="lab-report-actions">
+        <button class="btn ghost" type="button" data-action="lab-report-add"
+          data-entry="${escapeHtml(entryId)}"${addDisabled}>＋ ${escapeHtml(
+            t("ui_panel_lab_report_add_row", "Zeile")
+          )}</button>
+        <button class="btn" type="button" data-action="lab-report-save"
+          data-entry="${escapeHtml(entryId)}"${disabled}>\u{1F4BE} ${escapeHtml(
+            t("ui_panel_lab_report_save", "Bericht speichern")
+          )}</button>
+      </div>
+    </details>`;
+}
+
+export function handleLabReportChange(panel, entryId, field, value) {
+  if (!entryId || !field || !field.startsWith("lab-report-")) return false;
+  const draft = labReportDraft(panel, entryId);
+  if (field === "lab-report-ts") {
+    draft.ts = value;
+    return false;
+  }
+  if (field === "lab-report-ref") {
+    draft.reportRef = value;
+    return false;
+  }
+  const markerMatch = /^lab-report-marker-(\d+)$/.exec(field);
+  if (markerMatch) {
+    const row = draft.rows[Number(markerMatch[1])];
+    if (!row) return false;
+    row.marker = value;
+    row.unit = ""; // Einheiten-Dropdown hängt am Marker
+    return true;
+  }
+  const pickMatch = /^lab-report-unit-pick-(\d+)$/.exec(field);
+  if (pickMatch) {
+    const row = draft.rows[Number(pickMatch[1])];
+    if (!row) return false;
+    row.unit = value === "__custom__" ? "" : value;
+    return true;
+  }
+  const unitMatch = /^lab-report-unit-(\d+)$/.exec(field);
+  if (unitMatch) {
+    const row = draft.rows[Number(unitMatch[1])];
+    if (row) row.unit = value;
+    return false;
+  }
+  const valueMatch = /^lab-report-value-(\d+)$/.exec(field);
+  if (valueMatch) {
+    const row = draft.rows[Number(valueMatch[1])];
+    if (row) row.value = value;
+    return false;
+  }
+  return false;
+}
+
+export function addLabReportRow(panel, entryId) {
+  const draft = collectLabReportDraft(panel, entryId);
+  if (draft.rows.length >= LAB_REPORT_MAX_ROWS_UI) return;
+  draft.rows.push(emptyLabReportRow());
+  panel._render();
+}
+
+function removeLabReportRow(panel, entryId, index) {
+  const draft = collectLabReportDraft(panel, entryId);
+  if (!Number.isInteger(index) || draft.rows.length <= 1) return;
+  draft.rows.splice(index, 1);
+  panel._render();
+}
+
+export function fillLabReportDraft(panel, entryId, mode) {
+  const draft = collectLabReportDraft(panel, entryId);
+  const data = (panel._data || {})[entryId] || {};
+  const labs = data.labs || { categories: [], markers: {} };
+  const markers = labs.markers || {};
+  let keys = [];
+  if (mode === "visible") {
+    const visible = new Set(visibleLabCategories(labs).map((category) => category.key));
+    keys = Object.keys(markers).filter((key) => visible.has(markers[key].category));
+  } else {
+    const last = labs.last_report || {};
+    keys = (Array.isArray(last.marker_keys) ? last.marker_keys : []).filter(
+      (key) => markers[key]
+    );
+  }
+  const used = new Set(draft.rows.map((row) => row.marker).filter(Boolean));
+  for (const key of keys) {
+    if (used.has(key)) continue;
+    const empty = draft.rows.find((row) => !row.marker && !row.value && !row.unit);
+    if (empty) {
+      empty.marker = key;
+    } else if (draft.rows.length < LAB_REPORT_MAX_ROWS_UI) {
+      draft.rows.push({ marker: key, value: "", unit: "" });
+    } else {
+      break;
+    }
+    used.add(key);
+  }
+  panel._render();
+}
+
+async function submitLabReport(panel, entryId) {
+  if (!panel || !entryId || panel._busy || typeof panel._ws !== "function") return;
+  const draft = collectLabReportDraft(panel, entryId);
+  const ts = validLabReportTs(draft.ts);
+  if (ts.error) {
+    panel._formError = ts.error;
+    panel._render();
+    return;
+  }
+  const values = [];
+  for (const row of draft.rows) {
+    const marker = String(row.marker || "").trim();
+    const rawValue = String(row.value || "").trim().replace(",", ".");
+    const unit = String(row.unit || "").trim();
+    if (!marker && !rawValue && !unit) continue;
+    if (!marker || !/^-?\d+(\.\d+)?$/.test(rawValue)) {
+      panel._formError = t(
+        "ui_panel_val_lab_value",
+        "Bitte Marker und einen numerischen Wert angeben."
+      );
+      panel._render();
+      return;
+    }
+    values.push(
+      unit
+        ? { marker, value: Number(rawValue), unit }
+        : { marker, value: Number(rawValue) }
+    );
+  }
+  if (!values.length) {
+    panel._formError = t(
+      "ui_panel_lab_report_empty",
+      "Bitte mindestens einen Wert erfassen."
+    );
+    panel._render();
+    return;
+  }
+  const message = { type: WS.addLabReport, entry_id: entryId, values };
+  if (ts.iso) message.ts = ts.iso;
+  if (String(draft.reportRef || "").trim()) {
+    message.report_ref = String(draft.reportRef).trim();
+  }
+
+  panel._busy = true;
+  panel._actionError = null;
+  panel._formError = null;
+  panel._render();
+  try {
+    const result = await panel._ws(message);
+    const failure = resultError(result);
+    if (failure) {
+      panel._formError = failure;
+      return;
+    }
+    // ts/reportRef bleiben stehen (§6.4) — nur Werte + Zeilen werden geleert.
+    panel._labReportDraft[entryId] = { ...draft, rows: [emptyLabReportRow()] };
+    await panel._reloadEntry(entryId);
+  } catch (err) {
+    panel._formError = errMsg(err);
+  } finally {
+    panel._busy = false;
+    panel._render();
+  }
+}
+
+/* Envelope-Fehler der Batch-Kommandos (§3): `panel._ws` löst bei
+ * {"ok": false} nicht ab. */
+function resultError(result) {
+  if (!result || result.ok !== false) return "";
+  const error = result.error && typeof result.error === "object" ? result.error : {};
+  return error.message || error.code || t("ui_panel_lab_report_empty", "Fehler");
+}
+
 /* Kategorie schrittweise wechseln (Knoepfe + Wischgeste). Faellt die gemerkte
  * Kategorie weg (Flaeche neu konfiguriert), beginnt die Suche beim ersten
  * sichtbaren Eintrag. */
@@ -1058,9 +1373,94 @@ function ensureLabGestures(panel) {
       }
       return;
     }
+    const fillVisibleEl = target.closest('[data-action="lab-report-fill-visible"]');
+    if (fillVisibleEl) {
+      fillLabReportDraft(panel, fillVisibleEl.getAttribute("data-entry") || "", "visible");
+      return;
+    }
+    const fillLastEl = target.closest('[data-action="lab-report-fill-last"]');
+    if (fillLastEl) {
+      fillLabReportDraft(panel, fillLastEl.getAttribute("data-entry") || "", "last");
+      return;
+    }
+    const reportAddEl = target.closest('[data-action="lab-report-add"]');
+    if (reportAddEl) {
+      addLabReportRow(panel, reportAddEl.getAttribute("data-entry") || "");
+      return;
+    }
+    const reportRemoveEl = target.closest('[data-action="lab-report-remove"]');
+    if (reportRemoveEl) {
+      removeLabReportRow(
+        panel,
+        reportRemoveEl.getAttribute("data-entry") || "",
+        Number(reportRemoveEl.getAttribute("data-index"))
+      );
+      return;
+    }
+    const discardEl = target.closest('[data-action="lab-report-discard"]');
+    if (discardEl) {
+      discardLabReport(panel, discardEl.getAttribute("data-entry") || "");
+      return;
+    }
+    const reportSaveEl = target.closest('[data-action="lab-report-save"]');
+    if (reportSaveEl) {
+      submitLabReport(panel, reportSaveEl.getAttribute("data-entry") || "");
+      return;
+    }
     const saveEl = target.closest('[data-action="lab-add-value"]');
     if (saveEl) submitLabValue(panel, saveEl.getAttribute("data-entry") || "");
   });
+}
+
+export function labReportDiscardHtml(panel, labs, entryId) {
+  const last = labs && labs.last_report;
+  if (!last || !last.ts) return "";
+  const count = Array.isArray(last.marker_keys) ? last.marker_keys.length : 0;
+  return `<div class="lab-report-discard">
+      <button class="btn ghost" type="button" data-action="lab-report-discard"
+        data-entry="${escapeHtml(entryId)}"${panel._busy ? " disabled" : ""}>${escapeHtml(
+          `${t("ui_panel_lab_report_discard", "Diesen Bericht verwerfen")} (${count})`
+        )}</button>
+    </div>`;
+}
+
+async function discardLabReport(panel, entryId) {
+  if (!panel || !entryId || panel._busy || typeof panel._ws !== "function") return;
+  const last = (((panel._data || {})[entryId] || {}).labs || {}).last_report;
+  if (!last || !last.ts) return;
+  const count = Array.isArray(last.marker_keys) ? last.marker_keys.length : 0;
+  const confirmed =
+    typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(
+          t(
+            "ui_panel_lab_report_discard_confirm",
+            "Diesen Bericht mit {count} Werten verwerfen?",
+            { count }
+          )
+        )
+      : true;
+  if (!confirmed) return;
+  const message = { type: WS.removeLabReport, entry_id: entryId, ts: last.ts };
+  if (last.report_ref) message.report_ref = last.report_ref;
+
+  panel._busy = true;
+  panel._actionError = null;
+  panel._formError = null;
+  panel._render();
+  try {
+    const result = await panel._ws(message);
+    const failure = resultError(result);
+    if (failure) {
+      panel._formError = failure;
+      return;
+    }
+    await panel._reloadEntry(entryId);
+  } catch (err) {
+    panel._formError = errMsg(err);
+  } finally {
+    panel._busy = false;
+    panel._render();
+  }
 }
 
 export function labsTab(panel, data, entryId) {
@@ -1111,8 +1511,12 @@ export function labsTab(panel, data, entryId) {
       <button class="btn" type="button" data-action="lab-add-value" data-entry="${escapeHtml(
         entryId
       )}"${disabled}>\u{1F4BE} ${escapeHtml(t("ui_panel_lab_save", "Speichern"))}</button>
-      ${formError}
     </details>`;
+  const reportForm = labReportForm(panel, labs, entryId);
 
-  return `${labCategoryBar(labs, active)}<div class="lab-rows">${rows}</div>${entryForm}`;
+  return `${labCategoryBar(labs, active)}${labReportDiscardHtml(
+    panel,
+    labs,
+    entryId
+  )}<div class="lab-rows">${rows}</div>${formError}${entryForm}${reportForm}`;
 }

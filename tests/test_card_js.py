@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -2213,3 +2214,294 @@ def test_req_hom_122_labs_card_renders_localized_catalog_names(tmp_path):
     assert "Liver" in out["en"], "die Karte ignoriert `name_en` bei englischer UI"
     assert "ALT (ALT/GPT)" in out["en"], "der englische Marker-Name fehlt"
     assert "Leber" not in out["en"], "deutscher Kategoriename bleibt bei englischer UI"
+
+
+# --- REQ-HOM-123: Mehrzeilen-Dialog der Laborwerte-Karte --------------------
+
+
+def _js_method_text(source: str, name: str) -> str:
+    """Methodenrumpf bis zur naechsten Zeile `  }` (Muster von test_panel_js)."""
+    match = re.search(rf"\n\s+(?:async\s+)?{re.escape(name)}\s*\([^)]*\)\s*\{{", source)
+    assert match is not None, f"{name}() fehlt"
+    end = source.find("\n  }", match.end())
+    assert end != -1, f"{name}() hat keinen abschliessenden Block"
+    return source[match.end() : end]
+
+
+def test_req_hom_123_labs_card_report_dialog_shape():
+    source = _labs_card_source()
+
+    assert "const LAB_REPORT_MAX_ROWS_UI = 60;" in source
+    assert '<details class="labs-report">' in source
+    for name in ("_reportForm", "_fillReportDraft", "_saveReport", "_unitOptions"):
+        assert re.search(rf"(?:async\s+)?{name}\s*\(", source), f"{name}() fehlt"
+    for action in (
+        'data-action="lab-report-add"',
+        'data-action="lab-report-remove"',
+        'data-action="lab-report-save"',
+        'data-action="lab-report-fill-visible"',
+        'data-action="lab-report-fill-last"',
+    ):
+        assert action in source, action
+    assert 'data-field="lab-report-unit-pick-' in source
+    assert 'value="__custom__"' in source
+    assert "alt_units" in source
+    assert "health_o_mat/add_lab_report" in source
+
+
+def test_req_hom_123_labs_card_report_single_flight_and_error_envelope():
+    source = _labs_card_source()
+    body = _js_method_text(source, "_saveReport")
+
+    assert "if (this._saving) return;" in body
+    assert "this._saving = true;" in body
+    assert "this._saving = false;" in body
+    assert "resultError(result)" in body
+    assert "result.ok !== false" in source
+    # Erfolg: Werte + Zeilen leeren, ts/reportRef NICHT (§6.4).
+    assert "rows: [EMPTY_REPORT_ROW()]" in body
+    assert 'ts: ""' not in body
+    assert 'reportRef: ""' not in body
+
+
+_NODE_LABS_REPORT_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const mode = process.argv[3];
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+const card = new CardClass();
+card._config = { entry_id: "entry-1", person_mode: "fixed" };
+card._normalized = null;
+card._activeEntry = "entry-1";
+card._saving = false;
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [
+      { key: "liver", name: "Leber", hidden: false },
+      { key: "kidney", name: "Niere", hidden: false },
+    ],
+    markers: {
+      alt: { category: "liver", name: "ALT", unit: "U/L", alt_units: {}, history: [] },
+      creatinine: {
+        category: "kidney", name: "Kreatinin", unit: "\u00b5mol/L",
+        alt_units: { "mg/dL": 88.4 }, history: [],
+      },
+    },
+    last_report: {
+      ts: "2026-10-30T09:15:00+01:00", marker_keys: ["creatinine"], report_ref: "Labor A",
+    },
+  },
+};
+card._reportDraft = {
+  ts: "2026-10-30T09:15",
+  reportRef: "Labor A",
+  rows: [{ marker: "alt", value: "32", unit: "U/L" }],
+};
+card._collectReportDraftFromDom = () => {};
+card._loadData = async () => {};
+card._render = () => {};
+const sent = [];
+card._hass = {
+  connection: {
+    sendMessagePromise: async (payload) => {
+      sent.push(payload);
+      if (mode === "fail") {
+        return {
+          ok: false,
+          error: {
+            code: "unknown_marker",
+            params: { row: 1, marker: "alt" },
+            message: "Zeile 1 (alt): unknown_marker",
+          },
+        };
+      }
+      return { ok: true, written: 1 };
+    },
+  },
+};
+
+if (mode === "fill") {
+  card._fillReportDraft("last");
+  process.stdout.write(JSON.stringify({ rows: card._reportDraft.rows }));
+} else {
+  await card._saveReport();
+  process.stdout.write(
+    JSON.stringify({
+      payload: sent[0],
+      draft: card._reportDraft,
+      error: card._actionError,
+      saving: card._saving,
+      calls: sent.length,
+    })
+  );
+}
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_123_labs_card_report_roundtrip(tmp_path):
+    outcomes = {}
+    for mode in ("ok", "fail", "fill"):
+        outcomes[mode] = json.loads(
+            _run_node(
+                tmp_path,
+                _NODE_LABS_REPORT_RUNNER,
+                [str(Path(_LABS_CARD_JS)), mode],
+                f"runner_labs_report_{mode}",
+            )
+        )
+
+    ok = outcomes["ok"]
+    assert ok["calls"] == 1
+    assert ok["payload"]["type"] == "health_o_mat/add_lab_report"
+    assert ok["payload"]["entry_id"] == "entry-1"
+    assert ok["payload"]["values"] == [{"marker": "alt", "value": 32, "unit": "U/L"}]
+    # `datetime-local` ist zeitzonenfrei: der gesendete ISO-Wert muss derselbe
+    # Zeitpunkt sein (UTC-Repraesentation, unabhaengig von der Test-Zeitzone).
+    assert datetime.fromisoformat(ok["payload"]["ts"]).astimezone().replace(
+        tzinfo=None
+    ) == datetime(2026, 10, 30, 9, 15)
+    assert ok["draft"]["ts"] == "2026-10-30T09:15"
+    assert ok["draft"]["reportRef"] == "Labor A"
+    assert ok["draft"]["rows"] == [{"marker": "", "value": "", "unit": ""}]
+    assert ok["error"] == ""
+    assert ok["saving"] is False
+
+    failed = outcomes["fail"]
+    assert failed["error"] == "Zeile 1 (alt): unknown_marker"
+    assert failed["draft"]["rows"] == [{"marker": "alt", "value": "32", "unit": "U/L"}]
+    assert failed["draft"]["ts"] == "2026-10-30T09:15"
+
+    filled = outcomes["fill"]
+    assert filled["rows"][0]["marker"] == "alt"
+    assert filled["rows"][1]["marker"] == "creatinine"
+
+
+def test_req_hom_128_labs_card_discard_only_with_last_report():
+    source = _labs_card_source()
+
+    assert "_discardReport(" in source
+    assert 'data-action="lab-report-discard"' in source
+    assert "_labs().last_report" in source
+    assert "health_o_mat/remove_lab_report" in source
+    assert "window.confirm" in source
+
+
+_NODE_LABS_DISCARD_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const confirmed = process.argv[3] === "yes";
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: { confirm: () => confirmed },
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+const card = new CardClass();
+card._config = { entry_id: "entry-1", person_mode: "fixed" };
+card._normalized = null;
+card._activeEntry = "entry-1";
+card._saving = false;
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [],
+    markers: {},
+    last_report: {
+      ts: "2026-10-30T09:15:00+01:00",
+      marker_keys: ["alt", "crp"],
+      report_ref: "Labor A",
+    },
+  },
+};
+card._loadData = async () => {};
+card._render = () => {};
+const sent = [];
+card._hass = {
+  connection: {
+    sendMessagePromise: async (payload) => {
+      sent.push(payload);
+      return { ok: true, voided: 2 };
+    },
+  },
+};
+await card._discardReport();
+process.stdout.write(JSON.stringify({ payload: sent[0] || null, calls: sent.length }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_128_labs_card_discard_confirmation_and_payload(tmp_path):
+    def run(confirmed: str) -> dict:
+        return json.loads(
+            _run_node(
+                tmp_path,
+                _NODE_LABS_DISCARD_RUNNER,
+                [str(Path(_LABS_CARD_JS)), confirmed],
+                f"runner_labs_discard_{confirmed}",
+            )
+        )
+
+    cancelled = run("no")
+    assert cancelled == {"payload": None, "calls": 0}
+
+    confirmed = run("yes")
+    assert confirmed["calls"] == 1
+    assert confirmed["payload"] == {
+        "type": "health_o_mat/remove_lab_report",
+        "entry_id": "entry-1",
+        "ts": "2026-10-30T09:15:00+01:00",
+        "report_ref": "Labor A",
+    }

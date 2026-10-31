@@ -133,6 +133,8 @@ export const WS = {
   setWellbeing: "health_o_mat/set_wellbeing",
   // Laborwerte (REQ-HOM-122).
   addLabValue: "health_o_mat/add_lab_value",
+  addLabReport: "health_o_mat/add_lab_report",
+  removeLabReport: "health_o_mat/remove_lab_report",
   listHistory: "health_o_mat/list_history",
   voidEntry: "health_o_mat/void_entry",
   restoreEntry: "health_o_mat/restore_entry",
@@ -661,6 +663,22 @@ export const PANEL_CSS = `
   .lab-entry-form > summary { cursor: pointer; min-height: 44px; display: flex;
     align-items: center; font-size: .9rem; font-weight: 600; }
   .lab-entry-form .field { margin-top: 8px; }
+
+  .lab-report-form { margin-top: 8px; }
+  .lab-report-form > summary { cursor: pointer; min-height: 44px; display: flex;
+    align-items: center; font-weight: 600; }
+  .lab-report-fill { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .lab-report-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .lab-report-row {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px; align-items: center;
+  }
+  .lab-report-actions {
+    display: flex; justify-content: space-between; gap: 8px;
+    margin-top: 8px; flex-wrap: wrap;
+  }
+  .lab-report-discard { display: flex; justify-content: flex-end; margin: 8px 0; }
 
   .lab-custom-list { list-style: none; margin: 8px 0 0; padding: 0;
     display: flex; flex-direction: column; gap: 6px; }

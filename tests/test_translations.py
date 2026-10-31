@@ -542,6 +542,20 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_tile_lab_ok",
     "ui_panel_lab_threshold_title",
     "ui_panel_val_lab_value",
+    # REQ-HOM-123: Mehrzeilen-Bericht im Panel (Task 12/13).
+    "ui_panel_lab_report_title",
+    "ui_panel_lab_report_add_row",
+    "ui_panel_lab_report_remove_row",
+    "ui_panel_lab_report_save",
+    "ui_panel_lab_report_ts",
+    "ui_panel_lab_marker_choose",
+    "ui_panel_lab_fill_visible",
+    "ui_panel_lab_fill_last",
+    "ui_panel_lab_report_limit",
+    "ui_panel_lab_report_empty",
+    "ui_panel_lab_unit_custom",
+    "ui_panel_lab_report_discard",
+    "ui_panel_lab_report_discard_confirm",
 )
 
 

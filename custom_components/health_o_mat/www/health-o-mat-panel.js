@@ -78,7 +78,11 @@ import {
   t as uiTranslate,
   currentLanguage as uiCurrentLanguage,
 } from "./health-o-mat-i18n.js?v=0.16.1";
-import { renderOverview, renderDetail } from "./health-o-mat-panel-views.js?v=0.16.1";
+import {
+  renderOverview,
+  renderDetail,
+  handleLabReportChange,
+} from "./health-o-mat-panel-views.js?v=0.16.1";
 import {
   renderSettings,
   settingsStatusHtml,
@@ -136,6 +140,7 @@ class HealthOMatPanel extends HTMLElement {
     this._settingsErrors = {}; // entry_id -> load error text
     this._quickDraft = []; // working copy of the 4 quick-drink slots
     this._labCustomDraft = {}; // entry_id -> working copy of custom lab markers
+    this._labReportDraft = {}; // entry_id -> working copy of a lab report dialog
     this._settingsBusy = false;
     this._settingsStatus = null; // { ok: boolean, text: string }
     this._exportBusy = false;
@@ -2220,6 +2225,16 @@ class HealthOMatPanel extends HTMLElement {
     const el = ev.target;
     if (!el || !el.getAttribute) return;
     const field = el.getAttribute("data-field") || "";
+    if (field.startsWith("lab-report-")) {
+      const rerender = handleLabReportChange(
+        this,
+        this._selectedEntry,
+        field,
+        el.value == null ? "" : String(el.value)
+      );
+      if (rerender) this._render();
+      return;
+    }
     if (field.endsWith("-ts")) {
       this._tsDraft[field] = el.value == null ? "" : String(el.value);
       return;

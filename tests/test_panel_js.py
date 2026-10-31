@@ -3590,3 +3590,143 @@ def test_req_hom_122_panel_css_styles_lab_classes():
     # Dark/Light bleibt Sache der HA-Theme-Variablen (kein eigenes Farbschema).
     for var in ("--card-background-color", "--divider-color", "--primary-color"):
         assert var in css, f"{var} wird im Labor-Stylesheet nicht wiederverwendet"
+
+
+# --- REQ-HOM-123: Panel-Bericht-Abschnitt -----------------------------------
+
+
+def test_req_hom_123_panel_base_ws_knows_add_lab_report():
+    assert 'addLabReport: "health_o_mat/add_lab_report",' in _panel_base_source()
+
+
+def test_req_hom_123_panel_views_renders_report_form():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = (
+        _js_function_block(views, "labReportForm")
+        + _js_function_block(views, "labReportRowHtml")
+        + _js_function_block(views, "reportMarkerOptions")
+        + _js_function_block(views, "unitOptions")
+    )
+
+    for needle in (
+        "lab-report-ts",
+        "lab-report-ref",
+        "lab-report-marker-",
+        "lab-report-value-",
+        "lab-report-unit-pick-",
+        'data-action="lab-report-fill-visible"',
+        'data-action="lab-report-fill-last"',
+        'data-action="lab-report-add"',
+        'data-action="lab-report-remove"',
+        'data-action="lab-report-save"',
+        "labMarkerOptionsHtml(",
+        "alt_units",
+        "escapeHtml(",
+        "attrValue(",
+    ):
+        assert needle in body, needle
+    assert "LAB_REPORT_MAX_ROWS_UI" in views
+
+
+def test_req_hom_123_panel_entry_module_initialises_report_draft_and_delegates_changes():
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert re.search(r"this\._labReportDraft\s*=\s*\{\s*\}", entry)
+    assert "handleLabReportChange" in entry
+
+
+def test_req_hom_123_panel_report_draft_is_read_defensively():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+
+    assert "panel._labReportDraft && panel._labReportDraft[entryId]" in views
+
+
+def test_req_hom_123_panel_report_single_flight_context_reset_and_envelope():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "submitLabReport")
+
+    assert "panel._busy" in body
+    assert "WS.addLabReport" in body
+    assert "resultError(result)" in body
+    assert "rows: [emptyLabReportRow()]" in body
+    assert 'ts: ""' not in body
+    assert 'reportRef: ""' not in body
+
+
+_NODE_PANEL_REPORT_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+base.setUiLanguage("de");
+
+const panel = {};
+const labs = {
+  categories: [],
+  markers: {
+    creatinine: {
+      unit: "\u00b5mol/L",
+      alt_units: { "mg/dL": 88.4 },
+    },
+  },
+  last_report: { ts: null, marker_keys: [], report_ref: null },
+};
+panel._labReportDraft = {
+  "entry-1": { ts: "", reportRef: "", rows: [{ marker: "", value: "", unit: "" }] },
+};
+
+// Erst den Marker waehlen, dann rendern: das Einheiten-Dropdown haengt am
+// gewaehlten Marker (§6.2) — vor der Auswahl gibt es keine alt_units.
+const changed = views.handleLabReportChange(
+  panel, "entry-1", "lab-report-marker-0", "creatinine"
+);
+const html = views.labReportForm(panel, labs, "entry-1");
+const draft = panel._labReportDraft["entry-1"];
+process.stdout.write(JSON.stringify({ html, changed, draft }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_123_panel_report_form_and_change_handler(tmp_path):
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+    (tmp_path / "health-o-mat-panel-base.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    views_path = tmp_path / "health-o-mat-panel-views.js"
+    views_path.write_bytes((_WWW_DIR / "health-o-mat-panel-views.js").read_bytes())
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_REPORT_RUNNER,
+            [str(tmp_path / "health-o-mat-panel-base.js"), str(views_path)],
+            "runner_panel_report",
+        )
+    )
+
+    assert "mg/dL" in out["html"]
+    assert "__custom__" in out["html"]
+    assert 'data-action="lab-report-fill-visible"' in out["html"]
+    assert out["changed"] is True
+    assert out["draft"]["rows"][0]["marker"] == "creatinine"
+    assert out["draft"]["rows"][0]["unit"] == ""
+
+
+def test_req_hom_128_panel_discard_action_guarded_by_last_report():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    source = _panel_base_source()
+
+    assert "ui_panel_lab_report_discard_confirm" in views
+    assert 'data-action="lab-report-discard"' in views
+    assert "window.confirm" in views
+    assert 'removeLabReport: "health_o_mat/remove_lab_report",' in source
+
+
+def test_req_hom_128_panel_discard_sends_ts_and_optional_ref():
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "discardLabReport")
+
+    assert "last_report" in body
+    assert "ts: last.ts" in body or "ts: latest.ts" in body
+    assert "report_ref" in body
+    assert "WS.removeLabReport" in body
+    assert "resultError(result)" in body
