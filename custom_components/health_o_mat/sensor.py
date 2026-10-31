@@ -496,8 +496,11 @@ class LabValueSensor(HealthOMatSensor):
     """Ein Sensor je Laborwert-Marker (Katalog oder Custom, REQ-HOM-122).
 
     Der Wert kommt ausschließlich aus ``store.last_active_lab_reading`` —
-    voided Messungen dürfen nie als State erscheinen (die rohe
-    ``entry["lab_readings"]``-Liste filtert nicht). ``unique_id`` =
+    voided Messungen dürfen nie als State erscheinen. Die rohe
+    ``entry["lab_readings"]``-Liste enthält voided Einträge weiterhin; die
+    aktive Sicht ``active_entry()`` filtert sie heraus (NB-5), und
+    ``last_active_lab_reading`` liefert je Marker den Eintrag mit dem größten
+    ``ts`` (nicht den zuletzt eingetragenen). ``unique_id`` =
     ``{entry_id}_lab_{marker_key}`` und bleibt dauerhaft stabil (HACS-Regel).
     """
 

@@ -425,14 +425,19 @@ add_lab_value:
 remove_last_lab_value:
   name: Letzten Laborwert löschen
   description: >-
-    Entfernt den letzten aktiven Laborwert eines bestimmten Markers (Undo).
-    Der Eintrag wird als gelöscht markiert und bleibt wiederherstellbar.
+    Entfernt den zeitlich neuesten aktiven Laborwert eines bestimmten Markers
+    (Undo) — nicht zwingend den zuletzt eingegebenen. Nachgetragene alte
+    Befunde (rückdatierter Zeitstempel) werden dadurch nicht getroffen; der
+    entfernte Eintrag wird als gelöscht markiert und bleibt über
+    restore_entry wiederherstellbar.
   fields:
     person:
       name: Person
       description: Name der Person (leer = einzige konfigurierte Person).
     marker:
       name: Marker
-      description: Stabiler Marker-Schlüssel, dessen letzter Wert entfernt wird.
+      description: >-
+        Stabiler Marker-Schlüssel; entfernt wird dessen zeitlich neuester
+        aktiver Wert (größter Zeitstempel, nicht der zuletzt eingegebene).
       example: "alt"
       required: true

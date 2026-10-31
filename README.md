@@ -484,10 +484,14 @@ ruft die Referenz **nie selbst auf**.
 - **Ein Sensor je Katalog- und Custom-Marker** — Entity-ID aus dem englischen
   Markernamen (Katalog) bzw. dem vergebenen Namen (Custom), z. B.
   `sensor.…_creatinine` oder `sensor.…_crp`, mit
-  `state_class: measurement`; Zustand = letzter aktiver Wert in der kanonischen
-  Einheit. Attribute: `ts`, `category`, `ref_min`, `ref_max`, `in_range`.
+  `state_class: measurement`; Zustand = zeitlich neuester aktiver Wert in der
+  kanonischen Einheit. Attribute: `ts`, `category`, `ref_min`, `ref_max`, `in_range`.
   Gelöschte (voided) Werte erscheinen nicht als Zustand; der stabile
   `unique_id`-Suffix lautet `lab_<marker>`.
+  Entfernt oder umbenannt man einen **Custom-Marker**, bleibt dessen
+  Entity-Registry-Eintrag bestehen und wird als `unavailable` angezeigt — Home
+  Assistant löscht Entities nicht automatisch; der Eintrag muss bei Bedarf
+  manuell in der Entity-Registry entfernt werden.
 - **Ein Warn-Binary je Kategorie** — `binary_sensor.…_<category>_warning`
   (z. B. `…_liver_warning`, `…_kidney_warning`; ohne „Sonstige"),
   `device_class: problem`: `on`, sobald mindestens ein aktiver Marker der
@@ -517,11 +521,16 @@ data:
 action: health_o_mat.remove_last_lab_value
 data:
   person: "Caro"   # optional — ohne Angabe die einzige konfigurierte Person
-  marker: "alt"    # letzter aktiver Wert genau dieses Markers
+  marker: "alt"    # entfernt den zeitlich neuesten aktiven Wert dieses Markers
 ```
 
-`remove_last_lab_value` **voidet** den letzten aktiven Wert des Markers (kein
-Hard-Delete); der Eintrag bleibt im Verlauf wiederherstellbar.
+`remove_last_lab_value` **voidet** den **zeitlich neuesten** aktiven Wert des
+Markers (kein Hard-Delete) — also den Eintrag mit dem größten `ts`, **nicht
+zwingend den zuletzt eingegebenen**. Das ist der bewusste Unterschied zu einem
+Eingabe-Undo: nachgetragene alte Befunde (rückdatierter `ts`) verändern den
+aktuellen Wert nicht und werden von diesem Service deshalb auch nicht
+entfernt. Der voidete Eintrag bleibt im Verlauf erhalten und ist über
+`restore_entry` wiederherstellbar.
 
 ### Laborwerte-Karte (Custom Card)
 

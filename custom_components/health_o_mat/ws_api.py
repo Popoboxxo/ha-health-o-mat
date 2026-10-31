@@ -1367,7 +1367,13 @@ async def websocket_add_lab_value(
 async def websocket_remove_last_lab_value(
     hass: HomeAssistant, connection: Any, msg: dict[str, Any]
 ) -> None:
-    """`health_o_mat/remove_last_lab_value` → letzten aktiven Wert EINES Markers entfernen."""
+    """`health_o_mat/remove_last_lab_value` → zeitlich neuesten aktiven Wert entfernen.
+
+    Entfernt wird der aktive Wert mit dem größten `ts` — ausdrücklich NICHT
+    zwingend der zuletzt eingegebene: ein nachgetragener, rückdatierter Befund
+    darf den aktuellen Wert nicht verdrängen (vgl.
+    ``HealthOMatStore.last_active_lab_reading``).
+    """
     entry_id = msg["entry_id"]
     store = _store(hass)
     entry = _runtime_entry(hass, entry_id)
