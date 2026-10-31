@@ -44,14 +44,14 @@ Documented gaps (deliberately NOT faked):
 from __future__ import annotations
 
 import json
-import time
 import uuid
 import warnings
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 import requests
+from e2e_helpers import wait_for as _wait_for
+from e2e_helpers import ws_command
 
 from scripts.e2e_bootstrap import _ws_command
 
@@ -99,34 +99,9 @@ BP_PULSE = 63
 
 REST_TIMEOUT = 30
 CARD_TIMEOUT = 60000
-WRITE_TIMEOUT = 45.0
 
 
 # --- small, dependency-light helpers ---------------------------------------
-
-
-def _wait_for(
-    read: Callable[[], Any],
-    condition: Callable[[Any], bool],
-    description: str,
-    *,
-    timeout: float = WRITE_TIMEOUT,
-    interval: float = 0.4,
-) -> Any:
-    """Poll `read()` until `condition` is true, else fail with the last value.
-
-    The live instance is asynchronous (service call -> store write -> coordinator
-    refresh -> entity state), so every assertion on a write has to bridge that
-    window instead of reading once and hoping.
-    """
-    deadline = time.monotonic() + timeout
-    last: Any = None
-    while time.monotonic() < deadline:
-        last = read()
-        if condition(last):
-            return last
-        time.sleep(interval)
-    raise AssertionError(f"timed out after {timeout:g}s waiting for {description} (last: {last!r})")
 
 
 def _rest_state(base_url: str, token: str, entity_id: str) -> dict[str, Any]:
@@ -142,7 +117,7 @@ def _rest_state(base_url: str, token: str, entity_id: str) -> dict[str, Any]:
 
 def _panel_data(base_url: str, token: str, entry_id: str) -> dict[str, Any]:
     """The exact payload the card renders from (`health_o_mat/panel_data`)."""
-    result = _ws_command(base_url, token, {"type": "health_o_mat/panel_data", "entry_id": entry_id})
+    result = ws_command(base_url, token, {"type": "health_o_mat/panel_data", "entry_id": entry_id})
     return result or {}
 
 
@@ -463,7 +438,7 @@ def test_req_hom_113_card_wellbeing_input_writes_and_updates_the_ui(
     """
     entry_id = panel_person["entry_id"]
 
-    _ws_command(
+    ws_command(
         hass_base_url,
         hass_bearer_token,
         {"type": "health_o_mat/set_wellbeing", "entry_id": entry_id, "key": "bad"},
