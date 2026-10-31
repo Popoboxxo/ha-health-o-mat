@@ -16,6 +16,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from e2e_helpers import ws_command
 from test_card_config_e2e import (
     CARD_TIMEOUT,
     _open_card,
@@ -24,8 +25,6 @@ from test_card_config_e2e import (
     card_dashboard,  # noqa: F401 - re-exported pytest fixture
 )
 from test_panel_deeplink_e2e import open_panel
-
-from scripts.e2e_bootstrap import _ws_command
 
 pytestmark = pytest.mark.e2e
 
@@ -36,7 +35,7 @@ SETTINGS_CHECKBOX = "[data-field='wellbeing_confirm']"
 
 
 def _set_wellbeing_status(base_url: str, token: str, entry_id: str, key: str) -> None:
-    _ws_command(
+    ws_command(
         base_url,
         token,
         {"type": "health_o_mat/set_wellbeing", "entry_id": entry_id, "key": key},
@@ -44,7 +43,7 @@ def _set_wellbeing_status(base_url: str, token: str, entry_id: str, key: str) ->
 
 
 def _set_confirm_option(base_url: str, token: str, entry_id: str, value: bool) -> None:
-    _ws_command(
+    ws_command(
         base_url,
         token,
         {
@@ -139,7 +138,7 @@ def test_req_hom_114_panel_admin_option_controls_confirmation(
         # instance); the authoritative check is the get_settings round-trip below.
         panel.locator(".settings-status.ok").wait_for(state="visible", timeout=CARD_TIMEOUT)
 
-        settings = _ws_command(
+        settings = ws_command(
             hass_base_url,
             hass_bearer_token,
             {"type": "health_o_mat/get_settings", "entry_id": entry_id},

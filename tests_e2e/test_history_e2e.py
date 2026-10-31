@@ -8,10 +8,9 @@ authoritative ``health_o_mat/list_history`` payload.
 from __future__ import annotations
 
 import pytest
+from e2e_helpers import ws_command
 from test_card_config_e2e import CARD_TIMEOUT, _panel_data, _wait_for
 from test_panel_deeplink_e2e import open_panel, wait_for_detail
-
-from scripts.e2e_bootstrap import _ws_command
 
 pytestmark = pytest.mark.e2e
 
@@ -21,7 +20,7 @@ QUICK_DRINK = "[data-action='book']"
 
 
 def _history(base_url: str, token: str, entry_id: str, *, include_voided: bool) -> list[dict]:
-    result = _ws_command(
+    result = ws_command(
         base_url,
         token,
         {

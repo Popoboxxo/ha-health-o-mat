@@ -60,6 +60,7 @@ from typing import Any
 
 import pytest
 import yaml
+from e2e_helpers import ws_command
 from playwright.sync_api import expect
 from test_card_config_e2e import CARD_TIMEOUT, _panel_data, _wait_for
 from test_panel_deeplink_e2e import open_panel, tab_keys, tile, wait_for_detail, wait_for_overview
@@ -158,7 +159,7 @@ BADGE_WARN = "\u26a0"
 
 def _settings(base_url: str, token: str, entry_id: str) -> dict[str, Any]:
     """The authoritative settings payload (`health_o_mat/get_settings`)."""
-    result = _ws_command(
+    result = ws_command(
         base_url, token, {"type": "health_o_mat/get_settings", "entry_id": entry_id}
     )
     return result or {}
@@ -308,7 +309,7 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
             current = _settings(hass_base_url, hass_bearer_token, entry_id)
             changed = any(current.get(key) != snapshot[key] for key in snapshot)
             if changed:
-                current = _ws_command(
+                current = ws_command(
                     hass_base_url,
                     hass_bearer_token,
                     {"type": "health_o_mat/set_settings", "entry_id": entry_id, **snapshot},

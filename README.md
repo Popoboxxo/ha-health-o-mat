@@ -1200,7 +1200,7 @@ Katalog-Namen (de/en).
 
 ## E2E-Tests (Playwright)
 
-**Aktueller Stand:** **19 E2E-Tests** (realer HA-Docker-Stack) und **1395
+**Aktueller Stand:** **24 E2E-Tests** (realer HA-Docker-Stack) und **1500
 Unit-Tests**; `ruff check .` und `ruff format --check .` sind clean. Der
 Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
 abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
