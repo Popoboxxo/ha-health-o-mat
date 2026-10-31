@@ -40,6 +40,11 @@ def _load(name: str):
 sensor_module = _load("sensor")
 logic_module = _load("logic")
 
+# sensor.py imports `.entity`; reuse the already-loaded module object so a
+# monkeypatch hits the actual base class of LabValueSensor (a second `_load`
+# would create a fresh class object that no entity inherits from).
+entity_module = sys.modules[f"{_PKG}.entity"]
+
 
 def _load_const_module():
     """const-Modul im selben Fake-Paket (auch bei früherem Laden wiederverwenden)."""
@@ -1318,3 +1323,42 @@ def test_req_hom_122_async_setup_entry_adds_custom_marker_sensor():
     assert len(custom) == 1
     assert custom[0]._attr_name == "Vitamin D"
     assert custom[0]._attr_unique_id == "e1_lab_vitamin_d"
+
+
+def _custom_marker_def() -> dict:
+    """Custom-Marker-Vorlage (Form aus logic.effective_lab_markers)."""
+    return {
+        "category": "other",
+        "name": "Vitamin D",
+        "canonical_unit": "ng/mL",
+        "ref_min": 30,
+        "ref_max": 100,
+        "alt_units": {},
+        "require_explicit_unit": False,
+        "is_custom": True,
+    }
+
+
+def test_req_hom_130_custom_lab_suggested_object_id_uses_key():
+    """[REQ-HOM-130] Custom markers register as `lab_<key>` (A-5)."""
+    sensor = _make_lab_sensor(None, marker_key="vitamin_d", marker_def=_custom_marker_def())
+    assert sensor.suggested_object_id == "lab_vitamin_d"
+
+
+def test_req_hom_130_catalog_lab_suggested_object_id_falls_back_to_base(monkeypatch):
+    """[REQ-HOM-130] Catalog markers keep the central English pinning.
+
+    Asserts the delegation instead of a concrete value: the base pinning needs
+    HA's entity platform context, which a bare unit-test entity does not have
+    (HA >= 2026.9 uses `platform_data.object_id_platform_translations`, older
+    versions the translation name).
+    """
+    sensor = _make_lab_sensor(None, marker_key="crp", marker_def=_catalog_marker_def())
+    sentinel = "pinned_by_base"
+    monkeypatch.setattr(
+        entity_module.HealthOMatEntity,
+        "suggested_object_id",
+        property(lambda self: sentinel),
+    )
+
+    assert sensor.suggested_object_id == sentinel

@@ -8,14 +8,18 @@
 
 import asyncio
 import importlib.util
+import inspect
 import os
 import sys
 import types
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
+import homeassistant.helpers.device_registry as dr
+import homeassistant.helpers.entity_registry as er
 import pytest
 import voluptuous as vol
+from homeassistant.util import slugify
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -44,6 +48,24 @@ number_module = _load("number")
 const_module = _load("const")
 
 SCHEMA = const_module.STORE_SCHEMA_VERSION
+
+
+def test_fake_ha_provides_registry_migration_hooks():
+    """[REQ-HOM-130] Fake-HA covers the building blocks of the entity id migration.
+
+    Runs in both modes: with a real HA install the fake branch is inactive, so
+    the AsyncMock assertion is limited to the no-HA environment (CI).
+    """
+    from conftest import _USING_REAL_HA
+
+    assert slugify("Health-O-Mat Max") == "health_o_mat_max"
+    assert slugify("Grüner Tee") == "gruner_tee"
+    assert callable(dr.async_get)
+    # Must be awaitable: a plain MagicMock here would swallow the missing
+    # `await` and mask the B-1 bug (Spec §6.2).
+    assert inspect.iscoroutinefunction(er.async_migrate_entries)
+    if not _USING_REAL_HA:
+        assert type(er.async_migrate_entries).__name__ == "AsyncMock"
 
 
 def _make_store():
@@ -165,7 +187,7 @@ def _migrate_entry(entry, hass):
 
 def _load_init():
     """__init__.py mit Fake-Modulen laden (Store/Entityketten via _PKG)."""
-    for name in ("store", "entity", "const", "parser", "logic", "exporter"):
+    for name in ("store", "entity", "const", "parser", "logic", "exporter", "migration"):
         _load(name)
     spec = importlib.util.spec_from_file_location(
         f"{_PKG}.init", os.path.join(_COMPONENT_DIR, "__init__.py")
@@ -176,8 +198,25 @@ def _load_init():
     return module
 
 
-def test_config_entry_migration_v1_moves_quick_drinks_to_options():
-    """[REQ-HOM-101] v1-Entry: quick_drinks aus data → options, Version 2."""
+def _patch_empty_registries(monkeypatch):
+    """Leere Entity-/Device-Registry für die reine Datenmigration (v1 → v3).
+
+    Die Registry-Umbenennungen selbst deckt `tests/test_entry_migration.py`
+    vollständig ab; hier bleibt das ursprüngliche Prüfziel "Datenmigration".
+    """
+    registry = MagicMock()
+    registry.entities = {}
+    registry.async_get = MagicMock(return_value=None)
+    monkeypatch.setattr(er, "async_get", lambda hass: registry)
+    monkeypatch.setattr(er, "async_entries_for_config_entry", lambda reg, entry_id: [])
+    device_registry = MagicMock()
+    device_registry.async_get_device_by_identifier = MagicMock(return_value=None)
+    device_registry.async_get = MagicMock(return_value=None)
+    monkeypatch.setattr(dr, "async_get", lambda hass: device_registry)
+
+
+def test_config_entry_migration_v1_moves_quick_drinks_to_options(monkeypatch):
+    """[REQ-HOM-101/130] v1 entry: quick_drinks data -> options, version 3."""
     entry = MagicMock()
     entry.version = 1
     entry.title = "Health-O-Mat · Max"
@@ -190,20 +229,22 @@ def test_config_entry_migration_v1_moves_quick_drinks_to_options():
     entry.options = {}
     hass = MagicMock()
     hass.config_entries.async_update_entry = MagicMock()
+    hass.states.async_all = MagicMock(return_value=[])
+    _patch_empty_registries(monkeypatch)
 
     ok = _run(_migrate_entry(entry, hass))
 
     assert ok is True
     updated = hass.config_entries.async_update_entry.call_args
-    assert updated[1]["version"] == 2
+    assert updated[1]["version"] == 3
     assert "quick_drinks" not in updated[1]["data"]
     assert updated[1]["options"]["quick_drinks"][0]["label"] == "Glas Wasser"
 
 
-def test_config_entry_migration_v2_is_noop():
-    """[REQ-HOM-101] v2-Entry wird nicht erneut angefasst."""
+def test_config_entry_migration_v3_is_noop():
+    """[REQ-HOM-101/130] A v3 entry is not touched again."""
     entry = MagicMock()
-    entry.version = 2
+    entry.version = 3
     entry.data = {"person": "Max"}
     entry.options = {}
     hass = MagicMock()
@@ -216,9 +257,9 @@ def test_config_entry_migration_v2_is_noop():
 
 
 def test_config_entry_migration_rejects_downgrade():
-    """[REQ-HOM-101] Version > 2 → False (kein Downgrade)."""
+    """[REQ-HOM-101/130] Version > 3 -> False (no downgrade)."""
     entry = MagicMock()
-    entry.version = 3
+    entry.version = 4
     hass = MagicMock()
     ok = _run(_migrate_entry(entry, hass))
     assert ok is False

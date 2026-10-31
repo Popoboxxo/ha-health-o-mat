@@ -520,6 +520,17 @@ class LabValueSensor(HealthOMatSensor):
             self._attr_translation_key = f"lab_{marker_key}"
 
     @property
+    def suggested_object_id(self) -> str | None:
+        """Custom markers register as `lab_<key>` (REQ-HOM-130, A-5).
+
+        The catalog path keeps the central English pinning from
+        `HealthOMatEntity.suggested_object_id`.
+        """
+        if self._marker_def.get("is_custom"):
+            return f"lab_{self._marker_key}"
+        return super().suggested_object_id
+
+    @property
     def _reading(self) -> dict | None:
         return self._store.last_active_lab_reading(self._entry.entry_id, self._marker_key)
 

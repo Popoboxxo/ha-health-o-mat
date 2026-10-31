@@ -247,7 +247,8 @@ def drink_lexicon_schema(current_text: str) -> vol.Schema:
 class HealthOMatConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle einen Config-Flow für HA Health-O-Mat."""
 
-    VERSION = 2
+    # v3: entity ids of quick-drink buttons and custom lab markers (REQ-HOM-130).
+    VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
