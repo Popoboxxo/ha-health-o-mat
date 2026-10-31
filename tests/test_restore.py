@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import yaml
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -1409,6 +1410,34 @@ def test_req_hom_122_lab_values_in_datasets_and_dataset_list():
 
     assert "lab_values" in restore.DATASETS
     assert restore.DATASET_LIST["lab_values"] == "lab_readings"
+
+
+def test_req_hom_122_restore_backup_selector_offers_lab_values():
+    """[REQ-HOM-122] Der `restore_backup`-Selector listet Laborwerte wie die Engine."""
+    services_yaml = yaml.safe_load(
+        (Path(_COMPONENT_DIR) / "services.yaml").read_text(encoding="utf-8")
+    )
+    field = services_yaml["restore_backup"]["fields"]["datasets"]
+    options = [option["value"] for option in field["selector"]["select"]["options"]]
+
+    assert options == list(restore.DATASETS), (
+        "services.yaml-Selector weicht von restore.DATASETS ab"
+    )
+    assert "lab_values" in options
+
+
+def test_req_hom_122_void_and_restore_selectors_offer_lab_values():
+    """[REQ-HOM-122] `void_entry`/`restore_entry` bieten das Lab-Ziel im Selector an."""
+    services_yaml = yaml.safe_load(
+        (Path(_COMPONENT_DIR) / "services.yaml").read_text(encoding="utf-8")
+    )
+
+    for service in ("void_entry", "restore_entry"):
+        field = services_yaml[service]["fields"]["kind"]
+        options = [option["value"] for option in field["selector"]["select"]["options"]]
+        assert "lab_values" in options, f"{service}: lab_values fehlt im Selector"
+        for value in ("drinks", "blood_pressure", "wellbeing"):
+            assert value in options, f"{service}: {value} fehlt im Selector"
 
 
 def test_req_hom_122_dataset_alias_lab_readings_resolves_to_lab_values():

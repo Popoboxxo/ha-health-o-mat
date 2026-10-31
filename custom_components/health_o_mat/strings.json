@@ -476,7 +476,7 @@
         },
         "kind": {
           "name": "Type",
-          "description": "Entry type: drinks, blood_pressure or wellbeing."
+          "description": "Entry type: drinks, blood_pressure, wellbeing or lab_values."
         },
         "id": {
           "name": "Entry ID",
@@ -494,7 +494,7 @@
         },
         "kind": {
           "name": "Type",
-          "description": "Entry type: drinks, blood_pressure or wellbeing."
+          "description": "Entry type: drinks, blood_pressure, wellbeing or lab_values."
         },
         "id": {
           "name": "Entry ID",

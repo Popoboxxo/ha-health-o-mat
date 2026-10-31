@@ -296,3 +296,94 @@ def test_req_hom_122_csv_services_schema_rejects_unknown_dataset(service):
         schemas[service](payload)
 
     assert "lab_values" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# void_entry / restore_entry: `lab_values` als viertes Korrektur-Ziel
+# ---------------------------------------------------------------------------
+
+_STATE_SERVICES = ("void_entry", "restore_entry")
+
+
+def _make_lab_store():
+    """Echter Store (wie `test_wave_a`): void/restore laufen über den Storage-Pfad."""
+    store_module = sys.modules[f"{_PKG}.store"]
+    store = store_module.HealthOMatStore(MagicMock())
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value=None)
+    store._store.async_save = AsyncMock(return_value=None)
+    _run(store.async_load())
+    return store
+
+
+def _add_lab_reading(store, entry_id="e1"):
+    """Laborwert anlegen und dessen ID zurückgeben."""
+    _run(store.add_lab_reading(entry_id, "2026-10-31T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    return store.entry(entry_id)["lab_readings"][0]["id"]
+
+
+def test_req_hom_122_restore_entry_restores_voided_lab_reading():
+    """[REQ-HOM-122] restore_entry mit kind=lab_values hebt die Löschmarkierung auf."""
+    store = _make_lab_store()
+    reading_id = _add_lab_reading(store)
+    _run(store.void_lab_reading("e1", reading_id))
+    assert store.active_lab_readings("e1") == []
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    _run(registered["restore_entry"](_make_call({"kind": "lab_values", "id": reading_id})))
+
+    assert [item["id"] for item in store.active_lab_readings("e1")] == [reading_id]
+    assert any(
+        event["action"] == "entry_restored" and event["target_id"] == reading_id
+        for event in store.entry("e1")["audit_log"]
+    ), "restore schreibt kein Audit-Event"
+
+
+def test_req_hom_122_restore_entry_unknown_lab_id_raises():
+    """[REQ-HOM-122] Unbekannte Laborwert-ID → ServiceValidationError (kein stiller Erfolg)."""
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError, match="nicht gefunden"):
+        _run(registered["restore_entry"](_make_call({"kind": "lab_values", "id": "nope"})))
+
+
+def test_req_hom_122_void_entry_marks_lab_reading_voided():
+    """[REQ-HOM-122] void_entry kann Laborwerte voiden (gleicher Pfad wie restore)."""
+    store = _make_lab_store()
+    reading_id = _add_lab_reading(store)
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    _run(registered["void_entry"](_make_call({"kind": "lab_values", "id": reading_id})))
+
+    assert store.active_lab_readings("e1") == []
+    assert any(
+        event["action"] == "entry_voided" and event["target_id"] == reading_id
+        for event in store.entry("e1")["audit_log"]
+    )
+
+
+@pytest.mark.parametrize("service", _STATE_SERVICES)
+def test_req_hom_122_state_services_schema_accepts_lab_values(service):
+    """[REQ-HOM-122] Beide Korrektur-Services akzeptieren kind=lab_values."""
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+
+    validated = schemas[service]({"kind": "lab_values", "id": "r1"})
+
+    assert validated == {"kind": "lab_values", "id": "r1"}
+    with pytest.raises(vol.Invalid):
+        schemas[service]({"kind": "tea", "id": "r1"})
+
+
+def test_req_hom_122_restore_backup_schema_accepts_lab_values_dataset():
+    """[REQ-HOM-122] `restore_backup` akzeptiert `lab_values` als Datensatz-Filter."""
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+
+    validated = schemas["restore_backup"]({"filename": "b.json", "datasets": ["lab_values"]})
+
+    assert validated["datasets"] == ["lab_values"]

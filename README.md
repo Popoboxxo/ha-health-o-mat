@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 ![Validate](https://github.com/Popoboxxo/ha-health-o-mat/actions/workflows/validate.yml/badge.svg)
 
-**Trinken & Blutdruck im Blick** — das Gesundheits-Tagebuch für Home Assistant.
+**Trinken, Blutdruck, Wohlbefinden & Laborwerte im Blick** — das Gesundheits-Tagebuch für Home Assistant.
 Lokal, dauerhaft gespeichert (überlebt jeden Recorder-Purge), alles als native
 Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
 
@@ -21,18 +21,25 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   `cola`, `Ingwertee 400` — alles funktioniert
 - 🩺 **Blutdruck**: Eingabefelder (sys/dia/puls) + Speichern-Button, Verlaufs-Sensoren,
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
+- 🧪 **Laborwerte**: 29 Marker in 9 Kategorien (Leber, Niere, Elektrolyte,
+  Lipide, Schilddrüse, Blutbild, Entzündung, Verdauung, Medikamentenspiegel)
+  mit Referenzbereichen und Einheiten-Umrechnung; dazu eigene Marker,
+  Referenz-Overrides und ausgeblendete Kategorien. Ein Sensor je Marker und
+  ein Warn-Binary je Kategorie
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
   Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
   heute und der **Wohlbefinden-Score (1–10)** — je eine Entity für den
   Entscheidungswert, Details als Attribute
-- ↩️ **Verlauf & Korrigieren**: je Datentyp (Getränke, Blutdruck, Wohlbefinden)
+- ↩️ **Verlauf & Korrigieren**: für Getränke, Blutdruck und Wohlbefinden je
   ein Verlauf mit **Löschen (Void)**, **Wiederherstellen (Restore)** und
-  **Undo** — kein Hard-Delete in der UI, Korrekturen werden auditierbar
-  protokolliert
+  **Undo**; Laborwerte lassen sich über `remove_last_lab_value` (Undo des
+  zeitlich neuesten Werts eines Markers) korrigieren — kein Hard-Delete in
+  der UI, Korrekturen werden auditierbar protokolliert
 - 🕒 **Rückdatieren**: Buchungen/Messungen/Meldungen mit Zeitpunkt nachtragen
   (unbegrenzt zurück, nie in die Zukunft); „Jetzt"/„Gestern" als Schnellwahl
-- 🌍 **Deutsch/Englisch**: Panel, Karte, Editor und Admin folgen der
-  HA-Sprache (`hass.language`), mit deutschem Fallback
+- 🌍 **Deutsch/Englisch**: Panel, Hauptkarte, Karten-Editor und Admin folgen der
+  HA-Sprache (`hass.language`), mit deutschem Fallback; die Laborwerte-Karte
+  nutzt die HA-Sprache für die Katalog-Namen (de/en)
 - 🔔 **Erinnerungen & Wochenbericht**: Trink-/BD-/Wohlbefinden-Erinnerungen und
   ein Wochenbericht als Notification (optional per Scheduler), plus importierbare
   Blueprints
@@ -40,14 +47,16 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   und Defaults in optionalen Schritten — eine neue Person ist sofort einsatzbereit
 - 📄 **CSV-Export** per Service → `/config/health_o_mat_export/`
   (Semikolon + UTF-8-BOM = Excel-Doppelklick-tauglich; exportiert nur **aktive**
-  Einträge, das Archiv bleibt enthalten)
+  Einträge, das Archiv bleibt enthalten). Datensätze: Getränke, Blutdruck und
+  Laborwerte (`lab_values`); `all` schließt alle ein
 - 👥 **Multi-Person**: ein Config-Entry = eine Person = ein Device — beliebig viele
 - 🌙 **Tagesgrenze**: einstellbare Reset-Uhrzeit (Options, 0–23 Uhr, Default 0 Uhr);
   neustartfest, weil „heute"/„gestern" on-read aus der Historie berechnet werden
   (kein Reset-Job, DST-fest)
 - 🗄️ **Optionale Aufbewahrung**: Historie älter als X Monate wandert beim Start ins
   Archiv (Options „Aufbewahrung", Default aus); Summen/Lebenszähler bleiben
-  unverändert, der CSV-Export umfasst das Archiv
+  unverändert, der CSV-Export umfasst das Archiv. Die Aufbewahrung gilt nur für
+  Getränke und Blutdruckmessungen — **Laborwerte bleiben vollständig erhalten**
 
 ## Installation (HACS)
 
@@ -72,7 +81,7 @@ werden nur vorgemerkt und erst in der Zusammenfassung gespeichert:
 
 | Abschnitt | Inhalt |
 |---|---|
-| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel, Bereichs-Toggles |
+| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel, Bereichs-Toggles (Trinken, Blutdruck, Wohlbefinden, Laborwerte) |
 | **Getränke** | Quick-Drinks **und** Getränke-Lexikon in einem Formular (Lexikon mit Zeilen-Validierung) |
 | **Wohlbefinden** | Eigene Bilder je Stufe (optional, sonst Emojis) |
 | **Benachrichtigungen** | Erinnerungen und Wochenbericht (Standard: aus) |
@@ -179,11 +188,19 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `goal_streak` | Ziel-Serie / Goal streak | Tage in Folge mit erreichtem Tagesziel (+ Bestwert) |
 | sensor | `caffeine_today` | Koffein heute / Caffeine today | **geschätzte** mg Koffein heute |
 | binary_sensor | `daily_goal_reached` / `blood_pressure_warning` | Tagesziel erreicht, Blutdruck-Warnung | Status |
+| sensor | `lab_<marker>` (z. B. `lab_creatinine`, `lab_crp`) | Laborwert (z. B. Kreatinin / Creatinine, CRP) | zeitlich neuester aktiver Wert in kanonischer Einheit (+ `ts`, `category`, `ref_min`, `ref_max`, `in_range`) |
+| binary_sensor | `binary_lab_warning_<category>` (z. B. `binary_lab_warning_liver`) | Laborwert-Warnung (z. B. Leber / Liver) | `on`, wenn ≥ 1 aktiver Marker der Kategorie außerhalb des Referenzbereichs liegt |
 | button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Void/Speichern | Alltagseingabe |
 | button | `report_very_bad` … `report_excellent` | Melden: … / Report: … | Wohlbefinden (zehn Stufen) |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
 | number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*`, `wellbeing_input` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe, Wohlbefinden-Zahl | Runtime-Einstellungen und Scores |
+
+Beispiel-Entity-IDs: `sensor.health_o_mat_caro_creatinine`,
+`sensor.health_o_mat_caro_crp` und
+`binary_sensor.health_o_mat_caro_liver_warning`. Die Laborwerte sind im
+Abschnitt [Laborwerte (Blutwerte)](#laborwerte-blutwerte) ausführlich
+beschrieben.
 
 ### Entities im Detail
 
@@ -298,6 +315,11 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   über den konfigurierbaren Warnschwellen liegt (Defaults 140/90 mmHg,
   änderbar über die Number-Entities `…_systolic_warning_threshold` /
   `…_diastolic_warning_threshold`).
+- `binary_sensor.…_<category>_warning` — Laborwert-Warnung je Kategorie
+  (`liver`, `kidney`, `electrolytes`, `lipids`, `thyroid`, `blood_count`,
+  `inflammation`, `digestion`, `drug_levels`; nicht „Sonstige"), `on`, sobald
+  mindestens ein aktiver Marker der Kategorie außerhalb seines
+  Referenzbereichs liegt (`device_class: problem`).
 
 **Buttons**
 
@@ -669,9 +691,9 @@ data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
 Der Import ist bewusst tolerant: Semikolon-getrennt, UTF-8 mit oder ohne BOM,
 `#`-Kommentarzeilen und eine fehlende/abweichende Kopfzeile werden akzeptiert.
 Bestehende Einträge werden als Duplikate erkannt und übersprungen (Getränke über
-Zeitstempel + Menge, Blutdruck über Zeitstempel + systolisch + diastolisch);
-unlesbare Zeilen werden abgelehnt. Eine Notification meldet das Ergebnis als
-`imported / skipped / rejected`.
+Zeitstempel + Menge, Blutdruck über Zeitstempel + systolisch + diastolisch,
+Laborwerte über Zeitstempel + Marker + Wert); unlesbare Zeilen werden abgelehnt.
+Eine Notification meldet das Ergebnis als `imported / skipped / rejected`.
 
 ### Backup (JSON-Voll-Export)
 
@@ -681,10 +703,12 @@ action: health_o_mat.backup
 
 Schreibt ein versioniertes JSON-Backup **aller Personen und Datensätze** (alle
 Zeiträume) nach `/config/health_o_mat_export/` mit Zeitstempel-Dateinamen
-(`health_o_mat_backup_<YYYYMMDD-HHMMSS>.json`). **Format v2** enthält zusätzlich
-das **Retention-Archiv**, die Schema-Stufe, Personen-Namen und Zähler
-(gesamt/aktiv/gelöscht). **v1-Backups bleiben lesbar** und werden beim Restore
-migriert; neuere/unbekannte Versionen werden mit klarer Meldung abgelehnt.
+(`health_o_mat_backup_<YYYYMMDD-HHMMSS>.json`). **Format v3** enthält zusätzlich
+das **Retention-Archiv**, die Schema-Stufe, Personen-Namen, Zähler
+(gesamt/aktiv/gelöscht) sowie **Laborwerte und Labor-Optionen** (eigene Marker,
+Referenz-Overrides, ausgeblendete Kategorien). **v1- und v2-Backups bleiben
+lesbar** und werden beim Restore migriert; neuere/unbekannte Versionen werden
+mit klarer Meldung abgelehnt.
 Der Service ist **nur für HA-Administratoren** verfügbar.
 
 ### Restore (Backup zurückspielen)
@@ -721,8 +745,9 @@ data:
 ```
 
 - **Teil-Restore:** `persons` (Quell-Slug, Quell-Entry-ID oder Ziel-Entry-ID),
-  `datasets` (`drinks` / `blood_pressure` / `wellbeing`), `from`/`to` (ISO,
-  inklusiv auf `ts`; naive Werte gelten als lokale HA-Zeitzone).
+  `datasets` (`drinks` / `blood_pressure` / `wellbeing` / `lab_values`),
+  `from`/`to` (ISO, inklusiv auf `ts`; naive Werte gelten als lokale
+  HA-Zeitzone).
 - **Mehrere Quellen → ein Ziel:** `person_map` darf mehrere Backup-Personen
   auf denselben Ziel-Entry abbilden. Replace sammelt dann alle Quell-Records,
   dedupliziert sie und leert den Ziel-Scope genau einmal (kein Datenverlust).
@@ -781,7 +806,8 @@ Sensoren, CSV) und bleibt über **Restore** wiederherstellbar. Auch
 ## Dashboard-Beispiele
 
 - [`examples/dashboard.yaml`](examples/dashboard.yaml) — **nur Standard-Karten**
-  von Home Assistant (3 Ansichten: Trinken, Blutdruck, Wohlbefinden)
+  von Home Assistant (drei Ansichten für Trinken, Blutdruck und Wohlbefinden);
+  Laborwerte zeigt die separate Laborwerte-Karte bzw. der Laborwerte-Tab im Panel
 - [`examples/dashboard-mini.yaml`](examples/dashboard-mini.yaml) — Kompaktblock
   (Standard-Karten) zum Einbauen in ein bestehendes Dashboard
 - [`examples/dashboard-mushroom.yaml`](examples/dashboard-mushroom.yaml) —
@@ -797,6 +823,11 @@ Alle Varianten zeigen den Gesundheitszustand kontinuierlich: als Gauge/
 Bar (`daily_goal_progress`, `wellbeing`-Select im Verlaufsgraph), als
 mushroom-Select mit Emoji oder als konfigurierbare Karte.
 
+Die Laborwerte sind in diesen Standard-Dashboards nicht enthalten; dafür gibt
+es die eigenständige Karte `custom:health-o-mat-labs-card` (Abschnitt
+[Laborwerte-Karte](#laborwerte-karte-custom-card)) und den Laborwerte-Tab im
+Panel.
+
 Alle Beispiel-Dashboards werden **kontinuierlich getestet**: ein
 Unit-Test (`tests/test_dashboards.py`) prüft YAML-Struktur und
 Entity-Referenzen, und im geteilten HA-Testsystem (`/home/hermes/ha-test`)
@@ -807,6 +838,12 @@ Entity in der laufenden Instanz tatsächlich existiert.
 
 Die Integration liefert eine eigene Lovelace-Karte mit — eine kompakte
 Dashboard-Kachel, ohne zusätzliche HACS-Frontend-Abhängigkeit:
+
+> ℹ️ Daneben gibt es die eigenständige Karte `custom:health-o-mat-labs-card`
+> für Laborwerte (Kategorie-Reiter, Referenz-Badges, Sparkline,
+> Erfassungsformular) — Details im Abschnitt
+> [Laborwerte-Karte (Custom Card)](#laborwerte-karte-custom-card). Beide Karten
+> werden beim Setup automatisch als Lovelace-Ressource registriert.
 
 - 💧 **Hydration-Ring** — heutige Menge vs. Tagesziel (Prozent + mL), dazu
   Buchungen, der gestrige Wert, ein **Pace-Badge** (auf Kurs / voraus / hinten /
@@ -921,9 +958,10 @@ Ein unbekannter `status` wird mit `ServiceValidationError` abgelehnt. Die
 bestehenden `button.*_report_*`-Entities bleiben unverändert und nutzen
 denselben Store-/Refresh-Pfad.
 
-Die Karte wird unter `/health_o_mat/health-o-mat-card.js` ausgeliefert und beim
-Setup automatisch als Lovelace-Ressource registriert (idempotent) — die
-Ressource muss **nicht** von Hand hinzugefügt werden. Eine zusätzliche
+Die Karte wird unter `/health_o_mat/health-o-mat-card.js` ausgeliefert, die
+Laborwerte-Karte unter `/health_o_mat/health-o-mat-labs-card.js`. Beide werden
+beim Setup automatisch als Lovelace-Ressource registriert (idempotent) — die
+Ressourcen müssen **nicht** von Hand hinzugefügt werden. Eine zusätzliche
 Frontend-Abhängigkeit (z. B. Mushroom) ist **nicht** nötig.
 
 Einbindung in eine Dashboard-Ansicht per YAML:
@@ -936,8 +974,8 @@ entry_id: <config-entry-id>   # optional — ohne Angabe erscheint eine Personen
 Ohne `entry_id` (bzw. bei mehreren Personen) zeigt die Karte automatisch eine
 Personenauswahl.
 
-Die Karte liefert die Integration immer mit — unabhängig vom unten beschriebenen
-Panel.
+Beide Karten liefert die Integration immer mit — unabhängig vom unten
+beschriebenen Panel.
 
 ## Sidebar-Panel (optional)
 
@@ -946,18 +984,24 @@ eine app-artige Vollbild-Ansicht, die sich als eigener Menüpunkt in die
 HA-Seitenleiste einklinkt:
 
 - 👥 **Mehr-Personen-Übersicht** — eine Kachel je Person (Hydration-Ring, letzte
-  Blutdruckwerte, Wohlbefinden), inklusive Status
-- 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden; Buchen,
-  Messen und Melden funktionieren direkt aus dem Panel. Bereiche, die per
-  Feature-Toggle abgeschaltet sind, werden ausgeblendet
+  Blutdruckwerte, Wohlbefinden, Laborwert-Warnzeile), inklusive Status
+- 📑 **Person-Detail mit Tabs** — Trinken · Blutdruck · Wohlbefinden · Laborwerte;
+  Buchen, Messen, Melden und das Erfassen von Laborwerten funktionieren direkt
+  aus dem Panel. Bereiche, die per Feature-Toggle abgeschaltet sind, werden
+  ausgeblendet
 - 🕒 **Rückdatieren** — jedes Eingabeformular hat ein Zeitpunktfeld
   (`datetime-local`) plus Schnellwahl **„Jetzt"** und **„Gestern"**; **leer =
   jetzt**, die Zukunft wird abgelehnt
-- 📜 **Verlauf je Tab** — neueste zuerst, mit Filter **„Nur aktive"**
-  / **„Auch gelöscht"**, Inline-**Löschen mit Bestätigung** (Void) und
-  **Wiederherstellen**. Gelöschte Einträge sind sichtbar markiert und zählen
-  nicht in den Auswertungen
-- ↩️ **Undo für alle Typen** — Getränke, Blutdruck und Wohlbefinden
+- 📜 **Verlauf je Tab (Trinken, Blutdruck, Wohlbefinden)** — neueste zuerst, mit
+  Filter **„Nur aktive"** / **„Auch gelöscht"**, Inline-**Löschen mit
+  Bestätigung** (Void) und **Wiederherstellen**. Gelöschte Einträge sind
+  sichtbar markiert und zählen nicht in den Auswertungen
+- 🧪 **Laborwerte-Tab** — Kategorie-Reiter mit Wischgeste, je Marker Wert,
+  Einheit, Referenz-Badge, Verlaufsgraph und Zeitpunkt sowie ein Formular zum
+  Erfassen neuer Werte (Marker, Wert, Einheit, Bericht-Link/ID)
+- ↩️ **Undo für Getränke, Blutdruck und Wohlbefinden** — Laborwerte werden über
+  den Service `remove_last_lab_value` korrigiert (Undo des zeitlich neuesten
+  Werts eines Markers)
 - 📈 **Wohlbefinden-Score-Chart** — im Tab „Wohlbefinden" zeigt das Panel den
   **vollständigen Verlaufs-Chart** des Scores: Zeit auf der X-Achse, Score 1–10
   auf der Y-Achse (Extremwerte 1 und 10 hervorgehoben), Zeitachse und der
@@ -994,13 +1038,17 @@ verschachtelter Options-Schritte:
   Zeilen-Validierung (die Fehlermeldung nennt die betroffene Zeile)
 - 🩺 **Blutdruck-Warnschwellen** (sys/dia) — wirken zur Laufzeit sofort auf den
   Blutdruck-Warn-Binary-Sensor
+- 🧪 **Laborwerte** — Referenzbereiche der Katalog-Marker überschreiben
+  („Auf Katalog-Default zurücksetzen" inklusive), Kategorien ausblenden und
+  eigene Marker anlegen (Name, Einheit, Kategorie, Referenzbereich, optional
+  eine alternative Einheit mit Umrechnungsfaktor)
 - 🗄️ **Aufbewahrung** (Retention in Monaten) und **`audit_limit`**
   (Audit-Log-Cap; Default **1000** Ereignisse/Person, `0` = **unbegrenzt**)
-- 🧩 **Feature-Toggles pro Person** — **Trinken / Blutdruck / Wohlbefinden**
-  einzeln an/aus. Ein abgeschalteter Bereich erzeugt **keine** Entities mehr
-  (sie werden beim Reload entladen); `unique_id` und Historie bleiben
-  **unverändert**, ein Wieder-Einschalten erzeugt dieselbe `entity_id` wieder.
-  Fehlt die Auswahl (Alt-Entry), sind alle Bereiche aktiv
+- 🧩 **Feature-Toggles pro Person** — **Trinken · Blutdruck · Wohlbefinden ·
+  Laborwerte** einzeln an/aus. Ein abgeschalteter Bereich erzeugt **keine**
+  Entities mehr (sie werden beim Reload entladen); `unique_id` und Historie
+  bleiben **unverändert**, ein Wieder-Einschalten erzeugt dieselbe `entity_id`
+  wieder. Fehlt die Auswahl (Alt-Entry), sind alle Bereiche aktiv
 - ✅ **Wohlbefinden: Bestätigung vor Übernahme** (`wellbeing_confirm`, Default
   aus) — pro Person in der Panel-Admin-Ansicht (Karte „Wohlbefinden") pflegbar;
   gespeichert wird sie über denselben Einstellungs-Pfad wie die übrigen
@@ -1014,7 +1062,7 @@ verschachtelter Options-Schritte:
   Personen-Mapping ist möglich; vor dem echten Restore wird automatisch ein
   Sicherheitsbackup geschrieben
 - 📄 **CSV-Export** direkt aus dem Panel anstoßen
-  (`drinks` / `blood_pressure` / `all`, geschrieben nach
+  (`drinks` / `blood_pressure` / `lab_values` / `all`, geschrieben nach
   `/config/health_o_mat_export/`)
 - 💾 **Backup** direkt aus dem Panel auslösen (ruft den `health_o_mat.backup`-Service)
 - ➕ **Person anlegen** — öffnet den Standard-HA-Config-Flow (kein eigener Dialog)
@@ -1035,19 +1083,23 @@ abgesichert; Nicht-Admins erhalten einen sauberen Fehler statt Zugriff.
 
 Die Pro-Person-Toggles (REQ-HOM-009) sind auch über den regulären Options-Dialog
 erreichbar (Schalter „Trinken erfassen" / „Blutdruck erfassen" / „Wohlbefinden
-erfassen") und wirken identisch. Das Abschalten **löscht** keine Daten: Es werden
-lediglich die Entities des Bereichs nicht mehr geladen. Deaktivierte Entities
-erscheinen in Home Assistant als `unavailable` (bzw. sind nach einem Neustart
-nicht mehr vorhanden); ihre Registry-Einträge und `unique_id`s bleiben bestehen.
+erfassen" / „Laborwerte erfassen") und wirken identisch. Das Abschalten
+**löscht** keine Daten: Es werden lediglich die Entities des Bereichs nicht mehr
+geladen. Deaktivierte Entities erscheinen in Home Assistant als `unavailable`
+(bzw. sind nach einem Neustart nicht mehr vorhanden); ihre Registry-Einträge und
+`unique_id`s bleiben bestehen.
 
-Die oben beschriebene Lovelace-Karte (`custom:health-o-mat-card`) bleibt davon
-unberührt und funktioniert unabhängig vom Panel.
+Die oben beschriebenen Lovelace-Karten (`custom:health-o-mat-card` und
+`custom:health-o-mat-labs-card`) bleiben davon unberührt und funktionieren
+unabhängig vom Panel.
 
 ## Sprache & Internationalisierung (de/en)
 
-Panel, Karte, Karten-Editor und Admin-Ansicht folgen der **HA-Sprache**
-(`hass.language`) — **Deutsch und Englisch** vollständig. Ein Sprachwechsel zur
-Laufzeit rendert die Oberfläche neu, ohne Reload.
+Panel, Hauptkarte (`custom:health-o-mat-card`), deren Karten-Editor und die
+Admin-Ansicht folgen der **HA-Sprache** (`hass.language`) — **Deutsch und
+Englisch** vollständig. Ein Sprachwechsel zur Laufzeit rendert die Oberfläche
+neu, ohne Reload. Die Laborwerte-Karte nutzt die HA-Sprache für die
+Katalog-Namen (de/en).
 
 - **HA-nativ statt eigenem Framework:** Die UI-Texte liegen als flache Schlüssel
   im erlaubten `common`-Bereich (`component.health_o_mat.common.*`) und werden
@@ -1062,7 +1114,7 @@ Laufzeit rendert die Oberfläche neu, ohne Reload.
 
 ## E2E-Tests (Playwright)
 
-**Aktueller Stand:** **18 E2E-Tests** (realer HA-Docker-Stack) und **1120
+**Aktueller Stand:** **19 E2E-Tests** (realer HA-Docker-Stack) und **1395
 Unit-Tests**; `ruff check .` und `ruff format --check .` sind clean. Der
 Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
 abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
@@ -1100,6 +1152,13 @@ Zusätzlich (`tests_e2e/test_i18n_e2e.py`, REQ-HOM-117):
 
 - Panel rendert bei **en-US** englische Labels (kein roher `ui_…`-Key)
 - Karte rendert bei **en-US** englische Labels
+
+Zusätzlich (`tests_e2e/test_lab_values_e2e.py`, REQ-HOM-122):
+
+- Eigenen Marker im Admin-Bereich anlegen und einen Katalog-Referenzbereich
+  überschreiben
+- Wert über den Laborwerte-Tab erfassen und Wert samt In-Range-Badge prüfen
+- Warnzeile der Personen-Kachel und die neu erzeugte Marker-Entity prüfen
 
 Die Karten-Konfiguration ist außerdem in `tests_e2e/test_card_config_e2e.py`
 abgesichert (Sichtbarkeit der Blöcke, explizite BD-Eingabe, Wellbeing-Eingabe,

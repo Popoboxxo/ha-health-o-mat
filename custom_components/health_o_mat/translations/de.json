@@ -476,7 +476,7 @@
         },
         "kind": {
           "name": "Art",
-          "description": "Art des Eintrags: drinks, blood_pressure oder wellbeing."
+          "description": "Art des Eintrags: drinks, blood_pressure, wellbeing oder lab_values."
         },
         "id": {
           "name": "Eintrags-ID",
@@ -494,7 +494,7 @@
         },
         "kind": {
           "name": "Art",
-          "description": "Art des Eintrags: drinks, blood_pressure oder wellbeing."
+          "description": "Art des Eintrags: drinks, blood_pressure, wellbeing oder lab_values."
         },
         "id": {
           "name": "Eintrags-ID",
