@@ -619,26 +619,24 @@ def _report_type(panel, selector: str, value: str) -> None:
 
 
 def _labs_dashboard_config() -> dict[str, Any]:
-    """The shipped example dashboard, or an equivalent inline default view.
+    """The shipped example dashboard — the artifact under test (REQ-HOM-126).
 
-    `examples/dashboard-labs-card.yaml` is the artifact under test (REQ-HOM-126,
-    Task 18 of the plan). Until that file exists the same default view is built
-    inline, so this test still proves the card mounts and renders inside a real
-    Lovelace dashboard instead of silently skipping the requirement.
+    Read verbatim from ``examples/dashboard-labs-card.yaml``. There is
+    deliberately no inline fallback: a fallback would keep the test green while
+    the shipped example is broken (or missing from the E2E image), which is
+    exactly the failure mode this test exists to catch.
     """
-    if EXAMPLE_LABS_DASHBOARD.exists():
-        with EXAMPLE_LABS_DASHBOARD.open(encoding="utf-8") as handle:
-            return yaml.safe_load(handle)
-    return {
-        "title": "Health-O-Mat (Laborwerte)",
-        "views": [
-            {
-                "title": "Laborwerte",
-                "path": "laborwerte",
-                "cards": [{"type": "custom:health-o-mat-labs-card"}],
-            }
-        ],
-    }
+    assert EXAMPLE_LABS_DASHBOARD.is_file(), (
+        f"the example dashboard under test is missing: {EXAMPLE_LABS_DASHBOARD} "
+        "(the E2E image must ship it — see Dockerfile.e2e's 'COPY examples/')"
+    )
+    with EXAMPLE_LABS_DASHBOARD.open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    assert isinstance(config, dict), (
+        f"{EXAMPLE_LABS_DASHBOARD} must parse to a Lovelace config mapping, "
+        f"got {type(config).__name__}"
+    )
+    return config
 
 
 def test_req_hom_123_hybrid_button_prefills_visible_markers(
@@ -881,6 +879,18 @@ def test_req_hom_126_labs_card_example_dashboard_renders(
     views = config.get("views") or []
     assert views, "the labs dashboard example must define at least one view"
     view_path = str(views[0].get("path") or "")
+    # The shipped example must actually wire the labs card — otherwise the test
+    # would render an empty dashboard and prove nothing about the example.
+    card_types = [
+        str(card.get("type"))
+        for view in views
+        for card in (view.get("cards") or [])
+        if isinstance(card, dict)
+    ]
+    assert f"custom:{LABS_CARD_TAG}" in card_types, (
+        f"{EXAMPLE_LABS_DASHBOARD.name} must contain a 'custom:{LABS_CARD_TAG}' "
+        f"card, found: {card_types}"
+    )
 
     # Throwaway storage dashboard (same pattern as test_card_config_e2e.py):
     # unique url_path, deleted again even when the test fails.
