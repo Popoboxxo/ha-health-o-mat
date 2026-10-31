@@ -2,12 +2,9 @@ project:
   name: ha-health-o-mat
   prefix: hom
   short: health-o-mat
-agent-meta-version: "1.1.0"
-# Orchestrator recommended, user-override allowed (default would be 'strict': mandatory, no override).
+agent-meta-version: 2.0.0-beta.5
 orchestrator:
   mode: advisory
-# Issue #694: write-capable agents commit directly on a task-boundary trigger instead of
-# always delegating to the 'git' role. secret_scan stays at its default (true).
 auto_commit:
   mode: auto
   triggers:
@@ -58,11 +55,9 @@ variables:
   GIT_MAIN_BRANCH: main
   BUILD_COMMAND: ''
   TEST_COMMAND: pytest
-  DEV_COMMANDS: '# HA-Konfiguration prüfen (via CLI im HA-Container):
-
+  DEV_COMMANDS: |
+    # HA-Konfiguration prüfen (via CLI im HA-Container):
     # ha core check
-
-    '
   TEST_COMMANDS: |-
     pytest tests/
     # E2E gegen geteilte HA-Testinstanz (Etikette: /home/hermes/ha-test/README.md)
@@ -131,35 +126,33 @@ variables:
   TESTER_SNIPPETS_PATH: ''
   DEVELOPER_SNIPPETS_PATH: ''
   AGENT_META_REPO: Popoboxxo/agent-meta
-# Which rules are active: default (all), minimal (situational off), silent (only essentials)
 rules-preset: default
-# Communication style for all agents. Copied as .claude/rules/speech-mode.md — loaded automatically by Claude Code into every agent context. 'full' = default behavior, no rule generated. 'short' = facts only, no filler. 'childish' = playful, simple language with animal/toy analogies. 'caveman' = brutally short, caveman speech. 'asozial' = technically correct but dripping with contempt — New Kids style, insults the user's intelligence. 'submissive' = completely devoted and submissive, no contradiction, no own opinion, addresses user as master/mistress. 'business' = formal corporate tone. 'bullshit-bingo' = management speak, buzzwords. 'linkedin' = LinkedIn influencer style, inspirational.
 speech-mode: full
-# The active tier preset mapped against config/tier-presets.yaml. Adjusts model selection globally. Use se-focus: true instead of the deprecated '(SE)' suffix variants.
 tier-preset: Normal
-# When true, SE roles (se-architect, se-critic, se-developer, etc.) are upgraded one tier before preset mapping is applied. Replaces the deprecated '(SE)' suffix in tier-preset names.
 se-focus: false
-# When a provider is set to true, sync.py omits the generated agent's `model:` field entirely — every agent of that provider inherits the model of the main chat at runtime. Mutually exclusive with model-override-all per provider (sync.py fails fast on conflict).
 model-inherit-main-chat:
   Claude: true
   Gemini: true
   Opencode: true
-# Maximum number of agents that a coordinator (orchestrator, feature) may run in parallel via run_in_background. Default: 2. Set to 1 to disable parallelism.
 max-parallel-agents: 2
-# The active naming/versioning conventions preset, matched against config/conventions-presets.yaml. Individual overrides via 'conventions' block. Precedence: conventions > conventions-preset > 'default'.
 conventions-preset: default
-# When true, sync.py injects a debug block into every generated agent. Active agents announce themselves ([Agent: <name>]), log every delegation (→ Delegiere an: ...), and confirm completion (✓ [Agent: <name>] fertig). Default: false — no change to any agent file.
 debug-mode: false
-# Allow sync.py to write files containing detected secrets to committed (non-gitignored) paths. Default: false — sync aborts with an error when a secret is detected in a committed file. Set to true only when you deliberately commit secret-looking values (e.g. static demo tokens). NOT recommended for production projects.
 allow-committed-secrets: false
-# Generated files and provider-specific directories should not be committed
 gitignore:
   generated: true
   settings: true
   custom_entries:
-    - .claude/
-    - .gemini/
-    - .opencode/
-    - AGENTS.md
-    - opencode.json
-    - CLAUDE.md
+  - .claude/
+  - .gemini/
+  - .opencode/
+  - AGENTS.md
+  - opencode.json
+  - CLAUDE.md
+# Repo-Containment ('Gefängnis-Modus'): confines agent WRITE access to the project root (plus the tmp-sink). Opt-out: enabled: false.
+repo_containment:
+  enabled: true
+  tmp-sink:
+    enabled: true
+    path: .tmp
+    gitignore: true
+    cleanup: manual

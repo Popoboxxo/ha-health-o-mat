@@ -20,10 +20,12 @@ docker/ha_config_e2e/.ha_run.lock
 docker/ha_config_e2e/home-assistant.log*
 
 # --- agent-meta managed (do not edit) ---
+*.sync-backup-*
 .agents/hooks/
 .claude/
 .claude/agent-memory-local/
 .claude/agents/
+.claude/commands/
 .claude/pending-tasks.md
 .claude/progress/
 .claude/settings.json
@@ -32,7 +34,6 @@ docker/ha_config_e2e/home-assistant.log*
 .gemini/agents/
 .gemini/commands/
 .gemini/pending-tasks.md
-.gemini/rules/
 .gemini/settings.json
 .gemini/settings.local.json
 .mcp.json
@@ -47,8 +48,10 @@ docker/ha_config_e2e/home-assistant.log*
 .opencode/mcp.local.json
 .opencode/pending-tasks.md
 .opencode/settings.local.json
+.tmp/
 AGENTS.md
 AGENTS.personal.md
+CLAUDE.local.md
 CLAUDE.md
 CLAUDE.personal.md
 opencode.json

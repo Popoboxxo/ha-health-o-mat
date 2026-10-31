@@ -1,4 +1,7 @@
 {
+  "_agent-meta": {
+    "managed": "agent-meta managed — do not edit manually"
+  },
   "orchestrator-guard": {
     "PreToolUse": [
       {
@@ -7,6 +10,19 @@
           {
             "type": "command",
             "command": "bash ./hooks/antigravity-json-adapter.sh orchestrator-guard.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "repo-containment": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ./hooks/antigravity-json-adapter.sh repo-containment.sh"
           }
         ]
       }
