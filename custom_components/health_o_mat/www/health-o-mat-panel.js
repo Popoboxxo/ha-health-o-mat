@@ -160,7 +160,7 @@ class HealthOMatPanel extends HTMLElement {
     this._restoreDraft = {
       filename: "",
       mode: "merge",
-      datasets: { drinks: true, blood_pressure: true, wellbeing: true },
+      datasets: { drinks: true, blood_pressure: true, wellbeing: true, lab_values: true },
       from: "",
       to: "",
       personMap: "",
@@ -1402,6 +1402,7 @@ class HealthOMatPanel extends HTMLElement {
       drinks: checked("dataset-drinks", draft.datasets.drinks),
       blood_pressure: checked("dataset-blood_pressure", draft.datasets.blood_pressure),
       wellbeing: checked("dataset-wellbeing", draft.datasets.wellbeing),
+      lab_values: checked("dataset-lab_values", draft.datasets.lab_values),
     };
     const advanced = this.shadowRoot.querySelector("[data-restore-advanced]");
     if (advanced) draft.advanced = !!advanced.open;
@@ -1417,6 +1418,8 @@ class HealthOMatPanel extends HTMLElement {
       draft.datasets.blood_pressure = !!el.checked;
     } else if (name === "dataset-wellbeing") {
       draft.datasets.wellbeing = !!el.checked;
+    } else if (name === "dataset-lab_values") {
+      draft.datasets.lab_values = !!el.checked;
     } else if (name === "mode") {
       draft.mode = el.value === "replace" ? "replace" : "merge";
       this._render();

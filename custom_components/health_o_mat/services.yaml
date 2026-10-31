@@ -132,6 +132,8 @@ void_entry:
               value: "blood_pressure"
             - label: Wohlbefinden-Meldung
               value: "wellbeing"
+            - label: Laborwert
+              value: "lab_values"
     id:
       name: Eintrags-ID
       description: ID des Eintrags (aus dem Verlauf).
@@ -158,6 +160,8 @@ restore_entry:
               value: "blood_pressure"
             - label: Wohlbefinden-Meldung
               value: "wellbeing"
+            - label: Laborwert
+              value: "lab_values"
     id:
       name: Eintrags-ID
       description: ID des gelöschten Eintrags (aus dem Verlauf).
@@ -273,6 +277,8 @@ restore_backup:
               value: "blood_pressure"
             - label: Wohlbefinden
               value: "wellbeing"
+            - label: Laborwerte
+              value: "lab_values"
     from:
       name: Von (ISO)
       description: Nur Einträge ab diesem Zeitstempel (inklusive).

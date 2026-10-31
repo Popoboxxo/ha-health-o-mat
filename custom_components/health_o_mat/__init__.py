@@ -631,6 +631,28 @@ _KIND_LABELS: dict[str, str] = {
     "wellbeing": "Wohlbefinden-Meldungen",
 }
 
+# Laborwerte als viertes Korrektur-Ziel (REQ-HOM-122). `logic.HISTORY_KINDS`
+# führt bewusst nur die drei klassischen Ziele; das Lab-Ziel wird deshalb hier
+# aufgelöst und über dessen bestehende Store-Methoden bedient (ein Aufruf,
+# kein Zweitweg in der API).
+_LAB_STATE_KINDS: tuple[str, ...] = ("lab_values",)
+_LAB_STATE_ALIASES: dict[str, str] = {
+    "lab_value": "lab_values",
+    "lab_values": "lab_values",
+    "lab_readings": "lab_values",
+}
+_LAB_VOID_METHOD = "void_lab_reading"
+_LAB_RESTORE_METHOD = "restore_lab_reading"
+
+
+def _normalize_state_kind(kind: object) -> str | None:
+    """`kind` → kanonisches Korrektur-Ziel inklusive Laborwerten (None = unbekannt)."""
+    if isinstance(kind, str):
+        lab_kind = _LAB_STATE_ALIASES.get(kind.strip().lower())
+        if lab_kind is not None:
+            return lab_kind
+    return logic.normalize_history_kind(kind)
+
 
 async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: bool) -> None:
     """Gemeinsamer Pfad für `void_entry`/`restore_entry` (ein Store-Aufruf je Ziel).
@@ -641,18 +663,20 @@ async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: b
     `restore_*`-Methoden — inklusive Audit-Eintrag und Store-Persistenz.
     """
     entry_id, _info = get_runtime_data(hass, call)
-    kind = logic.normalize_history_kind(call.data.get("kind"))
+    raw_kind = call.data.get("kind")
+    kind = _normalize_state_kind(raw_kind)
     if kind is None:
+        allowed = (*logic.HISTORY_KINDS, *_LAB_STATE_KINDS)
         raise ServiceValidationError(
-            f"Unbekannter kind '{call.data.get('kind')}' — "
-            f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+            f"Unbekannter kind '{raw_kind}' — erlaubt: {', '.join(allowed)}"
         )
     item_id = str(call.data.get("id") or "").strip()
     if not item_id:
         raise ServiceValidationError("id fehlt")
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
     methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
-    changed = await getattr(store, methods[kind])(
+    method = methods.get(kind) or (_LAB_RESTORE_METHOD if restore else _LAB_VOID_METHOD)
+    changed = await getattr(store, method)(
         entry_id,
         item_id,
         actor=_service_actor(call),
@@ -1029,7 +1053,9 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("kind"): vol.In(
+                    ["drinks", "blood_pressure", "wellbeing", "lab_values"]
+                ),
                 vol.Required("id"): str,
             }
         ),
@@ -1041,7 +1067,9 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Required("kind"): vol.In(["drinks", "blood_pressure", "wellbeing"]),
+                vol.Required("kind"): vol.In(
+                    ["drinks", "blood_pressure", "wellbeing", "lab_values"]
+                ),
                 vol.Required("id"): str,
             }
         ),

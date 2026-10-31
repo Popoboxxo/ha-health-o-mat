@@ -2777,6 +2777,7 @@ function setRestoreFields(panel, overrides) {
     "restore-dataset-drinks": { checked: true },
     "restore-dataset-blood_pressure": { checked: true },
     "restore-dataset-wellbeing": { checked: false },
+    "restore-dataset-lab_values": { checked: false },
     "restore-from": { value: "2026-10-01T00:00" },
     "restore-to": { value: "2026-10-20T23:59" },
     "restore-person-map": { value: '{"alex": "entry-1"}' },
@@ -2807,6 +2808,20 @@ const dryResult = {
   // S-1: datetime-local → UTC-ISO (browser-lokal, daher im Runner berechnet)
   expectedFrom: new Date("2026-10-01T00:00").toISOString(),
   expectedTo: new Date("2026-10-20T23:59").toISOString(),
+};
+
+/* Nur Laborwerte ausgewählt: die Datensatz-Auswahl erreicht den Payload. */
+const labOnly = makePanel();
+await labOnly._loadRestoreFiles();
+setRestoreFields(labOnly, {
+  "restore-dataset-drinks": { checked: false },
+  "restore-dataset-blood_pressure": { checked: false },
+  "restore-dataset-lab_values": { checked: true },
+});
+await labOnly._runRestore(true);
+const labOnlyResult = {
+  msg: labOnly._messages.filter((msg) => msg.type === "health_o_mat/restore_backup").pop(),
+  error: labOnly._restoreError,
 };
 
 /* Replace ohne "REPLACE" wird beim Apply lokal abgelehnt. */
@@ -2882,6 +2897,7 @@ const cardHtml = admin.restoreCard(card);
 process.stdout.write(JSON.stringify({
   files: fileResult,
   dry: dryResult,
+  labOnly: labOnlyResult,
   blocked: blockedResult,
   dryReplace: dryReplaceResult,
   applied: appliedResult,
@@ -2923,6 +2939,10 @@ def test_req_hom_116_panel_restore_flow(tmp_path):
     assert msg["person_map"] == {"alex": "entry-1"}
     assert "confirm" not in msg
     assert dry["result"] is True
+    # REQ-HOM-122: Laborwerte sind eine wählbare Restore-Datensatz-Art.
+    lab_only = out["labOnly"]
+    assert lab_only["error"] is None
+    assert lab_only["msg"]["datasets"] == ["lab_values"]
     assert "Dry-Run" in dry["html"]
     assert "3 hinzugefügt" in dry["html"] and "0 Konflikte" in dry["html"]
     assert "Alex" in dry["html"], "Personen-Mapping wird nicht aufgelöst"
@@ -3354,6 +3374,20 @@ def test_req_hom_122_panel_base_export_datasets_include_lab_values():
     # Bestehende Eintraege bleiben unveraendert (nur additiv erweitert).
     for value in ("all", "drinks", "blood_pressure"):
         assert re.search(rf'value:\s*"{value}"', entries), f"{value} fehlt in EXPORT_DATASETS"
+
+
+def test_req_hom_122_panel_base_restore_datasets_include_lab_values():
+    """[REQ-HOM-122] Die Restore-Datensatz-Auswahl spiegelt `restore.DATASETS`."""
+    source = _panel_base_source()
+
+    block = re.search(r"export const RESTORE_DATASETS = \[(.*?)\];", source, re.S)
+    assert block is not None, "RESTORE_DATASETS fehlt im Panel-Basis-Modul"
+    entries = block.group(1)
+    assert re.search(r'value:\s*"lab_values"', entries), "lab_values fehlt in RESTORE_DATASETS"
+    assert "ui_common_dataset_lab_values" in entries, "eigener Label-Key fuer lab_values fehlt"
+    # Bestehende Eintraege bleiben unveraendert (nur additiv erweitert).
+    for value in ("drinks", "blood_pressure", "wellbeing"):
+        assert re.search(rf'value:\s*"{value}"', entries), f"{value} fehlt in RESTORE_DATASETS"
 
 
 # --- REQ-HOM-122: i18n der Labor-Namen ---------------------------------------

@@ -202,6 +202,7 @@ export const RESTORE_DATASETS = [
   { value: "drinks", label: "Getränke", labelKey: "ui_common_dataset_drinks" },
   { value: "blood_pressure", label: "Blutdruck", labelKey: "ui_common_dataset_blood_pressure" },
   { value: "wellbeing", label: "Wohlbefinden", labelKey: "ui_common_dataset_wellbeing" },
+  { value: "lab_values", label: "Laborwerte", labelKey: "ui_common_dataset_lab_values" },
 ];
 export const RESTORE_MODES = [
   { value: "merge", label: "Zusammenführen", labelKey: "ui_common_mode_merge" },
