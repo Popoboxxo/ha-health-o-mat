@@ -31,6 +31,12 @@ Deliberate scope notes:
   tests); the tile-row assertion derives its expected count from the live
   payload instead of hard-coding a number, so leftover data can never make the
   test flaky.
+* The test also walks the ENTITY layer, not only the panel payload: creating a
+  custom marker must create ``sensor.<...>_lab_<key>`` in the entity registry
+  and the state machine *without* a Home Assistant restart (review finding B-1:
+  an options change used to leave the new marker entity missing until the next
+  restart). Removing the marker again must take the entity out of service, so a
+  stale value can never keep being reported.
 """
 
 from __future__ import annotations
@@ -76,6 +82,11 @@ LAB_ROW_NAME = ".lab-row-name"
 LAB_ROW_VALUE = ".lab-row-value"
 LAB_ROW_OK = ".status.good"
 LAB_ROW_WARN = ".status.bad"
+
+# Home Assistant's own websocket commands (no integration-specific extra API).
+ENTITY_REGISTRY = "config/entity_registry/list"
+ENTITY_REGISTRY_REMOVE = "config/entity_registry/remove"
+STATES = "get_states"
 
 ENTRY_FORM = "details.lab-entry-form"
 ENTRY_MARKER = "[data-field='lab-add-marker']"
@@ -141,6 +152,42 @@ def _expected_lab_warning_count(payload: dict[str, Any]) -> int:
     )
 
 
+def _lab_unique_id(entry_id: str, marker_key: str) -> str:
+    """`unique_id` of one marker's lab sensor (stable HACS contract)."""
+    return f"{entry_id}_lab_{marker_key}"
+
+
+def _entity_registry_entries(base_url: str, token: str) -> list[dict[str, Any]]:
+    """Every entity-registry entry of the instance (`config/entity_registry/list`)."""
+    return _ws_command(base_url, token, {"type": ENTITY_REGISTRY}) or []
+
+
+def _entity_state(base_url: str, token: str, entity_id: str) -> dict[str, Any] | None:
+    """One state-machine entry from HA itself (None when the entity has no state)."""
+    for state in _ws_command(base_url, token, {"type": STATES}) or []:
+        if state.get("entity_id") == entity_id:
+            return state
+    return None
+
+
+def _lab_entity(base_url: str, token: str, entry_id: str, marker_key: str) -> dict[str, Any]:
+    """Registry entry + state of a marker's lab sensor (each may be None)."""
+    unique_id = _lab_unique_id(entry_id, marker_key)
+    registry_entry = next(
+        (
+            item
+            for item in _entity_registry_entries(base_url, token)
+            if item.get("unique_id") == unique_id
+        ),
+        None,
+    )
+    entity_id = str(registry_entry["entity_id"]) if registry_entry else ""
+    return {
+        "registry": registry_entry,
+        "state": _entity_state(base_url, token, entity_id) if entity_id else None,
+    }
+
+
 def _record_lab_value(panel, marker_key: str, value: float) -> None:
     """Record one value through the lab tab's entry form.
 
@@ -170,13 +217,40 @@ def _record_lab_value(panel, marker_key: str, value: float) -> None:
 # --- fixtures ---------------------------------------------------------------
 
 
+def _remove_orphaned_lab_entities(
+    base_url: str, token: str, entry_id: str, settings: dict[str, Any]
+) -> None:
+    """Drop lab entities that no effective marker backs any more.
+
+    Home Assistant keeps the registry entry of an entity its platform stops
+    providing and only marks it `unavailable`; on a shared instance that would
+    add one orphan per run. Removing them keeps the test instance's registry
+    clean without touching any non-lab entity.
+    """
+    catalog_keys = set((settings.get("lab_catalog") or {}).get("markers") or {})
+    custom_keys = {str(marker["key"]) for marker in settings.get("lab_custom_markers") or []}
+    valid = {_lab_unique_id(entry_id, key) for key in catalog_keys | custom_keys}
+    prefix = f"{entry_id}_lab_"
+    for item in _entity_registry_entries(base_url, token):
+        unique_id = str(item.get("unique_id") or "")
+        if item.get("platform") != "health_o_mat" or not unique_id.startswith(prefix):
+            continue
+        if unique_id in valid:
+            continue
+        _ws_command(
+            base_url, token, {"type": ENTITY_REGISTRY_REMOVE, "entity_id": item["entity_id"]}
+        )
+
+
 @pytest.fixture
 def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Iterator[dict[str, Any]]:
     """Snapshot the person's lab options and restore them afterwards.
 
     The E2E instance is shared and `entry.options` survive a run, so a custom
     marker created here would otherwise accumulate on every run. Only the
-    three lab option keys are touched; everything else is left alone.
+    three lab option keys are touched; everything else is left alone. The
+    orphaned lab entity such a marker leaves behind is removed afterwards, too
+    (also when the test fails halfway).
     """
     entry_id = panel_person["entry_id"]
     before = _settings(hass_base_url, hass_bearer_token, entry_id)
@@ -192,11 +266,12 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
             current = _settings(hass_base_url, hass_bearer_token, entry_id)
             changed = any(current.get(key) != snapshot[key] for key in snapshot)
             if changed:
-                _ws_command(
+                current = _ws_command(
                     hass_base_url,
                     hass_bearer_token,
                     {"type": "health_o_mat/set_settings", "entry_id": entry_id, **snapshot},
-                )
+                ) or _settings(hass_base_url, hass_bearer_token, entry_id)
+            _remove_orphaned_lab_entities(hass_base_url, hass_bearer_token, entry_id, current)
         except Exception as exc:  # noqa: BLE001 - teardown must not mask the test result
             warnings.warn(
                 f"could not restore the lab options of {entry_id!r} "
@@ -269,6 +344,29 @@ def test_req_hom_122_lab_values_smoke(
     assert custom_marker["ref_min"] == CUSTOM_REF_MIN
     assert custom_marker["ref_max"] == CUSTOM_REF_MAX
 
+    # 3b. Review finding B-1: the new marker must exist as a REAL entity right
+    # away. An options change used to update only the runtime mirror, so
+    # `sensor.<person>_lab_<key>` appeared not before the next HA restart —
+    # invisible to `panel_data`, which is why an UI-only test missed it.
+    entity = _wait_for(
+        lambda: _lab_entity(hass_base_url, hass_bearer_token, entry_id, marker_key),
+        lambda value: value["state"] is not None,
+        "the lab sensor entity of the new custom marker (B-1: lab option change "
+        "must reload the entry, no restart)",
+    )
+    lab_entity_id = str(entity["registry"]["entity_id"])
+    registry_entry = entity["registry"]
+    assert lab_entity_id.startswith("sensor."), f"unexpected domain: {lab_entity_id!r}"
+    assert registry_entry["platform"] == "health_o_mat"
+    assert registry_entry["unique_id"] == _lab_unique_id(entry_id, marker_key)
+
+    entity_attributes = entity["state"]["attributes"] or {}
+    assert entity_attributes.get("unit_of_measurement") == CUSTOM_UNIT_VALUE
+    assert entity_attributes.get("ref_min") == CUSTOM_REF_MIN
+    assert entity_attributes.get("ref_max") == CUSTOM_REF_MAX
+    assert entity_attributes.get("category") == CUSTOM_CATEGORY_KEY
+    assert entity["state"]["state"] == "unknown", "no value recorded yet"
+
     # 4. Person detail → lab tab (the admin form's back button leads to the overview).
     panel.locator(BACK).click()
     wait_for_overview(panel)
@@ -288,6 +386,19 @@ def test_req_hom_122_lab_values_smoke(
     )
     assert custom["unit"] == CUSTOM_UNIT_VALUE
     assert custom["in_range"] is True
+
+    # The sensor state must follow the write, not just the panel payload.
+    sensor_state = _wait_for(
+        lambda: _entity_state(hass_base_url, hass_bearer_token, lab_entity_id),
+        lambda value: (
+            value is not None and value.get("state") not in (None, "unknown", "unavailable")
+        ),
+        f"the lab sensor state to mirror the recorded value {CUSTOM_VALUE}",
+    )
+    assert float(sensor_state["state"]) == CUSTOM_VALUE
+    sensor_attributes = sensor_state["attributes"] or {}
+    assert sensor_attributes.get("unit_of_measurement") == CUSTOM_UNIT_VALUE
+    assert sensor_attributes.get("in_range") is True
 
     panel.locator(LAB_CATEGORY_BUTTON % CUSTOM_CATEGORY_KEY).click()
     custom_row = panel.locator(LAB_ROW % marker_key)
@@ -351,3 +462,39 @@ def test_req_hom_122_lab_values_smoke(
     assert f"{expected_count} lab values outside reference" in status_title, (
         f"the warning badge must name the lab cause, got title {status_title!r}"
     )
+
+    # 8. Removing the marker again (Admin UI) must take its entity out of
+    # service — an orphaned sensor that keeps reporting the last value would be
+    # data the user cannot get rid of.
+    panel.locator(SETTINGS_GEAR).click()
+    panel.locator(SETTINGS_FORM).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    panel.locator(LAB_REF_TABLE).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    custom_entry = panel.locator(CUSTOM_LIST, has_text=marker_name)
+    custom_entry.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    custom_entry.locator("[data-action='lab-custom-remove']").click()
+    assert panel.locator(CUSTOM_LIST, has_text=marker_name).count() == 0, (
+        "the removed marker must disappear from the admin list"
+    )
+
+    panel.locator(SAVE_BUTTON).click()
+    _wait_for(
+        lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+        lambda value: all(
+            marker.get("name") != marker_name for marker in value.get("lab_custom_markers") or []
+        ),
+        "the custom marker to be removed from the store",
+    )
+
+    # Home Assistant keeps the registry entry of an entity its platform no
+    # longer provides; what matters is that it is out of service (state
+    # `unavailable`) or gone entirely.
+    retired = _wait_for(
+        lambda: _lab_entity(hass_base_url, hass_bearer_token, entry_id, marker_key),
+        lambda value: (
+            value["registry"] is None
+            or value["state"] is None
+            or value["state"].get("state") == "unavailable"
+        ),
+        "the lab sensor entity to be gone/unavailable after removing the marker",
+    )
+    assert retired["state"] is None or retired["state"]["state"] == "unavailable"
