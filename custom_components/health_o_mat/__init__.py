@@ -977,7 +977,9 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {
                 vol.Optional("person"): str,
-                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+                vol.Optional("dataset", default="all"): vol.In(
+                    ["drinks", "blood_pressure", "lab_values", "all"]
+                ),
             }
         ),
         service_func=export_csv,
@@ -989,7 +991,9 @@ def _register_services(hass: HomeAssistant) -> None:
             {
                 vol.Required("filename"): str,
                 vol.Optional("person"): str,
-                vol.Optional("dataset", default="all"): vol.In(["drinks", "blood_pressure", "all"]),
+                vol.Optional("dataset", default="all"): vol.In(
+                    ["drinks", "blood_pressure", "lab_values", "all"]
+                ),
             }
         ),
         service_func=import_csv,

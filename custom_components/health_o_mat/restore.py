@@ -30,6 +30,7 @@ import copy
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -43,7 +44,12 @@ from .backup import (
     async_write_backup_document,
     build_backup_document,
 )
-from .const import DEFAULT_AUDIT_LIMIT, DOMAIN, STORE_SCHEMA_VERSION
+from .const import (
+    DEFAULT_AUDIT_LIMIT,
+    DOMAIN,
+    OPTION_LAB_CUSTOM_MARKERS,
+    STORE_SCHEMA_VERSION,
+)
 from .entity import signal_refresh
 from .importer import safe_restore_path
 from .store import (
@@ -58,11 +64,12 @@ from .store import (
 _LOGGER = logging.getLogger(__name__)
 
 RESTORE_MODES: tuple[str, ...] = ("merge", "replace")
-DATASETS: tuple[str, ...] = ("drinks", "blood_pressure", "wellbeing")
+DATASETS: tuple[str, ...] = ("drinks", "blood_pressure", "wellbeing", "lab_values")
 DATASET_LIST: dict[str, str] = {
     "drinks": "drinks",
     "blood_pressure": "readings",
     "wellbeing": "wellbeing_entries",
+    "lab_values": "lab_readings",
 }
 _DATASET_ALIASES: dict[str, str] = {
     "drink": "drinks",
@@ -72,6 +79,9 @@ _DATASET_ALIASES: dict[str, str] = {
     "blood_pressure": "blood_pressure",
     "wellbeing": "wellbeing",
     "wellbeing_entries": "wellbeing",
+    "lab_values": "lab_values",
+    "lab_value": "lab_values",
+    "lab_readings": "lab_values",
 }
 REPLACE_CONFIRM = "REPLACE"
 ACTION_DETAIL_LIMIT = 1000
@@ -204,6 +214,7 @@ class RestorePlan:
     target_archive_entries: dict[str, dict] | None = field(default=None, repr=False)
     audit_imports: dict[str, list[dict]] = field(default_factory=dict, repr=False)
     affected_targets: list[str] = field(default_factory=list, repr=False)
+    lab_custom_markers_by_target: dict[str, list[dict]] = field(default_factory=dict, repr=False)
     archive_changed: bool = False
     has_changes: bool = False
 
@@ -310,6 +321,12 @@ def _dedup_key(dataset: str, record: dict) -> tuple | None:
             return (ts, int(record.get("sys", 0)), int(record.get("dia", 0)))
         if dataset == "wellbeing":
             return (ts, str(record.get("key") or ""))
+        if dataset == "lab_values":
+            value = record.get("value")
+            if isinstance(value, (dict, list, set)):
+                # Nicht hashbar → ungültiger Record (Fehlerpfad statt Absturz).
+                return None
+            return (ts, str(record.get("marker_key") or ""), value)
     except (TypeError, ValueError):
         return None
     return None
@@ -330,6 +347,42 @@ def _normalize_record(record: dict) -> dict:
 
 def _is_active(record: dict) -> bool:
     return isinstance(record, dict) and not record.get("voided_at")
+
+
+def merge_lab_custom_markers(current: list[dict], incoming: list[dict]) -> list[dict]:
+    """Custom-Marker-Definitionen beim Restore mergen (REQ-HOM-122, §8).
+
+    Merge-Semantik wie der Rest des Restore (Duplikate überspringen): ein
+    bereits vorhandener `key` gewinnt — ein Backup überschreibt NIE eine
+    lokal schon existierende Custom-Marker-Definition, es ergänzt nur fehlende.
+    """
+    from .logic import normalize_lab_custom_markers
+
+    normalized_current = normalize_lab_custom_markers(current)
+    existing_keys = {marker["key"] for marker in normalized_current}
+    merged = list(normalized_current)
+    for marker in normalize_lab_custom_markers(incoming):
+        if marker["key"] not in existing_keys:
+            merged.append(marker)
+            existing_keys.add(marker["key"])
+    return merged
+
+
+def unknown_lab_marker_keys(records: list[dict], custom_markers: list[dict]) -> list[str]:
+    """`marker_key`s ohne Treffer in Katalog ODER den (gemergten) Custom-Markern.
+
+    Läuft NACH dem Custom-Marker-Merge (`merge_lab_custom_markers`) — ein
+    Restore auf eine leere/andere Installation bringt die Marker-Definition
+    gleich mit, sonst würde dieselbe Prüfung grundlos fehlschlagen (§8 der Spec).
+    """
+    from .logic import resolve_lab_marker
+
+    unknown: list[str] = []
+    for record in records:
+        marker_key = record.get("marker_key")
+        if resolve_lab_marker(marker_key, custom_markers) is None:
+            unknown.append(str(marker_key))
+    return unknown
 
 
 def _ml(record: dict) -> int:
@@ -530,6 +583,22 @@ def _resolve_persons(
     return resolved, public, errors, warnings
 
 
+def _target_lab_custom_markers(
+    plan: RestorePlan,
+    target: str,
+    incoming: Any,
+    current_lab_custom_markers: dict[str, list[dict]] | None,
+) -> list[dict]:
+    """Custom-Marker eines Ziels inkrementell mergen (many-to-one-fest)."""
+    merged = plan.lab_custom_markers_by_target.get(target)
+    if merged is None:
+        current = (current_lab_custom_markers or {}).get(target)
+        merged = merge_lab_custom_markers(current if isinstance(current, list) else [], [])
+    merged = merge_lab_custom_markers(merged, incoming if isinstance(incoming, list) else [])
+    plan.lab_custom_markers_by_target[target] = merged
+    return merged
+
+
 def plan_restore(
     backup: dict,
     current_entries: dict,
@@ -542,8 +611,16 @@ def plan_restore(
     person_map: dict | None = None,
     restore_audit: bool = False,
     current_archive_entries: dict | None = None,
+    lab_options: dict[str, dict] | None = None,
+    current_lab_custom_markers: dict[str, list[dict]] | None = None,
 ) -> RestorePlan:
-    """Plant einen Restore HA-frei (keine Schreibzugriffe)."""
+    """Plant einen Restore HA-frei (keine Schreibzugriffe).
+
+    ``lab_options`` ist die ``lab_options``-Sektion des Backups (Quell-Entry-ID
+    → Optionen); ``current_lab_custom_markers`` liefert die aktuell im Ziel
+    konfigurierten Marker (Ziel-Entry-ID → Liste), da diese Planung selbst
+    keinen ``hass``-Zugriff hat.
+    """
     normalized = parse_backup_document(backup)
     normalized_mode = str(mode or "merge").strip().lower()
     if normalized_mode not in RESTORE_MODES:
@@ -638,8 +715,34 @@ def plan_restore(
                     counts["errors"] += 1
                     plan.warnings.append(f"{dataset}: ungültiger Eintrag in Quelle {source_id}")
 
+            if dataset == "lab_values":
+                source_options = (lab_options or {}).get(source_id)
+                incoming_markers = (
+                    source_options.get(OPTION_LAB_CUSTOM_MARKERS, [])
+                    if isinstance(source_options, Mapping)
+                    else []
+                )
+                merged_markers = _target_lab_custom_markers(
+                    plan, target, incoming_markers, current_lab_custom_markers
+                )
+                unknown = set(unknown_lab_marker_keys(records, merged_markers))
+                if unknown:
+                    plan.warnings.append(
+                        f"lab_values: unbekannter Marker in Quelle {source_id}: "
+                        + ", ".join(sorted(unknown))
+                    )
+                    kept = [
+                        record
+                        for record in records
+                        if str(record.get("marker_key") or "") not in unknown
+                    ]
+                    counts["errors"] += len(records) - len(kept)
+                    records = kept
+
             archive_records: list[dict] = []
-            if dataset != "wellbeing" and plan.target_archive_entries is not None:
+            if dataset not in ("wellbeing", "lab_values") and (
+                plan.target_archive_entries is not None
+            ):
                 archive_source_entry = (normalized.get("archive_entries") or {}).get(
                     source_id
                 ) or {}
@@ -695,8 +798,8 @@ def plan_restore(
                 if dataset == "wellbeing":
                     wellbeing_touched.add(target)
 
-                # Archiv nur für Getränke/Messungen; Wellbeing hat kein Archiv.
-                if dataset == "wellbeing" or plan.target_archive_entries is None:
+                # Archiv nur für Getränke/Messungen; Wellbeing/Labor haben kein Archiv.
+                if dataset in ("wellbeing", "lab_values") or plan.target_archive_entries is None:
                     continue
                 archive_entry = plan.target_archive_entries.setdefault(
                     target, {"drinks": [], "readings": []}
@@ -732,7 +835,9 @@ def plan_restore(
                 sources = replace_sources.setdefault((target, dataset), [])
                 if source_id not in sources:
                     sources.append(source_id)
-                if dataset != "wellbeing" and plan.target_archive_entries is not None:
+                if dataset not in ("wellbeing", "lab_values") and (
+                    plan.target_archive_entries is not None
+                ):
                     replace_archive.setdefault((target, dataset), []).extend(archive_records)
 
     if normalized_mode == "replace":
@@ -892,6 +997,38 @@ def _audit_limit_for(hass: HomeAssistant, entry_id: str) -> int:
     return logic.audit_limit_from_options(options)
 
 
+def _current_lab_custom_markers(hass: HomeAssistant) -> dict[str, list[dict]]:
+    """Aktuell konfigurierte Custom-Marker je Entry (Merge-Basis für den Plan)."""
+    current: dict[str, list[dict]] = {}
+    try:
+        entries = list(hass.config_entries.async_entries(DOMAIN))
+    except Exception:  # noqa: BLE001 - Options-Lesen ist nie restore-kritisch
+        return current
+    for entry in entries:
+        options = getattr(entry, "options", None)
+        if isinstance(options, Mapping):
+            current[str(entry.entry_id)] = options.get(OPTION_LAB_CUSTOM_MARKERS, [])
+    return current
+
+
+def _apply_lab_custom_marker_options(hass: HomeAssistant, plan: RestorePlan) -> None:
+    """Gemergte Custom-Marker nach erfolgreichem Store-Save in die Options schreiben."""
+    for target_entry_id, merged_markers in plan.lab_custom_markers_by_target.items():
+        if not merged_markers:
+            continue
+        target_entry = hass.config_entries.async_get_entry(target_entry_id)
+        if target_entry is None:
+            continue
+        options = getattr(target_entry, "options", None)
+        target_options = dict(options) if isinstance(options, Mapping) else {}
+        if target_options.get(OPTION_LAB_CUSTOM_MARKERS) == merged_markers:
+            # Alter Bestand ohne ``lab_options``: nichts zu tun, keine unnötige
+            # Options-Aktualisierung (und damit kein Update-Listener-Feuer).
+            continue
+        target_options[OPTION_LAB_CUSTOM_MARKERS] = merged_markers
+        hass.config_entries.async_update_entry(target_entry, options=target_options)
+
+
 async def apply_restore(
     hass: HomeAssistant,
     store: HealthOMatStore,
@@ -984,6 +1121,10 @@ async def apply_restore(
                 _LOGGER.exception("Health-O-Mat: Archiv-Rollback fehlgeschlagen")
         raise RestoreError(f"Restore fehlgeschlagen, keine Änderung übernommen: {err}") from err
 
+    # Options erst NACH dem erfolgreichen Store-Save schreiben: kein
+    # halb-angewandter Restore, wenn der Save scheitert/rollt zurück.
+    _apply_lab_custom_marker_options(hass, plan)
+
     for target in plan.affected_targets:
         try:
             signal_refresh(hass, target)
@@ -1037,6 +1178,11 @@ async def async_restore_from_file(
         raise RestoreError(f"Backup-Datei ist kein gültiges JSON: {err.msg}") from err
 
     document = parse_backup_document(payload)
+    # Alte Backups (Schema/Version < 3) haben keine ``lab_options`` — additiv
+    # und optional: fehlende/kaputte Sektion wird als „keine Marker“ gelesen.
+    lab_options = document.get("lab_options")
+    if not isinstance(lab_options, dict):
+        lab_options = {}
 
     mode = str(data.get("mode") or "merge").strip().lower()
     if mode not in RESTORE_MODES:
@@ -1065,6 +1211,8 @@ async def async_restore_from_file(
         current_archive_entries=(
             archive_store.raw_entries_copy() if archive_store is not None else None
         ),
+        lab_options=lab_options,
+        current_lab_custom_markers=_current_lab_custom_markers(hass),
     )
     if plan.errors:
         raise RestoreError("; ".join(plan.errors))

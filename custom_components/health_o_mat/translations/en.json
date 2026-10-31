@@ -504,7 +504,13 @@
     },
     "export_csv": {
       "name": "CSV export",
-      "description": "Exports data as Excel-friendly CSV to /config/health_o_mat_export/. Administrators only."
+      "description": "Exports data as Excel-friendly CSV to /config/health_o_mat_export/. Administrators only.",
+      "fields": {
+        "dataset": {
+          "name": "Dataset",
+          "description": "Which data to export: drinks, blood_pressure, lab_values or all."
+        }
+      }
     },
     "import_csv": {
       "name": "CSV import",
@@ -520,7 +526,7 @@
         },
         "dataset": {
           "name": "Dataset",
-          "description": "Which data to import: drinks, blood_pressure or all (auto-detect)."
+          "description": "Which data to import: drinks, blood_pressure, lab_values or all (auto-detect)."
         }
       }
     },
@@ -651,6 +657,7 @@
     "ui_common_kind_wellbeing": "Wellbeing",
     "ui_common_dataset_drinks": "Drinks",
     "ui_common_dataset_blood_pressure": "Blood pressure",
+    "ui_common_dataset_lab_values": "Lab values",
     "ui_common_dataset_wellbeing": "Wellbeing",
     "ui_common_dataset_all": "All",
     "ui_common_mode_merge": "Merge",

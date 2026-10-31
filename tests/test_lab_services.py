@@ -14,6 +14,7 @@ import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import voluptuous as vol
 from homeassistant.exceptions import ServiceValidationError
 
 _COMPONENT_DIR = os.path.abspath(
@@ -62,11 +63,12 @@ def _make_call(data):
     return call
 
 
-def _wire_services(hass, store, entry_id="e1", options=None):
+def _wire_services_and_schemas(hass, store, entry_id="e1", options=None):
     """`_register_services` auf einem MagicMock-Hass ausführen.
 
-    Gibt `{service_name: handler}` zurück; die Schema-Validierung ist nicht
-    Teil dieser Suite (der Handler wird direkt aufgerufen).
+    Gibt `({service_name: handler}, {service_name: schema})` zurück. Die
+    Handler-Tests rufen den Handler direkt auf; die Schema-Tests validieren
+    gegen das tatsächlich registrierte voluptuous-Schema.
     """
     hass.data = {
         hass_init.DOMAIN: {
@@ -82,14 +84,22 @@ def _wire_services(hass, store, entry_id="e1", options=None):
     hass.config_entries.async_entries.return_value = [entry]
     hass.config_entries.async_get_entry.return_value = entry
     registered = {}
+    schemas = {}
 
     def _register(domain, name, schema=None, service_func=None):
         registered[name] = service_func
+        schemas[name] = schema
 
     hass.services = MagicMock()
     hass.services.has_service.return_value = False
     hass.services.async_register.side_effect = _register
     hass_init._register_services(hass)
+    return registered, schemas
+
+
+def _wire_services(hass, store, entry_id="e1", options=None):
+    """Nur die Handler — Kurzform für die bestehenden Handler-Tests."""
+    registered, _schemas = _wire_services_and_schemas(hass, store, entry_id, options)
     return registered
 
 
@@ -248,3 +258,41 @@ def test_req_hom_122_remove_last_lab_value_no_active_value_raises():
 
     with pytest.raises(ServiceValidationError):
         _run(registered["remove_last_lab_value"](call))
+
+
+# ---------------------------------------------------------------------------
+# export_csv / import_csv: `lab_values` im Service-Schema (REQ-HOM-122)
+# ---------------------------------------------------------------------------
+
+_CSV_SERVICES = ("export_csv", "import_csv")
+_CSV_DATASETS = ("drinks", "blood_pressure", "lab_values", "all")
+
+
+@pytest.mark.parametrize("service", _CSV_SERVICES)
+@pytest.mark.parametrize("dataset", _CSV_DATASETS)
+def test_req_hom_122_csv_services_schema_accepts_dataset(service, dataset):
+    """[REQ-HOM-122] Beide CSV-Services akzeptieren `lab_values` (und die alten Werte)."""
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+    payload = {"dataset": dataset}
+    if service == "import_csv":
+        payload["filename"] = "health_o_mat_lab_values_caro.csv"
+
+    validated = schemas[service](payload)
+
+    assert validated["dataset"] == dataset
+
+
+@pytest.mark.parametrize("service", _CSV_SERVICES)
+def test_req_hom_122_csv_services_schema_rejects_unknown_dataset(service):
+    """[REQ-HOM-122] Unbekannte Datensätze bleiben abgewiesen (lab_values ist erlaubt)."""
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+    payload = {"dataset": "pdf"}
+    if service == "import_csv":
+        payload["filename"] = "x.csv"
+
+    with pytest.raises(vol.Invalid) as exc:
+        schemas[service](payload)
+
+    assert "lab_values" in str(exc.value)

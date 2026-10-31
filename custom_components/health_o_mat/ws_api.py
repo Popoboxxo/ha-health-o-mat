@@ -208,7 +208,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
 )
 
 # Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
-EXPORT_DATASETS: tuple[str, ...] = ("drinks", "blood_pressure", "all")
+EXPORT_DATASETS: tuple[str, ...] = ("drinks", "blood_pressure", "lab_values", "all")
 DEFAULT_EXPORT_DATASET = "all"
 
 DEFAULT_QUICK_DRINK_ICON = "mdi:cup-water"

@@ -2438,6 +2438,36 @@ def test_export_csv_unknown_dataset_sends_error():
     hass.services.async_call.assert_not_called()
 
 
+def test_req_hom_122_export_datasets_include_lab_values():
+    """[REQ-HOM-122] Der WS-Export kennt den `lab_values`-Datensatz."""
+    assert "lab_values" in ws_api.EXPORT_DATASETS
+    assert set(ws_api.EXPORT_DATASETS) == {"drinks", "blood_pressure", "lab_values", "all"}
+
+
+def test_req_hom_122_export_csv_forwards_lab_values_dataset():
+    """[REQ-HOM-122] `dataset=lab_values` wird unverändert an den Service gereicht."""
+    entry = _entry("e1", person="caro", display="Caro (Privat)")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1", dataset="lab_values"),
+        )
+    )
+
+    assert connection.errors == []
+    hass.services.async_call.assert_awaited_once_with(
+        ws_api.DOMAIN,
+        "export_csv",
+        {"dataset": "lab_values", "person": "Caro (Privat)"},
+        blocking=True,
+    )
+    assert connection.results[0][1]["dataset"] == "lab_values"
+
+
 def test_export_csv_unknown_entry_sends_error():
     """Unbekannte entry_id → `not_found`, kein Service-Aufruf."""
     entry = _entry("e1")

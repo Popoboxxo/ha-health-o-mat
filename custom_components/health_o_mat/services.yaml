@@ -186,11 +186,13 @@ export_csv:
               value: "drinks"
             - label: Blutdruck
               value: "blood_pressure"
+            - label: Laborwerte
+              value: "lab_values"
 
 import_csv:
   name: CSV-Import
   description: >-
-    Importiert Getränke- oder Blutdruckdaten aus /config/health_o_mat_import/
+    Importiert Getränke-, Blutdruck- oder Laborwertdaten aus /config/health_o_mat_import/
     (nur dieses Verzeichnis, niemals /config/www).
   fields:
     filename:
@@ -215,6 +217,8 @@ import_csv:
               value: "drinks"
             - label: Blutdruck
               value: "blood_pressure"
+            - label: Laborwerte
+              value: "lab_values"
 
 backup:
   name: Backup

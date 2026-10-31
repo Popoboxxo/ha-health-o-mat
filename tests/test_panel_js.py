@@ -3294,3 +3294,17 @@ def test_req_hom_122_panel_views_tile_head_badge_mentions_lab():
     assert "ui_panel_bp_threshold_title" in tile
     assert "warn || labWarn" in tile
     assert "warnTitleParts.join" in tile
+
+
+def test_req_hom_122_panel_base_export_datasets_include_lab_values():
+    """[REQ-HOM-122] Das Export-Auswahlfeld spiegelt das Service-Schema inkl. `lab_values`."""
+    source = _panel_base_source()
+
+    block = re.search(r"export const EXPORT_DATASETS = \[(.*?)\];", source, re.S)
+    assert block is not None, "EXPORT_DATASETS fehlt im Panel-Basis-Modul"
+    entries = block.group(1)
+    assert re.search(r'value:\s*"lab_values"', entries), "lab_values fehlt in EXPORT_DATASETS"
+    assert "ui_common_dataset_lab_values" in entries, "eigener Label-Key fuer lab_values fehlt"
+    # Bestehende Eintraege bleiben unveraendert (nur additiv erweitert).
+    for value in ("all", "drinks", "blood_pressure"):
+        assert re.search(rf'value:\s*"{value}"', entries), f"{value} fehlt in EXPORT_DATASETS"

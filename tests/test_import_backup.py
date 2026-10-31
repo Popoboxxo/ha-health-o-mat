@@ -390,7 +390,7 @@ def test_build_backup_document_shape():
     document = backup.build_backup_document(raw, datetime(2026, 10, 14, 12, 0, 0))
 
     assert document["format"] == backup.BACKUP_FORMAT
-    assert document["version"] == backup.BACKUP_VERSION == 2
+    assert document["version"] == backup.BACKUP_VERSION == 3
     assert document["schema"] == 4
     assert document["created"] == "2026-10-14T12:00:00"
     assert document["persons"] == {"e1": "Max"}
@@ -399,6 +399,7 @@ def test_build_backup_document_shape():
             "drinks": {"total": 1, "active": 1, "voided": 0},
             "readings": {"total": 0, "active": 0, "voided": 0},
             "wellbeing": {"total": 0, "active": 0, "voided": 0},
+            "lab_readings": {"total": 0, "active": 0, "voided": 0},
         }
     }
     assert document["entries"] == raw["entries"]
@@ -430,6 +431,7 @@ def test_build_backup_document_counts_voided_separately():
         "drinks": {"total": 2, "active": 1, "voided": 1},
         "readings": {"total": 2, "active": 1, "voided": 1},
         "wellbeing": {"total": 2, "active": 1, "voided": 1},
+        "lab_readings": {"total": 0, "active": 0, "voided": 0},
     }
 
 
@@ -491,8 +493,9 @@ def test_async_backup_writes_all_persons(tmp_path, monkeypatch):
 
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     assert document["format"] == backup.BACKUP_FORMAT
-    assert document["version"] == 2
+    assert document["version"] == 3
     assert document["schema"] == const_module.STORE_SCHEMA_VERSION
+    assert document["lab_options"] == {}
     assert set(document["entries"]) == {"e1", "e2"}
     assert document["persons"] == {"e1": "Max", "e2": "Caro"}
     assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 1, "voided": 0}
@@ -932,3 +935,432 @@ def test_safe_restore_path_rejects_symlink(tmp_path):
 
     with pytest.raises(ValueError):
         importer.safe_restore_path(str(tmp_path), "link.json")
+
+
+# ============================================================================
+# REQ-HOM-122 — Laborwerte + Lab-Optionen im Backup-Dokument (v3)
+# ============================================================================
+
+
+def test_req_hom_122_backup_document_includes_lab_readings_counts():
+    """[REQ-HOM-122] counts weist Laborwerte wie die übrigen Datensätze aus."""
+    raw_data = {
+        "schema": 5,
+        "entries": {
+            "e1": {
+                "person": "Caro",
+                "drinks": [],
+                "readings": [],
+                "wellbeing_entries": [],
+                "lab_readings": [
+                    {"marker_key": "alt", "value": 32.0, "voided_at": None},
+                    {"marker_key": "ast", "value": 20.0, "voided_at": "2026-10-30T00:00:00"},
+                ],
+            }
+        },
+    }
+
+    doc = backup.build_backup_document(raw_data, datetime(2026, 10, 31))
+
+    assert doc["counts"]["e1"]["lab_readings"] == {"total": 2, "active": 1, "voided": 1}
+    # Die übrigen Zähler bleiben unverändert (additive Erweiterung).
+    assert doc["counts"]["e1"]["drinks"] == {"total": 0, "active": 0, "voided": 0}
+
+
+def test_req_hom_122_backup_document_includes_lab_options():
+    """[REQ-HOM-122] Lab-Optionen (aus entry.options) landen top-level im Dokument."""
+    raw_data = {"schema": 5, "entries": {"e1": {"drinks": [], "readings": []}}}
+    lab_options = {
+        "e1": {
+            "lab_custom_markers": [
+                {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+            ],
+            "lab_ref_overrides": {"alt": {"ref_min": 5}},
+            "lab_hidden_categories": ["thyroid"],
+        }
+    }
+
+    doc = backup.build_backup_document(raw_data, datetime(2026, 10, 31), lab_options=lab_options)
+
+    assert doc["lab_options"] == lab_options
+
+
+def test_req_hom_122_backup_document_lab_options_default_empty():
+    """[REQ-HOM-122] Ohne lab_options bleibt das Feld leer (abwärtskompatibel)."""
+    doc = backup.build_backup_document({"schema": 5, "entries": {}}, datetime(2026, 10, 31))
+
+    assert doc["lab_options"] == {}
+
+
+def test_req_hom_122_backup_document_lab_options_is_deep_copy():
+    """[REQ-HOM-122] lab_options wird tief kopiert (kein Store-/Options-Alias)."""
+    lab_options = {"e1": {"lab_custom_markers": [{"key": "vitamin_d"}]}}
+
+    doc = backup.build_backup_document(
+        {"schema": 5, "entries": {}}, datetime(2026, 10, 31), lab_options=lab_options
+    )
+    doc["lab_options"]["e1"]["lab_custom_markers"][0]["key"] = "changed"
+
+    assert lab_options["e1"]["lab_custom_markers"][0]["key"] == "vitamin_d"
+
+
+def test_req_hom_122_backup_version_bumped_to_3():
+    """[REQ-HOM-122] Backup-Format ist Version 3."""
+    assert backup.BACKUP_VERSION == 3
+
+
+def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, monkeypatch):
+    """[REQ-HOM-122] async_backup liest die Lab-Optionen je Config-Entry."""
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    configured = MagicMock()
+    configured.entry_id = "e1"
+    configured.options = {
+        const_module.OPTION_LAB_CUSTOM_MARKERS: [{"key": "vitamin_d"}],
+        const_module.OPTION_LAB_REF_OVERRIDES: {"alt": {"ref_min": 5}},
+        const_module.OPTION_LAB_HIDDEN_CATEGORIES: ["thyroid"],
+    }
+    bare = MagicMock()
+    bare.entry_id = "e2"
+    bare.options = {}
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[configured, bare])
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document["lab_options"] == {
+        "e1": {
+            "lab_custom_markers": [{"key": "vitamin_d"}],
+            "lab_ref_overrides": {"alt": {"ref_min": 5}},
+            "lab_hidden_categories": ["thyroid"],
+        },
+        "e2": {
+            "lab_custom_markers": [],
+            "lab_ref_overrides": {},
+            "lab_hidden_categories": [],
+        },
+    }
+
+
+# ============================================================================
+# REQ-HOM-122 — Labwerte im CSV-Export (Task 24)
+# ============================================================================
+
+_LAB_CSV_HEADER = (
+    "zeitstempel;person;marker;kategorie;wert;einheit;"
+    "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz"
+)
+
+
+def test_req_hom_122_export_csv_writes_lab_values_file(tmp_path):
+    """[REQ-HOM-122] dataset=lab_values schreibt eine Laborwert-CSV."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(
+        store.add_lab_reading(
+            "e1",
+            "2026-10-31T09:00:00+01:00",
+            "alt",
+            32.0,
+            "U/L",
+            32.0,
+            "U/L",
+            report_ref="https://example.com/x",
+        )
+    )
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    paths = _run(
+        exporter.async_export_csv(hass, store, _call({"person": "", "dataset": "lab_values"}))
+    )
+
+    written = list(tmp_path.glob("*lab*"))
+    assert written, "no lab_values CSV written"
+    content = written[0].read_text(encoding="utf-8-sig")
+    assert content.splitlines()[0] == _LAB_CSV_HEADER
+    assert "alt" in content
+    assert "liver" in content
+    assert "32.0" in content
+    assert "U/L" in content
+    assert "https://example.com/x" in content
+    assert paths == str(written[0])
+
+
+def test_req_hom_122_export_csv_lab_values_only_when_selected(tmp_path):
+    """[REQ-HOM-122] Andere Datensätze schreiben keine Laborwert-CSV."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_lab_reading("e1", "2026-10-31T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "drinks"})))
+
+    assert not list(tmp_path.glob("*lab*"))
+
+
+def test_req_hom_122_export_csv_all_includes_lab_values_file(tmp_path):
+    """[REQ-HOM-122] dataset=all exportiert zusätzlich die Laborwerte."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_lab_reading("e1", "2026-10-31T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "all"})))
+
+    lab_files = list(tmp_path.glob("*lab*"))
+    assert len(lab_files) == 1
+    assert lab_files[0].read_text(encoding="utf-8-sig").splitlines()[0] == _LAB_CSV_HEADER
+
+
+def test_req_hom_122_export_csv_lab_values_uses_custom_marker_category(tmp_path):
+    """[REQ-HOM-122] Custom-Marker-Kategorien kommen aus den Entry-Options."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(
+        store.add_lab_reading(
+            "e1", "2026-10-31T09:00:00", "vitamin_d", 30.0, "ng/mL", 30.0, "ng/mL"
+        )
+    )
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    custom = {
+        "e1": [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    }
+
+    _run(
+        exporter.async_export_csv(
+            hass,
+            store,
+            _call({"dataset": "lab_values"}),
+            lab_custom_markers_by_entry=custom,
+        )
+    )
+
+    content = next(tmp_path.glob("*lab*")).read_text(encoding="utf-8-sig")
+    assert "vitamin_d;other;30.0;ng/mL" in content
+
+
+def test_req_hom_122_export_csv_lab_values_reads_custom_markers_from_entries(tmp_path):
+    """[REQ-HOM-122] Ohne expliziten Parameter liest der Export entry.options."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(
+        store.add_lab_reading(
+            "e1", "2026-10-31T09:00:00", "vitamin_d", 30.0, "ng/mL", 30.0, "ng/mL"
+        )
+    )
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {
+        const_module.OPTION_LAB_CUSTOM_MARKERS: [
+            {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+        ]
+    }
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[entry])
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "lab_values"})))
+
+    content = next(tmp_path.glob("*lab*")).read_text(encoding="utf-8-sig")
+    assert "vitamin_d;other;30.0;ng/mL" in content
+
+
+# ============================================================================
+# REQ-HOM-122 — Labwerte im CSV-Import (Task 25)
+# ============================================================================
+
+_LAB_CSV_HEADER_LINE = (
+    "zeitstempel;person;marker;kategorie;wert;einheit;"
+    "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz"
+)
+
+
+def test_req_hom_122_parse_lab_row_valid():
+    """[REQ-HOM-122] Vollständige Laborwert-Zeile → Record-Dict."""
+    record = importer._parse_lab_row(
+        ["2026-10-31T09:00:00", "Caro", "alt", "liver", "32.0", "U/L", "32.0", "U/L", ""]
+    )
+
+    assert record["ts"] == "2026-10-31T09:00:00"
+    assert record["marker_raw"] == "alt"
+    assert record["value"] == 32.0
+    assert record["unit"] == "U/L"
+    assert record["reported_value"] == 32.0
+    assert record["reported_unit"] == "U/L"
+    assert record["report_ref"] is None
+
+
+def test_req_hom_122_parse_lab_row_keeps_report_ref():
+    """[REQ-HOM-122] Berichts-Referenz bleibt erhalten."""
+    record = importer._parse_lab_row(
+        ["2026-10-31T09:00:00", "Caro", "alt", "liver", "32.0", "U/L", "32.0", "U/L", "https://x"]
+    )
+
+    assert record["report_ref"] == "https://x"
+
+
+def test_req_hom_122_parse_lab_row_invalid_timestamp_returns_error_string():
+    """[REQ-HOM-122] Ungültiger Zeitstempel → Fehlermeldung statt Record."""
+    result = importer._parse_lab_row(
+        ["not-a-ts", "Caro", "alt", "liver", "32.0", "U/L", "32.0", "U/L", ""]
+    )
+
+    assert isinstance(result, str)
+
+
+def test_req_hom_122_parse_lab_row_invalid_value_returns_error_string():
+    """[REQ-HOM-122] Unlesbarer Wert → Fehlermeldung statt Record."""
+    result = importer._parse_lab_row(
+        ["2026-10-31T09:00:00", "Caro", "alt", "liver", "not-a-number", "U/L", "", "", ""]
+    )
+
+    assert isinstance(result, str)
+
+
+def test_req_hom_122_plan_import_lab_values_happy_path():
+    """[REQ-HOM-122] Kopfzeile + Datenzeile → ein geplanter Laborwert."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert len(plan.lab_readings) == 1
+    assert plan.lab_readings[0]["marker_key"] == "alt"
+    assert plan.lab_readings[0]["value"] == 32.0
+    assert plan.rejected == 0
+    assert plan.imported == 1
+
+
+def test_req_hom_122_plan_import_lab_values_resolves_alias():
+    """[REQ-HOM-122] Alias (gpt) wird auf den Katalog-Key (alt) aufgelöst."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;gpt;liver;32.0;U/L;32.0;U/L;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.lab_readings[0]["marker_key"] == "alt"
+
+
+def test_req_hom_122_plan_import_lab_values_rejects_unknown_marker_without_auto_create():
+    """[REQ-HOM-122] Unbekannter Marker → rejected, nie automatisch angelegt."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;not_a_marker;other;1;x;1;x;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.lab_readings == []
+    assert plan.rejected == 1
+
+
+def test_req_hom_122_plan_import_lab_values_dedup_by_ts_marker_value():
+    """[REQ-HOM-122] Duplikat über (ts, marker_key, value) → skipped."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+    existing = [{"ts": "2026-10-31T09:00:00", "marker_key": "alt", "value": 32.0}]
+
+    plan = importer.plan_import(
+        text, "lab_values", existing_lab_readings=existing, lab_custom_markers=[]
+    )
+
+    assert plan.lab_readings == []
+    assert plan.skipped == 1
+
+
+def test_req_hom_122_plan_import_lab_values_autodetect_header_in_all_mode():
+    """[REQ-HOM-122] dataset=all erkennt die Laborwert-Kopfzeile."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+
+    plan = importer.plan_import(text, "all", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert len(plan.lab_readings) == 1
+    assert plan.rejected == 0
+
+
+def test_req_hom_122_plan_import_lab_values_resolves_custom_marker():
+    """[REQ-HOM-122] Custom-Marker aus den Options werden aufgelöst."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;vitamin_d;other;30;ng/mL;30;ng/mL;\n"
+    custom = [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+
+    plan = importer.plan_import(
+        text, "lab_values", existing_lab_readings=[], lab_custom_markers=custom
+    )
+
+    assert plan.lab_readings[0]["marker_key"] == "vitamin_d"
+
+
+def test_req_hom_122_async_import_csv_writes_lab_readings(tmp_path):
+    """[REQ-HOM-122] Service legt Laborwerte über den Store an."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 1
+    assert result["rejected"] == 0
+    labs = store.entry("e1")["lab_readings"]
+    assert len(labs) == 1
+    assert labs[0]["marker_key"] == "alt"
+    assert labs[0]["value"] == 32.0
+    assert labs[0]["unit"] == "U/L"
+    assert labs[0]["reported_value"] == 32.0
+    assert labs[0]["reported_unit"] == "U/L"
+    assert labs[0]["report_ref"] is None
+    assert labs[0]["voided_at"] is None
+
+
+def test_req_hom_122_async_import_csv_uses_entry_lab_custom_markers(tmp_path):
+    """[REQ-HOM-122] Import liest Custom-Marker aus den Entry-Options."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;vitamin_d;other;30;ng/mL;30;ng/mL;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {
+        const_module.OPTION_LAB_CUSTOM_MARKERS: [
+            {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+        ]
+    }
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[entry])
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 1
+    assert store.entry("e1")["lab_readings"][0]["marker_key"] == "vitamin_d"

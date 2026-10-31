@@ -258,6 +258,11 @@ export const EXPORT_DATASETS = [
     label: "Blutdruck",
     labelKey: "ui_common_dataset_blood_pressure",
   },
+  {
+    value: "lab_values",
+    label: "Laborwerte",
+    labelKey: "ui_common_dataset_lab_values",
+  },
 ];
 
 export const RING_RADIUS = 42;
