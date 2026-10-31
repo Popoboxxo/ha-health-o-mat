@@ -972,7 +972,7 @@ def test_invalid_schema_backup_targets_own_storage_key():
     _async_test(store.async_load())
 
     assert hass.config.path.call_args[0] == (".storage", "health_o_mat_archive")
-    assert store.raw_data() == {"schema": 4, "entries": {}}
+    assert store.raw_data() == {"schema": store_module.STORE_SCHEMA_VERSION, "entries": {}}
 
 
 # ============================================================================
@@ -1036,7 +1036,7 @@ def test_store_migration_to_v4_adds_ids_and_void_fields(mock_store_fixture, fixt
 
     _async_test(store.async_load())
 
-    assert store.raw_data()["schema"] == 4
+    assert store.raw_data()["schema"] == store_module.STORE_SCHEMA_VERSION
     e1 = store.entry("e1")
     drink = e1["drinks"][0]
     reading = e1["readings"][0]
@@ -1112,7 +1112,7 @@ def test_store_migration_v4_is_idempotent_and_deterministic(mock_store_fixture):
     second = copy.deepcopy(store.raw_data())
 
     assert first == second
-    assert second["schema"] == 4
+    assert second["schema"] == store_module.STORE_SCHEMA_VERSION
     assert len(second["entries"]["e1"]["wellbeing_entries"]) == 3
     assert len(second["entries"]["e1"]["drinks"]) == 1
 
@@ -1836,3 +1836,152 @@ def test_audit_details_store_metadata_only(mock_store_fixture):
         assert "key" not in event["details"]
         assert "sys" not in event["details"]
         assert "dia" not in event["details"]
+
+
+# ============================================================================
+# Laborwerte (REQ-HOM-122): Schema v5, Schreiben/Lesen
+# ============================================================================
+
+
+def test_req_hom_122_migrate_v4_to_v5_adds_empty_lab_readings():
+    from custom_components.health_o_mat.store import migrate_store_data
+
+    data = {"schema": 4, "entries": {"e1": {"drinks": [], "readings": []}}}
+    migrated = migrate_store_data(data)
+    assert migrated["entries"]["e1"]["lab_readings"] == []
+    assert migrated["schema"] == 5
+
+
+def test_req_hom_122_migrate_v4_to_v5_is_idempotent():
+    from custom_components.health_o_mat.store import migrate_store_data
+
+    data = {"schema": 4, "entries": {"e1": {"drinks": [], "readings": []}}}
+    once = migrate_store_data(data)
+    twice = migrate_store_data(once)
+    assert twice["entries"]["e1"]["lab_readings"] == []
+
+
+def test_req_hom_122_migrate_v4_to_v5_does_not_overwrite_existing_lab_readings():
+    from custom_components.health_o_mat.store import migrate_store_data
+
+    existing = [{"id": "x", "marker_key": "alt", "value": 1}]
+    data = {
+        "schema": 4,
+        "entries": {"e1": {"drinks": [], "readings": [], "lab_readings": existing}},
+    }
+    migrated = migrate_store_data(data)
+    assert migrated["entries"]["e1"]["lab_readings"] == existing
+
+
+def test_req_hom_122_entry_defaults_include_empty_lab_readings(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    entry = store.entry("e1")
+    assert entry["lab_readings"] == []
+
+
+def test_req_hom_122_add_lab_reading_stores_fields(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(
+        store.add_lab_reading(
+            "e1",
+            "2026-10-31T09:00:00+01:00",
+            "alt",
+            32.0,
+            "U/L",
+            32.0,
+            "U/L",
+            report_ref="https://example.com/x",
+        )
+    )
+    readings = store.entry("e1")["lab_readings"]
+    assert len(readings) == 1
+    reading = readings[0]
+    assert reading["marker_key"] == "alt"
+    assert reading["value"] == 32.0
+    assert reading["unit"] == "U/L"
+    assert reading["reported_value"] == 32.0
+    assert reading["reported_unit"] == "U/L"
+    assert reading["report_ref"] == "https://example.com/x"
+    assert reading["voided_at"] is None
+    assert "id" in reading and "created_at" in reading
+
+
+def test_req_hom_122_active_lab_readings_filters_by_marker(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "t1", "alt", 1, "U/L", 1, "U/L"))
+    _async_test(store.add_lab_reading("e1", "t2", "ast", 2, "U/L", 2, "U/L"))
+    assert len(store.active_lab_readings("e1")) == 2
+    assert len(store.active_lab_readings("e1", marker_key="alt")) == 1
+    assert store.active_lab_readings("e1", marker_key="alt")[0]["marker_key"] == "alt"
+
+
+def test_req_hom_122_last_active_lab_reading_returns_latest_for_marker(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "t1", "alt", 1, "U/L", 1, "U/L"))
+    _async_test(store.add_lab_reading("e1", "t2", "alt", 2, "U/L", 2, "U/L"))
+    last = store.last_active_lab_reading("e1", "alt")
+    assert last["value"] == 2
+
+
+def test_req_hom_122_last_active_lab_reading_none_when_no_reading(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    assert store.last_active_lab_reading("e1", "alt") is None
+
+
+# ============================================================================
+# Laborwerte (REQ-HOM-122): Void/Restore/Undo
+# ============================================================================
+
+
+def test_req_hom_122_void_lab_reading_marks_voided(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "t1", "alt", 1, "U/L", 1, "U/L"))
+    reading_id = store.entry("e1")["lab_readings"][0]["id"]
+    changed = _async_test(store.void_lab_reading("e1", reading_id, reason="typo"))
+    assert changed is True
+    reading = store.entry("e1")["lab_readings"][0]
+    assert reading["voided_at"] is not None
+    assert reading["void_reason"] == "typo"
+    assert store.active_lab_readings("e1") == []
+
+
+def test_req_hom_122_void_lab_reading_unknown_id_returns_false(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    changed = _async_test(store.void_lab_reading("e1", "nope"))
+    assert changed is False
+
+
+def test_req_hom_122_restore_lab_reading_clears_void_fields(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "t1", "alt", 1, "U/L", 1, "U/L"))
+    reading_id = store.entry("e1")["lab_readings"][0]["id"]
+    _async_test(store.void_lab_reading("e1", reading_id))
+    changed = _async_test(store.restore_lab_reading("e1", reading_id))
+    assert changed is True
+    assert store.entry("e1")["lab_readings"][0]["voided_at"] is None
+
+
+def test_req_hom_122_remove_last_lab_reading_voids_only_matching_marker(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "t1", "alt", 1, "U/L", 1, "U/L"))
+    _async_test(store.add_lab_reading("e1", "t2", "ast", 2, "U/L", 2, "U/L"))
+    changed = _async_test(store.remove_last_lab_reading("e1", "alt"))
+    assert changed is True
+    assert store.active_lab_readings("e1", marker_key="alt") == []
+    assert len(store.active_lab_readings("e1", marker_key="ast")) == 1
+
+
+def test_req_hom_122_remove_last_lab_reading_no_active_reading_returns_false(mock_store_fixture):
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    changed = _async_test(store.remove_last_lab_reading("e1", "alt"))
+    assert changed is False

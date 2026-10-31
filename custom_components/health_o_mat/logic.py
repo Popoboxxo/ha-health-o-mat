@@ -8,6 +8,7 @@ from __future__ import annotations
 import calendar
 import csv
 import io
+import re
 from collections.abc import Iterable, Mapping
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from typing import Any
@@ -16,6 +17,10 @@ from .const import (
     AUDIT_LIMIT_OPTION,
     CAFFEINE_MG_PER_100ML,
     DEFAULT_AUDIT_LIMIT,
+    LAB_CATEGORIES,
+    LAB_CATEGORY_OTHER,
+    LAB_MARKER_ALIASES,
+    LAB_MARKERS,
     MAX_AUDIT_LIMIT,
     WELLBEING_STATES,
 )
@@ -956,3 +961,211 @@ def normalize_history_kind(kind: Any) -> str | None:
     if not isinstance(kind, str):
         return None
     return _KIND_ALIASES.get(kind.strip().lower())
+
+
+# --- Laborwerte: Marker-Auflösung + Einheiten-Konvertierung (REQ-HOM-122) ---
+
+
+def _slugify_lab_marker_name(name: str) -> str:
+    """Freitext-Marker-Name -> slug (ASCII, Kleinbuchstaben, Unterstriche).
+
+    Einfache, bewusst nicht-internationalisierte Normalisierung (YAGNI) —
+    ausreichend für die Admin-Eingabe eines Custom-Marker-Namens.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    return slug or "marker"
+
+
+def _norm_unit(value: Any) -> str:
+    """Einheiten-Vergleich case-/whitespace-insensitiv (HA-frei)."""
+    return str(value if value is not None else "").strip().lower()
+
+
+def normalize_lab_custom_markers(raw: Any) -> list[dict]:
+    """`entry.options["lab_custom_markers"]` normalisieren (HA-frei, §2.2).
+
+    Jeder Eintrag erhält einen stabilen `key` (slugify aus `name`, bei
+    Kollision mit einem Katalog-Key ODER einem bereits vergebenen Custom-Key
+    dieses Aufrufs mit `_2`/`_3`/... suffixiert — Reihenfolge bleibt stabil).
+    Unbrauchbare Einträge (kein `name`/`unit`) werden übersprungen, kein
+    Absturz bei Teil-Murks aus altem Options-Bestand.
+    """
+    if not isinstance(raw, list):
+        return []
+    used_keys: set[str] = set(LAB_MARKERS.keys())
+    result: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        unit = str(item.get("unit") or "").strip()
+        if not name or not unit:
+            continue
+        base_key = str(item.get("key") or "").strip().lower() or _slugify_lab_marker_name(name)
+        key = base_key
+        suffix = 2
+        while key in used_keys:
+            key = f"{base_key}_{suffix}"
+            suffix += 1
+        used_keys.add(key)
+
+        category = str(item.get("category") or LAB_CATEGORY_OTHER).strip() or LAB_CATEGORY_OTHER
+        entry: dict[str, Any] = {"key": key, "name": name, "category": category, "unit": unit}
+        for bound in ("ref_min", "ref_max"):
+            if item.get(bound) is not None:
+                try:
+                    entry[bound] = float(item[bound])
+                except (TypeError, ValueError):
+                    pass
+        alt_unit = item.get("alt_unit")
+        if (
+            isinstance(alt_unit, dict)
+            and alt_unit.get("unit")
+            and alt_unit.get("factor_to_canonical") is not None
+        ):
+            try:
+                entry["alt_unit"] = {
+                    "unit": str(alt_unit["unit"]).strip(),
+                    "factor_to_canonical": float(alt_unit["factor_to_canonical"]),
+                }
+            except (TypeError, ValueError):
+                pass
+        result.append(entry)
+    return result
+
+
+def effective_lab_markers(custom_markers: Any = None) -> dict[str, dict]:
+    """Katalog- + Custom-Marker zu EINER einheitlichen Lookup-Struktur mergen.
+
+    Jeder Wert trägt `is_custom` — das entscheidet in sensor.py/ws_api.py, ob
+    `translation_key` (Katalog) oder der nutzervergebene `name` (Custom)
+    verwendet wird (§4 der Spec). Custom-Marker können nie einen Katalog-Key
+    überschreiben (normalize_lab_custom_markers garantiert das bereits).
+    """
+    markers: dict[str, dict] = {
+        key: {**definition, "is_custom": False} for key, definition in LAB_MARKERS.items()
+    }
+    for custom in normalize_lab_custom_markers(custom_markers):
+        markers[custom["key"]] = {
+            "category": custom["category"],
+            "name_de": custom["name"],
+            "name_en": custom["name"],
+            "name": custom["name"],
+            "canonical_unit": custom["unit"],
+            "ref_min": custom.get("ref_min"),
+            "ref_max": custom.get("ref_max"),
+            "alt_units": (
+                {custom["alt_unit"]["unit"]: custom["alt_unit"]["factor_to_canonical"]}
+                if custom.get("alt_unit")
+                else {}
+            ),
+            "require_explicit_unit": False,
+            "is_custom": True,
+        }
+    return markers
+
+
+def resolve_lab_marker(raw_key: Any, custom_markers: Any = None) -> tuple[str, dict] | None:
+    """Marker-Schlüssel auflösen: Alias -> Katalog -> Custom (§2.1a/§5.1).
+
+    `None` = kein Treffer in allen drei Schritten (Aufrufer meldet
+    `unknown_marker`, legt NIE automatisch einen Custom-Marker an).
+    """
+    normalized = str(raw_key if raw_key is not None else "").strip().lower()
+    key = LAB_MARKER_ALIASES.get(normalized, normalized)
+    markers = effective_lab_markers(custom_markers)
+    marker = markers.get(key)
+    if marker is None:
+        return None
+    return key, marker
+
+
+def convert_lab_value(marker_def: dict, value: float, unit: str | None) -> tuple[float, str]:
+    """Rohwert + Ursprungseinheit -> (kanonischer Wert, kanonische Einheit).
+
+    Bidirektional (§3 der Spec): `unit` darf die Haupt-Einheit ODER eine
+    bekannte Alt-Einheit sein, beide gelten als gültige Eingabe. Fehlende
+    `unit` fällt auf die kanonische Einheit zurück (Aufrufer prüft vorher
+    `require_explicit_unit`, falls das für diesen Marker verboten ist).
+    Unbekannte Einheit -> `ValueError("unsupported_unit")`, NIE stillschweigend
+    falsch rechnen.
+    """
+    canonical_unit = marker_def["canonical_unit"]
+    if unit is None or _norm_unit(unit) == _norm_unit(canonical_unit):
+        return float(value), canonical_unit
+    alt_units = marker_def.get("alt_units") or {}
+    for alt_unit, factor in alt_units.items():
+        if _norm_unit(alt_unit) == _norm_unit(unit):
+            return round(float(value) * float(factor), 6), canonical_unit
+    raise ValueError("unsupported_unit")
+
+
+# --- Laborwerte: Referenzbereich + In-Range-Prüfung (REQ-HOM-122) ---
+
+
+def resolve_lab_reference(
+    marker_key: str, marker_def: dict, ref_overrides: Any
+) -> tuple[float | None, float | None]:
+    """Referenzbereich auflösen: Override (nur Katalog) > Katalog-Default (§2.3).
+
+    Custom-Marker haben keinen Override-Layer (sie sind schon
+    personenspezifisch) — ein Override-Dict ohne passenden `marker_key` wirkt
+    für sie ohnehin nicht, diese Funktion braucht also keinen Sonderfall.
+    """
+    override = ref_overrides.get(marker_key) if isinstance(ref_overrides, Mapping) else None
+    if isinstance(override, Mapping):
+        return (
+            override.get("ref_min", marker_def.get("ref_min")),
+            override.get("ref_max", marker_def.get("ref_max")),
+        )
+    return marker_def.get("ref_min"), marker_def.get("ref_max")
+
+
+def lab_marker_in_range(
+    value: float | None, ref_min: float | None, ref_max: float | None
+) -> bool | None:
+    """`True`/`False`/`None` (kein Wert ODER kein Referenzbereich hinterlegt).
+
+    Die Integration klassifiziert nicht medizinisch (Vision §4.2) — dies ist
+    eine reine Bereichsprüfung, keine Diagnose.
+    """
+    if value is None or (ref_min is None and ref_max is None):
+        return None
+    if ref_min is not None and value < ref_min:
+        return False
+    if ref_max is not None and value > ref_max:
+        return False
+    return True
+
+
+def normalize_lab_ref_overrides(raw: Any) -> dict[str, dict]:
+    """`entry.options["lab_ref_overrides"]` normalisieren (§2.3, HA-frei).
+
+    Nur bekannte Katalog-Marker-Keys bleiben erhalten (ein gelöschter/
+    umbenannter Marker würde sonst einen verwaisten Override-Eintrag
+    hinterlassen); nur `ref_min`/`ref_max` werden übernommen.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, dict] = {}
+    for marker_key, bounds in raw.items():
+        if marker_key not in LAB_MARKERS or not isinstance(bounds, dict):
+            continue
+        entry: dict[str, float] = {}
+        for bound in ("ref_min", "ref_max"):
+            if bounds.get(bound) is not None:
+                try:
+                    entry[bound] = float(bounds[bound])
+                except (TypeError, ValueError):
+                    continue
+        if entry:
+            result[str(marker_key)] = entry
+    return result
+
+
+def normalize_lab_hidden_categories(raw: Any) -> list[str]:
+    """`entry.options["lab_hidden_categories"]` normalisieren (§2.5, HA-frei)."""
+    if not isinstance(raw, list):
+        return []
+    known = {category["key"] for category in LAB_CATEGORIES}
+    return [str(item) for item in raw if str(item) in known]

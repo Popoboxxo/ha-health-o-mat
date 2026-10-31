@@ -492,7 +492,7 @@ def test_async_backup_writes_all_persons(tmp_path, monkeypatch):
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     assert document["format"] == backup.BACKUP_FORMAT
     assert document["version"] == 2
-    assert document["schema"] == 4
+    assert document["schema"] == const_module.STORE_SCHEMA_VERSION
     assert set(document["entries"]) == {"e1", "e2"}
     assert document["persons"] == {"e1": "Max", "e2": "Caro"}
     assert document["counts"]["e1"]["drinks"] == {"total": 1, "active": 1, "voided": 0}
@@ -757,7 +757,7 @@ def test_async_backup_includes_archive_store(tmp_path, monkeypatch):
     path = _run(backup.async_backup(hass, store, archive))
 
     document = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert document["archive_schema"] == 4
+    assert document["archive_schema"] == const_module.STORE_SCHEMA_VERSION
     assert document["archive_entries"]["e1"]["drinks"][0]["ml"] == 500
 
 
