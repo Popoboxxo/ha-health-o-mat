@@ -1,6 +1,11 @@
 # Test dependencies for ha-health-o-mat
 # Windows-compatible, no fcntl-dependent plugins
 
-pytest>=7.0.0
+# Bounded on both ends: an unbounded `>=7.0.0` let CI resolve to 9.2.0 and
+# broke the suite through a changed MonkeyPatch.setattr undo semantics
+# (pytest #10644, see tests/conftest.py -> homeassistant.util.dt). The lower
+# bound is that 8.4 behaviour the harness is written against; the verified
+# version is 9.2.0. `<10` keeps the next major from landing unannounced.
+pytest>=8.4,<10
 voluptuous>=0.13.0
 pyyaml>=6.0
