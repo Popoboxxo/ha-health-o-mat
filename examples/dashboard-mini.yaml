@@ -34,9 +34,9 @@ cards:
     square: false
     cards:
       - type: button
-        entity: button.health_o_mat_max_glas_wasser
+        entity: button.health_o_mat_max_quick_drink_1
       - type: button
-        entity: button.health_o_mat_max_flasche_wasser
+        entity: button.health_o_mat_max_quick_drink_2
       - type: button
         entity: button.health_o_mat_max_book_custom_amount
       - type: button
