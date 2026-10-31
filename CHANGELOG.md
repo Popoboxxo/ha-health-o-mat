@@ -5,6 +5,65 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.16.2] — 2026-10-31
+
+### Added
+
+- **Batch lab report check-in (REQ-HOM-123):** new `add_lab_report` service and
+  WebSocket command record several lab values of one report in a single
+  operation — one shared timestamp, one optional `report_ref`, all-or-nothing
+  (one invalid row rejects the whole report, empty rows are ignored), tiered
+  limits of 60 rows in the UI and 200 on the server, with row-level structured
+  errors (`{code, params, message}`), duplicate-marker detection and
+  `NaN`/`inf` hardening that also covers the single-value `add_lab_value` path.
+- **Multi-row report dialog (REQ-HOM-123):** both the card and the panel lab
+  tab gained a dialog that adds, edits and removes rows with hybrid filling
+  ("all visible markers" / "recently used markers"), per-row unit dropdowns
+  from `alt_units`, and a single-flight submit.
+- **Batch undo (REQ-HOM-128):** symmetric `remove_lab_report` service and WS
+  command void all active values of one timestamp (optionally narrowed by
+  `report_ref`), with a separate audit entry, a confirmation step in the UI and
+  individual restores via `restore_entry`.
+- **Lab unit conversion column (REQ-HOM-124):** the admin lab section lists the
+  legacy-unit × factor → canonical-unit conversion per marker (including custom
+  markers), formats the factor through `formatNumber` and flags markers that
+  require a unit with an "unit required" badge.
+- **Panel disclaimer toggle (REQ-HOM-125):** the medical note in the panel lab
+  tab is visible by default and can be hidden through the new
+  `lab_hide_panel_disclaimer` option, transported via `panel_data`; an empty
+  state covers the "all categories hidden" case and the card disclaimer is now
+  localised (German/English).
+- **Lab retention (REQ-HOM-129):** new independent `lab_retention_months`
+  option (0–120, default 0 = off, keeps the previous behaviour) that voids lab
+  readings older than the configured window on setup with
+  `void_reason: retention`, without an archive and without touching the
+  drink/blood-pressure retention.
+- **Example labs dashboard (REQ-HOM-126):** `examples/dashboard-labs-card.yaml`
+  shows the labs card in a ready-to-use dashboard, referenced from the README
+  and covered by the dashboard tests.
+- **Voided lab rows in export/import (REQ-HOM-129):** `lab_values.csv` now
+  includes voided rows with `voided_at`/`void_reason`; re-import skips them
+  explicitly, header-based, so older files without these columns keep the
+  positional behaviour.
+
+### Fixed
+
+- **Hybrid report buttons:** the card and panel report buttons now pass the
+  config-entry id and the report dialog stays open after a validation error
+  instead of closing and discarding the entered rows.
+
+### Changed
+
+- Documentation covers the batch extension: the README, the service reference,
+  the options wizard (lab retention) and the admin section now describe the
+  report services, the conversion column, the disclaimer toggle and the voided
+  export rows, and the stated unit test count is 1500.
+- No breaking changes: data model stays at store schema v5, no config-entry
+  migration, no changes to `unique_id`s or entity IDs, and backup/restore
+  compatibility is unchanged (backup options are additive).
+
+[0.16.2]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.16.1...v0.16.2
+
 ## [0.16.1] — 2026-10-31
 
 ### Added
