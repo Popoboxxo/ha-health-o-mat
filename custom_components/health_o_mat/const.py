@@ -497,5 +497,16 @@ OPTION_LAB_CUSTOM_MARKERS = "lab_custom_markers"
 OPTION_LAB_REF_OVERRIDES = "lab_ref_overrides"
 OPTION_LAB_HIDDEN_CATEGORIES = "lab_hidden_categories"
 
+# Labor-Retention (REQ-HOM-129): eigene Option, unabhängig von
+# `retention_months` (Getränke/BD); 0 = aus (Default = bisheriges Verhalten).
+OPTION_LAB_RETENTION_MONTHS = "lab_retention_months"
+
+# Panel-Medizin-Hinweis (REQ-HOM-125): Admin-Schalter, Default False = sichtbar.
+OPTION_LAB_HIDE_PANEL_DISCLAIMER = "lab_hide_panel_disclaimer"
+
 # Max. Länge des optionalen `report_ref`-Freitextfelds (§2.4a der Spec).
 LAB_REPORT_REF_MAX_LEN = 500
+
+# LEICHTER Batch-Vertrag (REQ-HOM-123): Server-Limit je Bericht; die UI hat
+# einen eigenen Soft-Cap (60). Beide Werte sind bewusst unabhängig.
+LAB_REPORT_MAX_ROWS = 200

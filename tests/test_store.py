@@ -2092,3 +2092,365 @@ def test_req_hom_122_nb5_active_entry_filters_voided_lab_readings(mock_store_fix
     assert [item["value"] for item in view["lab_readings"]] == [40.0]
     # Rohbestand bleibt vollständig (Schreibpfad/Backup/Diagnostics).
     assert len(store.entry("e1")["lab_readings"]) == 2
+
+
+# --- REQ-HOM-123: add_lab_readings ------------------------------------------
+
+
+def _lab_rows(count: int = 2) -> list[dict]:
+    return [
+        {
+            "marker_key": f"marker_{index}",
+            "value": float(index + 1),
+            "unit": "U/L",
+            "reported_value": float(index + 1),
+            "reported_unit": "U/L",
+        }
+        for index in range(count)
+    ]
+
+
+def test_req_hom_123_add_lab_readings_writes_all_rows_with_one_save(mock_store_fixture):
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+
+    ids = _async_test(
+        store.add_lab_readings(
+            "e1",
+            "2026-11-01T09:15:00+01:00",
+            _lab_rows(2),
+            report_ref="https://example.com/1",
+            created_ts_iso="2026-11-01T10:00:00+01:00",
+        )
+    )
+
+    readings = store.entry("e1")["lab_readings"]
+    assert [reading["marker_key"] for reading in readings] == ["marker_0", "marker_1"]
+    assert all(reading["ts"] == "2026-11-01T09:15:00+01:00" for reading in readings)
+    assert all(reading["report_ref"] == "https://example.com/1" for reading in readings)
+    assert all(reading["created_at"] == "2026-11-01T10:00:00+01:00" for reading in readings)
+    assert all(reading["voided_at"] is None for reading in readings)
+    assert {reading["id"] for reading in readings} == set(ids)
+    mock_save.async_save.assert_awaited_once()
+
+
+def test_req_hom_123_add_lab_readings_writes_one_privacy_safe_audit_entry(mock_store_fixture):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+
+    ids = _async_test(
+        store.add_lab_readings(
+            "e1",
+            "2026-11-01T09:15:00+01:00",
+            _lab_rows(2),
+            report_ref="Labor 10/2026",
+            created_ts_iso="2026-11-01T10:00:00+01:00",
+        )
+    )
+
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 1
+    assert audit[0]["action"] == "lab_values_added"
+    assert audit[0]["kind"] == "lab_readings"
+    assert audit[0]["target_id"] is None
+    assert audit[0]["details"] == {
+        "count": 2,
+        "marker_keys": ["marker_0", "marker_1"],
+        "reading_ids": ids,
+        "created_at": "2026-11-01T10:00:00+01:00",
+    }
+    assert "report_ref" not in audit[0]["details"]
+    assert "Labor 10/2026" not in repr(audit[0])
+
+
+def test_req_hom_123_add_lab_readings_caps_details_lists_at_20(mock_store_fixture):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+
+    ids = _async_test(store.add_lab_readings("e1", "2026-11-01T09:15:00+01:00", _lab_rows(25)))
+
+    details = store.entry("e1")["audit_log"][0]["details"]
+    assert details["count"] == 25
+    assert len(details["marker_keys"]) == 20
+    assert len(details["reading_ids"]) == 20
+    assert details["reading_ids"] == ids[:20]
+    assert len(store.entry("e1")["lab_readings"]) == 25
+
+
+def test_req_hom_123_add_lab_readings_rolls_back_on_save_error(mock_store_fixture, monkeypatch):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    existing = {"id": "old-reading", "marker_key": "alt", "value": 32.0}
+    store.entry("e1")["lab_readings"] = [existing]
+    # Zwei Alt-Einträge + Limit 2: das Anhängen kappt den Ring (inkl.
+    # `audit_pruned`-Summary). Ein Slice-Rollback würde das NICHT
+    # wiederherstellen — der Test pinnt den deepcopy-Snapshot (§2.8).
+    store.entry("e1")["audit_log"] = [
+        {
+            "id": "audit-1",
+            "ts": "2026-10-01T08:00:00+02:00",
+            "action": "lab_value_added",
+            "kind": "lab_readings",
+            "target_id": "old-reading",
+            "actor": None,
+            "details": {},
+        },
+        {
+            "id": "audit-2",
+            "ts": "2026-10-02T08:00:00+02:00",
+            "action": "entry_voided",
+            "kind": "lab_readings",
+            "target_id": "old-reading",
+            "actor": None,
+            "details": {},
+        },
+    ]
+
+    async def _fail_save() -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(store, "_async_save", _fail_save)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        _async_test(
+            store.add_lab_readings("e1", "2026-11-01T09:15:00+01:00", _lab_rows(2), audit_limit=2)
+        )
+
+    assert store.entry("e1")["lab_readings"] == [existing]
+    assert [event["id"] for event in store.entry("e1")["audit_log"]] == [
+        "audit-1",
+        "audit-2",
+    ]
+
+
+# --- REQ-HOM-128/129: Batch-Undo + Retention --------------------------------
+
+
+def _seed_lab(store, entry_id: str = "e1", **kwargs) -> None:
+    _async_test(store.add_lab_readings(entry_id, **kwargs))
+
+
+def test_req_hom_128_void_lab_report_voids_only_matching_instant(mock_store_fixture):
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {
+            "id": "r1",
+            "ts": "2026-11-01T09:15:00+01:00",
+            "marker_key": "alt",
+            "report_ref": "A",
+            "voided_at": None,
+        },
+        {
+            "id": "r2",
+            "ts": "2026-11-01T08:15:00+00:00",
+            "marker_key": "crp",
+            "report_ref": "A",
+            "voided_at": None,
+        },
+        {
+            "id": "r3",
+            "ts": "2026-10-01T09:15:00+01:00",
+            "marker_key": "tsh",
+            "report_ref": None,
+            "voided_at": None,
+        },
+    ]
+
+    voided = _async_test(store.void_lab_report("e1", "2026-11-01T09:15:00+01:00", report_ref="A"))
+
+    assert voided == ["r1", "r2"]
+    readings = {reading["id"]: reading for reading in store.entry("e1")["lab_readings"]}
+    assert readings["r1"]["void_reason"] == "report_discarded"
+    assert readings["r1"]["voided_at"] is not None
+    assert readings["r2"]["voided_at"] is not None
+    assert readings["r3"]["voided_at"] is None
+    mock_save.async_save.assert_awaited_once()
+
+
+def test_req_hom_128_void_lab_report_without_ref_voids_all_at_that_instant(mock_store_fixture):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {
+            "id": "r1",
+            "ts": "2026-11-01T09:15:00+01:00",
+            "marker_key": "alt",
+            "report_ref": "A",
+            "voided_at": None,
+        },
+        {
+            "id": "r2",
+            "ts": "2026-11-01T09:15:00+01:00",
+            "marker_key": "crp",
+            "report_ref": None,
+            "voided_at": None,
+        },
+    ]
+
+    voided = _async_test(store.void_lab_report("e1", "2026-11-01T09:15:00+01:00"))
+
+    assert voided == ["r1", "r2"]
+
+
+def test_req_hom_128_void_lab_report_writes_one_audit_entry(mock_store_fixture):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {
+            "id": "r1",
+            "ts": "2026-11-01T09:15:00+01:00",
+            "marker_key": "alt",
+            "report_ref": "A",
+            "voided_at": None,
+        },
+    ]
+
+    _async_test(store.void_lab_report("e1", "2026-11-01T09:15:00+01:00", actor="u1"))
+
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 1
+    assert audit[0]["action"] == "lab_report_voided"
+    assert audit[0]["kind"] == "lab_readings"
+    assert audit[0]["target_id"] is None
+    assert audit[0]["actor"] == "u1"
+    assert "report_ref" not in audit[0]["details"]
+    assert audit[0]["details"]["count"] == 1
+    assert audit[0]["details"]["reading_ids"] == ["r1"]
+    assert audit[0]["details"]["created_at"]
+
+
+def test_req_hom_128_void_lab_report_without_match_returns_empty_without_write(
+    mock_store_fixture,
+):
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {
+            "id": "r1",
+            "ts": "2026-10-01T09:15:00+01:00",
+            "marker_key": "alt",
+            "report_ref": None,
+            "voided_at": None,
+        },
+    ]
+
+    voided = _async_test(store.void_lab_report("e1", "2026-11-01T09:15:00+01:00"))
+
+    assert voided == []
+    assert store.entry("e1")["audit_log"] == []
+    mock_save.async_save.assert_not_awaited()
+
+
+def test_req_hom_128_void_lab_report_rolls_back_voided_fields_on_save_error(
+    mock_store_fixture, monkeypatch
+):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    original = {
+        "id": "r1",
+        "ts": "2026-11-01T09:15:00+01:00",
+        "marker_key": "alt",
+        "report_ref": None,
+        "voided_at": None,
+        "voided_by": None,
+        "void_reason": None,
+    }
+    store.entry("e1")["lab_readings"] = [copy.deepcopy(original)]
+
+    async def _fail_save() -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(store, "_async_save", _fail_save)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        _async_test(store.void_lab_report("e1", "2026-11-01T09:15:00+01:00"))
+
+    assert store.entry("e1")["lab_readings"] == [original]
+    assert store.entry("e1")["audit_log"] == []
+
+
+def test_req_hom_129_void_lab_readings_before_voids_only_older_active(
+    mock_store_fixture,
+):
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {"id": "old", "ts": "2026-01-01T09:00:00+01:00", "marker_key": "alt", "voided_at": None},
+        {"id": "new", "ts": "2026-10-01T09:00:00+02:00", "marker_key": "crp", "voided_at": None},
+        {
+            "id": "already",
+            "ts": "2025-01-01T09:00:00+01:00",
+            "marker_key": "tsh",
+            "voided_at": "2026-02-01T00:00:00+01:00",
+            "voided_by": None,
+            "void_reason": None,
+        },
+    ]
+
+    voided = _async_test(
+        store.void_lab_readings_before("e1", "2026-09-01T00:00:00+02:00", months=12)
+    )
+
+    assert voided == ["old"]
+    readings = {reading["id"]: reading for reading in store.entry("e1")["lab_readings"]}
+    assert readings["old"]["void_reason"] == "retention"
+    assert readings["new"]["voided_at"] is None
+    assert readings["already"]["void_reason"] is None
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 1
+    assert audit[0]["action"] == "lab_values_retention"
+    assert audit[0]["details"]["count"] == 1
+    assert audit[0]["details"]["months"] == 12
+    assert audit[0]["details"]["cutoff"] == "2026-09-01T00:00:00+02:00"
+    assert audit[0]["details"]["reading_ids"] == ["old"]
+    mock_save.async_save.assert_awaited_once()
+
+
+def test_req_hom_129_void_lab_readings_before_is_idempotent(mock_store_fixture):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    store.entry("e1")["lab_readings"] = [
+        {"id": "old", "ts": "2026-01-01T09:00:00+01:00", "marker_key": "alt", "voided_at": None},
+    ]
+
+    first = _async_test(
+        store.void_lab_readings_before("e1", "2026-09-01T00:00:00+02:00", months=12)
+    )
+    second = _async_test(
+        store.void_lab_readings_before("e1", "2026-09-01T00:00:00+02:00", months=12)
+    )
+
+    assert first == ["old"]
+    assert second == []
+    assert (
+        len([e for e in store.entry("e1")["audit_log"] if e["action"] == "lab_values_retention"])
+        == 1
+    )
+
+
+def test_req_hom_129_void_lab_readings_before_rolls_back_on_save_error(
+    mock_store_fixture, monkeypatch
+):
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    original = {
+        "id": "old",
+        "ts": "2026-01-01T09:00:00+01:00",
+        "marker_key": "alt",
+        "voided_at": None,
+        "voided_by": None,
+        "void_reason": None,
+    }
+    store.entry("e1")["lab_readings"] = [copy.deepcopy(original)]
+
+    async def _fail_save() -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(store, "_async_save", _fail_save)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        _async_test(store.void_lab_readings_before("e1", "2026-09-01T00:00:00+02:00", months=12))
+
+    assert store.entry("e1")["lab_readings"] == [original]
+    assert store.entry("e1")["audit_log"] == []

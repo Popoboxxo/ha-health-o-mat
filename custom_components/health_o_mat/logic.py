@@ -8,6 +8,7 @@ from __future__ import annotations
 import calendar
 import csv
 import io
+import math
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping
@@ -22,6 +23,7 @@ from .const import (
     LAB_CATEGORY_OTHER,
     LAB_MARKER_ALIASES,
     LAB_MARKERS,
+    LAB_REPORT_MAX_ROWS,
     MAX_AUDIT_LIMIT,
     WELLBEING_STATES,
 )
@@ -1106,6 +1108,179 @@ def convert_lab_value(marker_def: dict, value: float, unit: str | None) -> tuple
         if _norm_unit(alt_unit) == _norm_unit(unit):
             return round(float(value) * float(factor), 6), canonical_unit
     raise ValueError("unsupported_unit")
+
+
+# --- Laborbericht-Batch (REQ-HOM-123/128/129) -------------------------------
+
+# Fehlercodes, deren `params` einen Zeilenbezug tragen (§2.4).
+_LAB_ROW_ERROR_CODES = frozenset(
+    {
+        "unknown_marker",
+        "unit_required",
+        "invalid_value",
+        "unsupported_unit",
+        "duplicate_marker",
+    }
+)
+
+
+def lab_report_error(code: str, params: Mapping[str, Any] | None = None) -> dict:
+    """Fehlerobjekt im Batch-Vertrag bauen (§2.4).
+
+    Rückgabe: ``{"code": str, "params": dict, "message": str}``. Der Service
+    transportiert nur ``message``; die WS-Batch-Kommandos liefern das ganze
+    Objekt. ``marker`` ist immer der eingegebene Rohwert; ein leerer Marker
+    erscheint im Text als ``-``.
+    """
+    values = dict(params or {})
+    if code == "invalid_ts":
+        prose = ENTRY_TS_INVALID_MESSAGE.format(value=values.get("value"))
+        message = f"invalid_ts: {prose}"
+    elif code == "too_many_rows":
+        message = f"too_many_rows ({values.get('count')} > {values.get('limit')})"
+    elif code in _LAB_ROW_ERROR_CODES:
+        marker = values.get("marker") or "-"
+        message = f"Zeile {values.get('row')} ({marker}): {code}"
+        if code == "duplicate_marker":
+            message += f" (schon in Zeile {values.get('first_row')})"
+    else:
+        message = code
+    return {"code": code, "params": values, "message": message}
+
+
+def coerce_lab_number(value: Any) -> float | None:
+    """Messwert zu ``float`` — ``None`` bei bool, Nicht-Zahl, NaN/±inf (§2.5).
+
+    ``bool`` ist in Python eine ``int``-Unterklasse (``True == 1``), aber kein
+    Messwert. Nicht-endliche Werte würden sonst in Konvertierung, Anzeige und
+    Referenzvergleich als scheinbar gültige Zahl durchrutschen.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _lab_row_is_empty(row: Mapping[str, Any]) -> bool:
+    """Leerzeile (§2.3): Marker, Wert und Einheit fehlen/whitespace."""
+    marker = str(row.get("marker") or "").strip()
+    raw_value = row.get("value")
+    value = "" if raw_value is None else str(raw_value).strip()
+    unit = str(row.get("unit") or "").strip()
+    return not (marker or value or unit)
+
+
+def validate_lab_report_rows(
+    values: Any, custom_markers: Any = None
+) -> tuple[list[dict], dict | None]:
+    """Leerzeilen filtern, Zeilen validieren, in kanonische Einheiten konvertieren.
+
+    Rückgabe: (konvertierte Zeilen, Fehlerobjekt oder None). Das Fehlerobjekt
+    ist ``{"code", "params", "message"}`` (§2.4). Die Zeilennummer ist der
+    ORIGINALindex der Eingabeliste (1-basiert, inklusive Leerzeilen), damit der
+    Nutzer die Zeile in seinem Eingabefeld wiederfindet.
+    """
+    if isinstance(values, Mapping):
+        values = [values]
+    if not isinstance(values, list):
+        return [], lab_report_error("empty_report")
+
+    filled = [
+        (index, row)
+        for index, row in enumerate(values, start=1)
+        if isinstance(row, Mapping) and not _lab_row_is_empty(row)
+    ]
+    if not filled:
+        return [], lab_report_error("empty_report")
+    if len(filled) > LAB_REPORT_MAX_ROWS:
+        return [], lab_report_error(
+            "too_many_rows", {"count": len(filled), "limit": LAB_REPORT_MAX_ROWS}
+        )
+
+    converted: list[dict] = []
+    resolved_keys: list[tuple[int, str, str]] = []
+    for index, row in filled:
+        raw_marker = str(row.get("marker") or "").strip()
+        resolved = resolve_lab_marker(raw_marker, custom_markers) if raw_marker else None
+        if resolved is None:
+            return [], lab_report_error("unknown_marker", {"row": index, "marker": raw_marker})
+        marker_key, marker_def = resolved
+        raw_unit = row.get("unit")
+        unit = str(raw_unit).strip() if raw_unit is not None else ""
+        if not unit and marker_def.get("require_explicit_unit"):
+            return [], lab_report_error("unit_required", {"row": index, "marker": raw_marker})
+        # Zahlenprüfung VOR der Einheitenprüfung: `convert_lab_value` beginnt mit
+        # `float(value)` und würde "abc" sonst als `unsupported_unit` melden.
+        raw_value = row.get("value")
+        reported_value = coerce_lab_number(raw_value)
+        if reported_value is None:
+            return [], lab_report_error(
+                "invalid_value",
+                {"row": index, "marker": raw_marker, "value": raw_value},
+            )
+        try:
+            canonical_value, canonical_unit = convert_lab_value(
+                marker_def, reported_value, unit or None
+            )
+        except ValueError:
+            return [], lab_report_error(
+                "unsupported_unit",
+                {"row": index, "marker": raw_marker, "unit": unit},
+            )
+        converted.append(
+            {
+                "marker_key": marker_key,
+                "value": canonical_value,
+                "unit": canonical_unit,
+                "reported_value": reported_value,
+                "reported_unit": unit or canonical_unit,
+            }
+        )
+        resolved_keys.append((index, marker_key, raw_marker))
+
+    # Duplikate erst nach der Zeilenvalidierung (§2.5: Schritt 4 vor Schritt 5).
+    first_row: dict[str, int] = {}
+    for index, marker_key, raw_marker in resolved_keys:
+        if marker_key in first_row:
+            return [], lab_report_error(
+                "duplicate_marker",
+                {"row": index, "marker": raw_marker, "first_row": first_row[marker_key]},
+            )
+        first_row[marker_key] = index
+    return converted, None
+
+
+def lab_report_matches(
+    reading: Any,
+    ts: datetime,
+    report_ref: str | None = None,
+) -> bool:
+    """True, wenn eine Lesung zum Bericht gehört (Instant + optionaler Tag).
+
+    Zeitvergleich als **Instant**: Offset-Schreibweisen derselben Zeit treffen
+    sich (kein String-Vergleich). ``report_ref is None`` = kein Tag-Filter; ein
+    gesetzter Filter trifft nur Einträge mit exakt diesem Tag (``None`` im
+    Eintrag zählt nicht als Treffer).
+    """
+    if not isinstance(reading, Mapping):
+        return False
+    parsed = _parse_ts(reading.get("ts"))
+    if parsed is None:
+        return False
+    left = _align_tz(parsed, ts)
+    if left.tzinfo is None or ts.tzinfo is None:
+        if left.replace(tzinfo=None) != ts.replace(tzinfo=None):
+            return False
+    elif left.astimezone(UTC) != ts.astimezone(UTC):
+        return False
+    if report_ref is None:
+        return True
+    return (reading.get("report_ref") or None) == report_ref
 
 
 # --- Laborwerte: Referenzbereich + In-Range-Prüfung (REQ-HOM-122) ---
