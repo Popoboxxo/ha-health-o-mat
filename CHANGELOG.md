@@ -5,6 +5,45 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.16.0] — 2026-10-31
+
+### Added
+
+- **Lab values as a fourth data domain (REQ-HOM-122):** lab readings in nine
+  medical categories (liver, kidney, electrolytes, lipids, thyroid, blood
+  count, inflammation, digestion, drug levels) plus "other" for custom markers.
+  The catalog ships 29 markers with default reference ranges (typical adult
+  guide values, not a clinical norm), per-person reference overrides,
+  per-category visibility, German name aliases (GPT/GOT/Gamma-GT) and
+  bidirectional unit conversion (catalog units plus one optional legacy unit
+  pair per custom marker). Values are stored canonically, the reported value
+  and unit are kept as `reported_value`/`reported_unit`. An optional
+  `report_ref` links a reading to a lab report.
+- **Lab entities:** one sensor per marker and one warning binary sensor per
+  category. Both are controlled by the new `areas.labs` toggle (options flow
+  and admin area checkbox).
+- **Lab services:** `add_lab_value` and `remove_last_lab_value`, including
+  alias resolution and `unknown_marker` / `unit_required` /
+  `unsupported_unit` validation.
+- **Lab UI:** a dedicated `health-o-mat-labs-card`, a panel tab with a
+  category swipe bar, an overview tile row, an admin section for reference
+  overrides, hidden categories, custom markers and the feedback link, plus
+  bilingual catalog names (`name_de`/`name_en`) and a medical disclaimer in
+  card, panel and README.
+- **Lab data portability:** backup format v3, restore dataset `lab_values`
+  (including first-wins merge of custom markers and per-record validation on
+  unknown markers), CSV export/import as `lab_values.csv`, and `lab_values`
+  in the service schemas, WS export and UI dataset selector.
+
+### Changed
+
+- Store schema v4 → v5 (additive `lab_readings[]`); existing data is migrated
+  on load without loss. No config-entry migration and no changes to existing
+  `unique_id`s, entity IDs or backup compatibility (v1/v2 backups remain
+  readable).
+
+[0.16.0]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.15.0...v0.16.0
+
 ## [0.15.0] — 2026-10-26
 
 ### Added
