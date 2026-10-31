@@ -13,7 +13,7 @@ import importlib.util
 import os
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -203,6 +203,8 @@ def _write_store() -> MagicMock:
     store.add_reading = AsyncMock()
     store.set_wellbeing = AsyncMock()
     store.add_lab_reading = AsyncMock()
+    store.add_lab_readings = AsyncMock()
+    store.void_lab_report = AsyncMock(return_value=["r1"])
     store.remove_last_lab_reading = AsyncMock(return_value=True)
     store.remove_last_drink = AsyncMock(return_value=True)
     store.remove_last_reading = AsyncMock(return_value=True)
@@ -636,6 +638,7 @@ _PANEL_TOP_LEVEL_KEYS = {
     "wellbeing_scale",
     "quick_drinks",
     "wellbeing_confirm",
+    "lab_hide_panel_disclaimer",
     "labs",
     "entities",
 }
@@ -791,6 +794,8 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_RESTORE_ENTRY,
     ws_api.COMMAND_SAVE_MEASUREMENT,
     ws_api.COMMAND_ADD_LAB_VALUE,
+    ws_api.COMMAND_ADD_LAB_REPORT,
+    ws_api.COMMAND_REMOVE_LAB_REPORT,
     ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
     ws_api.COMMAND_SET_WELLBEING,
     ws_api.COMMAND_SUBSCRIBE,
@@ -1765,6 +1770,8 @@ SETTINGS_DEFAULTS = {
     "audit_limit": 1000,
     "enable_sidebar_panel": False,
     "wellbeing_confirm": False,
+    # Additiv (REQ-HOM-125): Disclaimer-Schalter, Default sichtbar.
+    "lab_hide_panel_disclaimer": False,
 }
 
 
@@ -1848,6 +1855,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "lab_custom_markers": [],
                 "lab_ref_overrides": {},
                 "lab_hidden_categories": [],
+                "lab_hide_panel_disclaimer": False,
                 "lab_catalog": {
                     "categories": const.LAB_CATEGORIES,
                     "markers": const.LAB_MARKERS,
@@ -3275,6 +3283,7 @@ def test_m2a_panel_data_keeps_contract_keys_with_voided_entries(monkeypatch):
         "wellbeing_scale",
         "quick_drinks",
         "wellbeing_confirm",
+        "lab_hide_panel_disclaimer",
         "labs",
         "entities",
     }
@@ -4506,3 +4515,391 @@ def test_req_hom_122_lab_commands_are_registered(monkeypatch):
         schemas[ws_api.COMMAND_REMOVE_LAST_LAB_VALUE](
             {"id": 3, "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE, "entry_id": "e1"}
         )
+
+
+# --- REQ-HOM-123/128: WS-Batch ----------------------------------------------
+
+
+def _now_cest(monkeypatch) -> None:
+    """`_now` mit fester Berliner Sommerzeit (UTC+2).
+
+    `parse_entry_ts` rechnet Offset-Zeitstempel in die Zone von `now` um. Mit
+    einem naiven `NOW` wäre die Zone der *aktuelle* lokale Fixed-Offset und die
+    `ts`-Erwartung würde mit der Jahreszeit wechseln; diese beiden Tests pinnen
+    deshalb eine bewusst feste, zoneinfo-freie Referenz.
+    """
+    monkeypatch.setattr(
+        ws_api.dt_util,
+        "now",
+        lambda: datetime(2026, 10, 15, 12, 0, tzinfo=timezone(timedelta(hours=2))),
+    )
+
+
+def test_req_hom_123_websocket_add_lab_report_returns_success_envelope(monkeypatch):
+    _now_cest(monkeypatch)
+    store = _write_store()
+    store.add_lab_readings = AsyncMock(return_value=["r1", "r2"])
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_report(
+            hass,
+            connection,
+            {
+                "id": 21,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "e1",
+                # Die gepinnte Referenz (2026-10-15) liegt nach `ts`.
+                "ts": "2026-10-14T09:15:00+02:00",
+                "report_ref": "  Labor 10/2026  ",
+                "values": [
+                    {"marker": "alt", "value": 32},
+                    {"marker": "creatinine", "value": 1.1, "unit": "mg/dL"},
+                    {},
+                ],
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [
+        (21, {"ok": True, "written": 2, "ts": "2026-10-14T09:15:00+02:00"})
+    ]
+    args, kwargs = store.add_lab_readings.call_args
+    assert args[0] == "e1"
+    assert args[1] == "2026-10-14T09:15:00+02:00"
+    assert [row["marker_key"] for row in args[2]] == ["alt", "creatinine"]
+    assert kwargs["report_ref"] == "Labor 10/2026"
+
+
+def test_req_hom_123_websocket_add_lab_report_sends_structured_error(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_report(
+            hass,
+            connection,
+            {
+                "id": 22,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "e1",
+                "values": [{"marker": "alt", "value": 32}, {"marker": "gptx", "value": 1}],
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [
+        (
+            22,
+            {
+                "ok": False,
+                "error": {
+                    "code": "unknown_marker",
+                    "params": {"row": 2, "marker": "gptx"},
+                    "message": "Zeile 2 (gptx): unknown_marker",
+                },
+            },
+        )
+    ]
+    store.add_lab_readings.assert_not_awaited()
+
+
+def test_req_hom_123_websocket_add_lab_report_invalid_ts_envelope(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_report(
+            hass,
+            connection,
+            {
+                "id": 23,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "e1",
+                "ts": "kaputt",
+                "values": [{"marker": "alt", "value": 32}],
+            },
+        )
+    )
+
+    assert connection.errors == []
+    result = connection.results[0][1]
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_ts"
+    assert result["error"]["params"] == {"value": "kaputt"}
+    assert result["error"]["message"].startswith("invalid_ts: ")
+    store.add_lab_readings.assert_not_awaited()
+
+
+def test_req_hom_123_websocket_add_lab_report_unknown_entry_stays_send_error(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_report(
+            hass,
+            connection,
+            {
+                "id": 24,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "unknown",
+                "ts": "kaputt",
+                "values": [{"marker": "alt", "value": 32}],
+            },
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == ws_api.ERR_NOT_FOUND
+
+
+def test_req_hom_128_websocket_remove_lab_report_success(monkeypatch):
+    _now_cest(monkeypatch)
+    store = _write_store()
+    store.void_lab_report = AsyncMock(return_value=["r1", "r2"])
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_lab_report(
+            hass,
+            connection,
+            {
+                "id": 25,
+                "type": ws_api.COMMAND_REMOVE_LAB_REPORT,
+                "entry_id": "e1",
+                "ts": "2026-10-14T09:15:00+02:00",
+                "report_ref": "Labor A",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [(25, {"ok": True, "voided": 2})]
+    args, kwargs = store.void_lab_report.call_args
+    assert args == ("e1", "2026-10-14T09:15:00+02:00")
+    assert kwargs["report_ref"] == "Labor A"
+
+
+def test_req_hom_128_websocket_remove_lab_report_no_match_envelope(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    store.void_lab_report = AsyncMock(return_value=[])
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_lab_report(
+            hass,
+            connection,
+            {
+                "id": 26,
+                "type": ws_api.COMMAND_REMOVE_LAB_REPORT,
+                "entry_id": "e1",
+                "ts": "2026-10-14T09:15:00+02:00",
+            },
+        )
+    )
+
+    assert connection.results[0][1]["ok"] is False
+    assert connection.results[0][1]["error"]["code"] == "no_active_report"
+
+
+def test_req_hom_123_lab_report_commands_are_registered(monkeypatch):
+    registered: list[tuple] = []
+    hass = FakeHass()
+    monkeypatch.setattr(
+        ws_api.websocket_api,
+        "async_register_command",
+        lambda *args: registered.append(args),
+    )
+
+    asyncio.run(ws_api.async_register_ws_api(hass))
+
+    schemas = {args[1]: args[3] for args in registered}
+    add_schema = schemas[ws_api.COMMAND_ADD_LAB_REPORT]
+    parsed = add_schema(
+        {
+            "id": 1,
+            "type": ws_api.COMMAND_ADD_LAB_REPORT,
+            "entry_id": "e1",
+            "values": [{"marker": "alt", "value": "32.5"}, {}],
+        }
+    )
+    assert parsed["values"][0]["value"] == "32.5"
+    assert parsed["values"][1] == {}
+    with pytest.raises(vol.Invalid):
+        add_schema(
+            {
+                "id": 2,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "e1",
+                "values": [{"marker": "alt", "value": 1, "bogus": 2}],
+            }
+        )
+    with pytest.raises(vol.Invalid):
+        add_schema({"id": 3, "type": ws_api.COMMAND_ADD_LAB_REPORT, "values": []})
+
+    remove_schema = schemas[ws_api.COMMAND_REMOVE_LAB_REPORT]
+    with pytest.raises(vol.Invalid):
+        remove_schema({"id": 4, "type": ws_api.COMMAND_REMOVE_LAB_REPORT, "entry_id": "e1"})
+
+
+def test_req_hom_123_websocket_add_lab_value_rejects_nan(monkeypatch):
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 27,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "alt",
+                "value": float("nan"),
+            },
+        )
+    )
+
+    assert connection.results == []
+    assert connection.errors == [(27, ws_api.ERR_INVALID_FORMAT, "invalid_value")]
+    store.add_lab_reading.assert_not_awaited()
+
+
+# --- REQ-HOM-123/125: panel_data-Zusatzfelder -------------------------------
+
+
+def test_req_hom_123_panel_data_labs_marker_exposes_alt_units(monkeypatch):
+    entry = _entry(
+        options={
+            "lab_custom_markers": [
+                {
+                    "key": "vitamin_d",
+                    "name": "Vitamin D",
+                    "category": "other",
+                    "unit": "ng/mL",
+                    "alt_unit": {"unit": "nmol/L", "factor_to_canonical": 0.4},
+                }
+            ]
+        }
+    )
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    markers = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]
+
+    assert markers["creatinine"]["alt_units"] == {"mg/dL": 88.4}
+    assert markers["alt"]["alt_units"] == {}
+    assert markers["vitamin_d"]["alt_units"] == {"nmol/L": 0.4}
+    # Bewusst NICHT im Payload (§6.2).
+    assert "require_explicit_unit" not in markers["urine_protein_creatinine_ratio"]
+
+
+def test_req_hom_123_panel_data_last_report_uses_latest_common_instant(monkeypatch):
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    store.active_lab_readings.return_value = [
+        {"ts": "2026-10-01T09:00:00+01:00", "marker_key": "alt", "value": 32.0},
+        {"ts": "2026-10-31T09:00:00+01:00", "marker_key": "alt", "value": 33.0},
+        {
+            "ts": "2026-10-31T08:00:00+00:00",
+            "marker_key": "crp",
+            "value": 4.8,
+            "report_ref": "Labor A",
+        },
+        {"ts": "2026-10-01T09:00:00+01:00", "marker_key": "tsh", "value": 1.9},
+    ]
+
+    last = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["last_report"]
+
+    assert last["ts"] == "2026-10-31T09:00:00+01:00"
+    assert last["marker_keys"] == ["alt", "crp"]
+    assert last["report_ref"] == "Labor A"
+
+
+def test_req_hom_123_panel_data_last_report_empty_without_readings(monkeypatch):
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch)
+
+    assert ws_api.build_panel_data(hass, "e1", NOW)["labs"]["last_report"] == {
+        "ts": None,
+        "marker_keys": [],
+        "report_ref": None,
+    }
+
+
+def test_req_hom_125_panel_data_carries_disclaimer_flag(monkeypatch):
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch)
+    assert ws_api.build_panel_data(hass, "e1", NOW)["lab_hide_panel_disclaimer"] is False
+
+    ward = _entry("e1", options={"lab_hide_panel_disclaimer": True})
+    hass2, _store2 = _lab_panel_hass(ward, monkeypatch)
+    assert ws_api.build_panel_data(hass2, "e1", NOW)["lab_hide_panel_disclaimer"] is True
+
+
+def test_req_hom_125_settings_accepts_and_returns_disclaimer_flag(monkeypatch):
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", lab_hide_panel_disclaimer=True
+            ),
+        )
+    )
+
+    assert connection.errors == []
+    assert hass.config_entries.updates[0]["options"]["lab_hide_panel_disclaimer"] is True
+    assert connection.results[0][1]["lab_hide_panel_disclaimer"] is True
+
+
+def test_req_hom_125_settings_rejects_non_boolean_disclaimer(monkeypatch):
+    entry = _entry("e1", options={"daily_goal_ml": 2000})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", lab_hide_panel_disclaimer="true"
+            ),
+        )
+    )
+
+    assert connection.errors, "ein String darf kein stiller Boolean sein"
+    assert hass.config_entries.updates == []
+
+
+def test_req_hom_129_settings_merge_keeps_lab_retention(monkeypatch):
+    entry = _entry("e1", options={"daily_goal_ml": 2000, "lab_retention_months": 24})
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(
+                ws_api.COMMAND_SET_SETTINGS, entry_id="e1", lab_hide_panel_disclaimer=True
+            ),
+        )
+    )
+
+    stored = hass.config_entries.updates[0]["options"]
+    assert stored["lab_retention_months"] == 24

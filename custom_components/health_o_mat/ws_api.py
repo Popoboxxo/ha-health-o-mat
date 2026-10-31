@@ -44,6 +44,7 @@ from .const import (
     MIN_BP_VALUE,
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_HIDE_PANEL_DISCLAIMER,
     OPTION_LAB_REF_OVERRIDES,
     OPTION_WELLBEING_CONFIRM,
     WELLBEING_IMAGES_OPTION,
@@ -105,6 +106,8 @@ COMMAND_BOOK_DRINK = "health_o_mat/book_drink"
 COMMAND_UNDO_LAST = "health_o_mat/undo_last"
 COMMAND_SAVE_MEASUREMENT = "health_o_mat/save_measurement"
 COMMAND_ADD_LAB_VALUE = "health_o_mat/add_lab_value"
+COMMAND_ADD_LAB_REPORT = "health_o_mat/add_lab_report"
+COMMAND_REMOVE_LAB_REPORT = "health_o_mat/remove_lab_report"
 COMMAND_REMOVE_LAST_LAB_VALUE = "health_o_mat/remove_last_lab_value"
 COMMAND_SET_WELLBEING = "health_o_mat/set_wellbeing"
 COMMAND_LIST_HISTORY = "health_o_mat/list_history"
@@ -206,6 +209,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_REF_OVERRIDES,
     OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_HIDE_PANEL_DISCLAIMER,
 )
 
 # Datensätze des bestehenden `health_o_mat.export_csv`-Service (services.yaml).
@@ -284,6 +288,8 @@ SETTINGS_SCHEMA = vol.Schema(
         # Wohlbefinden-Bestätigung (REQ-HOM-114): STRIKT bool, kein Coerce —
         # `vol.Boolean()` würde "true"/1 akzeptieren und still umdeuten.
         vol.Optional(OPTION_WELLBEING_CONFIRM): _strict_bool,
+        # Panel-Disclaimer-Schalter (REQ-HOM-125): strikt bool, kein Coerce.
+        vol.Optional(OPTION_LAB_HIDE_PANEL_DISCLAIMER): _strict_bool,
         vol.Optional("sys_threshold"): vol.All(
             vol.Coerce(int), vol.Range(min=MIN_BP_VALUE, max=MAX_BP_VALUE)
         ),
@@ -511,6 +517,11 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
         # Wohlbefinden-Meldung — der Detail-Tab braucht die Option, ohne das
         # admin-only `get_settings` aufzurufen.
         OPTION_WELLBEING_CONFIRM: bool(options.get(OPTION_WELLBEING_CONFIRM, False)),
+        # Additiv (REQ-HOM-125): Disclaimer-Zustand für den Lab-Tab — NICHT über
+        # das admin-only `get_settings`, sonst wäre er für Nicht-Admins leer.
+        OPTION_LAB_HIDE_PANEL_DISCLAIMER: bool(
+            options.get(OPTION_LAB_HIDE_PANEL_DISCLAIMER, False)
+        ),
         "entities": entity_ids_for_entry(hass, entry_id),
     }
 
@@ -613,6 +624,40 @@ def _wellbeing_history(items: Any, images: dict[str, str] | None = None) -> list
 _LAB_HISTORY_LIMIT = 14
 
 
+def _last_report(store: Any, entry_id: str) -> dict[str, Any]:
+    """Bericht mit dem neuesten gemeinsamen Zeitpunkt (§6.2).
+
+    „Bericht" = alle aktiven Marker, deren neuester aktiver Wert denselben
+    Instant trägt (Offset-Schreibweisen zählen zusammen). ``report_ref`` ist der
+    erste nicht-leere Tag dieses Berichts — die Verwerfen-Aktion (§6.5) sendet
+    ihn mit, damit nur genau dieser Bericht getroffen wird.
+    """
+    empty = {"ts": None, "marker_keys": [], "report_ref": None}
+    if store is None:
+        return empty
+    newest: dict[str, dict] = {}
+    for reading in store.active_lab_readings(entry_id):
+        key = reading.get("marker_key")
+        if not key:
+            continue
+        current = newest.get(key)
+        if current is None or lab_reading_chrono_key(reading) > lab_reading_chrono_key(current):
+            newest[key] = reading
+    if not newest:
+        return empty
+    latest_instant = max(lab_reading_chrono_key(item)[0] for item in newest.values())
+    members = [
+        item for item in newest.values() if lab_reading_chrono_key(item)[0] == latest_instant
+    ]
+    anchor = max(members, key=lab_reading_chrono_key)
+    report_ref = next((item.get("report_ref") for item in members if item.get("report_ref")), None)
+    return {
+        "ts": anchor.get("ts"),
+        "marker_keys": sorted(str(item.get("marker_key")) for item in members),
+        "report_ref": report_ref,
+    }
+
+
 def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
     """Labor-Block für `panel_data` (REQ-HOM-122) — kein Zweit-Datenmodell.
 
@@ -663,6 +708,9 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
             "name_de": name_de,
             "name_en": marker_def.get("name_en") or name_de,
             "unit": marker_def.get("canonical_unit"),
+            # Additiv (REQ-HOM-123): Alt-Einheiten fürs Einheiten-Dropdown.
+            # Katalog: `alt_units`; Custom: das eine optionale Alt-Paar.
+            "alt_units": dict(marker_def.get("alt_units") or {}),
             "ref_min": ref_min,
             "ref_max": ref_max,
             "is_custom": bool(marker_def.get("is_custom")),
@@ -677,7 +725,11 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
             ],
         }
 
-    return {"categories": categories, "markers": markers}
+    return {
+        "categories": categories,
+        "markers": markers,
+        "last_report": _last_report(store, entry.entry_id),
+    }
 
 
 # --- HA-Zugriffe (defensiv) -------------------------------------------------
@@ -982,6 +1034,35 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Required("value"): vol.Coerce(float),
                 vol.Optional("unit"): str,
                 vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+            },
+        ),
+        (
+            COMMAND_ADD_LAB_REPORT,
+            websocket_add_lab_report,
+            {
+                vol.Required("entry_id"): str,
+                vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+                vol.Required("values"): [
+                    vol.Schema(
+                        {
+                            # Leerzeilen sind erlaubt (§2.3): alle drei Felder
+                            # Optional; die Pflicht-Semantik prüft der Handler.
+                            vol.Optional("marker"): str,
+                            vol.Optional("value"): vol.Any(str, int, float),
+                            vol.Optional("unit"): vol.Any(str, None),
+                        }
+                    )
+                ],
+            },
+        ),
+        (
+            COMMAND_REMOVE_LAB_REPORT,
+            websocket_remove_lab_report,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("ts"): str,
                 vol.Optional("report_ref"): str,
             },
         ),
@@ -1333,12 +1414,15 @@ async def websocket_add_lab_value(
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unit_required")
         return
     try:
-        reported_value = float(msg.get("value"))
+        reported_value = logic.coerce_lab_number(msg.get("value"))
+        if reported_value is None:
+            connection.send_error(msg["id"], ERR_INVALID_FORMAT, "invalid_value")
+            return
         canonical_value, canonical_unit = logic.convert_lab_value(
             marker_def, reported_value, raw_unit
         )
     except (TypeError, ValueError) as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "invalid_value")
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "unsupported_unit")
         return
     report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
     now = dt_util.now()
@@ -1362,6 +1446,95 @@ async def websocket_add_lab_value(
     )
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
+
+
+def _lab_error_result(error: dict[str, Any]) -> dict[str, Any]:
+    """Fachfehler-Envelope der Batch-Kommandos (§3)."""
+    return {"ok": False, "error": error}
+
+
+async def websocket_add_lab_report(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/add_lab_report` → Bericht als EINEN Vorgang (REQ-HOM-123).
+
+    Reihenfolge wie beim Service (§2.5): Entry → Zeitpunkt → Zeilen. Fachfehler
+    kommen als Ergebnis-Envelope (strukturiert), `send_error` bleibt Entry-/
+    Transportfehlern vorbehalten.
+    """
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    options = getattr(entry, "options", None) or {}
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
+    except ValueError:
+        connection.send_result(
+            msg["id"],
+            _lab_error_result(logic.lab_report_error("invalid_ts", {"value": msg.get("ts")})),
+        )
+        return
+    rows, error = logic.validate_lab_report_rows(
+        msg.get("values"), options.get(OPTION_LAB_CUSTOM_MARKERS)
+    )
+    if error is not None:
+        connection.send_result(msg["id"], _lab_error_result(error))
+        return
+    report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+    await store.add_lab_readings(
+        entry_id,
+        ts_iso,
+        rows,
+        report_ref=report_ref,
+        created_ts_iso=now.isoformat(),
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"], {"ok": True, "written": len(rows), "ts": ts_iso})
+
+
+async def websocket_remove_lab_report(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/remove_lab_report` → Bericht verwerfen (REQ-HOM-128)."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg["ts"], now)
+    except ValueError:
+        ts_iso = None
+    if ts_iso is None:
+        connection.send_result(
+            msg["id"],
+            _lab_error_result(logic.lab_report_error("invalid_ts", {"value": msg["ts"]})),
+        )
+        return
+    report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+    voided = await store.void_lab_report(
+        entry_id,
+        ts_iso,
+        report_ref=report_ref,
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
+    if not voided:
+        connection.send_result(
+            msg["id"],
+            _lab_error_result(logic.lab_report_error("no_active_report", {"ts": ts_iso})),
+        )
+        return
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"], {"ok": True, "voided": len(voided)})
 
 
 async def websocket_remove_last_lab_value(
@@ -1651,6 +1824,9 @@ def build_settings(entry: Any) -> dict[str, Any]:
         ),
         OPTION_LAB_HIDDEN_CATEGORIES: logic.normalize_lab_hidden_categories(
             options.get(OPTION_LAB_HIDDEN_CATEGORIES)
+        ),
+        OPTION_LAB_HIDE_PANEL_DISCLAIMER: bool(
+            options.get(OPTION_LAB_HIDE_PANEL_DISCLAIMER, False)
         ),
         # Read-only Referenzdaten aus const.py — die Admin-Maske baut daraus die
         # Referenzbereich-Tabelle auf, ohne einen zweiten WS-Request. Kein
