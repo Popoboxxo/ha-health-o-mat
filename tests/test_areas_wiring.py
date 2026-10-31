@@ -253,3 +253,129 @@ def test_options_updated_explicit_lifetime_change_applies(monkeypatch):
     _run(init._options_updated(hass, entry))
 
     assert store.all_entries()["e1"]["total_ml_lifetime"] == 900
+
+
+# --- Review-Fix B-1: Lab-Options lösen einen Reload aus ----------------------
+
+
+def _lab_setup(monkeypatch, options):
+    """Setup-Baseline: `_apply_options` spiegelt die Lab-Options in rt."""
+    init = _load_init()
+    monkeypatch.setattr(init, "_async_apply_panel_layer", AsyncMock())
+    monkeypatch.setattr(init, "async_setup_reminders", AsyncMock())
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    entry = _cfg_entry(options=dict(options))
+    entry.runtime_data = init.HealthOMatData()
+    hass = _hass(store, entry)
+    init._apply_options(hass, entry)
+    return init, entry, hass
+
+
+def test_apply_options_mirrors_lab_options_snapshot(monkeypatch):
+    """[REQ-HOM-122/B-1] _apply_options spiegelt die Lab-Options in rt.lab_options."""
+    init, entry, _hass_mock = _lab_setup(
+        monkeypatch, {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}]}
+    )
+
+    markers, _overrides, hidden = entry.runtime_data.lab_options
+
+    assert [marker["key"] for marker in markers] == ["vitamin_d"]
+    assert hidden == frozenset()
+
+
+def test_options_updated_new_custom_marker_triggers_reload(monkeypatch):
+    """[REQ-HOM-122/B-1] Neuer Custom-Marker → Reload erzeugt den Sensor."""
+    init, entry, hass = _lab_setup(monkeypatch, {})
+    assert hass.config_entries.async_reload.call_count == 0
+
+    entry.options = {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}]}
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_called_once_with("e1")
+
+
+def test_options_updated_removed_custom_marker_triggers_reload(monkeypatch):
+    """[REQ-HOM-122/B-1] Entfernter Custom-Marker → Reload räumt die Entity ab."""
+    init, entry, hass = _lab_setup(
+        monkeypatch, {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}]}
+    )
+
+    entry.options = {}
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_called_once_with("e1")
+
+
+def test_options_updated_lab_changes_trigger_reload_for_each_key(monkeypatch):
+    """[REQ-HOM-122/B-1] Auch Overrides und verborgene Kategorien laden neu."""
+    init, entry, hass = _lab_setup(monkeypatch, {})
+
+    entry.options = {"lab_ref_overrides": {"alt": {"ref_max": 40}}}
+    _run(init._options_updated(hass, entry))
+    hass.config_entries.async_reload.assert_called_once_with("e1")
+
+    # Verborgenes Kategorie-Set ändert den Warn-Sensor-Satz ebenfalls.
+    entry.options = {
+        "lab_ref_overrides": {"alt": {"ref_max": 40}},
+        "lab_hidden_categories": ["liver"],
+    }
+    _run(init._options_updated(hass, entry))
+    assert hass.config_entries.async_reload.call_count == 2
+
+
+def test_options_updated_unchanged_lab_options_do_not_reload(monkeypatch):
+    """[REQ-HOM-122/B-1] Unveränderte Lab-Options (nur unkritische Keys) → kein Reload."""
+    init, entry, hass = _lab_setup(
+        monkeypatch,
+        {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}], "daily_goal_ml": 2000},
+    )
+
+    entry.options = {
+        "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}],
+        "daily_goal_ml": 2500,
+    }
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_not_called()
+
+
+def test_options_updated_lab_format_noise_does_not_reload(monkeypatch):
+    """[REQ-HOM-122/B-1] Format-/Reihenfolge-Rauschen löst keinen Reload aus."""
+    init, entry, hass = _lab_setup(
+        monkeypatch,
+        {
+            "lab_custom_markers": [
+                {"name": "Vitamin D", "unit": "ng/mL", "ref_min": 30},
+                {"name": "Ferritin", "unit": "µg/L", "ref_min": 30},
+            ],
+            "lab_hidden_categories": ["liver", "kidney"],
+        },
+    )
+
+    # Reihenfolge getauscht, Zahlen als Strings, Whitespace im Namen.
+    entry.options = {
+        "lab_custom_markers": [
+            {"name": "  Ferritin  ", "unit": "µg/L", "ref_min": "30"},
+            {"name": "Vitamin D", "unit": "ng/mL", "ref_min": 30},
+        ],
+        "lab_hidden_categories": ["kidney", "liver"],
+    }
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_not_called()
+
+
+def test_options_updated_lab_reload_is_idempotent(monkeypatch):
+    """[REQ-HOM-122/B-1] Kein Reload-Loop: derselbe Optionsstand lädt nur einmal."""
+    init, entry, hass = _lab_setup(monkeypatch, {})
+
+    entry.options = {"lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL"}]}
+    _run(init._options_updated(hass, entry))
+    # Nach dem Reload: frisches Runtime-Objekt (wie in async_setup_entry) und
+    # erneutes Options-Spiegeln dürfen keinen weiteren Reload auslösen.
+    entry.runtime_data = init.HealthOMatData()
+    init._apply_options(hass, entry)
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_called_once_with("e1")

@@ -22,6 +22,8 @@ from .const import (
     DOMAIN,
     LAB_REPORT_REF_MAX_LEN,
     OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_REF_OVERRIDES,
     OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
@@ -79,6 +81,33 @@ _SERVICE_NAMES = (
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
 
+# Vergleichbarer Stand der Lab-Options: (Custom-Marker nach `key` sortiert,
+# Ref-Overrides nach Marker sortiert, verborgene Kategorien als Set).
+type LabOptionsSnapshot = tuple[tuple[dict, ...], tuple[tuple[str, dict], ...], frozenset[str]]
+
+
+def _lab_options_snapshot(options: dict) -> LabOptionsSnapshot:
+    """Vergleichbarer Snapshot der Lab-Options (Review-Fix B-1).
+
+    Die Lab-Entities (ein Sensor je Marker, ein Warn-Sensor je Kategorie)
+    entstehen beim Setup aus diesen drei Optionen. Ändert sich ihr Inhalt,
+    muss der Entry neu geladen werden — deshalb wird der Stand, aus dem die
+    Entities gebaut wurden, in `HealthOMatData.lab_options` gespiegelt.
+
+    Normalisiert über die `logic.*`-Normalisierer und reihenfolge-unabhängig
+    (Custom-Marker nach ihrem stabilen `key`, verborgene Kategorien als Set):
+    reines Format-Rauschen (Whitespace, Zahlen als Strings, Listen-Reihenfolge)
+    darf keinen Reload auslösen.
+    """
+    markers = logic.normalize_lab_custom_markers(options.get(OPTION_LAB_CUSTOM_MARKERS))
+    overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
+    hidden = logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES))
+    return (
+        tuple(sorted(markers, key=lambda marker: marker["key"])),
+        tuple(sorted(overrides.items())),
+        frozenset(hidden),
+    )
+
 
 class HealthOMatData:
     """Laufzeitdaten eines Config-Entries (= eine Person)."""
@@ -89,6 +118,11 @@ class HealthOMatData:
         self.sys_threshold: int = DEFAULT_SYS_THRESHOLD
         self.dia_threshold: int = DEFAULT_DIA_THRESHOLD
         self.areas: dict[str, bool] = dict(areas.DEFAULT_AREAS)
+        # B-1: Lab-Options, aus denen die Entities beim Setup gebaut wurden.
+        # Startwert = "keine Lab-Options" (das ist der Entity-Satz eines
+        # frischen Setups ohne Custom-Marker/Overrides), damit ein Entry ohne
+        # Lab-Options keinen Reload auslöst.
+        self.lab_options: LabOptionsSnapshot = _lab_options_snapshot({})
         # S-4: zuletzt gesehener `set_lifetime_ml`-Optionswert. Nur eine
         # explizite Änderung darf den Lebenszähler setzen — sonst würde jede
         # Options-Änderung (z. B. Tagesziel) den gewachsenen Zähler zurücksetzen.
@@ -312,6 +346,7 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     rt = entry.runtime_data
     opts = entry.options or {}
     rt.areas = areas.active_areas(opts)
+    rt.lab_options = _lab_options_snapshot(opts)
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
@@ -335,6 +370,11 @@ async def _options_updated(hass, entry) -> None:
     DailyGoalNumber.async_set_native_value, siehe number.py — beide schreiben nur
     noch in entry.options, dieser Listener ist der einzige Sync-Punkt zurück in
     den Runtime-Spiegel rt.daily_goal_ml).
+
+    Ein Reload ist genau dann nötig, wenn sich die **Entity-Menge** ändert:
+    Personen-Umbenennung (Device-Name), Bereichs-Auswahl und — seit REQ-HOM-122
+    (Review-Fix B-1) — die Lab-Options (ein Sensor je Marker, ein Warn-Sensor je
+    Kategorie). Alles andere wird am laufenden Entry nachgezogen.
     """
     rt = entry.runtime_data
     opts = entry.options or {}
@@ -344,15 +384,21 @@ async def _options_updated(hass, entry) -> None:
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
 
     new_areas = areas.active_areas(opts)
+    new_lab_options = _lab_options_snapshot(opts)
 
     # Anzeige-Name geändert → Store synchron halten + Entities neu laden
     # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
     current_person = store.all_entries().get(entry.entry_id, {}).get("person")
     person_changed = current_person != effective_person(entry)
-    if person_changed or new_areas != rt.areas:
+    lab_options_changed = new_lab_options != rt.lab_options
+    if person_changed or new_areas != rt.areas or lab_options_changed:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
+        # Snapshot VOR dem Reload setzen: der Reload baut die Entities aus
+        # genau diesen Optionen neu auf, ein erneuter Listener-Lauf darf also
+        # keinen weiteren Reload auslösen (kein Reload-Loop).
+        rt.lab_options = new_lab_options
         # Vor dem Reload: Timer neu aufsetzen (der Reload löst zwar erneut
         # Setup aus, aber bis dahin soll die neue Options-Wahl schon gelten).
         await async_setup_reminders(hass, entry, store)

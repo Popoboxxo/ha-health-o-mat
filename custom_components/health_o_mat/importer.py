@@ -33,7 +33,7 @@ from .const import (
     OPTION_LAB_CUSTOM_MARKERS,
 )
 from .entity import signal_refresh
-from .logic import resolve_lab_marker
+from .logic import convert_lab_value, resolve_lab_marker
 from .store import HealthOMatStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -423,8 +423,13 @@ def plan_import(
     ``dataset`` ist ``drinks``, ``blood_pressure``, ``lab_values`` oder ``all``
     (auto-erkennen). Duplikate werden über ``(ts, ml)``, ``(ts, sys, dia)`` bzw.
     ``(ts, marker_key, value)`` erkannt — bestehende Einträge und Wiederholungen
-    innerhalb der Datei zählen als ``skipped``, unlesbare Zeilen und unbekannte
-    Laborwert-Marker als ``rejected``.
+    innerhalb der Datei zählen als ``skipped``, unlesbare Zeilen, unbekannte
+    Laborwert-Marker und nicht unterstützte Einheiten als ``rejected``.
+
+    Laborwerte werden nach der Marker-Auflösung über
+    ``logic.convert_lab_value`` in den ``canonical_unit`` des Markers umgerechnet
+    (Spec-Invariante: ``value``/``unit`` sind immer kanonisch). Die Rohwerte
+    bleiben als ``reported_value``/``reported_unit`` erhalten.
     """
     rows, header_kind = parse_csv_text(text)
     resolved = dataset
@@ -445,8 +450,16 @@ def plan_import(
                 plan.rejected += 1
                 plan.errors.append(f"Unbekannter Marker: {record['marker_raw']!r}")
                 continue
-            marker_key, _marker_def = resolved_marker
+            marker_key, marker_def = resolved_marker
+            try:
+                value, unit = convert_lab_value(marker_def, record["value"], record["unit"])
+            except ValueError:
+                plan.rejected += 1
+                plan.errors.append(f"Nicht unterstützte Einheit: {record['unit']!r}")
+                continue
             record["marker_key"] = marker_key
+            record["value"] = value
+            record["unit"] = unit
             del record["marker_raw"]
             key = (record["ts"], marker_key, record["value"])
             if key in seen_labs:

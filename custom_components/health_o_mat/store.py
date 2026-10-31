@@ -15,9 +15,9 @@ Person optional gekappt (Default 1000, `0` = unbegrenzt).
 
 Lesepfade für Anzeige/Auswertung nutzen die **aktive Sicht**
 (`active_entry`/`active_entries`): voided Einträge (`voided_at` gesetzt) sind
-dort herausgefiltert und die Wellbeing-Spiegel aus den aktiven Ereignissen neu
-aufgebaut. `entry()`/`all_entries()` bleiben bewusst **roh** (Schreibpfad,
-Backup, Diagnostics-Rohzahlen).
+dort herausgefiltert (inkl. `lab_readings`) und die Wellbeing-Spiegel aus den
+aktiven Ereignissen neu aufgebaut. `entry()`/`all_entries()` bleiben bewusst
+**roh** (Schreibpfad, Backup, Diagnostics-Rohzahlen).
 
 Die Klasse bedient sowohl den Haupt-Store (`MAIN_STORE_KEY`) als auch den
 separaten Archiv-Store (`ARCHIVE_STORE_KEY`); beide teilen sich dieselbe
@@ -693,18 +693,26 @@ class HealthOMatStore:
         ]
 
     def last_active_lab_reading(self, entry_id: str, marker_key: str) -> dict | None:
-        """Letzter aktiver Wert EINES Markers (None = keiner erfasst)."""
+        """Aktueller aktiver Wert EINES Markers — der mit dem größten `ts`.
+
+        Bewusst NICHT "der zuletzt eingetragene": nachgetragene alte Befunde
+        (rückdatierter `ts`) dürfen den aktuellen Wert nicht überschreiben.
+        Bei identischem `ts`/`created_at` gewinnt der zuletzt eingetragene
+        (stabiler Sort, Muster wie `_sync_wellbeing_mirrors`).
+        """
         items = self.entry(entry_id).get("lab_readings", [])
         if not isinstance(items, list):
             return None
-        for item in reversed(items):
-            if (
-                isinstance(item, dict)
-                and item.get("marker_key") == marker_key
-                and not item.get("voided_at")
-            ):
-                return item
-        return None
+        candidates = [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and item.get("marker_key") == marker_key
+            and not item.get("voided_at")
+        ]
+        if not candidates:
+            return None
+        return sorted(candidates, key=lab_reading_chrono_key)[-1]
 
     async def void_lab_reading(
         self,
@@ -847,7 +855,7 @@ class HealthOMatStore:
             for item in self.entry(entry_id).get("wellbeing_entries", [])
             if isinstance(item, dict) and not item.get("voided_at")
         ]
-        return sorted(active, key=_wellbeing_chrono_key)
+        return sorted(active, key=_event_chrono_key)
 
     def current_wellbeing(self, entry_id: str) -> dict | None:
         """Aktueller Wohlbefindenswert = letzter nicht-gelöschter Eintrag."""
@@ -1137,6 +1145,9 @@ def _active_view(entry: dict) -> dict:
     view = dict(entry)
     view["drinks"] = _active_items(entry.get("drinks"))
     view["readings"] = _active_items(entry.get("readings"))
+    # NB-5: `active_entry()` verspricht "ohne voided" — das gilt auch für die
+    # Laborwerte (sonst tauchen gelöschte Befunde in Auswertungen auf).
+    view["lab_readings"] = _active_items(entry.get("lab_readings"))
     if isinstance(entry.get("wellbeing_entries"), list):
         view["wellbeing_entries"] = _active_items(entry.get("wellbeing_entries"))
         _sync_wellbeing_mirrors(view)
@@ -1166,9 +1177,14 @@ def _chrono_sort_key(value: Any) -> datetime:
     return parsed.astimezone(UTC).replace(tzinfo=None)
 
 
-def _wellbeing_chrono_key(item: dict) -> tuple[datetime, datetime]:
-    """Sortierschlüssel eines Wellbeing-Ereignisses: `ts`, dann `created_at`."""
+def _event_chrono_key(item: dict) -> tuple[datetime, datetime]:
+    """Sortierschlüssel eines Ereignisses: `ts`, dann `created_at`."""
     return (_chrono_sort_key(item.get("ts")), _chrono_sort_key(item.get("created_at")))
+
+
+# Öffentlicher Alias: auch `ws_api._labs_block` sortiert den Laborverlauf damit —
+# ein zweiter (abweichender) Sortierpfad wäre eine Fehlerquelle.
+lab_reading_chrono_key = _event_chrono_key
 
 
 def _sync_wellbeing_mirrors(entry: dict) -> None:
@@ -1189,7 +1205,7 @@ def _sync_wellbeing_mirrors(entry: dict) -> None:
             for item in entries
             if isinstance(item, dict) and item.get("key") and not item.get("voided_at")
         ),
-        key=_wellbeing_chrono_key,
+        key=_event_chrono_key,
     )
     if not active:
         entry["wellbeing"] = {}

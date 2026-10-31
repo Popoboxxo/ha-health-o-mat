@@ -1312,6 +1312,36 @@ def test_req_hom_122_plan_import_lab_values_resolves_custom_marker():
     assert plan.lab_readings[0]["marker_key"] == "vitamin_d"
 
 
+def test_req_hom_122_plan_import_lab_values_converts_alt_unit_to_canonical():
+    """[REQ-HOM-122] mg/dL wird in den canonical_unit (µmol/L) umgerechnet.
+
+    Spec-Invariante: ``value``/``unit`` sind immer kanonisch, die Rohwerte
+    bleiben als ``reported_value``/``reported_unit`` erhalten.
+    """
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;creatinine;kidney;1.1;mg/dL;;;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.rejected == 0
+    record = plan.lab_readings[0]
+    assert record["marker_key"] == "creatinine"
+    assert record["value"] == 97.24
+    assert record["unit"] == "µmol/L"
+    assert record["reported_value"] == 1.1
+    assert record["reported_unit"] == "mg/dL"
+
+
+def test_req_hom_122_plan_import_lab_values_rejects_unsupported_unit():
+    """[REQ-HOM-122] Unbekannte Einheit → rejected, nie roh persistiert."""
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;furlongs;;;\n"
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.lab_readings == []
+    assert plan.rejected == 1
+    assert "furlongs" in plan.errors[0]
+
+
 def test_req_hom_122_async_import_csv_writes_lab_readings(tmp_path):
     """[REQ-HOM-122] Service legt Laborwerte über den Store an."""
     folder = _import_dir(tmp_path)
@@ -1364,3 +1394,75 @@ def test_req_hom_122_async_import_csv_uses_entry_lab_custom_markers(tmp_path):
 
     assert result["imported"] == 1
     assert store.entry("e1")["lab_readings"][0]["marker_key"] == "vitamin_d"
+
+
+def test_req_hom_122_async_import_csv_stores_canonical_lab_value(tmp_path):
+    """[REQ-HOM-122] Service persistiert Laborwerte kanonisch, Rohwert bleibt reported."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;creatinine;kidney;1.1;mg/dL;;;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 1
+    lab = store.entry("e1")["lab_readings"][0]
+    assert lab["value"] == 97.24
+    assert lab["unit"] == "µmol/L"
+    assert lab["reported_value"] == 1.1
+    assert lab["reported_unit"] == "mg/dL"
+
+
+def test_req_hom_122_async_import_csv_rejects_unsupported_unit_without_write(tmp_path):
+    """[REQ-HOM-122] Unbekannte Einheit → rejected, keine Store-Schreibung."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;furlongs;;;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 0
+    assert result["rejected"] == 1
+    assert result["errors"]
+    assert store.entry("e1")["lab_readings"] == []
+
+
+def test_req_hom_122_lab_export_import_roundtrip_stays_canonical(tmp_path):
+    """[REQ-HOM-122] Export → Import: kanonischer Wert bleibt, Rohwert bleibt reported."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(
+        store.add_lab_reading(
+            "e1", "2026-10-31T09:00:00", "creatinine", 97.24, "µmol/L", 1.1, "mg/dL"
+        )
+    )
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "lab_values"})))
+    content = next(tmp_path.glob("*lab*")).read_text(encoding="utf-8-sig")
+
+    plan = importer.plan_import(
+        content, "lab_values", existing_lab_readings=[], lab_custom_markers=[]
+    )
+
+    assert plan.rejected == 0
+    record = plan.lab_readings[0]
+    assert record["value"] == 97.24
+    assert record["unit"] == "µmol/L"
+    assert record["reported_value"] == 1.1
+    assert record["reported_unit"] == "mg/dL"

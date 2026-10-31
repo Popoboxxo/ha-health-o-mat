@@ -1985,3 +1985,86 @@ def test_req_hom_122_remove_last_lab_reading_no_active_reading_returns_false(moc
     _async_test(store.async_load())
     changed = _async_test(store.remove_last_lab_reading("e1", "alt"))
     assert changed is False
+
+
+# ============================================================================
+# Laborwerte (REQ-HOM-122): Review-Fixes NB-1 (Zeitstempel) + NB-5 (aktive Sicht)
+# ============================================================================
+
+
+def _add_lab(store, ts: str, marker: str, value: float) -> None:
+    """Kurzschreibweise für `add_lab_reading` (kanonische Einheit = U/L)."""
+    _async_test(store.add_lab_reading("e1", ts, marker, value, "U/L", value, "U/L"))
+
+
+def test_req_hom_122_nb1_last_active_lab_reading_uses_latest_ts(mock_store_fixture):
+    """[NB-1] Nachgetragener älterer Befund überschreibt den aktuellen Wert nicht.
+
+    Erfassungs-Reihenfolge: erst der NEUERE Befund (03.11.), dann der
+    NACHGETRAGENE ältere (30.10.). "Aktuell" ist der neuere `ts`.
+    """
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _add_lab(store, "2026-11-03T09:00:00+01:00", "alt", 40)
+    _add_lab(store, "2026-10-30T09:00:00+01:00", "alt", 25)
+
+    last = store.last_active_lab_reading("e1", "alt")
+
+    assert last["value"] == 40
+    assert last["ts"] == "2026-11-03T09:00:00+01:00"
+
+
+def test_req_hom_122_nb1_last_active_lab_reading_handles_naive_and_aware_mixes(mock_store_fixture):
+    """[NB-1] Naive und tz-aware `ts` sind vergleichbar (kein TypeError, korrekte Wahl)."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _add_lab(store, "2026-11-03T09:00:00", "alt", 40)
+    _add_lab(store, "2026-10-30T09:00:00Z", "alt", 25)
+
+    last = store.last_active_lab_reading("e1", "alt")
+
+    assert last["value"] == 40
+
+
+def test_req_hom_122_nb1_last_active_lab_reading_skips_voided_newest(mock_store_fixture):
+    """[NB-1] Der neueste Wert ist voided → der davor liegende aktive gewinnt."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _add_lab(store, "2026-10-30T09:00:00+01:00", "alt", 25)
+    _add_lab(store, "2026-11-03T09:00:00+01:00", "alt", 40)
+    newest_id = store.active_lab_readings("e1", marker_key="alt")[1]["id"]
+    _async_test(store.void_lab_reading("e1", newest_id))
+
+    last = store.last_active_lab_reading("e1", "alt")
+
+    assert last["value"] == 25
+
+
+def test_req_hom_122_nb1_remove_last_lab_reading_voids_chronologically_newest(mock_store_fixture):
+    """[NB-1] Undo trifft den zeitlich neuesten Wert, nicht den zuletzt erfassten."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _add_lab(store, "2026-11-03T09:00:00+01:00", "alt", 40)
+    _add_lab(store, "2026-10-30T09:00:00+01:00", "alt", 25)
+
+    changed = _async_test(store.remove_last_lab_reading("e1", "alt"))
+
+    assert changed is True
+    active = store.active_lab_readings("e1", marker_key="alt")
+    assert [item["value"] for item in active] == [25.0]
+
+
+def test_req_hom_122_nb5_active_entry_filters_voided_lab_readings(mock_store_fixture):
+    """[NB-5] `active_entry()` verspricht 'ohne voided' — auch für `lab_readings`."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _add_lab(store, "2026-10-30T09:00:00+01:00", "alt", 25)
+    _add_lab(store, "2026-11-03T09:00:00+01:00", "alt", 40)
+    voided_id = store.entry("e1")["lab_readings"][0]["id"]
+    _async_test(store.void_lab_reading("e1", voided_id))
+
+    view = store.active_entry("e1")
+
+    assert [item["value"] for item in view["lab_readings"]] == [40.0]
+    # Rohbestand bleibt vollständig (Schreibpfad/Backup/Diagnostics).
+    assert len(store.entry("e1")["lab_readings"]) == 2

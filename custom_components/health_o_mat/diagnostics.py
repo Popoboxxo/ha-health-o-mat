@@ -9,8 +9,8 @@ landet üblicherweise in einem öffentlichen GitHub-Issue. Deshalb gilt eine str
 **Allow-List** statt einer Deny-List:
 
 Erlaubt: Integrations-/Entry-/Schema-Versionen, Entity-IDs der Person,
-``entry.options`` (Personennamen darin maskiert) und reine **Zähler**
-(gesamt/aktiv/voided je Datensatz sowie Audit-Anzahl).
+``entry.options`` (Personennamen darin maskiert, Lab-Optionen nur als Zähler)
+und reine **Zähler** (gesamt/aktiv/voided je Datensatz sowie Audit-Anzahl).
 Verboten: ml-Mengen je Buchung, sys/dia/puls, Wohlbefinden-Status, Personennamen,
 rohe Zeitstempel. ``total_ml_lifetime`` wird bewusst weggelassen (grenzwertige
 Gesundheitsmenge, vgl. Fund N-5).
@@ -26,13 +26,30 @@ import pathlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .const import DOMAIN, STORE_SCHEMA_VERSION
+from .const import (
+    DOMAIN,
+    OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_HIDDEN_CATEGORIES,
+    OPTION_LAB_REF_OVERRIDES,
+    STORE_SCHEMA_VERSION,
+)
 
 #: Ersatz für jeden Personennamen im Output — nie der reale Name.
 _PERSON_MASK = "***"
 
 #: Options-Schlüssel, die einen Personennamen tragen und daher maskiert werden.
 _NAME_KEYS = frozenset({"person", "person_display"})
+
+#: Lab-Options mit Freitext/Gesundheitsbezug: nur als reiner Zähler ausgeben.
+#: ``lab_custom_markers`` enthält frei wählbare Namen (potenziell Diagnosen),
+#: ``lab_ref_overrides``/``lab_hidden_categories`` Marker-Identitäten.
+_LAB_OPTION_KEYS = frozenset(
+    {
+        OPTION_LAB_CUSTOM_MARKERS,
+        OPTION_LAB_HIDDEN_CATEGORIES,
+        OPTION_LAB_REF_OVERRIDES,
+    }
+)
 
 
 def redact_diagnostics(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -127,22 +144,33 @@ def _count(value: Any) -> int:
 
 
 def _redact_options(options: Any) -> dict[str, Any]:
-    """Options kopieren, Personennamen maskieren, sonst tief durchreichen."""
+    """Options kopieren, Personennamen maskieren, Lab-Optionen nur zählen."""
     if not isinstance(options, Mapping):
         return {}
-    return {
-        str(key): (_PERSON_MASK if key in _NAME_KEYS else _scrub(value))
-        for key, value in options.items()
-    }
+    return {str(key): _redact_option_value(key, value) for key, value in options.items()}
+
+
+def _redact_option_value(key: Any, value: Any) -> Any:
+    """Einen Options-Wert redigieren: Name maskieren, Lab-Inhalt nur zählen."""
+    name = str(key)
+    if name in _NAME_KEYS:
+        return _PERSON_MASK
+    if name in _LAB_OPTION_KEYS:
+        return {"count": _option_count(value)}
+    return _scrub(value)
+
+
+def _option_count(value: Any) -> int:
+    """Anzahl der Einträge einer Lab-Option — nie deren Inhalt."""
+    if isinstance(value, Mapping):
+        return len(value)
+    return _count(value)
 
 
 def _scrub(value: Any) -> Any:
-    """Rekursiv Personennamen in verschachtelten Options maskieren."""
+    """Rekursiv Personennamen und Lab-Inhalte in verschachtelten Options redigieren."""
     if isinstance(value, Mapping):
-        return {
-            str(key): (_PERSON_MASK if key in _NAME_KEYS else _scrub(item))
-            for key, item in value.items()
-        }
+        return {str(key): _redact_option_value(key, item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_scrub(item) for item in value]
     return value

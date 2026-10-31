@@ -53,6 +53,7 @@ from .entity import effective_person, signal_refresh
 from .frontend import shared_data
 from .importer import list_import_files as _list_import_files
 from .panel import OPTION_ENABLE_SIDEBAR_PANEL
+from .store import lab_reading_chrono_key
 from .ui_store import HealthOMatUiStore
 
 try:  # HA-Kernkomponente; Import bleibt tolerant, damit das Paket auch ohne
@@ -644,8 +645,13 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
         overrides_for_marker = None if marker_def.get("is_custom") else ref_overrides
         ref_min, ref_max = logic.resolve_lab_reference(marker_key, marker_def, overrides_for_marker)
         last = store.last_active_lab_reading(entry.entry_id, marker_key) if store else None
+        # NB-1: Der Verlauf ist chronologisch (aufsteigend) sortiert — die
+        # Einfüge-Reihenfolge ist bei nachgetragenen Befunden nicht chronologisch.
         history_items = (
-            store.active_lab_readings(entry.entry_id, marker_key=marker_key)[-_LAB_HISTORY_LIMIT:]
+            sorted(
+                store.active_lab_readings(entry.entry_id, marker_key=marker_key),
+                key=lab_reading_chrono_key,
+            )[-_LAB_HISTORY_LIMIT:]
             if store
             else []
         )

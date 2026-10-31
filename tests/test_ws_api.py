@@ -4141,6 +4141,38 @@ def test_req_hom_122_panel_data_labs_history_is_capped(monkeypatch):
     assert history[-1]["value"] == 20.0
 
 
+def test_req_hom_122_panel_data_labs_history_is_chronological(monkeypatch):
+    """[NB-1] Der Verlauf ist nach `ts` aufsteigend sortiert, nicht nach Eingabe."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    # Erfassungs-Reihenfolge: neuer Wert zuerst, danach der nachgetragene alte.
+    items = [
+        {"ts": "2026-11-03T09:00:00+01:00", "value": 40.0},
+        {"ts": "2026-10-30T09:00:00+01:00", "value": 25.0},
+        {"ts": "2026-10-20T09:00:00+01:00", "value": 20.0},
+    ]
+    store.active_lab_readings.return_value = items
+
+    history = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]["history"]
+
+    assert [item["value"] for item in history] == [20.0, 25.0, 40.0]
+
+
+def test_req_hom_122_panel_data_labs_history_cap_keeps_newest(monkeypatch):
+    """[NB-1] Die 14er-Grenze schneidet die ÄLTESTEN Werte ab (unsortierter Input)."""
+    hass, store = _lab_panel_hass(_entry(), monkeypatch)
+    items = [
+        {"ts": f"2026-10-{day:02d}T09:00:00+01:00", "value": float(day)}
+        for day in range(20, 0, -1)  # absteigend erfasst/nachgetragen
+    ]
+    store.active_lab_readings.return_value = items
+
+    history = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["alt"]["history"]
+
+    assert len(history) == 14
+    assert history[0]["value"] == 7.0
+    assert history[-1]["value"] == 20.0
+
+
 def test_req_hom_122_panel_data_labs_category_hidden_flag(monkeypatch):
     """`lab_hidden_categories` setzt nur das `hidden`-Flag, filtert nichts weg."""
     entry = _entry(options={"lab_hidden_categories": ["thyroid"]})

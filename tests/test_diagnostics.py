@@ -337,3 +337,53 @@ def test_counters_legacy_wellbeing_without_event_list():
     assert out["counters"]["wellbeing_active"] == 2
     assert out["counters"]["wellbeing_voided"] == 0
     assert out["counters"]["wellbeing_history"] == 1
+
+
+# ============================================================================
+# REQ-HOM-122 — Lab-Optionen: Freitext/Marker-Identitäten nur als Zähler
+# ============================================================================
+
+_LAB_OPTIONS = {
+    const.OPTION_LAB_CUSTOM_MARKERS: [
+        {"key": "vitamin_d", "name": "Vitamin-D-Mangel", "category": "other", "unit": "ng/mL"},
+        {"key": "ferritin", "name": "Ferritin", "category": "blood_count", "unit": "ng/mL"},
+    ],
+    const.OPTION_LAB_REF_OVERRIDES: {"creatinine": {"ref_min": 60, "ref_max": 110}},
+    const.OPTION_LAB_HIDDEN_CATEGORIES: ["thyroid", "drug_levels"],
+}
+
+
+def test_redact_lab_options_as_counts_only():
+    """[REQ-HOM-122] Lab-Options nur als Zähler — keine Namen, Marker oder Werte."""
+    out = diagnostics.redact_diagnostics({"options": _LAB_OPTIONS})
+
+    options = out["options"]
+    assert options[const.OPTION_LAB_CUSTOM_MARKERS] == {"count": 2}
+    assert options[const.OPTION_LAB_REF_OVERRIDES] == {"count": 1}
+    assert options[const.OPTION_LAB_HIDDEN_CATEGORIES] == {"count": 2}
+
+    blob = _blob(out)
+    for token in (
+        "Vitamin-D-Mangel",
+        "vitamin_d",
+        "ferritin",
+        '"creatinine"',
+        '"ref_min"',
+        "thyroid",
+        "drug_levels",
+    ):
+        assert token not in blob, f"geleakt: {token!r}"
+
+
+def test_async_diagnostics_redacts_lab_options_from_entry():
+    """[REQ-HOM-122] entry.options mit Lab-Inhalten → nur Zähler im Download."""
+    hass = MagicMock()
+    hass.data = {}
+    entry = SimpleNamespace(entry_id="e1", version=5, options=_LAB_OPTIONS)
+
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+
+    assert out["options"][const.OPTION_LAB_CUSTOM_MARKERS] == {"count": 2}
+    blob = _blob(out)
+    assert "Vitamin-D-Mangel" not in blob
+    assert "vitamin_d" not in blob
