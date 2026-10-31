@@ -51,6 +51,7 @@ from .const import (
     STORE_SCHEMA_VERSION,
     STORE_VERSION,
 )
+from .logic import lab_report_matches
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -679,6 +680,70 @@ class HealthOMatStore:
         )
         await self._async_save()
 
+    async def add_lab_readings(
+        self,
+        entry_id: str,
+        ts_iso: str,
+        rows: list[dict],
+        report_ref: str | None = None,
+        created_ts_iso: str | None = None,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> list[str]:
+        """Mehrere Laborwerte eines Berichts als EIN Vorgang schreiben (§2.8).
+
+        ``rows`` sind bereits validierte, kanonisch konvertierte Zeilen
+        (``{marker_key, value, unit, reported_value, reported_unit}``). Genau ein
+        Save, genau ein Audit-Eintrag; schlägt der Save fehl, wird der
+        In-Memory-Zustand (deepcopy-Snapshot) exakt zurückgesetzt und der Fehler
+        weitergereicht.
+        """
+        created = created_ts_iso or _now_iso()
+        entry = self.entry(entry_id)
+        readings_before = copy.deepcopy(entry.get("lab_readings") or [])
+        audit_before = copy.deepcopy(entry.get("audit_log") or [])
+        reading_ids: list[str] = []
+        marker_keys: list[str] = []
+        try:
+            for row in rows:
+                reading = {
+                    "id": str(uuid.uuid4()),
+                    "ts": ts_iso,
+                    "marker_key": row["marker_key"],
+                    "value": float(row["value"]),
+                    "unit": row["unit"],
+                    "reported_value": float(row["reported_value"]),
+                    "reported_unit": row["reported_unit"],
+                    "report_ref": report_ref,
+                    "created_at": created,
+                    "voided_at": None,
+                    "voided_by": None,
+                    "void_reason": None,
+                }
+                entry.setdefault("lab_readings", []).append(reading)
+                reading_ids.append(reading["id"])
+                marker_keys.append(reading["marker_key"])
+            self._append_audit(
+                entry_id,
+                "lab_values_added",
+                "lab_readings",
+                None,
+                actor,
+                {
+                    "count": len(reading_ids),
+                    "marker_keys": marker_keys[:20],
+                    "reading_ids": reading_ids[:20],
+                    "created_at": created,
+                },
+                audit_limit,
+            )
+            await self._async_save()
+        except Exception:
+            entry["lab_readings"] = readings_before
+            entry["audit_log"] = audit_before
+            raise
+        return reading_ids
+
     def active_lab_readings(self, entry_id: str, marker_key: str | None = None) -> list[dict]:
         """Nur nicht-gelöschte Laborwerte, optional auf einen Marker gefiltert."""
         items = self.entry(entry_id).get("lab_readings", [])
@@ -751,6 +816,116 @@ class HealthOMatStore:
         )
         await self._async_save()
         return True
+
+    async def void_lab_report(
+        self,
+        entry_id: str,
+        ts_iso: str,
+        report_ref: str | None = None,
+        actor: str | None = None,
+        reason: str = "report_discarded",
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> list[str]:
+        """Alle aktiven Werte eines Berichts voiden (REQ-HOM-128).
+
+        Treffer = gleicher Instant wie ``ts_iso`` und — falls ``report_ref``
+        gesetzt ist — exakt derselbe Tag. Ein Save, ein Audit, Rollback bei
+        Save-Fehler. Leere Rückgabe = kein aktiver Treffer (kein Write).
+        """
+        entry = self.entry(entry_id)
+        try:
+            target = datetime.fromisoformat(ts_iso)
+        except (TypeError, ValueError):
+            return []
+        readings_before = copy.deepcopy(entry.get("lab_readings") or [])
+        audit_before = copy.deepcopy(entry.get("audit_log") or [])
+        voided_at = _now_iso()
+        voided_ids: list[str] = []
+        try:
+            for reading in entry.get("lab_readings") or []:
+                if not isinstance(reading, dict) or reading.get("voided_at"):
+                    continue
+                if not lab_report_matches(reading, target, report_ref):
+                    continue
+                reading["voided_at"] = voided_at
+                reading["voided_by"] = actor
+                reading["void_reason"] = reason
+                voided_ids.append(reading["id"])
+            if not voided_ids:
+                return []
+            self._append_audit(
+                entry_id,
+                "lab_report_voided",
+                "lab_readings",
+                None,
+                actor,
+                {
+                    "count": len(voided_ids),
+                    "reading_ids": voided_ids[:20],
+                    "created_at": voided_at,
+                },
+                audit_limit,
+            )
+            await self._async_save()
+        except Exception:
+            entry["lab_readings"] = readings_before
+            entry["audit_log"] = audit_before
+            raise
+        return voided_ids
+
+    async def void_lab_readings_before(
+        self,
+        entry_id: str,
+        cutoff_iso: str,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+        months: int = 0,
+    ) -> list[str]:
+        """Labor-Retention: aktive Werte mit ``ts < cutoff`` voiden (REQ-HOM-129).
+
+        Kein Archiv, keine Listenkürzung, keine Änderung an Getränken/BD.
+        Idempotent: bereits voidete Einträge werden nie erneut gezählt oder
+        geauditet. ``months`` landet nur im Audit-Details-Objekt.
+        """
+        entry = self.entry(entry_id)
+        cutoff = _chrono_sort_key(cutoff_iso)
+        readings_before = copy.deepcopy(entry.get("lab_readings") or [])
+        audit_before = copy.deepcopy(entry.get("audit_log") or [])
+        voided_at = _now_iso()
+        voided_ids: list[str] = []
+        try:
+            for reading in entry.get("lab_readings") or []:
+                if not isinstance(reading, dict) or reading.get("voided_at"):
+                    continue
+                if _chrono_sort_key(reading.get("ts")) >= cutoff:
+                    continue
+                reading["voided_at"] = voided_at
+                reading["voided_by"] = actor
+                reading["void_reason"] = "retention"
+                voided_ids.append(reading["id"])
+            if not voided_ids:
+                return []
+            self._append_audit(
+                entry_id,
+                "lab_values_retention",
+                "lab_readings",
+                None,
+                actor,
+                {
+                    "count": len(voided_ids),
+                    "months": int(months),
+                    "cutoff": cutoff_iso,
+                    "reading_ids": voided_ids[:20],
+                    "created_at": voided_at,
+                },
+                audit_limit,
+            )
+            await self._async_save()
+        except Exception:
+            entry["lab_readings"] = readings_before
+            entry["audit_log"] = audit_before
+            raise
+        return voided_ids
 
     async def restore_lab_reading(
         self,

@@ -5,10 +5,20 @@ Mirrors the existing Card/Panel E2E pattern (``test_card_config_e2e.py`` /
 ``docker-compose.e2e.yml`` driven by Playwright, reusing the shared fixtures
 (``logged_in_page``, ``hass_base_url``, ``hass_bearer_token``, ``panel_person``).
 
-Scenario (spec §9): create a custom marker in the Admin UI → override a catalog
-reference range → record a value through the panel's "Lab values" tab →
-verify the value and its in-range badge in the tab, and the lab-warning row on
-the overview tile.
+Scenarios:
+
+* REQ-HOM-122 (smoke, below): create a custom marker in the Admin UI → override
+  a catalog reference range → record a value through the panel's "Lab values"
+  tab → verify the value and its in-range badge in the tab, and the lab-warning
+  row on the overview tile.
+* REQ-HOM-123: the multi-row report dialog (batch write, hybrid fill button,
+  all-or-nothing duplicate rejection), plus the same card on a real dashboard.
+* REQ-HOM-125: the medical disclaimer in the panel's lab tab (default visible,
+  admin-hideable, also in the all-categories-hidden empty state).
+* REQ-HOM-124: the admin catalog's conversion column ("alt unit × factor →
+  canonical", locale-formatted factor, "unit required" badge).
+* REQ-HOM-126: `examples/dashboard-labs-card.yaml` renders the labs card in
+  Lovelace.
 
 Everything is asserted twice where it matters: the visible UI and the
 authoritative server payload (``panel_data`` / ``get_settings``), so a green
@@ -41,12 +51,15 @@ Deliberate scope notes:
 
 from __future__ import annotations
 
+import re
 import uuid
 import warnings
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from playwright.sync_api import expect
 from test_card_config_e2e import CARD_TIMEOUT, _panel_data, _wait_for
 from test_panel_deeplink_e2e import open_panel, tab_keys, tile, wait_for_detail, wait_for_overview
@@ -92,6 +105,30 @@ ENTRY_FORM = "details.lab-entry-form"
 ENTRY_MARKER = "[data-field='lab-add-marker']"
 ENTRY_VALUE = "[data-field='lab-add-value']"
 ENTRY_SAVE = "[data-action='lab-add-value']"
+
+# Mehrzeilen-Dialog "Laborbericht" (REQ-HOM-123) — Panel-Zweitimplementierung
+# der Karte, gleiche `data-field`/`data-action`-Namen (§6.3).
+LAB_REPORT_FORM = "details.lab-report-form"
+LAB_REPORT_FILL_VISIBLE = "[data-action='lab-report-fill-visible']"
+LAB_REPORT_FILL_LAST = "[data-action='lab-report-fill-last']"
+LAB_REPORT_ADD = "[data-action='lab-report-add']"
+LAB_REPORT_SAVE = "[data-action='lab-report-save']"
+LAB_REPORT_DISCARD = "[data-action='lab-report-discard']"
+LAB_REPORT_MARKER = "[data-field='lab-report-marker-%d']"
+LAB_REPORT_VALUE = "[data-field='lab-report-value-%d']"
+LAB_REPORT_UNIT = "[data-field='lab-report-unit-%d']"
+LAB_REPORT_MARKER_SELECT = "[data-field^='lab-report-marker-']"
+LAB_REPORT_ERROR = ".msg.error"
+
+# Medizin-Hinweis (REQ-HOM-125) + Admin-Schalter dafür.
+LAB_DISCLAIMER = ".labs-disclaimer"
+DISCLAIMER_CHECKBOX = "[data-field='lab-hide-panel-disclaimer']"
+
+# Laborwerte-Karte in einem echten Lovelace-Dashboard (REQ-HOM-126).
+LABS_CARD_TAG = "health-o-mat-labs-card"
+EXAMPLE_LABS_DASHBOARD = (
+    Path(__file__).resolve().parents[1] / "examples" / "dashboard-labs-card.yaml"
+)
 
 TILE_LAB_ROW = ".lab-row-tile"
 TILE_STATUS = ".status.bad"
@@ -247,10 +284,14 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
     """Snapshot the person's lab options and restore them afterwards.
 
     The E2E instance is shared and `entry.options` survive a run, so a custom
-    marker created here would otherwise accumulate on every run. Only the
-    three lab option keys are touched; everything else is left alone. The
-    orphaned lab entity such a marker leaves behind is removed afterwards, too
-    (also when the test fails halfway).
+    marker created here would otherwise accumulate on every run. Only the lab
+    option keys are touched; everything else is left alone. The orphaned lab
+    entity such a marker leaves behind is removed afterwards, too (also when
+    the test fails halfway).
+
+    `lab_hide_panel_disclaimer` belongs to the same snapshot since REQ-HOM-125:
+    the disclaimer test turns the note off and would otherwise leave the shared
+    instance with a hidden disclaimer for every later run.
     """
     entry_id = panel_person["entry_id"]
     before = _settings(hass_base_url, hass_bearer_token, entry_id)
@@ -258,6 +299,7 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
         "lab_custom_markers": before.get("lab_custom_markers") or [],
         "lab_ref_overrides": before.get("lab_ref_overrides") or {},
         "lab_hidden_categories": before.get("lab_hidden_categories") or [],
+        "lab_hide_panel_disclaimer": before.get("lab_hide_panel_disclaimer") is True,
     }
     try:
         yield snapshot
@@ -498,3 +540,411 @@ def test_req_hom_122_lab_values_smoke(
         "the lab sensor entity to be gone/unavailable after removing the marker",
     )
     assert retired["state"] is None or retired["state"]["state"] == "unavailable"
+
+
+# --- REQ-HOM-123…126: Batch, Disclaimer, Admin-Faktoren, Beispiel-Dashboard --
+
+
+def _open_labs_tab(page, base_url: str, person: str):
+    """Person detail view with the lab tab active (category bar rendered)."""
+    panel = open_panel(page, base_url, person=person)
+    wait_for_detail(panel)
+    panel.locator(LAB_TAB).click()
+    panel.locator(LAB_CATEGORY_BAR).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    return panel
+
+
+def _open_report_form(panel):
+    """Open the collapsed report dialog (`<details>`) and return its locator."""
+    form = panel.locator(LAB_REPORT_FORM)
+    form.wait_for(state="attached", timeout=CARD_TIMEOUT)
+    if not form.evaluate("(el) => el.open"):
+        form.locator("summary").click()
+    panel.locator(LAB_REPORT_ADD).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    return form
+
+
+def _visible_marker_keys(payload: dict[str, Any]) -> list[str]:
+    """Marker keys the panel auto-fills ("alle sichtbaren Marker").
+
+    Same rule as `visibleLabCategories` in health-o-mat-panel-views.js: a
+    category is visible when it is not hidden AND has at least one marker.
+    """
+    labs = payload.get("labs") or {}
+    markers = labs.get("markers") or {}
+    hidden = {
+        str(category.get("key"))
+        for category in labs.get("categories") or []
+        if category.get("hidden")
+    }
+    with_markers = {str(marker.get("category")) for marker in markers.values() if marker}
+    return sorted(
+        str(key)
+        for key, marker in markers.items()
+        if marker and str(marker.get("category")) not in hidden
+        if str(marker.get("category")) in with_markers
+    )
+
+
+def _report_row_markers(panel) -> list[str]:
+    """`value` of every marker select of the report dialog (row order)."""
+    return panel.locator(LAB_REPORT_MARKER_SELECT).evaluate_all("els => els.map(el => el.value)")
+
+
+def _report_field(panel, selector: str):
+    """One control of the report dialog, with the `<details>` opened first.
+
+    The panel re-renders its whole shadow root on structural changes (add a
+    row, pick a marker), which resets the `<details>` element to "closed" —
+    the controls then exist but are not visible. Re-opening before every
+    interaction keeps the test on the user-visible path instead of poking at
+    hidden DOM.
+    """
+    _open_report_form(panel)
+    field = panel.locator(selector)
+    field.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    return field
+
+
+def _report_type(panel, selector: str, value: str) -> None:
+    """Type into a dialog input and commit it like a user leaving the field.
+
+    The panel keeps the dialog draft in `change` events (the `input` event is
+    not wired), so a bare `fill()` would leave the draft empty and the report
+    would be rejected as "marker without value". Blurring commits the value.
+    """
+    field = _report_field(panel, selector)
+    field.fill(value)
+    field.blur()
+
+
+def _labs_dashboard_config() -> dict[str, Any]:
+    """The shipped example dashboard — the artifact under test (REQ-HOM-126).
+
+    Read verbatim from ``examples/dashboard-labs-card.yaml``. There is
+    deliberately no inline fallback: a fallback would keep the test green while
+    the shipped example is broken (or missing from the E2E image), which is
+    exactly the failure mode this test exists to catch.
+    """
+    assert EXAMPLE_LABS_DASHBOARD.is_file(), (
+        f"the example dashboard under test is missing: {EXAMPLE_LABS_DASHBOARD} "
+        "(the E2E image must ship it — see Dockerfile.e2e's 'COPY examples/')"
+    )
+    with EXAMPLE_LABS_DASHBOARD.open(encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    assert isinstance(config, dict), (
+        f"{EXAMPLE_LABS_DASHBOARD} must parse to a Lovelace config mapping, "
+        f"got {type(config).__name__}"
+    )
+    return config
+
+
+def test_req_hom_123_hybrid_button_prefills_visible_markers(
+    logged_in_page, hass_base_url, hass_bearer_token, panel_person
+):
+    """[REQ-HOM-123] "Fill all visible markers" prefills one row per visible marker.
+
+    Spec §6.1 (hybrid filling) and §6.3 (the panel is a second implementation of
+    the same dialog) require the two fill buttons next to the multi-row form.
+    Kept separate from the write/duplicate test on purpose: a broken fill button
+    must not mask the batch-write contract (and vice versa).
+    """
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+    _open_report_form(panel)
+    panel.locator(LAB_REPORT_FILL_VISIBLE).click()
+
+    expected_keys = _visible_marker_keys(_panel_data(hass_base_url, hass_bearer_token, entry_id))
+    assert expected_keys, "the catalog must provide visible markers to fill"
+    assert sorted(_report_row_markers(panel)) == expected_keys, (
+        "the hybrid button must prefill exactly the visible markers, one row each "
+        "(reproduce: open the panel's lab tab → 'Laborbericht erfassen' → "
+        "'Alle sichtbaren Marker anlegen'; it adds no rows because the panel "
+        "passes an empty entry id)"
+    )
+
+
+def test_req_hom_123_lab_report_dialog_writes_and_rejects_duplicates(
+    logged_in_page, hass_base_url, hass_bearer_token, panel_person
+):
+    """[REQ-HOM-123] Two rows in one write; a duplicate is rejected and keeps the input."""
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+    # One decimal that is never .0: the panel renders the raw JSON number, so a
+    # whole number would read "137" instead of a formatted "137.0".
+    alt_value = round(100 + (uuid.uuid4().int % 90) + 0.5, 1)
+    crp_value = round(10 + (uuid.uuid4().int % 90) + 0.5, 1)
+
+    # 1. Two rows, one save.
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+    _open_report_form(panel)
+    panel.locator(LAB_REPORT_ADD).click()
+    _report_field(panel, LAB_REPORT_MARKER % 0).select_option(CATALOG_MARKER)
+    _report_type(panel, LAB_REPORT_VALUE % 0, str(alt_value))
+    _report_field(panel, LAB_REPORT_MARKER % 1).select_option("crp")
+    _report_type(panel, LAB_REPORT_VALUE % 1, str(crp_value))
+    _report_type(panel, LAB_REPORT_UNIT % 1, "mg/L")
+    _report_field(panel, LAB_REPORT_SAVE).click()
+
+    after = _wait_for(
+        lambda: _panel_data(hass_base_url, hass_bearer_token, entry_id),
+        lambda value: _lab_marker(value, "crp").get("reported_value") == crp_value,
+        "the report values to reach the store",
+    )
+    alt = _lab_marker(after, CATALOG_MARKER)
+    crp = _lab_marker(after, "crp")
+    assert alt["reported_value"] == alt_value
+    assert alt["reported_unit"] == CATALOG_MARKER_UNIT
+    assert alt["value"] == alt_value, "U/L is canonical, no conversion expected"
+    assert crp["reported_value"] == crp_value
+    assert crp["reported_unit"] == "mg/L"
+    assert crp["value"] == crp_value
+    last_report = (after.get("labs") or {}).get("last_report") or {}
+    assert sorted(last_report.get("marker_keys") or []) == sorted([CATALOG_MARKER, "crp"]), (
+        "both rows must belong to ONE report (single batch write, §2.5)"
+    )
+
+    # The sensor layer must follow the batch write, not just the panel payload.
+    alt_entity = _wait_for(
+        lambda: _lab_entity(hass_base_url, hass_bearer_token, entry_id, CATALOG_MARKER),
+        lambda value: (
+            value["state"] is not None
+            and value["state"].get("state") not in (None, "unknown", "unavailable")
+        ),
+        "the ALT lab sensor to mirror the batch write",
+    )
+    assert float(alt_entity["state"]["state"]) == alt_value
+    crp_entity = _wait_for(
+        lambda: _lab_entity(hass_base_url, hass_bearer_token, entry_id, "crp"),
+        lambda value: (
+            value["state"] is not None
+            and value["state"].get("state") not in (None, "unknown", "unavailable")
+        ),
+        "the CRP lab sensor to mirror the batch write",
+    )
+    assert float(crp_entity["state"]["state"]) == crp_value
+
+    # ... and the tab itself shows both values.
+    alt_row = panel.locator(LAB_ROW % CATALOG_MARKER)
+    alt_row.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert alt_row.locator(LAB_ROW_VALUE).inner_text().strip() == (
+        f"{alt_value} {CATALOG_MARKER_UNIT}"
+    )
+    panel.locator(LAB_CATEGORY_BUTTON % crp["category"]).click()
+    crp_row = panel.locator(LAB_ROW % "crp")
+    crp_row.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert crp_row.locator(LAB_ROW_VALUE).inner_text().strip() == f"{crp_value} mg/L"
+
+    # 2. Duplicate: the same resolved marker twice → server refuses the WHOLE
+    # report, names row and marker, and the dialog keeps its input.
+    before = _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CATALOG_MARKER)[
+        "reported_value"
+    ]
+    _open_report_form(panel)
+    panel.locator(LAB_REPORT_ADD).click()
+    _report_field(panel, LAB_REPORT_MARKER % 0).select_option(CATALOG_MARKER)
+    _report_type(panel, LAB_REPORT_VALUE % 0, "33")
+    _report_field(panel, LAB_REPORT_MARKER % 1).select_option(CATALOG_MARKER)
+    _report_type(panel, LAB_REPORT_VALUE % 1, "34")
+    _report_field(panel, LAB_REPORT_SAVE).click()
+
+    error = panel.locator(LAB_REPORT_ERROR).first
+    error.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    message = error.inner_text()
+    assert "Zeile 2" in message, f"the error must name the offending row: {message!r}"
+    assert CATALOG_MARKER in message, f"the error must name the marker: {message!r}"
+    assert "duplicate_marker" in message, f"the error must carry the code: {message!r}"
+    assert panel.locator(LAB_REPORT_VALUE % 0).input_value() == "33", (
+        "a rejected report must keep the entered values"
+    )
+    assert panel.locator(LAB_REPORT_VALUE % 1).input_value() == "34"
+
+    unchanged = _panel_data(hass_base_url, hass_bearer_token, entry_id)
+    assert _lab_marker(unchanged, CATALOG_MARKER)["reported_value"] == before, (
+        "an all-or-nothing rejection must not touch the stored value"
+    )
+
+
+def test_req_hom_125_panel_disclaimer_visibility_and_empty_state(
+    logged_in_page, hass_base_url, hass_bearer_token, panel_person, restore_lab_options
+):
+    """[REQ-HOM-125] Visible by default, hideable by admins, also in the empty state."""
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+    settings = _settings(hass_base_url, hass_bearer_token, entry_id)
+
+    # 1. Default: the note is part of the lab tab (before any settings load).
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+    disclaimer = panel.locator(LAB_DISCLAIMER)
+    disclaimer.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert "medical" in disclaimer.inner_text().lower()
+    assert panel.locator(LAB_CATEGORY_BAR).count() == 1, (
+        "the disclaimer must not replace the category bar while categories are visible"
+    )
+
+    # 2. Admin: hide the note through the settings form.
+    panel.locator(SETTINGS_GEAR).click()
+    panel.locator(SETTINGS_FORM).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    checkbox = panel.locator(DISCLAIMER_CHECKBOX)
+    checkbox.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert not checkbox.is_checked(), "the E2E fixture must start with a visible disclaimer"
+    checkbox.set_checked(True)
+    panel.locator(SAVE_BUTTON).click()
+    _wait_for(
+        lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+        lambda value: value.get("lab_hide_panel_disclaimer") is True,
+        "the disclaimer option to be persisted",
+    )
+
+    panel.locator(BACK).click()
+    wait_for_overview(panel)
+    tile(panel, entry_id).click()
+    wait_for_detail(panel)
+    panel.locator(LAB_TAB).click()
+    panel.locator(LAB_CATEGORY_BAR).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert panel.locator(LAB_DISCLAIMER).count() == 0, (
+        "a hidden disclaimer must not be rendered at all (not merely invisible)"
+    )
+
+    # 3. Hide EVERY category: empty state keeps the note (the data is still
+    # there, only the display is filtered) and names the settings cause.
+    panel.locator(SETTINGS_GEAR).click()
+    panel.locator(SETTINGS_FORM).wait_for(state="visible", timeout=CARD_TIMEOUT)
+    panel.locator(DISCLAIMER_CHECKBOX).set_checked(False)
+    for category in settings["lab_catalog"]["categories"]:
+        box = panel.locator(f"[data-field='lab-hide-{category['key']}']")
+        if box.count():
+            box.set_checked(False)
+    panel.locator(SAVE_BUTTON).click()
+    _wait_for(
+        lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+        lambda value: bool(value.get("lab_hidden_categories")),
+        "all categories to be hidden",
+    )
+
+    panel.locator(BACK).click()
+    wait_for_overview(panel)
+    tile(panel, entry_id).click()
+    wait_for_detail(panel)
+    panel.locator(LAB_TAB).click()
+    empty_disclaimer = panel.locator(LAB_DISCLAIMER)
+    empty_disclaimer.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert "medical" in empty_disclaimer.inner_text().lower()
+    assert panel.locator(LAB_CATEGORY_BAR).count() == 0, "no category bar in the empty state"
+    assert settings["lab_catalog"]["categories"], "the catalog must not be empty"
+
+    empty_message = panel.locator(".msg", has_text="hidden").first
+    empty_message.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    empty_text = empty_message.inner_text().lower()
+    assert "categor" in empty_text and "hidden" in empty_text, (
+        f"the empty state must explain that the categories are hidden: {empty_text!r}"
+    )
+
+
+def test_req_hom_124_admin_conversion_column_visible(logged_in_page, hass_base_url, panel_person):
+    """[REQ-HOM-124] The catalog table shows "alt unit × factor → canonical"."""
+    page = logged_in_page
+    panel = open_panel(page, hass_base_url, person=panel_person["slug"])
+    wait_for_detail(panel)
+    panel.locator(SETTINGS_GEAR).click()
+    panel.locator(LAB_REF_TABLE).wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+    text = panel.locator(LAB_REF_TABLE).inner_text()
+    # Bilirubin: mg/dL × 17.1 → µmol/L. The factor goes through
+    # `Intl.NumberFormat`, so the decimal separator follows the UI language
+    # (17.1 in en, 17,1 in de) — the test accepts both instead of pinning one.
+    assert re.search(r"mg/dL × 17[.,]1 → µmol/L", text), (
+        f"missing the bilirubin conversion column entry: {text!r}"
+    )
+    # Urea: g/g × 1,000 → mg/g — the grouping separator proves the factor is
+    # formatted locally instead of string-concatenated.
+    assert re.search(r"g/g × 1[.,]000 → mg/g", text), (
+        f"missing the locale-formatted conversion factor: {text!r}"
+    )
+    # The marker without a usable alt unit has no conversion ("—"), and the
+    # marker that requires an explicit unit carries the badge.
+    assert "Unit required" in text, (
+        f"missing the 'unit required' badge of the catalog markers: {text!r}"
+    )
+
+
+def test_req_hom_126_labs_card_example_dashboard_renders(
+    logged_in_page, hass_base_url, hass_bearer_token
+):
+    """[REQ-HOM-126] The example dashboard renders the labs card in Lovelace."""
+    page = logged_in_page
+    config = _labs_dashboard_config()
+    views = config.get("views") or []
+    assert views, "the labs dashboard example must define at least one view"
+    view_path = str(views[0].get("path") or "")
+    # The shipped example must actually wire the labs card — otherwise the test
+    # would render an empty dashboard and prove nothing about the example.
+    card_types = [
+        str(card.get("type"))
+        for view in views
+        for card in (view.get("cards") or [])
+        if isinstance(card, dict)
+    ]
+    assert f"custom:{LABS_CARD_TAG}" in card_types, (
+        f"{EXAMPLE_LABS_DASHBOARD.name} must contain a 'custom:{LABS_CARD_TAG}' "
+        f"card, found: {card_types}"
+    )
+
+    # Throwaway storage dashboard (same pattern as test_card_config_e2e.py):
+    # unique url_path, deleted again even when the test fails.
+    url_path = f"e2e-labs-{uuid.uuid4().hex[:10]}"
+    created = _ws_command(
+        hass_base_url,
+        hass_bearer_token,
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": url_path,
+            "title": "E2E Labs",
+            "mode": "storage",
+            "show_in_sidebar": False,
+            "require_admin": False,
+            "icon": "mdi:flask-outline",
+        },
+    )
+    dashboard_id = (created or {}).get("id")
+    try:
+        _ws_command(
+            hass_base_url,
+            hass_bearer_token,
+            {"type": "lovelace/config/save", "url_path": url_path, "config": config},
+        )
+
+        url = f"{hass_base_url}/{url_path}"
+        page.goto(f"{url}/{view_path}" if view_path else url)
+
+        # Mount or a diagnosable error card — never a bare timeout.
+        page.locator(f"{LABS_CARD_TAG}, hui-error-card").first.wait_for(
+            state="attached", timeout=CARD_TIMEOUT
+        )
+        assert page.locator("hui-error-card").count() == 0, (
+            "Lovelace rendered hui-error-card instead of the labs card — is the card "
+            f"resource registered (frontend.py)? URL: {page.url}"
+        )
+
+        card = page.locator(LABS_CARD_TAG)
+        card.locator("ha-card").wait_for(state="visible", timeout=CARD_TIMEOUT)
+        card.locator(".labs-title").wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+        # Defaults of the example: disclaimer on, category tabs and one row per
+        # marker of the active category — i.e. `panel_data` really reached the
+        # card instead of only the empty shell being mounted.
+        card.locator(".labs-disclaimer").wait_for(state="visible", timeout=CARD_TIMEOUT)
+        card.locator(".labs-tabs button").first.wait_for(state="visible", timeout=CARD_TIMEOUT)
+        card.locator(".labs-row").first.wait_for(state="visible", timeout=CARD_TIMEOUT)
+        assert card.locator(".labs-error").count() == 0, (
+            "the card must not render an error banner for a configured person"
+        )
+    finally:
+        if dashboard_id:
+            _ws_command(
+                hass_base_url,
+                hass_bearer_token,
+                {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id},
+            )

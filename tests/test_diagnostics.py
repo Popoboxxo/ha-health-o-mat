@@ -375,6 +375,22 @@ def test_redact_lab_options_as_counts_only():
         assert token not in blob, f"geleakt: {token!r}"
 
 
+def test_req_hom_129_redacts_new_lab_options_as_counts_only():
+    """[REQ-HOM-129] Retention/Disclaimer werden als reine Zähler redigiert."""
+    options = {
+        const.OPTION_LAB_RETENTION_MONTHS: 24,
+        const.OPTION_LAB_HIDE_PANEL_DISCLAIMER: True,
+    }
+
+    out = diagnostics.redact_diagnostics({"options": options})
+
+    # Skalare haben keine Sequenzlänge → `count` 0; der Wert selbst leakt nie.
+    assert out["options"][const.OPTION_LAB_RETENTION_MONTHS] == {"count": 0}
+    assert out["options"][const.OPTION_LAB_HIDE_PANEL_DISCLAIMER] == {"count": 0}
+    assert isinstance(out["options"][const.OPTION_LAB_RETENTION_MONTHS], dict)
+    assert isinstance(out["options"][const.OPTION_LAB_HIDE_PANEL_DISCLAIMER], dict)
+
+
 def test_async_diagnostics_redacts_lab_options_from_entry():
     """[REQ-HOM-122] entry.options mit Lab-Inhalten → nur Zähler im Download."""
     hass = MagicMock()

@@ -1,9 +1,11 @@
 # Build-context filter for the E2E runner image (Dockerfile.e2e).
 #
 # The image only needs custom_components/, scripts/e2e_bootstrap.py,
-# tests_e2e/ and requirements_e2e.txt. Everything else is either irrelevant
-# for the container or must not end up in an image layer at all (submodule
-# trees, local agent state, credentials/tokens in .env-like files).
+# tests_e2e/, examples/ and requirements_e2e.txt. Everything else is either
+# irrelevant for the container or must not end up in an image layer at all
+# (submodule trees, local agent state, credentials/tokens in .env-like files).
+# examples/ is included on purpose: examples/dashboard-labs-card.yaml is the
+# artifact under test for REQ-HOM-126, not documentation.
 .agent-meta/
 .agents/
 .claude/
@@ -13,7 +15,6 @@
 .git/
 .github/
 docs/
-examples/
 tests/
 external/
 test-results/

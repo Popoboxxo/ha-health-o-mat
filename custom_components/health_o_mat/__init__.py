@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -25,6 +26,7 @@ from .const import (
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_REF_OVERRIDES,
+    OPTION_LAB_RETENTION_MONTHS,
     OPTION_WEEKLY_REPORT,
     WELLBEING_STATES,
 )
@@ -77,7 +79,9 @@ _SERVICE_NAMES = (
     "set_wellbeing",
     "weekly_report",
     "add_lab_value",
+    "add_lab_report",
     "remove_last_lab_value",
+    "remove_lab_report",
 )
 
 type HealthOMatConfigEntry = ConfigEntry[HealthOMatData]
@@ -225,6 +229,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -
     # Opt-in-Sidebar-Panel (L2) erst NACH der Options-Auswertung anwenden.
     await _async_apply_panel_layer(hass)
     await _apply_retention(hass, entry, store)
+    await _apply_lab_retention(hass, entry, store)
     await async_setup_reminders(hass, entry, store)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
@@ -256,6 +261,35 @@ def _retention_months(entry) -> int:
         return int(entry.options.get("retention_months") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _lab_retention_months(entry) -> int:
+    """Labor-Retention in Monaten aus den Options (0/ungültig = AUS)."""
+    try:
+        return int(entry.options.get(OPTION_LAB_RETENTION_MONTHS) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _apply_lab_retention(hass: HomeAssistant, entry, store: HealthOMatStore) -> None:
+    """Labor-Retention: alte aktive Werte voiden (REQ-HOM-129).
+
+    Eigener Schritt NEBEN `_apply_retention` (Getränke/BD) — kein Archiv, keine
+    Listenkürzung. Default 0 = no-op; idempotent (voidete Einträge zählen nie
+    erneut), Audit nur bei Treffern (macht der Store).
+    """
+    months = _lab_retention_months(entry)
+    if months <= 0:
+        return
+    cutoff = logic.months_ago(dt_util.now(), months)
+    voided = await store.void_lab_readings_before(
+        entry.entry_id,
+        cutoff.isoformat(),
+        audit_limit=_entry_audit_limit(hass, entry.entry_id),
+        months=months,
+    )
+    if voided:
+        signal_refresh(hass, entry.entry_id)
 
 
 async def _get_archive_store(hass: HomeAssistant) -> HealthOMatStore:
@@ -442,6 +476,7 @@ async def _options_updated(hass, entry) -> None:
     rt.lifetime_setting_seen = wanted
     # Retention nach Options-Änderung anwenden (idempotent, No-op wenn AUS).
     await _apply_retention(hass, entry, store)
+    await _apply_lab_retention(hass, entry, store)
     # Opt-in-Sidebar-Panel: Option enable/disable → Panel registrieren/entfernen.
     await _async_apply_panel_layer(hass)
     # Erinnerungs-/Berichts-Timer an die neuen Optionen anpassen (idempotent).
@@ -758,7 +793,9 @@ def _register_services(hass: HomeAssistant) -> None:
         raw_unit = call.data.get("unit")
         if raw_unit is None and marker_def.get("require_explicit_unit"):
             raise ServiceValidationError("unit_required")
-        value = float(call.data["value"])
+        value = logic.coerce_lab_number(call.data["value"])
+        if value is None:
+            raise ServiceValidationError("invalid_value")
         try:
             canonical_value, canonical_unit = logic.convert_lab_value(marker_def, value, raw_unit)
         except ValueError as err:
@@ -780,6 +817,84 @@ def _register_services(hass: HomeAssistant) -> None:
             actor=_service_actor(call),
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
+        signal_refresh(hass, entry_id)
+
+    async def add_lab_report(call: ServiceCall) -> None:
+        """Laborbericht (mehrere Werte) als EINEN Vorgang erfassen (REQ-HOM-123).
+
+        Reihenfolge ist Vertrag (§2.5): Person → Zeitpunkt → Zeilen. Eine
+        ungültige Zeile lehnt den gesamten Bericht ab; es wird nichts
+        geschrieben. Leere Zeilen werden ignoriert.
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        options = _entry_options(hass, entry_id)
+        now = dt_util.now()
+        raw_ts = call.data.get("ts")
+        try:
+            parsed_ts = _service_entry_ts(call, now)
+        except ServiceValidationError as err:
+            raise ServiceValidationError(
+                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
+            ) from err
+        # Der validierte Originalstring bleibt erhalten (Offset-Schreibweise
+        # des Aufrufers), statt ihn in die Systemzone umzurechnen — der
+        # Bericht soll exakt den eingegebenen Zeitpunkt tragen (§2.2).
+        ts_iso = (
+            raw_ts.strip() if parsed_ts is not None and isinstance(raw_ts, str) else now.isoformat()
+        )
+        rows, error = logic.validate_lab_report_rows(
+            call.data.get("values"), options.get(OPTION_LAB_CUSTOM_MARKERS)
+        )
+        if error is not None:
+            raise ServiceValidationError(error["message"])
+        report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        await store.add_lab_readings(
+            entry_id,
+            ts_iso,
+            rows,
+            report_ref=report_ref,
+            created_ts_iso=now.isoformat(),
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        signal_refresh(hass, entry_id)
+
+    async def remove_lab_report(call: ServiceCall) -> None:
+        """Laborbericht verwerfen — alle aktiven Werte eines Zeitpunkts (REQ-HOM-128).
+
+        Mit ``report_ref`` werden nur Einträge mit exakt diesem Tag getroffen.
+        Ohne Treffer: ``no_active_report``. Kein Gruppen-Restore — einzeln über
+        ``restore_entry`` (``kind: lab_values``).
+        """
+        entry_id, _info = get_runtime_data(hass, call)
+        now = dt_util.now()
+        raw_ts = call.data.get("ts")
+        try:
+            parsed_ts = _service_entry_ts(call, now)
+        except ServiceValidationError as err:
+            raise ServiceValidationError(
+                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
+            ) from err
+        if parsed_ts is None:
+            raise ServiceValidationError(
+                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
+            )
+        # Wie `add_lab_report`: der validierte Originalstring bleibt erhalten.
+        ts_iso = raw_ts.strip() if isinstance(raw_ts, str) else parsed_ts.isoformat()
+        report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+        store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
+        voided = await store.void_lab_report(
+            entry_id,
+            ts_iso,
+            report_ref=report_ref,
+            actor=_service_actor(call),
+            audit_limit=_entry_audit_limit(hass, entry_id),
+        )
+        if not voided:
+            raise ServiceValidationError(
+                logic.lab_report_error("no_active_report", {"ts": ts_iso})["message"]
+            )
         signal_refresh(hass, entry_id)
 
     async def set_wellbeing(call: ServiceCall) -> None:
@@ -1009,6 +1124,44 @@ def _register_services(hass: HomeAssistant) -> None:
             }
         ),
         service_func=add_lab_value,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "add_lab_report",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+                vol.Required("values"): vol.All(
+                    cv.ensure_list,
+                    [
+                        vol.Schema(
+                            {
+                                # Bewusst Optional: die UI sendet leere Zeilen, und
+                                # ein `{}`-Eintrag ist eine ignorierte Leerzeile.
+                                vol.Optional("marker"): str,
+                                vol.Optional("value"): vol.Any(str, int, float),
+                                vol.Optional("unit"): vol.Any(str, None),
+                            }
+                        )
+                    ],
+                ),
+            }
+        ),
+        service_func=add_lab_report,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "remove_lab_report",
+        schema=vol.Schema(
+            {
+                vol.Optional("person"): str,
+                vol.Required("ts"): str,
+                vol.Optional("report_ref"): str,
+            }
+        ),
+        service_func=remove_lab_report,
     )
     hass.services.async_register(
         DOMAIN,

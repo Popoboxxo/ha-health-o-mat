@@ -1714,3 +1714,299 @@ def test_req_hom_122_normalize_lab_hidden_categories_non_list_is_empty():
     from custom_components.health_o_mat import logic
 
     assert logic.normalize_lab_hidden_categories(None) == []
+
+
+# --- REQ-HOM-123/129: Laborbericht-Batch (HA-frei) --------------------------
+
+
+def test_req_hom_123_coerce_lab_number_rejects_bool_nan_inf_and_non_numbers():
+    from custom_components.health_o_mat import logic
+
+    assert logic.coerce_lab_number(32) == 32.0
+    assert logic.coerce_lab_number("32.5") == 32.5
+    assert logic.coerce_lab_number(0) == 0.0
+    for rejected in (True, False, float("nan"), float("inf"), float("-inf"), "abc", None):
+        assert logic.coerce_lab_number(rejected) is None, rejected
+
+
+def test_req_hom_123_lab_report_error_builds_the_contract_shape():
+    from custom_components.health_o_mat import logic
+
+    row_error = logic.lab_report_error("unknown_marker", {"row": 3, "marker": "kreatinin"})
+    assert row_error == {
+        "code": "unknown_marker",
+        "params": {"row": 3, "marker": "kreatinin"},
+        "message": "Zeile 3 (kreatinin): unknown_marker",
+    }
+
+    duplicate = logic.lab_report_error(
+        "duplicate_marker", {"row": 2, "marker": "gpt", "first_row": 1}
+    )
+    assert duplicate["message"] == "Zeile 2 (gpt): duplicate_marker (schon in Zeile 1)"
+
+    too_many = logic.lab_report_error("too_many_rows", {"count": 201, "limit": 200})
+    assert too_many["message"] == "too_many_rows (201 > 200)"
+
+    invalid_ts = logic.lab_report_error("invalid_ts", {"value": "kaputt"})
+    assert invalid_ts["message"].startswith("invalid_ts: ")
+    assert "kaputt" in invalid_ts["message"]
+
+    assert (
+        logic.lab_report_error("no_active_report", {"ts": "2026-11-01T09:15:00+01:00"})["message"]
+        == "no_active_report"
+    )
+
+
+def test_req_hom_123_validate_rows_converts_and_keeps_reported_values():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [
+            {"marker": "creatinine", "value": 1.1, "unit": "mg/dL"},
+            {"marker": "tsh", "value": "1.9"},
+        ]
+    )
+
+    assert error is None
+    assert [row["marker_key"] for row in rows] == ["creatinine", "tsh"]
+    assert rows[0]["unit"] == "µmol/L"
+    assert round(rows[0]["value"], 2) == 97.24
+    assert rows[0]["reported_value"] == 1.1
+    assert rows[0]["reported_unit"] == "mg/dL"
+    assert rows[1]["reported_unit"] == "mIU/L"
+
+
+def test_req_hom_123_validate_rows_resolves_alias_and_custom_marker():
+    from custom_components.health_o_mat import logic
+
+    custom = [{"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}]
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": "gpt", "value": 32}, {"marker": "vitamin_d", "value": 42}], custom
+    )
+
+    assert error is None
+    assert [row["marker_key"] for row in rows] == ["alt", "vitamin_d"]
+    assert rows[1]["unit"] == "ng/mL"
+
+
+def test_req_hom_123_validate_rows_ignores_empty_rows():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [
+            {},
+            {"marker": "", "value": "", "unit": ""},
+            {"marker": "alt", "value": 32},
+            {"marker": "  ", "value": "  ", "unit": ""},
+        ]
+    )
+
+    assert error is None
+    assert [row["marker_key"] for row in rows] == ["alt"]
+
+
+def test_req_hom_123_validate_rows_rejects_empty_report():
+    from custom_components.health_o_mat import logic
+
+    for empty in ([{}, {"marker": " ", "value": " "}], None, []):
+        rows, error = logic.validate_lab_report_rows(empty)
+        assert rows == []
+        assert error == {"code": "empty_report", "params": {}, "message": "empty_report"}
+
+
+def test_req_hom_123_validate_rows_rejects_more_than_200_filled_rows():
+    from custom_components.health_o_mat import logic
+
+    values = [{"marker": "alt", "value": index} for index in range(201)]
+
+    rows, error = logic.validate_lab_report_rows(values)
+
+    assert rows == []
+    assert error == {
+        "code": "too_many_rows",
+        "params": {"count": 201, "limit": 200},
+        "message": "too_many_rows (201 > 200)",
+    }
+
+
+def test_req_hom_123_validate_rows_accepts_200_filled_rows():
+    from custom_components.health_o_mat import logic
+
+    custom = [
+        {"key": f"m{index}", "name": f"M{index}", "category": "other", "unit": "U/L"}
+        for index in range(200)
+    ]
+    values = [{"marker": f"m{index}", "value": index} for index in range(200)]
+
+    rows, error = logic.validate_lab_report_rows(values, custom)
+
+    assert error is None
+    assert len(rows) == 200
+
+
+def test_req_hom_123_validate_rows_does_not_count_empty_rows_for_the_cap():
+    from custom_components.health_o_mat import logic
+
+    values = [{"marker": "alt", "value": 32}] + [{} for _ in range(250)]
+
+    rows, error = logic.validate_lab_report_rows(values)
+
+    assert error is None
+    assert len(rows) == 1
+
+
+def test_req_hom_123_validate_rows_row_numbers_count_original_positions():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [{}, {"marker": "alt", "value": 32}, {"marker": "gptx", "value": 1}]
+    )
+
+    assert rows == []
+    assert error["code"] == "unknown_marker"
+    assert error["params"] == {"row": 3, "marker": "gptx"}
+    assert error["message"] == "Zeile 3 (gptx): unknown_marker"
+
+
+def test_req_hom_123_validate_rows_renders_missing_marker_as_dash():
+    from custom_components.health_o_mat import logic
+
+    # §2.5: ein fehlender Marker ist ZUERST `unknown_marker` (vor
+    # `invalid_value`); der leere Rohwert erscheint im Text als `-` (§2.4).
+    rows, error = logic.validate_lab_report_rows([{"value": "abc"}])
+
+    assert rows == []
+    assert error == {
+        "code": "unknown_marker",
+        "params": {"row": 1, "marker": ""},
+        "message": "Zeile 1 (-): unknown_marker",
+    }
+
+
+def test_req_hom_123_validate_rows_requires_explicit_unit():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": "urine_protein_creatinine_ratio", "value": 10}]
+    )
+
+    assert rows == []
+    assert error == {
+        "code": "unit_required",
+        "params": {"row": 1, "marker": "urine_protein_creatinine_ratio"},
+        "message": "Zeile 1 (urine_protein_creatinine_ratio): unit_required",
+    }
+
+
+def test_req_hom_123_validate_rows_reports_invalid_value_before_unsupported_unit():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": "alt", "value": "abc", "unit": "mg/dL"}]
+    )
+
+    assert rows == []
+    assert error["code"] == "invalid_value"
+    assert error["params"] == {"row": 1, "marker": "alt", "value": "abc"}
+
+
+def test_req_hom_123_validate_rows_rejects_bool_and_nan_values():
+    from custom_components.health_o_mat import logic
+
+    for bad in (True, float("nan"), float("inf")):
+        rows, error = logic.validate_lab_report_rows([{"marker": "alt", "value": bad}])
+        assert rows == []
+        assert error["code"] == "invalid_value"
+
+
+def test_req_hom_123_validate_rows_reports_unsupported_unit():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows([{"marker": "alt", "value": 32, "unit": "mg/dL"}])
+
+    assert rows == []
+    assert error == {
+        "code": "unsupported_unit",
+        "params": {"row": 1, "marker": "alt", "unit": "mg/dL"},
+        "message": "Zeile 1 (alt): unsupported_unit",
+    }
+
+
+def test_req_hom_123_validate_rows_reports_alias_duplicate_with_first_row():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": "alt", "value": 32}, {"marker": "gpt", "value": 30}]
+    )
+
+    assert rows == []
+    assert error == {
+        "code": "duplicate_marker",
+        "params": {"row": 2, "marker": "gpt", "first_row": 1},
+        "message": "Zeile 2 (gpt): duplicate_marker (schon in Zeile 1)",
+    }
+
+
+def test_req_hom_123_validate_rows_row_error_wins_over_earlier_duplicate():
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [
+            {"marker": "alt", "value": 32},
+            {"marker": "gpt", "value": 30},
+            {"marker": "gptx", "value": 1},
+        ]
+    )
+
+    assert rows == []
+    assert error["code"] == "unknown_marker"
+    assert error["params"]["row"] == 3
+
+
+# --- REQ-HOM-128: Berichts-Matcher (HA-frei) --------------------------------
+
+
+def _reading(ts: str, report_ref: str | None = None) -> dict:
+    return {"ts": ts, "marker_key": "alt", "value": 32.0, "report_ref": report_ref}
+
+
+def test_req_hom_128_lab_report_matches_compares_instants_not_offsets():
+    from datetime import datetime
+
+    from custom_components.health_o_mat import logic
+
+    target = datetime.fromisoformat("2026-11-01T08:15:00+00:00")
+
+    assert logic.lab_report_matches(_reading("2026-11-01T09:15:00+01:00"), target) is True
+    assert logic.lab_report_matches(_reading("2026-11-01T09:15:00+02:00"), target) is False
+
+
+def test_req_hom_128_lab_report_matches_filters_by_report_ref():
+    from datetime import datetime
+
+    from custom_components.health_o_mat import logic
+
+    target = datetime.fromisoformat("2026-11-01T09:15:00+01:00")
+
+    assert logic.lab_report_matches(_reading("2026-11-01T09:15:00+01:00", "Labor A"), target)
+    assert not logic.lab_report_matches(
+        _reading("2026-11-01T09:15:00+01:00", "Labor A"), target, "Labor B"
+    )
+    # Ein gesetzter Filter trifft einen Eintrag ohne Tag NICHT.
+    assert not logic.lab_report_matches(
+        _reading("2026-11-01T09:15:00+01:00", None), target, "Labor A"
+    )
+    # Ohne Filter zählt jeder Eintrag dieses Zeitpunkts.
+    assert logic.lab_report_matches(_reading("2026-11-01T09:15:00+01:00", None), target)
+
+
+def test_req_hom_128_lab_report_matches_tolerates_broken_or_missing_ts():
+    from datetime import datetime
+
+    from custom_components.health_o_mat import logic
+
+    target = datetime.fromisoformat("2026-11-01T09:15:00+01:00")
+
+    assert logic.lab_report_matches({"ts": "kaputt"}, target) is False
+    assert logic.lab_report_matches({}, target) is False
+    assert logic.lab_report_matches("kein-dict", target) is False

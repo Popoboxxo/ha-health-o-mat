@@ -428,6 +428,116 @@ add_lab_value:
         Nur Referenz, Health-O-Mat ruft die URL nie selbst auf.
       example: "https://example.com/laborbericht/123"
 
+add_lab_report:
+  name: Laborbericht erfassen
+  description: >-
+    Erfasst mehrere Laborwerte eines Berichts in einem Vorgang — gleicher
+    Zeitpunkt, gleiche Berichts-Referenz, Alles-oder-nichts: eine ungültige
+    Zeile lehnt den gesamten Bericht ab. Leere Zeilen werden ignoriert. Ein
+    erneuter Aufruf schreibt erneut (nicht idempotent).
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt des Berichts als ISO 8601 (z. B. 2026-11-01T09:15 oder mit
+        Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900.
+      example: "2026-11-01T09:15:00+01:00"
+    report_ref:
+      name: Berichts-Referenz
+      description: >-
+        Optionaler Link oder externe ID des Laborberichts (max. 500 Zeichen).
+        Nur Referenz, Health-O-Mat ruft die URL nie selbst auf.
+      example: "https://example.com/laborbericht/123"
+    values:
+      name: Werte
+      description: Zeilen aus Marker, Wert und (optionaler) Einheit.
+      required: true
+      selector:
+        object:
+          multiple: true
+          label_field: marker
+          fields:
+            marker:
+              label: Marker
+              required: true
+              selector:
+                select:
+                  custom_value: true
+                  options:
+                    - label: ALT (GPT)
+                      value: "alt"
+                    - label: AST (GOT)
+                      value: "ast"
+                    - label: GGT (Gamma-GT)
+                      value: "ggt"
+                    - label: Bilirubin gesamt
+                      value: "bilirubin_total"
+                    - label: Gesamteiweiß
+                      value: "total_protein"
+                    - label: Kreatinin
+                      value: "creatinine"
+                    - label: eGFR
+                      value: "egfr"
+                    - label: Harnstoff
+                      value: "urea"
+                    - label: Protein/Kreatinin-Quotient (Urin)
+                      value: "urine_protein_creatinine_ratio"
+                    - label: Natrium
+                      value: "sodium"
+                    - label: Kalium
+                      value: "potassium"
+                    - label: Calcium gesamt
+                      value: "calcium"
+                    - label: Magnesium
+                      value: "magnesium"
+                    - label: Chlorid
+                      value: "chloride"
+                    - label: Gesamtcholesterin
+                      value: "cholesterol_total"
+                    - label: LDL
+                      value: "ldl"
+                    - label: HDL
+                      value: "hdl"
+                    - label: Triglyceride
+                      value: "triglycerides"
+                    - label: TSH
+                      value: "tsh"
+                    - label: fT4
+                      value: "ft4"
+                    - label: fT3
+                      value: "ft3"
+                    - label: Hämoglobin
+                      value: "hemoglobin"
+                    - label: Leukozyten
+                      value: "leukocytes"
+                    - label: Thrombozyten
+                      value: "platelets"
+                    - label: CRP
+                      value: "crp"
+                    - label: BSG
+                      value: "esr"
+                    - label: Lipase
+                      value: "lipase"
+                    - label: Amylase
+                      value: "amylase"
+                    - label: Tacrolimus (Talspiegel)
+                      value: "tacrolimus"
+            value:
+              label: Wert
+              required: true
+              selector:
+                number:
+                  step: any
+                  mode: box
+            unit:
+              label: Einheit
+              selector:
+                text:
+
 remove_last_lab_value:
   name: Letzten Laborwert löschen
   description: >-
@@ -447,3 +557,30 @@ remove_last_lab_value:
         aktiver Wert (größter Zeitstempel, nicht der zuletzt eingegebene).
       example: "alt"
       required: true
+
+remove_lab_report:
+  name: Laborbericht verwerfen
+  description: >-
+    Verwirft alle aktiven Laborwerte eines Berichts (gemeinsamer Zeitpunkt).
+    Ist eine Berichts-Referenz gesetzt, werden nur Einträge mit exakt diesem
+    Tag verworfen. Kein Treffer ist ein Fehler. Verwerfen markiert die Werte
+    als gelöscht; sie bleiben einzeln über restore_entry wiederherstellbar.
+  fields:
+    person:
+      name: Person
+      description: Name der Person (leer = einzige konfigurierte Person).
+      example: "Caro"
+    ts:
+      name: Zeitpunkt
+      description: >-
+        Zeitpunkt des Berichts als ISO 8601 — derselbe Wert wie beim Erfassen
+        (z. B. aus panel_data.labs.last_report.ts). Pflichtfeld.
+      example: "2026-11-01T09:15:00+01:00"
+      required: true
+    report_ref:
+      name: Berichts-Referenz
+      description: >-
+        Optional: grenzt das Verwerfen auf genau diesen Tag ein (max. 500
+        Zeichen). Ohne Angabe werden alle aktiven Werte dieses Zeitpunkts
+        verworfen.
+      example: "https://example.com/laborbericht/123"

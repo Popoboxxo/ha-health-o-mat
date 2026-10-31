@@ -14,6 +14,7 @@ import types
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
+import voluptuous as vol
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -962,3 +963,24 @@ def test_drinks_schema_contains_skip_and_lexicon():
     assert "quick_3_icon" in keys
     assert "drink_lexicon" in keys
     assert "skip" in keys
+
+
+# --- REQ-HOM-129: Labor-Retention im Grundlagen-Schritt ---------------------
+
+
+def test_req_hom_129_basics_step_exposes_lab_retention():
+    options_flow = _make_flow(options={"lab_retention_months": 24})
+
+    result = _async_test(options_flow.async_step_basics(None))
+
+    assert "lab_retention_months" in result["data_schema"].schema
+    defaults = _schema_defaults(result)
+    assert defaults["lab_retention_months"] == 24
+
+
+def test_req_hom_129_basics_step_rejects_out_of_range_lab_retention():
+    options_flow = _make_flow()
+    schema = _async_test(options_flow.async_step_basics(None))["data_schema"]
+
+    with pytest.raises(vol.Invalid):
+        schema({"daily_goal_ml": 2000, "lab_retention_months": 121})

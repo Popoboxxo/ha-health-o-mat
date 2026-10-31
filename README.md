@@ -81,7 +81,7 @@ werden nur vorgemerkt und erst in der Zusammenfassung gespeichert:
 
 | Abschnitt | Inhalt |
 |---|---|
-| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung, Sidebar-Panel, Bereichs-Toggles (Trinken, Blutdruck, Wohlbefinden, Laborwerte) |
+| **Grundlagen** | Tagesziel, Lebenszähler-Startwert, Anzeigename, Tages-Reset, Aufbewahrung (Getränke/BD), Labor-Aufbewahrung, Sidebar-Panel, Bereichs-Toggles (Trinken, Blutdruck, Wohlbefinden, Laborwerte) |
 | **Getränke** | Quick-Drinks **und** Getränke-Lexikon in einem Formular (Lexikon mit Zeilen-Validierung) |
 | **Wohlbefinden** | Eigene Bilder je Stufe (optional, sonst Emojis) |
 | **Benachrichtigungen** | Erinnerungen und Wochenbericht (Standard: aus) |
@@ -105,6 +105,13 @@ werden nur vorgemerkt und erst in der Zusammenfassung gespeichert:
 Die benachrichtigungsbezogenen Optionen (Erinnerungen, Wochenbericht) sind im
 Abschnitt [Erinnerungen, Wochenbericht & Blueprints](#erinnerungen-wochenbericht--blueprints)
 beschrieben.
+
+Die **Labor-Aufbewahrung** (`lab_retention_months`, Default `0` = aus, Bereich
+0…120) liegt im Schritt **Grundlagen** direkt neben der Getränke-/BD-Retention.
+Bei `> 0` werden beim Setup und nach einer Options-Änderung Laborwerte älter
+als N Monate **voidet** (kein Archiv, rückholbar über `restore_entry`) —
+Details im Abschnitt
+[Laborwerte → Migration & Export](#migration--export).
 
 ## Erinnerungen, Wochenbericht & Blueprints
 
@@ -458,8 +465,9 @@ Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
   Retention-Archiv und Zählern); **v1-Backups bleiben lesbar** und werden beim
   Restore migriert. **Löschen ist jetzt Void:** Einträge werden markiert, nicht
   entfernt, und bleiben wiederherstellbar. `remove_last_entry` **voidet**
-  (kein Hard-Delete mehr). Der CSV-Export enthält standardmäßig nur aktive
-  Einträge. **Keine Änderung an `unique_id`s, Entity-IDs oder Config-Entry-`data`.**
+  (kein Hard-Delete mehr). Der CSV-Export enthält für Getränke und Blutdruck
+  standardmäßig nur aktive Einträge (das Lab-CSV enthält zusätzlich voidete
+  Zeilen). **Keine Änderung an `unique_id`s, Entity-IDs oder Config-Entry-`data`.**
   Die Recorder-Langzeitstatistik wird bei Korrekturen **nicht rückwirkend**
   angepasst (dokumentierte Grenze); die Integration schreibt bei Änderungen
   keine alten Statistikwerte um.
@@ -539,6 +547,35 @@ data:
 - `ts` folgt derselben Regel wie die übrigen Schreib-Services (ISO 8601, leer =
   jetzt, höchstens 5 Minuten in der Zukunft).
 
+Einen **ganzen Laborbericht** erfasst `add_lab_report` in einem Vorgang —
+gemeinsamer Zeitpunkt, gemeinsame Berichts-Referenz, **alles-oder-nichts**:
+
+```yaml
+action: health_o_mat.add_lab_report
+data:
+  person: "Caro"                                   # optional — einzige Person, wenn leer
+  ts: "2026-11-01T09:15:00+01:00"                  # ein Zeitpunkt für den ganzen Bericht
+  report_ref: "https://example.com/laborbericht/123"
+  values:
+    - {marker: alt, value: 32, unit: U/L}
+    - {marker: creatinine, value: 1.1, unit: mg/dL}
+    - {marker: crp, value: 4.8, unit: mg/L}
+    - {marker: tsh, value: 1.9}                    # ohne unit = kanonische Einheit
+```
+
+- `add_lab_report` erfasst **einen Bericht als einen Vorgang**: ein Zeitpunkt, eine
+  Berichts-Referenz, **alles-oder-nichts** (eine ungültige Zeile lehnt den gesamten
+  Bericht ab), genau ein Store-Write und **ein** Audit-Eintrag (`lab_values_added`).
+- Leere Zeilen werden ignoriert; höchstens **200** befüllte Zeilen pro Aufruf (der Dialog
+  hat einen UI-Soft-Cap von **60**); derselbe Marker darf im selben Bericht nur einmal
+  vorkommen (Alias-Kollision zählt: `gpt` + `alt` → `duplicate_marker`).
+- Fehler nennen Code **und** Originalzeile, z. B.
+  `Zeile 3 (kreatinin): unknown_marker` (Leerzeilen zählen mit). Die WS-Antwort liefert
+  dasselbe strukturiert als `{"ok": false, "error": {code, params, message}}`.
+- Der Aufruf ist **nicht** idempotent: zweimal gesendet = zweimal gespeichert. Vor einem
+  Retry `panel_data.labs.last_report` prüfen; einen versehentlich doppelten Bericht
+  entfernt `remove_lab_report` in einem Schritt.
+
 ```yaml
 action: health_o_mat.remove_last_lab_value
 data:
@@ -554,6 +591,21 @@ aktuellen Wert nicht und werden von diesem Service deshalb auch nicht
 entfernt. Der voidete Eintrag bleibt im Verlauf erhalten und ist über
 `restore_entry` wiederherstellbar.
 
+```yaml
+action: health_o_mat.remove_lab_report
+data:
+  person: "Caro"                                   # optional
+  ts: "2026-11-01T09:15:00+01:00"                  # Pflicht — z. B. aus last_report.ts
+  report_ref: "https://example.com/laborbericht/123"   # optional: nur dieser Bericht
+```
+
+- Verwirft **alle aktiven** Werte dieses Zeitpunkts (mit `report_ref`: nur Einträge mit
+  exakt diesem Tag). Ohne Treffer: `no_active_report`; ungültiges `ts`: `invalid_ts`.
+- Das Verwerfen **voidet** (kein Hard-Delete) mit `void_reason = "report_discarded"`;
+  einzeln wiederherstellbar über `restore_entry` (`kind: lab_values`). Die UI bietet
+  „Diesen Bericht verwerfen" mit Sicherheitsabfrage, sichtbar nur bei aktivem
+  `labs.last_report`.
+
 ### Laborwerte-Karte (Custom Card)
 
 Die Integration liefert eine eigene Lovelace-Karte mit:
@@ -562,7 +614,14 @@ Die Integration liefert eine eigene Lovelace-Karte mit:
 - je Marker Wert + Einheit, **In-Range-Badge**, optional eine Sparkline (Trend)
   und der Zeitpunkt der letzten Erfassung,
 - Bericht-Link aus `report_ref`,
-- ein Eingabeformular (Marker, Wert, Einheit, Zeitpunkt, Bericht-Link/ID).
+- ein Eingabeformular (Marker, Wert, Einheit, Zeitpunkt, Bericht-Link/ID) —
+  zusätzlich ein **Mehrzeilen-Dialog** für einen ganzen Laborbericht mit
+  Hybrid-Füllung („Alle sichtbaren Marker anlegen", „Zuletzt verwendete Marker
+  anlegen"), Einheiten-Dropdown je Zeile (kanonisch + Alt-Einheiten + Freitext)
+  und „Diesen Bericht verwerfen" (Sicherheitsabfrage) für den zuletzt
+  erfassten Bericht,
+- einen Medizin-Hinweis, der der Karten-/HA-Sprache folgt
+  (`ui_card_lab_disclaimer`).
 
 ```yaml
 type: custom:health-o-mat-labs-card
@@ -577,20 +636,32 @@ Die Karte wird beim Setup automatisch als Lovelace-Ressource registriert
 Disclaimer aktiv. Die Karte ist unabhängig vom Panel; das Panel zeigt die
 Laborwerte als vierten Tab (mit Kategorie-Wischgeste).
 
+Ein vollständiges Beispiel-Dashboard mit beiden Ansichten liegt unter
+[`examples/dashboard-labs-card.yaml`](examples/dashboard-labs-card.yaml).
+
 ### Migration & Export
 
 - **Store-Schema v4 → v5:** Beim Update ergänzt die Migration je Person die
   Liste `lab_readings` — automatisch und idempotent, bestehende Daten bleiben
   unverändert. Ein manueller Schritt ist nicht nötig.
 - **Backup v3** enthält Laborwerte und die Labor-Optionen (eigene Marker,
-  Referenz-Overrides, ausgeblendete Kategorien); ältere Backups bleiben lesbar.
+  Referenz-Overrides, ausgeblendete Kategorien, `lab_retention_months`,
+  `lab_hide_panel_disclaimer`); ältere Backups bleiben lesbar.
 - **CSV-Export/-Import:** Datensatz `lab_values` (Datei
   `health_o_mat_labvalues_<Person>_<YYYYMMDD-HHMM>.csv`). `all` schließt
-  Laborwerte mit ein.
-- **Aufbewahrung (Retention):** Die optionale Aufbewahrung/Archivierung gilt
-  derzeit **nicht** für Laborwerte — `lab_readings` wandert nicht ins Archiv und
-  bleibt vollständig erhalten. Das ist bewusster v1-Scope; die Einstellung
-  „Aufbewahrung" bezieht sich nur auf Getränke und Blutdruckmessungen.
+  Laborwerte mit ein. Das Lab-CSV enthält **auch voidete Zeilen** inkl.
+  `voided_at`/`void_reason`; `drinks.csv` und die Blutdruck-CSV bleiben
+  „nur aktive". Beim Re-Import werden voidete Zeilen **übersprungen** und als
+  `skipped` gezählt (keine Wiederbelebung, unabhängig vom Bestand) — erkannt
+  header-basiert an der Spalte `voided_at`; Altdateien ohne die Spalten
+  importieren unverändert nach der Positions-Konvention.
+- **Aufbewahrung (Retention):** Laborwerte haben eine **eigene** Option
+  `lab_retention_months` (0 = aus, 0…120), unabhängig von der Getränke-/BD-Retention.
+  Bei `> 0` werden beim Setup und nach einer Options-Änderung Laborwerte älter als
+  N Monate **voidet** (`void_reason = "retention"`, ein Audit `lab_values_retention`) —
+  **kein Archiv**,
+  keine Listenkürzung, über `restore_entry` rückholbar. Die Einstellung
+  „Aufbewahrung" für Getränke und Blutdruckmessungen bleibt davon unberührt.
 - **Restore:** Ein unbekannter Marker wird mit einer Warnung **übersprungen**
   (der betroffene Record zählt als Fehler, der Restore läuft weiter — kein
   Abbruch des gesamten Vorgangs). Definieren mehrere Quellen denselben
@@ -800,8 +871,9 @@ Sensoren, CSV) und bleibt über **Restore** wiederherstellbar. Auch
   bewertet.
 - **Recorder:** Die HA-Langzeitstatistik wird bei Korrekturen **nicht
   rückwirkend** angepasst — sie bleibt eine dokumentierte Grenze. Der CSV-Export
-  enthält standardmäßig nur aktive Einträge; das Backup enthält Audit- und
-  voided-Einträge.
+  enthält für Getränke und Blutdruck standardmäßig nur aktive Einträge; das
+  Lab-CSV enthält voidete Zeilen inkl. `voided_at`/`void_reason`. Das Backup
+  enthält Audit- und voided-Einträge.
 
 ## Dashboard-Beispiele
 
@@ -816,6 +888,10 @@ Sensoren, CSV) und bleibt über **Restore** wiederherstellbar. Auch
   **mitgelieferte Karte** (`custom:health-o-mat-card`) in drei Konfigurationen
   (kompakt, nur Anzeige, mit Eingaben); nutzt die Karten-Konfiguration aus dem
   Abschnitt [Mitgelieferte Karte](#mitgelieferte-karte-custom-card)
+- [`examples/dashboard-labs-card.yaml`](examples/dashboard-labs-card.yaml) — zeigt die
+  **Laborwerte-Karte** (`custom:health-o-mat-labs-card`) in zwei Ansichten (alle Defaults,
+  reine Anzeige mit Personen-Dropdown); Personenfilter anpassen oder entfernen — ohne
+  Filter zeigt die Karte alle Personen
 
 Import: Einstellungen → Dashboards → **Dashboard hinzufügen** →
 „Neues Dashboard aus YAML" (Personennamen in den Entity-IDs anpassen).
@@ -998,7 +1074,12 @@ HA-Seitenleiste einklinkt:
   sichtbar markiert und zählen nicht in den Auswertungen
 - 🧪 **Laborwerte-Tab** — Kategorie-Reiter mit Wischgeste, je Marker Wert,
   Einheit, Referenz-Badge, Verlaufsgraph und Zeitpunkt sowie ein Formular zum
-  Erfassen neuer Werte (Marker, Wert, Einheit, Bericht-Link/ID)
+  Erfassen neuer Werte (Marker, Wert, Einheit, Bericht-Link/ID) und ein
+  Mehrzeilen-Dialog für ganze Berichte (Hybrid-Füllung, Einheiten-Dropdown,
+  „Diesen Bericht verwerfen" mit Sicherheitsabfrage). Oberhalb der
+  Kategorie-Leiste steht ein **Medizin-Hinweis** für alle Nutzer (Default
+  sichtbar, Admin kann ihn ausblenden); sind alle Kategorien ausgeblendet,
+  lautet der Leerzustand „Alle Kategorien ausgeblendet"
 - ↩️ **Undo für Getränke, Blutdruck und Wohlbefinden** — Laborwerte werden über
   den Service `remove_last_lab_value` korrigiert (Undo des zeitlich neuesten
   Werts eines Markers)
@@ -1041,7 +1122,12 @@ verschachtelter Options-Schritte:
 - 🧪 **Laborwerte** — Referenzbereiche der Katalog-Marker überschreiben
   („Auf Katalog-Default zurücksetzen" inklusive), Kategorien ausblenden und
   eigene Marker anlegen (Name, Einheit, Kategorie, Referenzbereich, optional
-  eine alternative Einheit mit Umrechnungsfaktor)
+  eine alternative Einheit mit Umrechnungsfaktor). Die Katalog-Tabelle zeigt
+  die **Umrechnungs-Spalte** (z. B. `mg/dL × 88,4 → µmol/L`, Faktor
+  sprachabhängig formatiert) und bei Markern mit Verwechslungsgefahr das Badge
+  **„Einheit Pflicht"**; die Checkbox **„Medizin-Hinweis im Panel ausblenden"**
+  (`lab_hide_panel_disclaimer`, Default aus = Hinweis sichtbar) schaltet den
+  Hinweis im Panel-Lab-Tab ab
 - 🗄️ **Aufbewahrung** (Retention in Monaten) und **`audit_limit`**
   (Audit-Log-Cap; Default **1000** Ereignisse/Person, `0` = **unbegrenzt**)
 - 🧩 **Feature-Toggles pro Person** — **Trinken · Blutdruck · Wohlbefinden ·

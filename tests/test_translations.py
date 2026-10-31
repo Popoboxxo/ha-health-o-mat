@@ -391,7 +391,9 @@ def test_translation_placeholders_match_across_languages() -> None:
 
 _LAB_SERVICE_FIELDS = {
     "add_lab_value": {"person", "marker", "value", "unit", "ts", "report_ref"},
+    "add_lab_report": {"person", "values", "ts", "report_ref"},
     "remove_last_lab_value": {"person", "marker"},
+    "remove_lab_report": {"person", "ts", "report_ref"},
 }
 
 # Minimal-Override-Konvention (wie `add_blood_pressure`): in den JSON-Dateien
@@ -399,7 +401,9 @@ _LAB_SERVICE_FIELDS = {
 # Felder aus `services.yaml`.
 _LAB_TRANSLATED_FIELDS = {
     "add_lab_value": {"marker", "unit", "ts", "report_ref"},
+    "add_lab_report": {"values", "ts", "report_ref"},
     "remove_last_lab_value": {"marker"},
+    "remove_lab_report": {"ts", "report_ref"},
 }
 
 
@@ -509,6 +513,10 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_admin_lab_category",
     "ui_admin_lab_marker",
     "ui_admin_lab_unit",
+    # REQ-HOM-124: Admin-Umrechnungsspalte (Task 15).
+    "ui_admin_lab_conversion",
+    "ui_admin_lab_conversion_required",
+    "ui_admin_lab_conversion_none",
     "ui_admin_lab_range",
     "ui_admin_lab_reset",
     "ui_admin_lab_hide_title",
@@ -528,6 +536,10 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_lab_prev",
     "ui_panel_lab_next",
     "ui_panel_lab_no_categories",
+    # REQ-HOM-125: Panel-Disclaimer + Admin-Schalter (Task 14).
+    "ui_panel_lab_disclaimer",
+    "ui_panel_lab_all_hidden",
+    "ui_admin_lab_hide_disclaimer",
     "ui_panel_lab_add_value",
     "ui_panel_lab_marker",
     "ui_panel_lab_value_field",
@@ -538,6 +550,22 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_tile_lab_ok",
     "ui_panel_lab_threshold_title",
     "ui_panel_val_lab_value",
+    # REQ-HOM-123: Mehrzeilen-Bericht im Panel (Task 12/13).
+    "ui_panel_lab_report_title",
+    "ui_panel_lab_report_add_row",
+    "ui_panel_lab_report_remove_row",
+    "ui_panel_lab_report_save",
+    "ui_panel_lab_report_ts",
+    "ui_panel_lab_marker_choose",
+    "ui_panel_lab_fill_visible",
+    "ui_panel_lab_fill_last",
+    "ui_panel_lab_report_limit",
+    "ui_panel_lab_report_empty",
+    "ui_panel_lab_unit_custom",
+    "ui_panel_lab_report_discard",
+    "ui_panel_lab_report_discard_confirm",
+    # REQ-HOM-125: Karten-Disclaimer lokalisiert (Task 16).
+    "ui_card_lab_disclaimer",
 )
 
 

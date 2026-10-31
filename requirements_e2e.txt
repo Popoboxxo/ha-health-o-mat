@@ -17,3 +17,9 @@ requests>=2.32
 # and `health_o_mat/set_ui_settings` are websocket-only commands
 # (custom_components/health_o_mat/ws_api.py), there is no REST equivalent.
 websockets>=13.0
+
+# tests_e2e/test_lab_values_e2e.py parses examples/dashboard-labs-card.yaml
+# (the Lovelace dashboard artifact under test, REQ-HOM-126) via
+# `yaml.safe_load`. Neither the Playwright base image nor the unit-test
+# requirements ship PyYAML, so without this pin the import fails at collection.
+pyyaml>=6

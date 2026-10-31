@@ -1041,13 +1041,43 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
             "lab_custom_markers": [{"key": "vitamin_d"}],
             "lab_ref_overrides": {"alt": {"ref_min": 5}},
             "lab_hidden_categories": ["thyroid"],
+            "lab_hide_panel_disclaimer": False,
+            "lab_retention_months": 0,
         },
         "e2": {
             "lab_custom_markers": [],
             "lab_ref_overrides": {},
             "lab_hidden_categories": [],
+            "lab_hide_panel_disclaimer": False,
+            "lab_retention_months": 0,
         },
     }
+
+
+def test_req_hom_129_backup_collects_lab_retention_and_disclaimer(tmp_path, monkeypatch):
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = {
+        const_module.OPTION_LAB_RETENTION_MONTHS: 24,
+        const_module.OPTION_LAB_HIDE_PANEL_DISCLAIMER: True,
+    }
+    hass.config_entries = MagicMock()
+    hass.config_entries.async_entries = MagicMock(return_value=[entry])
+    monkeypatch.setattr(
+        backup, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 14, 12, 0, 0))
+    )
+
+    path = _run(backup.async_backup(hass, store))
+
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert document["lab_options"]["e1"]["lab_retention_months"] == 24
+    assert document["lab_options"]["e1"]["lab_hide_panel_disclaimer"] is True
 
 
 # ============================================================================
@@ -1056,7 +1086,8 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
 
 _LAB_CSV_HEADER = (
     "zeitstempel;person;marker;kategorie;wert;einheit;"
-    "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz"
+    "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz;"
+    "voided_at;void_reason"
 )
 
 
@@ -1499,3 +1530,175 @@ def test_req_hom_122_lab_export_import_roundtrip_stays_canonical(tmp_path):
     assert record["unit"] == "µmol/L"
     assert record["reported_value"] == 1.1
     assert record["reported_unit"] == "mg/dL"
+
+
+def test_req_hom_129_export_csv_includes_voided_lab_rows_with_reason(tmp_path):
+    """[REQ-HOM-129] lab_values.csv enthält voidete Zeilen inkl. Grund."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_lab_reading("e1", "2026-10-31T09:00:00+01:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    _run(store.add_lab_reading("e1", "2026-01-01T09:00:00+01:00", "crp", 4.8, "mg/L", 4.8, "mg/L"))
+    old = next(
+        reading for reading in store.entry("e1")["lab_readings"] if reading["marker_key"] == "crp"
+    )
+    _run(store.void_lab_reading("e1", old["id"], reason="retention"))
+
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    _run(exporter.async_export_csv(hass, store, _call({"dataset": "lab_values"})))
+
+    written = list(tmp_path.glob("*lab*"))
+    assert written
+    content = written[0].read_text(encoding="utf-8-sig")
+    assert content.splitlines()[0] == _LAB_CSV_HEADER
+    assert "crp" in content
+    assert "retention" in content
+    assert "alt" in content
+    # Genau eine Zeile ohne voided_at (der aktive alt-Wert) + Header.
+    assert len(content.splitlines()) == 3
+
+
+def test_req_hom_129_import_skips_exported_voided_rows():
+    """[REQ-HOM-129] Re-Import der voideten Export-Zeile zählt als skipped."""
+    importer = _load("importer")
+    text = (
+        "zeitstempel;person;marker;kategorie;wert;einheit;"
+        "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz;"
+        "voided_at;void_reason\n"
+        "2026-01-01T09:00:00+01:00;Caro;crp;inflammation;4.8;mg/L;4.8;mg/L;;"
+        "2026-02-01T00:00:00+01:00;retention\n"
+    )
+    existing = [
+        {
+            "ts": "2026-01-01T09:00:00+01:00",
+            "marker_key": "crp",
+            "value": 4.8,
+            "voided_at": "2026-02-01T00:00:00+01:00",
+            "void_reason": "retention",
+        }
+    ]
+
+    plan = importer.plan_import(
+        text, "lab_values", existing_lab_readings=existing, lab_custom_markers=[]
+    )
+
+    assert plan.skipped == 1
+    assert plan.rejected == 0
+    assert plan.lab_readings == []
+
+
+def _voided_lab_export_csv() -> str:
+    """Export-Text mit einem aktiven und einem voideten Laborwert (aktuelle Header)."""
+    return (
+        f"{_LAB_CSV_HEADER}\n"
+        "2026-10-31T09:00:00+01:00;Caro;alt;liver;32.0;U/L;32.0;U/L;;;\n"
+        "2026-01-01T09:00:00+01:00;Caro;crp;inflammation;4.8;mg/L;4.8;mg/L;;"
+        "2026-02-01T00:00:00+01:00;retention\n"
+    )
+
+
+def test_req_hom_129_import_empty_store_never_writes_voided_row(tmp_path):
+    """[REQ-HOM-129] Leerer Store: voidete Zeile wird nicht als aktiver Wert angelegt.
+
+    Kern des Fehlerfalls aus §2.15: die Dedupe gegen vorhandene Rohdaten kann
+    eine voidete Zeile in einem frischen Store nicht abfangen — sie muss
+    anhand der ``voided_at``-Spalte übersprungen werden.
+    """
+    folder = _import_dir(tmp_path)
+    (folder / "labs.csv").write_text(_voided_lab_export_csv(), encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 1
+    assert result["skipped"] == 1
+    assert result["rejected"] == 0
+    labs = store.entry("e1")["lab_readings"]
+    assert [lab["marker_key"] for lab in labs] == ["alt"]
+    assert labs[0]["value"] == 32.0
+    assert labs[0]["voided_at"] is None
+
+
+def test_req_hom_129_import_skips_voided_row_unknown_to_store(tmp_path):
+    """[REQ-HOM-129] Store kennt den voideten Wert nicht → wird trotzdem nicht angelegt."""
+    folder = _import_dir(tmp_path)
+    (folder / "labs.csv").write_text(_voided_lab_export_csv(), encoding="utf-8")
+    store = _fresh_store()
+    _run(store.add_lab_reading("e1", "2026-10-31T09:00:00+01:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    # Aktiver Wert = Duplikat, voideter Wert = übersprungen (nie geschrieben).
+    assert result["imported"] == 0
+    assert result["skipped"] == 2
+    assert result["rejected"] == 0
+    assert [lab["marker_key"] for lab in store.entry("e1")["lab_readings"]] == ["alt"]
+
+
+def test_req_hom_129_import_old_csv_without_void_columns_still_imports(tmp_path):
+    """[REQ-HOM-129] Altdatei ohne ``voided_at``/``void_reason`` bleibt importierbar."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 1
+    assert result["skipped"] == 0
+    assert result["rejected"] == 0
+    labs = store.entry("e1")["lab_readings"]
+    assert len(labs) == 1
+    assert labs[0]["marker_key"] == "alt"
+    assert labs[0]["reported_value"] == 32.0
+    assert labs[0]["reported_unit"] == "U/L"
+
+
+def test_req_hom_129_import_finds_void_columns_in_any_header_position():
+    """[REQ-HOM-129] Spaltenzuordnung ist header-basiert, nicht positionsgebunden.
+
+    ``voided_at``/``void_reason`` stehen hier in der Mitte (mit BOM und
+    Whitespace-Padding) — die übrigen Felder werden trotzdem korrekt gelesen.
+    """
+    header = (
+        "zeitstempel;person;marker;kategorie;wert;einheit; voided_at ;void_reason;"
+        "eingegeben_als_wert;eingegeben_als_einheit;berichts_referenz"
+    )
+    text = "\ufeff" + (
+        f"{header}\n"
+        "2026-10-31T09:00:00+01:00;Caro;alt;liver;32.0;U/L;;;32.0;U/L;\n"
+        "2026-01-01T09:00:00+01:00;Caro;crp;inflammation;4.8;mg/L;"
+        "2026-02-01T00:00:00+01:00;retention;4.8;mg/L;\n"
+    )
+
+    plan = importer.plan_import(text, "lab_values", existing_lab_readings=[], lab_custom_markers=[])
+
+    assert plan.skipped == 1
+    assert plan.rejected == 0
+    assert len(plan.lab_readings) == 1
+    record = plan.lab_readings[0]
+    assert record["marker_key"] == "alt"
+    assert record["value"] == 32.0
+    assert record["unit"] == "U/L"
+    assert record["reported_value"] == 32.0
+    assert record["reported_unit"] == "U/L"
+    assert record["report_ref"] is None

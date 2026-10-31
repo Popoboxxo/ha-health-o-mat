@@ -40,6 +40,7 @@
           "person_display": "Anzeigename",
           "daily_reset_hour": "Reset-Uhrzeit des Tageszählers (0-23)",
           "retention_months": "Aufbewahrung der Historie in Monaten (0 = aus)",
+          "lab_retention_months": "Aufbewahrung der Laborwerte in Monaten (0 = aus)",
           "enable_sidebar_panel": "Sidebar-Panel anzeigen",
           "area_drink": "Trinken erfassen",
           "area_bp": "Blutdruck erfassen",
@@ -612,6 +613,38 @@
         }
       }
     },
+    "add_lab_report": {
+      "name": "Laborbericht erfassen",
+      "description": "Erfasst mehrere Laborwerte eines Berichts in einem Vorgang — gleicher Zeitpunkt, gleiche Berichts-Referenz, Alles-oder-nichts: eine ungültige Zeile lehnt den gesamten Bericht ab. Leere Zeilen werden ignoriert. Ein erneuter Aufruf schreibt erneut (nicht idempotent).",
+      "fields": {
+        "values": {
+          "name": "Werte",
+          "description": "Zeilen aus Marker, Wert und (optionaler) Einheit."
+        },
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt des Berichts als ISO 8601 (z. B. 2026-11-01T09:15 oder mit Offset). Leer = jetzt. Höchstens 5 Minuten in der Zukunft, nicht vor 1900."
+        },
+        "report_ref": {
+          "name": "Berichts-Referenz",
+          "description": "Optionaler Link oder externe ID des Laborberichts (max. 500 Zeichen). Nur Referenz, Health-O-Mat ruft die URL nie selbst auf."
+        }
+      }
+    },
+    "remove_lab_report": {
+      "name": "Laborbericht verwerfen",
+      "description": "Verwirft alle aktiven Laborwerte eines Berichts (gemeinsamer Zeitpunkt). Ist eine Berichts-Referenz gesetzt, werden nur Einträge mit exakt diesem Tag verworfen. Kein Treffer ist ein Fehler. Verwerfen markiert die Werte als gelöscht; sie bleiben einzeln über restore_entry wiederherstellbar.",
+      "fields": {
+        "ts": {
+          "name": "Zeitpunkt",
+          "description": "Zeitpunkt des Berichts als ISO 8601 — derselbe Wert wie beim Erfassen (z. B. aus panel_data.labs.last_report.ts). Pflichtfeld."
+        },
+        "report_ref": {
+          "name": "Berichts-Referenz",
+          "description": "Optional: grenzt das Verwerfen auf genau diesen Tag ein (max. 500 Zeichen). Ohne Angabe werden alle aktiven Werte dieses Zeitpunkts verworfen."
+        }
+      }
+    },
     "remove_last_lab_value": {
       "name": "Letzten Laborwert löschen",
       "description": "Entfernt den letzten aktiven Laborwert eines bestimmten Markers (Undo). Der Eintrag wird als gelöscht markiert und bleibt wiederherstellbar.",
@@ -865,6 +898,7 @@
     "ui_card_yesterday": "Gestern",
     "ui_card_percent": "{percent}% des Tagesziels",
     "ui_card_bp_warning": "Letzte Messung oberhalb der Schwellen",
+    "ui_card_lab_disclaimer": "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
     "ui_card_no_measurement": "Keine Messung",
     "ui_card_no_person_filter": "Keine Person passt zum konfigurierten Personen-Filter.",
     "ui_card_loading": "Lade Health-O-Mat…",
@@ -978,9 +1012,13 @@
     "ui_admin_lab_category": "Kategorie",
     "ui_admin_lab_marker": "Marker",
     "ui_admin_lab_unit": "Einheit",
+    "ui_admin_lab_conversion": "Umrechnung",
+    "ui_admin_lab_conversion_required": "Einheit Pflicht",
+    "ui_admin_lab_conversion_none": "—",
     "ui_admin_lab_range": "Referenz",
     "ui_admin_lab_reset": "Auf Katalog-Default zurücksetzen",
     "ui_admin_lab_hide_title": "Kategorien ausblenden",
+    "ui_admin_lab_hide_disclaimer": "Medizin-Hinweis im Panel ausblenden",
     "ui_admin_lab_custom_title": "Eigene Marker",
     "ui_admin_lab_custom_name": "Name",
     "ui_admin_lab_custom_unit": "Einheit",
@@ -997,6 +1035,8 @@
     "ui_panel_lab_prev": "Vorherige Kategorie",
     "ui_panel_lab_next": "Nächste Kategorie",
     "ui_panel_lab_no_categories": "Keine Laborwert-Kategorie sichtbar.",
+    "ui_panel_lab_disclaimer": "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
+    "ui_panel_lab_all_hidden": "Alle Kategorien ausgeblendet",
     "ui_panel_lab_add_value": "Neuen Wert erfassen",
     "ui_panel_lab_marker": "Marker",
     "ui_panel_lab_value_field": "Wert",
@@ -1006,6 +1046,19 @@
     "ui_panel_tile_lab_warning": "{count} Marker außerhalb Referenz",
     "ui_panel_tile_lab_ok": "Alles im Bereich",
     "ui_panel_lab_threshold_title": "{count} Laborwerte außerhalb Referenz",
+    "ui_panel_lab_report_title": "Laborbericht erfassen",
+    "ui_panel_lab_report_add_row": "Zeile",
+    "ui_panel_lab_report_remove_row": "Zeile entfernen",
+    "ui_panel_lab_report_save": "Bericht speichern",
+    "ui_panel_lab_report_ts": "Zeitpunkt",
+    "ui_panel_lab_marker_choose": "— bitte wählen —",
+    "ui_panel_lab_fill_visible": "Alle sichtbaren Marker anlegen",
+    "ui_panel_lab_fill_last": "Zuletzt verwendete Marker anlegen",
+    "ui_panel_lab_report_limit": "Höchstens 60 Zeilen pro Bericht.",
+    "ui_panel_lab_report_empty": "Bitte mindestens einen Wert erfassen.",
+    "ui_panel_lab_unit_custom": "Andere …",
+    "ui_panel_lab_report_discard": "Diesen Bericht verwerfen",
+    "ui_panel_lab_report_discard_confirm": "Diesen Bericht mit {count} Werten verwerfen?",
     "ui_panel_val_lab_value": "Bitte Marker und einen numerischen Wert angeben."
   }
 }

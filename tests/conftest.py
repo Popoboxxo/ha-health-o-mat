@@ -351,6 +351,18 @@ if not _USING_REAL_HA:
         """Identity decorator — real HA's @callback just tags the function."""
         return func
 
+    def ensure_list(value: Any) -> list[Any]:
+        """Minimal stand-in for helpers.config_validation.ensure_list.
+
+        Implemented for real instead of as a MagicMock: ``__init__.py`` wires it
+        into the ``add_lab_report`` voluptuous schema
+        (``vol.All(cv.ensure_list, [vol.Schema(...)])``), so a Mock would
+        swallow the list-wrapping and validate the wrong shapes.
+        """
+        if value is None:
+            return []
+        return value if isinstance(value, list) else [value]
+
     def _module(name: str, **attrs) -> types.ModuleType:
         mod = types.ModuleType(name)
         for attr_name, value in attrs.items():
@@ -540,6 +552,10 @@ if not _USING_REAL_HA:
             async_response=websocket_async_response,
         ),
         "homeassistant.helpers": _module("homeassistant.helpers"),
+        "homeassistant.helpers.config_validation": _module(
+            "homeassistant.helpers.config_validation",
+            ensure_list=ensure_list,
+        ),
         "homeassistant.helpers.typing": _module(
             "homeassistant.helpers.typing",
             UNDEFINED=_UNDEFINED,

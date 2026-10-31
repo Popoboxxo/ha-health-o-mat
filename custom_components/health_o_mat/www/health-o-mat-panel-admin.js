@@ -24,6 +24,7 @@ import {
   escapeHtml,
   attrValue,
   datasetLabel,
+  formatNumber,
   labDisplayName,
   normalizeAreas,
   personSlug,
@@ -359,8 +360,43 @@ export function labSettingsSection(panel, settings, entryId) {
   };
   const altUnitText = (marker) => {
     const altUnit = marker && marker.alt_unit;
-    return altUnit && altUnit.unit ? String(altUnit.unit) : "";
+    if (!altUnit || !altUnit.unit) return "";
+    const factor = altUnit.factor_to_canonical;
+    return factor == null
+      ? String(altUnit.unit)
+      : `${String(altUnit.unit)} × ${formatNumber(factor)}`;
   };
+
+  // Umrechnung je Alt-Einheit: "Alt × Faktor → kanonisch". Der Faktor kommt
+  // aus `formatNumber` (locale-fähig) — kein hartkodiertes Komma, keine
+  // String-Konkatenation des Rohwerts (§7.1).
+  const conversionText = (marker) => {
+    const altUnits =
+      marker && typeof marker.alt_units === "object" ? marker.alt_units : {};
+    const pairs = Object.entries(altUnits).filter(
+      ([unit, factor]) => unit && factor != null && Number.isFinite(Number(factor))
+    );
+    if (!pairs.length) {
+      return `<span class="muted">${escapeHtml(
+        t("ui_admin_lab_conversion_none", "—")
+      )}</span>`;
+    }
+    const canonical = String(marker.canonical_unit || "");
+    return pairs
+      .map(
+        ([unit, factor]) =>
+          `${escapeHtml(unit)} × ${escapeHtml(formatNumber(factor))} → ${escapeHtml(
+            canonical
+          )}`
+      )
+      .join("<br>");
+  };
+  const requiredBadge = (marker) =>
+    marker && marker.require_explicit_unit
+      ? `<div class="chip">${escapeHtml(
+          t("ui_admin_lab_conversion_required", "Einheit Pflicht")
+        )}</div>`
+      : "";
 
   const refRows = Object.entries(markers)
     .map(([key, marker]) => {
@@ -372,6 +408,7 @@ export function labSettingsSection(panel, settings, entryId) {
           <td>${escapeHtml(categoryName(definition.category))}</td>
           <td>${escapeHtml(labDisplayName(definition, key))}</td>
           <td>${escapeHtml(definition.canonical_unit || "")}</td>
+          <td>${conversionText(definition)}${requiredBadge(definition)}</td>
           <td>
             <input type="number" step="any" data-field="lab-ref-min-${escapeHtml(key)}"
               value="${attrValue(refMin)}" />
@@ -404,7 +441,7 @@ export function labSettingsSection(panel, settings, entryId) {
       (marker, index) => `<li>
           ${escapeHtml(marker.name || "")} (${escapeHtml(marker.key || "?")}) —
           ${escapeHtml(marker.unit || "")} · ${escapeHtml(categoryName(marker.category))}${
-        altUnitText(marker) ? ` · ${escapeHtml(altUnitText(marker))}` : ""
+        altUnitText(marker) ? ` · alt: ${escapeHtml(altUnitText(marker))}` : ""
       }
           <button class="btn ghost" type="button" data-action="lab-custom-remove"
             data-index="${index}">\u2715</button>
@@ -431,6 +468,7 @@ export function labSettingsSection(panel, settings, entryId) {
           <th>${escapeHtml(t("ui_admin_lab_category", "Kategorie"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_marker", "Marker"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_unit", "Einheit"))}</th>
+          <th>${escapeHtml(t("ui_admin_lab_conversion", "Umrechnung"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_range", "Referenz"))}</th>
           <th></th>
         </tr></thead>
@@ -443,6 +481,16 @@ export function labSettingsSection(panel, settings, entryId) {
         t("ui_admin_lab_hide_title", "Kategorien ausblenden")
       )}</div>
       <div class="settings-grid">${hideCheckboxes}</div>
+      <div class="settings-grid">
+        <label class="check">
+          <input type="checkbox" data-field="lab-hide-panel-disclaimer"${
+            s.lab_hide_panel_disclaimer === true ? " checked" : ""
+          } />
+          <span>${escapeHtml(
+            t("ui_admin_lab_hide_disclaimer", "Medizin-Hinweis im Panel ausblenden")
+          )}</span>
+        </label>
+      </div>
     </div>
 
     <div class="card">

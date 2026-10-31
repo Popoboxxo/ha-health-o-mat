@@ -26,6 +26,7 @@ from .const import (
     DOMAIN,
     DRINK_LEXICON,
     MAX_RETENTION_MONTHS,
+    OPTION_LAB_RETENTION_MONTHS,
     OPTION_REMINDERS,
     OPTION_WEEKLY_REPORT,
     WELLBEING_IMAGES_OPTION,
@@ -430,6 +431,12 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         "retention_months",
                         default=int(self._option("retention_months", 0) or 0),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)),
+                    # Labor-Retention (REQ-HOM-129): eigene Option, unabhängig von
+                    # `retention_months`; 0 = AUS (Default = bisheriges Verhalten).
+                    vol.Optional(
+                        OPTION_LAB_RETENTION_MONTHS,
+                        default=int(self._option(OPTION_LAB_RETENTION_MONTHS, 0) or 0),
                     ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETENTION_MONTHS)),
                     # Opt-in-Sidebar-Panel (CONCEPT-UI §8.3): Default AUS; der
                     # bestehende Wert wird unverändert als Default übernommen.

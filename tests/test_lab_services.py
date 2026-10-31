@@ -11,10 +11,12 @@ import importlib.util
 import os
 import sys
 import types
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import voluptuous as vol
+import yaml
 from homeassistant.exceptions import ServiceValidationError
 
 _COMPONENT_DIR = os.path.abspath(
@@ -387,3 +389,340 @@ def test_req_hom_122_restore_backup_schema_accepts_lab_values_dataset():
     validated = schemas["restore_backup"]({"filename": "b.json", "datasets": ["lab_values"]})
 
     assert validated["datasets"] == ["lab_values"]
+
+
+# ---------------------------------------------------------------------------
+# Service-Schema-Mirror (REQ-HOM-123/128)
+# ---------------------------------------------------------------------------
+
+
+def test_req_hom_123_marker_options_mirror_the_catalog_in_both_services():
+    """[REQ-HOM-123] `add_lab_value` und `add_lab_report` kennen exakt `LAB_MARKERS`."""
+    const_module = sys.modules[f"{_PKG}.const"]
+    with open(os.path.join(_COMPONENT_DIR, "services.yaml"), encoding="utf-8") as fh:
+        services = yaml.safe_load(fh)
+
+    single = {
+        option["value"]
+        for option in services["add_lab_value"]["fields"]["marker"]["selector"]["select"]["options"]
+    }
+    batch = {
+        option["value"]
+        for option in services["add_lab_report"]["fields"]["values"]["selector"]["object"][
+            "fields"
+        ]["marker"]["selector"]["select"]["options"]
+    }
+
+    expected = set(const_module.LAB_MARKERS)
+    assert single == expected, "add_lab_value driftet gegen den Katalog"
+    assert batch == expected, "add_lab_report driftet gegen den Katalog"
+
+
+def test_req_hom_128_remove_lab_report_fields_and_required_ts():
+    """[REQ-HOM-128] Undo-Service: person/ts/report_ref, `ts` ist Pflicht."""
+    with open(os.path.join(_COMPONENT_DIR, "services.yaml"), encoding="utf-8") as fh:
+        services = yaml.safe_load(fh)
+
+    fields = services["remove_lab_report"]["fields"]
+    assert set(fields) == {"person", "ts", "report_ref"}
+    assert fields["ts"].get("required") is True
+
+
+# ---------------------------------------------------------------------------
+# add_lab_report (REQ-HOM-123)
+# ---------------------------------------------------------------------------
+
+
+def test_req_hom_123_add_lab_report_writes_one_batch_with_shared_context(monkeypatch):
+    monkeypatch.setattr(
+        hass_init,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 31, 12, 0, tzinfo=UTC)),
+    )
+
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock(return_value=["r1", "r2"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call(
+        {
+            "values": [
+                {"marker": "alt", "value": 32, "unit": "U/L"},
+                {"marker": "creatinine", "value": 1.1, "unit": "mg/dL"},
+            ],
+            # Vergangenheit relativ zur im Test gepinnten Uhr.
+            "ts": "2026-10-30T09:15:00+01:00",
+            "report_ref": "  Labor 10/2026  ",
+        }
+    )
+
+    assert _run(registered["add_lab_report"](call)) is None
+
+    store.add_lab_readings.assert_awaited_once()
+    args, kwargs = store.add_lab_readings.call_args
+    assert args[0] == "e1"
+    assert args[1] == "2026-10-30T09:15:00+01:00"
+    assert [row["marker_key"] for row in args[2]] == ["alt", "creatinine"]
+    assert args[2][1]["unit"] == "µmol/L"
+    assert kwargs["report_ref"] == "Labor 10/2026"
+
+
+def test_req_hom_123_add_lab_report_ignores_empty_rows():
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock(return_value=["r1"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call({"values": [{"marker": "alt", "value": 32}, {}, {"marker": "", "value": ""}]})
+
+    _run(registered["add_lab_report"](call))
+
+    rows = store.add_lab_readings.call_args.args[2]
+    assert [row["marker_key"] for row in rows] == ["alt"]
+
+
+def test_req_hom_123_add_lab_report_rejects_unknown_marker_without_write():
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call(
+        {
+            "values": [
+                {"marker": "alt", "value": 32},
+                {"marker": "crp", "value": 4.8},
+                {"marker": "gptx", "value": 1},
+            ]
+        }
+    )
+
+    with pytest.raises(ServiceValidationError, match=r"Zeile 3 \(gptx\): unknown_marker"):
+        _run(registered["add_lab_report"](call))
+
+    store.add_lab_readings.assert_not_awaited()
+
+
+def test_req_hom_123_add_lab_report_prefixes_invalid_ts():
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call({"values": [{"marker": "alt", "value": 32}], "ts": "kaputt"})
+
+    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+        _run(registered["add_lab_report"](call))
+
+    store.add_lab_readings.assert_not_awaited()
+
+
+def test_req_hom_123_add_lab_report_resolves_person_before_timestamp():
+    """Ein unbekannter Entry meldet den Entry-Fehler, nicht `invalid_ts` (§2.5)."""
+    store = MagicMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call(
+        {"person": "niemand", "values": [{"marker": "alt", "value": 32}], "ts": "kaputt"}
+    )
+
+    with pytest.raises(ServiceValidationError, match="nicht gefunden"):
+        _run(registered["add_lab_report"](call))
+
+
+def test_req_hom_123_add_lab_report_caps_report_ref_length():
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock(return_value=["r1"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call({"values": [{"marker": "alt", "value": 32}], "report_ref": "x" * 600})
+
+    _run(registered["add_lab_report"](call))
+
+    assert len(store.add_lab_readings.call_args.kwargs["report_ref"]) == 500
+
+
+def test_req_hom_123_add_lab_report_schema_allows_empty_row_and_rejects_extra():
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+    schema = schemas["add_lab_report"]
+
+    parsed = schema({"values": [{}], "ts": "2026-11-01T09:15:00+01:00"})
+    assert parsed["values"] == [{}]
+    parsed = schema({"values": {"marker": "alt", "value": "32.5"}})
+    assert parsed["values"] == [{"marker": "alt", "value": "32.5"}]
+
+    with pytest.raises(vol.Invalid):
+        schema({"values": [{"marker": "alt", "value": 1, "bogus": 2}]})
+    with pytest.raises(vol.Invalid):
+        schema({"ts": "2026-11-01T09:15:00+01:00"})
+
+
+def test_req_hom_123_add_lab_value_rejects_nan_and_inf():
+    store = MagicMock()
+    store.add_lab_reading = AsyncMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(ServiceValidationError, match="invalid_value"):
+            _run(registered["add_lab_value"](_make_call({"marker": "alt", "value": bad})))
+
+    store.add_lab_reading.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# remove_lab_report (REQ-HOM-128)
+# ---------------------------------------------------------------------------
+
+
+def test_req_hom_128_remove_lab_report_voids_report_with_ref(monkeypatch):
+    monkeypatch.setattr(
+        hass_init,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 31, 12, 0, tzinfo=UTC)),
+    )
+
+    store = MagicMock()
+    store.void_lab_report = AsyncMock(return_value=["r1", "r2"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call(
+        {
+            "ts": "2026-10-30T09:15:00+01:00",
+            "report_ref": "  Labor 10/2026  ",
+        }
+    )
+
+    assert _run(registered["remove_lab_report"](call)) is None
+
+    store.void_lab_report.assert_awaited_once()
+    args, kwargs = store.void_lab_report.call_args
+    assert args == ("e1", "2026-10-30T09:15:00+01:00")
+    assert kwargs["report_ref"] == "Labor 10/2026"
+
+
+def test_req_hom_128_remove_lab_report_without_ref_passes_none(monkeypatch):
+    monkeypatch.setattr(
+        hass_init,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 31, 12, 0, tzinfo=UTC)),
+    )
+
+    store = MagicMock()
+    store.void_lab_report = AsyncMock(return_value=["r1"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    _run(registered["remove_lab_report"](_make_call({"ts": "2026-10-30T09:15:00+01:00"})))
+
+    assert store.void_lab_report.call_args.kwargs["report_ref"] is None
+
+
+def test_req_hom_128_remove_lab_report_no_match_raises(monkeypatch):
+    monkeypatch.setattr(
+        hass_init,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 31, 12, 0, tzinfo=UTC)),
+    )
+
+    store = MagicMock()
+    store.void_lab_report = AsyncMock(return_value=[])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError, match="no_active_report"):
+        _run(registered["remove_lab_report"](_make_call({"ts": "2026-10-30T09:15:00+01:00"})))
+
+
+def test_req_hom_128_remove_lab_report_invalid_ts_raises_with_prefix():
+    store = MagicMock()
+    store.void_lab_report = AsyncMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+        _run(registered["remove_lab_report"](_make_call({"ts": "kaputt"})))
+
+    store.void_lab_report.assert_not_awaited()
+
+
+def test_req_hom_128_remove_lab_report_caps_report_ref_length(monkeypatch):
+    monkeypatch.setattr(
+        hass_init,
+        "dt_util",
+        types.SimpleNamespace(now=lambda: datetime(2026, 10, 31, 12, 0, tzinfo=UTC)),
+    )
+
+    store = MagicMock()
+    store.void_lab_report = AsyncMock(return_value=["r1"])
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    _run(
+        registered["remove_lab_report"](
+            _make_call({"ts": "2026-10-30T09:15:00+01:00", "report_ref": "x" * 600})
+        )
+    )
+
+    assert len(store.void_lab_report.call_args.kwargs["report_ref"]) == 500
+
+
+def test_req_hom_128_remove_lab_report_schema_requires_ts():
+    hass = MagicMock()
+    _registered, schemas = _wire_services_and_schemas(hass, MagicMock())
+    schema = schemas["remove_lab_report"]
+
+    parsed = schema({"ts": "2026-10-30T09:15:00+01:00"})
+    assert parsed["ts"] == "2026-10-30T09:15:00+01:00"
+
+    with pytest.raises(vol.Invalid):
+        schema({})
+    with pytest.raises(vol.Invalid):
+        schema({"ts": "2026-10-30T09:15:00+01:00", "bogus": 1})
+
+
+# ---------------------------------------------------------------------------
+# Labor-Retention (REQ-HOM-129)
+# ---------------------------------------------------------------------------
+
+
+def test_req_hom_129_lab_retention_months_reads_options_or_zero():
+    assert hass_init._lab_retention_months(_wire_entry_like({})) == 0
+    assert hass_init._lab_retention_months(_wire_entry_like({"lab_retention_months": 24})) == 24
+    assert hass_init._lab_retention_months(_wire_entry_like({"lab_retention_months": "x"})) == 0
+
+
+def _wire_entry_like(options: dict):
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = options
+    return entry
+
+
+def test_req_hom_129_apply_lab_retention_default_off_is_noop(monkeypatch):
+    store = MagicMock()
+    store.void_lab_readings_before = AsyncMock()
+    entry = _wire_entry_like({})
+    hass = MagicMock()
+
+    _run(hass_init._apply_lab_retention(hass, entry, store))
+
+    store.void_lab_readings_before.assert_not_awaited()
+
+
+def test_req_hom_129_apply_lab_retention_voids_before_cutoff(monkeypatch):
+    store = MagicMock()
+    store.void_lab_readings_before = AsyncMock(return_value=["r1"])
+    entry = _wire_entry_like({"lab_retention_months": 12})
+    hass = MagicMock()
+    monkeypatch.setattr(
+        hass_init.dt_util,
+        "now",
+        lambda: datetime(2026, 11, 1, 12, 0, tzinfo=UTC),
+    )
+
+    _run(hass_init._apply_lab_retention(hass, entry, store))
+
+    store.void_lab_readings_before.assert_awaited_once()
+    args, kwargs = store.void_lab_readings_before.call_args
+    assert args[0] == "e1"
+    assert args[1] == "2025-11-01T12:00:00+00:00"
+    assert kwargs["months"] == 12

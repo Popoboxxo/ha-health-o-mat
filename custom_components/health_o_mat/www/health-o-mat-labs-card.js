@@ -30,6 +30,9 @@ const PERSON_MODES = ["selector", "fixed"];
 /* Gleiche Zukunfts-Toleranz wie Karte/Server (REQ-HOM-120). */
 const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
+// UI-Soft-Cap des Bericht-Dialogs (Render-Schutz). Server-Limit bleibt 200 (§2.5).
+const LAB_REPORT_MAX_ROWS_UI = 60;
+
 /* ---- Self-contained helpers (no imports) --------------------------------- */
 
 function escapeHtml(value) {
@@ -84,6 +87,25 @@ function labDisplayName(item, fallback) {
   const chosen = _language === "en" ? en : de;
   if (chosen) return String(chosen);
   return fallback == null ? "" : String(fallback);
+}
+
+/* Kartenlokale Übersetzungen: die Karte lädt keine HA-Ressourcen, braucht aber
+ * den Disclaimer sprachabhängig. Die Keys sind identisch zu `common` in
+ * strings.json; ein Test pinnt die Gleichheit der Texte. */
+const CARD_TEXT = {
+  de: {
+    ui_card_lab_disclaimer:
+      "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
+  },
+  en: {
+    ui_card_lab_disclaimer:
+      "⚠️ Note: not medical advice — reference values, not a diagnosis. Adjust reference ranges in the settings.",
+  },
+};
+
+function cardText(key) {
+  const language = _language === "en" ? "en" : "de";
+  return (CARD_TEXT[language] && CARD_TEXT[language][key]) || CARD_TEXT.de[key] || "";
 }
 
 /* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
@@ -211,6 +233,19 @@ function errorMessage(err) {
   return known[text] || text || "Speichern fehlgeschlagen.";
 }
 
+/* Strukturierte Batch-Fehler (§2.4/§3): `sendMessagePromise` löst bei
+ * {"ok": false} NICHT ab — der Aufrufer muss die Envelope selbst prüfen. */
+function resultError(result) {
+  if (!result || result.ok !== false) return "";
+  const error = result.error && typeof result.error === "object" ? result.error : {};
+  return error.message || error.code || "Speichern fehlgeschlagen.";
+}
+
+function reportErrorMessage(err) {
+  const message = err && err.message ? String(err.message) : String(err == null ? "" : err);
+  return message.trim() || "Speichern fehlgeschlagen.";
+}
+
 /* Ein Personen-Eintrag passt zu einem Filterwert, wenn entry_id, Slug oder
  * Anzeigename übereinstimmen (case-insensitiv). Leer = kein Filter. */
 function personMatchesFilter(person, filter) {
@@ -252,6 +287,13 @@ function normalizeCardConfig(raw) {
 }
 
 const EMPTY_DRAFT = () => ({ marker: "", value: "", unit: "", ts: "", reportRef: "" });
+
+const EMPTY_REPORT_ROW = () => ({ marker: "", value: "", unit: "" });
+const EMPTY_REPORT_DRAFT = () => ({
+  ts: "",
+  reportRef: "",
+  rows: [EMPTY_REPORT_ROW()],
+});
 
 const CARD_CSS = `
   :host { display: block; }
@@ -314,6 +356,20 @@ const CARD_CSS = `
   .labs-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
   .labs-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--secondary-text-color); }
   .labs-form-grid .wide { grid-column: 1 / -1; }
+  .labs-report { border-top: 1px solid var(--divider-color, rgba(0,0,0,.08)); padding-top: 8px; }
+  .labs-report summary { cursor: pointer; font-weight: 600; }
+  .labs-report-fill { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .labs-report-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .labs-report-row {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px; align-items: center;
+  }
+  .labs-report-actions {
+    display: flex; justify-content: space-between; gap: 8px;
+    margin-top: 8px; flex-wrap: wrap;
+  }
+  .labs-report-discard { display: flex; justify-content: flex-end; margin-top: 8px; }
   .labs-save {
     align-self: flex-end; min-height: 40px; padding: 8px 18px; border: none; border-radius: 8px;
     background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff);
@@ -342,6 +398,9 @@ class HealthOMatLabsCard extends HTMLElement {
     this._activeEntry = "";
     this._activeCategory = "";
     this._draft = EMPTY_DRAFT();
+    this._reportDraft = EMPTY_REPORT_DRAFT();
+    this._reportOpen = false;
+    this._fillNote = "";
     this._loading = false;
     this._saving = false;
     this._error = null;
@@ -351,6 +410,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this._onClick = this._onClick.bind(this);
     this._onInput = this._onInput.bind(this);
     this._onChange = this._onChange.bind(this);
+    this._onToggle = this._onToggle.bind(this);
   }
 
   /* ---- Lovelace card API -------------------------------------------------- */
@@ -380,6 +440,9 @@ class HealthOMatLabsCard extends HTMLElement {
     this._activeEntry = "";
     this._activeCategory = "";
     this._draft = EMPTY_DRAFT();
+    this._reportDraft = EMPTY_REPORT_DRAFT();
+    this._reportOpen = false;
+    this._fillNote = "";
     this._error = null;
     this._actionError = "";
     this._render();
@@ -411,6 +474,8 @@ class HealthOMatLabsCard extends HTMLElement {
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("input", this._onInput);
     this.shadowRoot.addEventListener("change", this._onChange);
+    // `toggle` bubbelt nicht — Capture-Phase faengt es am Shadow-Root ab.
+    this.shadowRoot.addEventListener("toggle", this._onToggle, true);
     this._listenersAttached = true;
   }
 
@@ -418,6 +483,7 @@ class HealthOMatLabsCard extends HTMLElement {
     this.shadowRoot.removeEventListener("click", this._onClick);
     this.shadowRoot.removeEventListener("input", this._onInput);
     this.shadowRoot.removeEventListener("change", this._onChange);
+    this.shadowRoot.removeEventListener("toggle", this._onToggle, true);
     this._listenersAttached = false;
   }
 
@@ -489,6 +555,9 @@ class HealthOMatLabsCard extends HTMLElement {
       if (entryId !== this._activeEntry) {
         this._activeCategory = "";
         this._draft = EMPTY_DRAFT();
+        this._reportDraft = EMPTY_REPORT_DRAFT();
+        this._reportOpen = false;
+        this._fillNote = "";
       }
       this._activeEntry = entryId;
       if (!entryId) {
@@ -728,19 +797,7 @@ class HealthOMatLabsCard extends HTMLElement {
   }
 
   _readEntryTs() {
-    const raw = String(this._draft.ts || "").trim();
-    if (!raw) return { iso: "" };
-    const parsed = new Date(raw);
-    if (!Number.isFinite(parsed.getTime())) {
-      return { error: "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen." };
-    }
-    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
-      return {
-        error:
-          "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz).",
-      };
-    }
-    return { iso: parsed.toISOString() };
+    return this._validateTs(this._draft.ts);
   }
 
   async _saveValue() {
@@ -801,6 +858,333 @@ class HealthOMatLabsCard extends HTMLElement {
     }
   }
 
+  /* ---- Mehrzeilen-Dialog: Laborbericht (REQ-HOM-123) ---------------------- */
+
+  _reportMarkerOptions(markers, selectedKey) {
+    const placeholder = selectedKey
+      ? ""
+      : '<option value="" selected>— bitte wählen —</option>';
+    return `${placeholder}${labMarkerOptionsHtml(markers, selectedKey)}`;
+  }
+
+  _unitOptions(marker, selectedUnit) {
+    const canonical = (marker && marker.unit) || "";
+    const altUnits = Object.keys((marker && marker.alt_units) || {});
+    const known = [canonical, ...altUnits].filter(
+      (unit, index, all) => unit && all.indexOf(unit) === index
+    );
+    const current = selectedUnit
+      ? known.includes(selectedUnit)
+        ? selectedUnit
+        : "__custom__"
+      : canonical;
+    const options = known
+      .map(
+        (unit) =>
+          `<option value="${escapeHtml(unit)}"${
+            unit === current ? " selected" : ""
+          }>${escapeHtml(unit)}</option>`
+      )
+      .join("");
+    return `${options}<option value="__custom__"${
+      current === "__custom__" ? " selected" : ""
+    }>Andere …</option>`;
+  }
+
+  _reportRow(row, index, markers) {
+    const marker = markers[row.marker];
+    const disabled = this._saving ? " disabled" : "";
+    return `<div class="labs-report-row" data-role="lab-report-row">
+      <select data-field="lab-report-marker-${index}" aria-label="Marker"${disabled}>${this._reportMarkerOptions(
+        markers,
+        row.marker
+      )}</select>
+      <input type="number" step="any" inputmode="decimal" data-field="lab-report-value-${index}"
+        aria-label="Wert" value="${escapeHtml(row.value)}" placeholder="Wert"${disabled} />
+      <select data-field="lab-report-unit-pick-${index}" aria-label="Einheit"${disabled}>${this._unitOptions(
+        marker,
+        row.unit
+      )}</select>
+      <input type="text" data-field="lab-report-unit-${index}" aria-label="Einheit (Freitext)"
+        value="${escapeHtml(row.unit)}" placeholder="${escapeHtml(
+          (marker && marker.unit) || "Einheit"
+        )}" autocomplete="off"${disabled} />
+      <button type="button" class="labs-tab" data-action="lab-report-remove" data-index="${index}"
+        aria-label="Zeile entfernen"${disabled}>✕</button>
+    </div>`;
+  }
+
+  _reportForm() {
+    const markers = this._markers();
+    if (!Object.keys(markers).length) return "";
+    const draft = this._reportDraft;
+    const atLimit = draft.rows.length >= LAB_REPORT_MAX_ROWS_UI;
+    const disabled = this._saving ? " disabled" : "";
+    const addDisabled = this._saving || atLimit ? " disabled" : "";
+    const rows = draft.rows
+      .map((row, index) => this._reportRow(row, index, markers))
+      .join("");
+    const note = atLimit
+      ? `Höchstens ${LAB_REPORT_MAX_ROWS_UI} Zeilen pro Bericht.`
+      : this._fillNote;
+    const noteHtml = note ? `<div class="labs-empty">${escapeHtml(note)}</div>` : "";
+    return `<details class="labs-report">
+      <summary>Laborbericht erfassen</summary>
+      <div class="labs-report-fill">
+        <button type="button" class="labs-tab" data-action="lab-report-fill-visible"${disabled}>Alle sichtbaren Marker anlegen</button>
+        <button type="button" class="labs-tab" data-action="lab-report-fill-last"${disabled}>Zuletzt verwendete Marker anlegen</button>
+      </div>
+      <div class="labs-form-grid">
+        <label>Zeitpunkt
+          <input type="datetime-local" data-field="lab-report-ts" aria-label="Zeitpunkt"
+            value="${escapeHtml(draft.ts)}" />
+        </label>
+        <label class="wide">Bericht-Link/ID (optional)
+          <input type="text" data-field="lab-report-ref" aria-label="Bericht-Link oder ID"
+            value="${escapeHtml(draft.reportRef)}" placeholder="https://… oder Befund-ID"
+            autocomplete="off" />
+        </label>
+      </div>
+      <div class="labs-report-rows">${rows}</div>
+      ${noteHtml}
+      <div class="labs-report-actions">
+        <button type="button" class="labs-tab" data-action="lab-report-add"${addDisabled}>＋ Zeile</button>
+        <button type="button" class="labs-save" data-action="lab-report-save"${disabled}>${
+          this._saving ? "Speichern…" : "Bericht speichern"
+        }</button>
+      </div>
+    </details>`;
+  }
+
+  _collectReportDraftFromDom() {
+    const read = (field) => {
+      const el = this.shadowRoot.querySelector(`[data-field="${field}"]`);
+      return el && el.value != null ? String(el.value) : "";
+    };
+    this._reportDraft.ts = read("lab-report-ts");
+    this._reportDraft.reportRef = read("lab-report-ref");
+    this._reportDraft.rows = this._reportDraft.rows.map((_row, index) => ({
+      marker: read(`lab-report-marker-${index}`),
+      value: read(`lab-report-value-${index}`),
+      unit: read(`lab-report-unit-${index}`),
+    }));
+  }
+
+  _fillReportDraft(mode) {
+    this._collectReportDraftFromDom();
+    const markers = this._markers();
+    let keys = [];
+    if (mode === "visible") {
+      // „sichtbar" = was die Karte tatsächlich als Kategorie zeigt (hidden-Flag
+      // UND show_categories-Konfiguration).
+      const visible = new Set(this._visibleCategories().map((category) => category.key));
+      keys = Object.keys(markers).filter((key) => visible.has(markers[key].category));
+    } else {
+      const last = this._labs().last_report || {};
+      keys = (Array.isArray(last.marker_keys) ? last.marker_keys : []).filter(
+        (key) => markers[key]
+      );
+    }
+    const used = new Set(this._reportDraft.rows.map((row) => row.marker).filter(Boolean));
+    let limitHit = false;
+    for (const key of keys) {
+      if (used.has(key)) continue;
+      const empty = this._reportDraft.rows.find(
+        (row) => !row.marker && !row.value && !row.unit
+      );
+      if (empty) {
+        empty.marker = key;
+      } else if (this._reportDraft.rows.length < LAB_REPORT_MAX_ROWS_UI) {
+        this._reportDraft.rows.push({ marker: key, value: "", unit: "" });
+      } else {
+        limitHit = true;
+        break;
+      }
+      used.add(key);
+    }
+    this._fillNote = limitHit
+      ? `Höchstens ${LAB_REPORT_MAX_ROWS_UI} Zeilen pro Bericht.`
+      : "";
+    this._render();
+  }
+
+  _addReportRow() {
+    if (this._reportDraft.rows.length >= LAB_REPORT_MAX_ROWS_UI) return;
+    this._collectReportDraftFromDom();
+    this._reportDraft.rows.push(EMPTY_REPORT_ROW());
+    this._render();
+  }
+
+  _removeReportRow(index) {
+    if (!Number.isInteger(index) || this._reportDraft.rows.length <= 1) return;
+    this._collectReportDraftFromDom();
+    this._reportDraft.rows.splice(index, 1);
+    this._render();
+  }
+
+  _onReportField(field, value) {
+    if (field === "lab-report-ts") {
+      this._reportDraft.ts = value;
+      return;
+    }
+    if (field === "lab-report-ref") {
+      this._reportDraft.reportRef = value;
+      return;
+    }
+    const match = /^lab-report-(marker|value|unit)-(\d+)$/.exec(field);
+    if (!match) return;
+    const row = this._reportDraft.rows[Number(match[2])];
+    if (row) row[match[1]] = value;
+  }
+
+  _onUnitPick(index, value) {
+    const row = this._reportDraft.rows[index];
+    if (!row) return;
+    row.unit = value === "__custom__" ? "" : value;
+    const input = this.shadowRoot.querySelector(`[data-field="lab-report-unit-${index}"]`);
+    if (input) input.value = row.unit;
+  }
+
+  _validateTs(rawInput) {
+    const raw = String(rawInput || "").trim();
+    if (!raw) return { iso: "" };
+    const parsed = new Date(raw);
+    if (!Number.isFinite(parsed.getTime())) {
+      return { error: "Ungültiger Zeitpunkt — bitte Datum und Uhrzeit prüfen." };
+    }
+    if (parsed.getTime() > Date.now() + TS_FUTURE_TOLERANCE_MS) {
+      return {
+        error:
+          "Der Zeitpunkt liegt in der Zukunft (erlaubt sind bis zu 5 Minuten Toleranz).",
+      };
+    }
+    return { iso: parsed.toISOString() };
+  }
+
+  _readReportTs() {
+    return this._validateTs(this._reportDraft.ts);
+  }
+
+  async _saveReport() {
+    if (this._saving) return;
+    this._collectReportDraftFromDom();
+    const entryId = this._activeEntry;
+    if (!entryId) {
+      this._actionError = "Keine Person ausgewählt.";
+      this._render();
+      return;
+    }
+    const ts = this._readReportTs();
+    if (ts.error) {
+      this._actionError = ts.error;
+      this._render();
+      return;
+    }
+    const values = [];
+    for (const row of this._reportDraft.rows) {
+      const marker = String(row.marker || "").trim();
+      const rawValue = String(row.value || "").trim().replace(",", ".");
+      const unit = String(row.unit || "").trim();
+      if (!marker && !rawValue && !unit) continue;
+      if (!marker) {
+        this._actionError = "Bitte für jede befüllte Zeile einen Marker auswählen.";
+        this._render();
+        return;
+      }
+      if (!/^-?\d+(\.\d+)?$/.test(rawValue)) {
+        this._actionError = "Bitte für jede befüllte Zeile einen gültigen Wert eingeben.";
+        this._render();
+        return;
+      }
+      values.push(
+        unit
+          ? { marker, value: Number(rawValue), unit }
+          : { marker, value: Number(rawValue) }
+      );
+    }
+    if (!values.length) {
+      this._actionError = "Bitte mindestens einen Wert erfassen.";
+      this._render();
+      return;
+    }
+    const payload = { type: "health_o_mat/add_lab_report", entry_id: entryId, values };
+    if (ts.iso) payload.ts = ts.iso;
+    if (String(this._reportDraft.reportRef || "").trim()) {
+      payload.report_ref = String(this._reportDraft.reportRef).trim();
+    }
+    this._saving = true;
+    this._actionError = "";
+    this._render();
+    try {
+      const result = await this._hass.connection.sendMessagePromise(payload);
+      const failure = resultError(result);
+      if (failure) {
+        this._actionError = failure;
+        return;
+      }
+      this._actionError = "";
+      // Bericht-Kontext (ts/reportRef) bleibt für Nachtrag-Korrekturen stehen
+      // (§6.4) — geleert werden nur Wert-Felder und die Zeilenliste.
+      this._reportDraft = { ...this._reportDraft, rows: [EMPTY_REPORT_ROW()] };
+      // Der Dialog startet nach dem Absenden wieder im Startzustand (zugeklappt).
+      this._reportOpen = false;
+      this._fillNote = "";
+      await this._loadData(true);
+    } catch (err) {
+      this._actionError = reportErrorMessage(err);
+    } finally {
+      this._saving = false;
+      this._render();
+    }
+  }
+
+  _discardReportBar() {
+    const last = this._labs().last_report;
+    if (!last || !last.ts) return "";
+    const count = Array.isArray(last.marker_keys) ? last.marker_keys.length : 0;
+    return `<div class="labs-report-discard">
+      <button type="button" class="labs-tab" data-action="lab-report-discard"${
+        this._saving ? " disabled" : ""
+      }>Diesen Bericht verwerfen (${count})</button>
+    </div>`;
+  }
+
+  async _discardReport() {
+    if (this._saving) return;
+    const last = this._labs().last_report;
+    if (!last || !last.ts) return;
+    const count = Array.isArray(last.marker_keys) ? last.marker_keys.length : 0;
+    const confirmed =
+      typeof window !== "undefined" && typeof window.confirm === "function"
+        ? window.confirm(`Diesen Bericht mit ${count} Werten verwerfen?`)
+        : true;
+    if (!confirmed) return;
+    if (!this._activeEntry) return;
+    const payload = {
+      type: "health_o_mat/remove_lab_report",
+      entry_id: this._activeEntry,
+      ts: last.ts,
+    };
+    if (last.report_ref) payload.report_ref = last.report_ref;
+    this._saving = true;
+    this._actionError = "";
+    this._render();
+    try {
+      const result = await this._hass.connection.sendMessagePromise(payload);
+      const failure = resultError(result);
+      if (failure) {
+        this._actionError = failure;
+        return;
+      }
+      await this._loadData(true);
+    } catch (err) {
+      this._actionError = reportErrorMessage(err);
+    } finally {
+      this._saving = false;
+      this._render();
+    }
+  }
+
   /* ---- Events ------------------------------------------------------------- */
 
   _onClick(ev) {
@@ -815,13 +1199,48 @@ class HealthOMatLabsCard extends HTMLElement {
       }
       return;
     }
+    if (action === "lab-report-add") {
+      this._addReportRow();
+      return;
+    }
+    if (action === "lab-report-remove") {
+      this._removeReportRow(Number(el.getAttribute("data-index")));
+      return;
+    }
+    if (action === "lab-report-fill-visible") {
+      this._fillReportDraft("visible");
+      return;
+    }
+    if (action === "lab-report-fill-last") {
+      this._fillReportDraft("last");
+      return;
+    }
+    if (action === "lab-report-discard") {
+      this._discardReport();
+      return;
+    }
+    if (action === "lab-report-save") this._saveReport();
     if (action === "lab-save") this._saveValue();
+  }
+
+  /* Offen-Zustand des Bericht-Dialogs merken: strukturelle Aenderungen (Zeile,
+   * Marker, Einheit) rendern den Shadow-Root neu — ohne diesen Zustand faellt
+   * das `<details>` bei jedem Klick zu (E2E-Befund Batch-Dialog). */
+  _onToggle(ev) {
+    const el = ev.target;
+    if (!el || typeof el.matches !== "function") return;
+    if (!el.matches("details.labs-report")) return;
+    this._reportOpen = el.open === true;
   }
 
   _onInput(ev) {
     const el = ev.target;
     if (!el || !el.getAttribute) return;
     const field = el.getAttribute("data-field");
+    if (field && field.startsWith("lab-report-")) {
+      this._onReportField(field, String(el.value || ""));
+      return;
+    }
     if (field === "lab-value") this._draft.value = String(el.value || "");
     else if (field === "lab-unit") this._draft.unit = String(el.value || "");
     else if (field === "lab-report-ref") this._draft.reportRef = String(el.value || "");
@@ -836,6 +1255,26 @@ class HealthOMatLabsCard extends HTMLElement {
       return;
     }
     const field = el.getAttribute("data-field");
+    const markerMatch = /^lab-report-marker-(\d+)$/.exec(field || "");
+    if (markerMatch) {
+      this._collectReportDraftFromDom();
+      const row = this._reportDraft.rows[Number(markerMatch[1])];
+      if (row) {
+        row.marker = String(el.value || "");
+        row.unit = ""; // Einheiten-Dropdown hängt am Marker
+      }
+      this._render();
+      return;
+    }
+    const unitPickMatch = /^lab-report-unit-pick-(\d+)$/.exec(field || "");
+    if (unitPickMatch) {
+      this._onUnitPick(Number(unitPickMatch[1]), String(el.value || ""));
+      return;
+    }
+    if (field && field.startsWith("lab-report-")) {
+      this._onReportField(field, String(el.value || ""));
+      return;
+    }
     if (field === "lab-marker") {
       this._draft.marker = String(el.value || "");
       this._updateUnitPlaceholder();
@@ -853,6 +1292,8 @@ class HealthOMatLabsCard extends HTMLElement {
     this._actionError = "";
     this._activeCategory = "";
     this._draft = EMPTY_DRAFT();
+    this._reportDraft = EMPTY_REPORT_DRAFT();
+    this._fillNote = "";
     this._loadData();
   }
 
@@ -862,7 +1303,9 @@ class HealthOMatLabsCard extends HTMLElement {
     if (!this.shadowRoot || !this._config) return;
     const cfg = this._configNorm();
     const disclaimer = cfg.showDisclaimer
-      ? `<div class="labs-disclaimer" role="note">⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.</div>`
+      ? `<div class="labs-disclaimer" role="note">${escapeHtml(
+          cardText("ui_card_lab_disclaimer")
+        )}</div>`
       : "";
     const errorBanner = this._error
       ? `<div class="labs-error" role="alert">⚠️ ${escapeHtml(this._error)}</div>`
@@ -874,6 +1317,7 @@ class HealthOMatLabsCard extends HTMLElement {
     const hasData = !this._loading && !!this._data;
     const body = hasData ? `${this._categoryTabs()}${this._markerTable(cfg)}` : "";
     const entryForm = hasData && cfg.allowManualEntry ? this._entryForm() : "";
+    const reportForm = hasData && cfg.allowManualEntry ? this._reportForm() : "";
     const name = this._personName();
     const personSuffix = name ? ` — <span class="name">${escapeHtml(name)}</span>` : "";
     this.shadowRoot.innerHTML = `
@@ -889,10 +1333,16 @@ class HealthOMatLabsCard extends HTMLElement {
           ${actionError}
           ${loading}
           ${body}
+          ${this._discardReportBar()}
           ${entryForm}
+          ${reportForm}
         </div>
       </ha-card>
     `;
+    // Offen-Zustand nach dem Re-Render wiederherstellen: innerHTML ersetzt das
+    // `<details>`-Element, der gemerkte Zustand haelt den Dialog offen.
+    const reportEl = this.shadowRoot.querySelector("details.labs-report");
+    if (reportEl) reportEl.open = this._reportOpen === true;
   }
 }
 

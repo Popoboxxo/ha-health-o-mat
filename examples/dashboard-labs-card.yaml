@@ -1,0 +1,26 @@
+# HA Health-O-Mat — Beispiel-Dashboard für die Laborwerte-Karte
+# Import: Einstellungen → Dashboards → Dashboard hinzufügen → "Neues Dashboard aus YAML"
+#
+# Voraussetzung: die Integration ist installiert (die Karte wird beim Setup
+# automatisch als Lovelace-Ressource registriert).
+title: Health-O-Mat (Laborwerte)
+views:
+  - title: Laborwerte            # alle Defaults (Trend, Eingabe, Disclaimer an)
+    path: laborwerte
+    icon: mdi:flask-outline
+    cards:
+      - type: custom:health-o-mat-labs-card
+
+  - title: Anzeige               # reine Anzeige, Personen-Dropdown
+    path: anzeige
+    icon: mdi:eye-outline
+    cards:
+      - type: custom:health-o-mat-labs-card
+        person_mode: selector             # Dropdown (kein fest verdrahteter Entry)
+        # person_filter: ["max"]          # optional: Whitelist (entry_id/Slug/Name) —
+        #                                 # anpassen oder auskommentiert lassen
+        # default_person: "max"           # optional: Vorauswahl im Dropdown
+        show_trend: true
+        allow_manual_entry: false
+        show_categories: ["liver", "kidney", "lipids"]   # Tab-Reihenfolge
+        # show_disclaimer: false          # nur bewusst abschalten

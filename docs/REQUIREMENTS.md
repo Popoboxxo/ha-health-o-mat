@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-11-01 (Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…129** — inkl. Fehlervertrag/Umbau (127, eigener Plan), Batch-Undo (128) und Labor-Retention (129); Spec beschlossen, Umsetzung ausstehend, Branch noch nicht angelegt; zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+**Stand:** 2026-11-01 (Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126/128/129 umgesetzt** — Batch-Erfassung (123), Admin-Umrechnungen (124), Panel-Disclaimer (125), Beispiel-Dashboard (126), Batch-Undo (128) und Labor-Retention (129), Branch `feat/lab-batch-visibility`, noch kein Release/Tag; **REQ-HOM-127** bleibt offen (Fehlervertrag/Umbau, eigener Plan); zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -17,10 +17,15 @@ Belege (REQ-HOM-122): **1395 Unit-Tests**, **19 E2E-Tests** (realer HA-Docker-St
 `ruff check .` + `ruff format --check .` clean (63 Dateien) ·
 Belege (UX-P1/0.14.0): **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
 `ruff check .` + `ruff format --check .` clean ·
-**REQ-HOM-123…129 geplant** (Laborwerte — Batch-Erfassung & Sichtbarkeit, Spec
+**REQ-HOM-123…126/128/129 umgesetzt** (Laborwerte — Batch-Erfassung &
+Sichtbarkeit, Spec
 `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`,
-2026-11-01; Status Offen — Spec beschlossen, Umsetzung ausstehend, Branch noch
-nicht angelegt) ·
+2026-11-01; Branch `feat/lab-batch-visibility`, noch kein Release/Tag) ·
+Belege (REQ-HOM-123…126/128/129): **1495 Unit-Tests** (`pytest -q`, 0 failed),
+`ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests**
+(19 bestehende + fünf neue Laborwert-Szenarien aus Task 19) ·
+**REQ-HOM-127 offen** (Fehlercode-/i18n-Umbau der bestehenden Pfade — eigenes
+Vorhaben mit eigenem Plan) ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 **`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
 
@@ -45,7 +50,8 @@ Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
    Danach **REQ-HOM-123…129** (Laborwerte — Batch-Erfassung & Sichtbarkeit,
    Erweiterung zu REQ-HOM-122, Spec
    `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`;
-   Status Offen — Spec beschlossen, Umsetzung ausstehend). Davon **REQ-HOM-127**
+   Branch `feat/lab-batch-visibility`, **123…126/128/129 umgesetzt**, noch kein
+   Release/Tag). Davon **REQ-HOM-127**
    (Fehlercode-/i18n-Umbau der bestehenden Pfade) als **eigenes Vorhaben mit
    eigenem Plan**, nicht Teil dieser Erweiterung; **128** (Batch-Undo) und
    **129** (Labor-Retention) gehören zur Erweiterung.
@@ -1248,9 +1254,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-123 — Batch-Check-in eines Laborberichts (`add_lab_report`)
 - **Priorität:** P2 · **Aufwand:** L
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§2 Service-Vertrag, §2.3 Zeilen-Form, §2.4 Fehlervertrag, §2.5
   Fehlercodes/Reihenfolge, §2.6 Duplikate, §2.7/§2.8 Store und Audit, §3
@@ -1281,43 +1286,52 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Zahlen-Helper **`NaN`/`inf`-gehärtet** (`invalid_value` statt stilles
   Speichern).
 - **Akzeptanzkriterien:**
-  - [ ] Service: YAML-Beispiel aus §2.11 → `lab_readings` wächst um **4**
+  - [x] Service: YAML-Beispiel aus §2.11 → `lab_readings` wächst um **4**
     Einträge, alle mit demselben `ts`/`report_ref`; der Service gibt **nichts**
     zurück.
-  - [ ] WS: derselbe Bericht liefert `{"ok": true, "written": 4, "ts": …}`.
-  - [ ] Ungültige Zeile 3 (unbekannter Marker) → Service:
+  - [x] WS: derselbe Bericht liefert `{"ok": true, "written": 4, "ts": …}`.
+  - [x] Ungültige Zeile 3 (unbekannter Marker) → Service:
     `ServiceValidationError` mit `Zeile 3 (kreatinin): unknown_marker`; WS:
     `{"ok": false, "error": {"code": "unknown_marker", "params": {"row": 3,
     "marker": "kreatinin"}}}`; `lab_readings` **und** `audit_log` unverändert.
-  - [ ] Zeilennummer = Originalzeile inkl. Leerzeilen (Leerzeile in Position 2
+  - [x] Zeilennummer = Originalzeile inkl. Leerzeilen (Leerzeile in Position 2
     → Fehler in Zeile 3 meldet `row: 3`).
-  - [ ] Leerzeilen werden ignoriert: 3 Zeilen, davon 1 leer bzw. `{}` → 2
+  - [x] Leerzeilen werden ignoriert: 3 Zeilen, davon 1 leer bzw. `{}` → 2
     Werte, kein Fehler.
-  - [ ] Fehlercodes in genau dieser Reihenfolge: `invalid_ts`, `empty_report`,
+  - [x] Fehlercodes in genau dieser Reihenfolge: `invalid_ts`, `empty_report`,
     `too_many_rows` (201 befüllte Zeilen, `limit: 200`), `unknown_marker`,
     `unit_required`, `invalid_value`, `unsupported_unit`, `duplicate_marker`.
-  - [ ] Personenauflösung **vor** `invalid_ts`: unbekannte Person + kaputter
+  - [x] Personenauflösung **vor** `invalid_ts`: unbekannte Person + kaputter
     `ts` → Entry-Fehler.
-  - [ ] `gpt` + `alt` im selben Batch → `duplicate_marker` mit `first_row`.
-  - [ ] Genau **ein** `_async_save`, **ein** `signal_refresh`, **ein**
+  - [x] `gpt` + `alt` im selben Batch → `duplicate_marker` mit `first_row`.
+  - [x] Genau **ein** `_async_save`, **ein** `signal_refresh`, **ein**
     Audit-Eintrag `lab_values_added` (`count`, `marker_keys`/`reading_ids`
     ≤ 20, `created_at`, kein `report_ref`).
-  - [ ] `add_lab_value` mit `NaN`/`inf` → `invalid_value` (**Fixed**, gleicher
+  - [x] `add_lab_value` mit `NaN`/`inf` → `invalid_value` (**Fixed**, gleicher
     Helper).
-  - [ ] Dialog: Start 1 leere Zeile, **60er**-Cap, Knöpfe „Alle sichtbaren
+  - [x] Dialog: Start 1 leere Zeile, **60er**-Cap, Knöpfe „Alle sichtbaren
     Marker anlegen" und „Zuletzt verwendete Marker anlegen" (dedupe, Cap
     beachtet), Einheiten-Dropdown je Zeile mit kanonisch + `alt_units` +
     Freitext.
-- **Belege:** stehen mit der Umsetzung aus (Spec §12 Teststrategie:
-  `tests/test_logic.py`, `tests/test_store.py`, `tests/test_lab_services.py`,
-  `tests/test_ws_api.py`, `tests/test_panel_js.py`, `tests/test_card_js.py`,
-  `tests/test_translations.py`, `tests_e2e/test_lab_values_e2e.py`).
+- **Belege:** `tests/test_logic.py::test_req_hom_123_*` (u. a.
+  `test_req_hom_123_validate_rows_converts_and_keeps_reported_values`,
+  `::test_req_hom_123_validate_rows_reports_alias_duplicate_with_first_row`,
+  `::test_req_hom_123_validate_rows_rejects_more_than_200_filled_rows`),
+  `tests/test_store.py::test_req_hom_123_add_lab_readings_*` (ein Save, ein
+  Audit, Detail-Cap 20, Rollback),
+  `tests/test_lab_services.py::test_req_hom_123_*` (Service-Vertrag,
+  Leerzeilen, Personenauflösung vor `ts`, `NaN`/`inf`),
+  `tests/test_ws_api.py::test_req_hom_123_*` (Envelope, strukturierte Fehler,
+  `panel_data`), `tests/test_card_js.py::test_req_hom_123_*`,
+  `tests/test_panel_js.py::test_req_hom_123_*`,
+  `tests/test_translations.py` (Service-Parität); E2E:
+  `tests_e2e/test_lab_values_e2e.py::test_req_hom_123_lab_report_dialog_writes_and_rejects_duplicates`,
+  `::test_req_hom_123_hybrid_button_prefills_visible_markers`.
 
 #### REQ-HOM-124 — Umrechnungen in der Admin-UI sichtbar
 - **Priorität:** P2 · **Aufwand:** S–M
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§7 Admin-UI, §11 Akzeptanzkriterien)
 - **Bezug:** Erweiterung zu **REQ-HOM-122** (Admin-UI der Laborwerte, Katalog
@@ -1334,26 +1348,29 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Server-API — die Werte stammen aus dem bereits gelieferten Katalog
   (`settings.lab_catalog`).
 - **Akzeptanzkriterien:**
-  - [ ] Katalog-Tabelle zeigt für `creatinine` mit **Systemsprache DE**
+  - [x] Katalog-Tabelle zeigt für `creatinine` mit **Systemsprache DE**
     `mg/dL × 88,4 → µmol/L` und mit **EN** `mg/dL × 88.4 → µmol/L` (Test setzt
     die Sprache explizit; Faktor kommt aus `formatNumber`, kein hartkodiertes
     Trennzeichen).
-  - [ ] Marker mit leerem `alt_units` zeigen `—`.
-  - [ ] `urine_protein_creatinine_ratio` zeigt Badge „Einheit Pflicht" +
+  - [x] Marker mit leerem `alt_units` zeigen `—`.
+  - [x] `urine_protein_creatinine_ratio` zeigt Badge „Einheit Pflicht" +
     Alt-Einheit.
-  - [ ] Kein neuer WS-Request/keine API-Änderung (Werte stammen aus
+  - [x] Kein neuer WS-Request/keine API-Änderung (Werte stammen aus
     `settings.lab_catalog`).
-  - [ ] Neue Keys in `strings.json`/`de`/`en` und in `_REQ_HOM_122_UI_KEYS`.
-  - [ ] (Nice-to-have) Custom-Marker-Zeile zeigt
+  - [x] Neue Keys in `strings.json`/`de`/`en` und in `_REQ_HOM_122_UI_KEYS`.
+  - [x] (Nice-to-have) Custom-Marker-Zeile zeigt
     `alt: <Einh.> × {formatNumber(factor)}` (locale-fähig).
-- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_panel_js.py`,
-  `tests/test_translations.py`).
+- **Belege:** `tests/test_panel_js.py::test_req_hom_124_admin_conversion_column_is_locale_aware`,
+  `::test_req_hom_124_admin_conversion_uses_format_number`;
+  `tests/test_translations.py::test_req_hom_122_common_ui_keys_exist_in_all_three_files`
+  deckt `ui_admin_lab_conversion`, `ui_admin_lab_conversion_required` und
+  `ui_admin_lab_conversion_none` in Master/de/en ab; E2E:
+  `tests_e2e/test_lab_values_e2e.py::test_req_hom_124_admin_conversion_column_visible`.
 
 #### REQ-HOM-125 — Medizin-Hinweis im Panel-Lab-Tab
 - **Priorität:** P2 · **Aufwand:** S
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§7.4 Disclaimer-Schalter, §8 Medizin-Hinweis im Panel, §11
   Akzeptanzkriterien)
@@ -1378,28 +1395,35 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   definiert (gleiche Optik, getrennte Stylesheets). Die Option landet in
   `backup.lab_options` und in der Diagnostics-Redaktionsliste.
 - **Akzeptanzkriterien:**
-  - [ ] Lab-Tab zeigt den Hinweis ohne Admin-Rechte und **ohne**
+  - [x] Lab-Tab zeigt den Hinweis ohne Admin-Rechte und **ohne**
     `get_settings`; Quelle ist `panel_data.lab_hide_panel_disclaimer`.
-  - [ ] Hinweis ist **auch im Leerfall** sichtbar (alle Kategorien
+  - [x] Hinweis ist **auch im Leerfall** sichtbar (alle Kategorien
     ausgeblendet) und der Leerzustand textet „Alle Kategorien ausgeblendet".
-  - [ ] Admin-Checkbox „Medizin-Hinweis im Panel ausblenden" schreibt
+  - [x] Admin-Checkbox „Medizin-Hinweis im Panel ausblenden" schreibt
     `lab_hide_panel_disclaimer`; nach `true` ist der Hinweis im Tab weg, nach
     `false` wieder da (ohne Reload-Sonderweg).
-  - [ ] Statischer JS-Test: Lab-Tab-Quelle referenziert weder `_settings` noch
+  - [x] Statischer JS-Test: Lab-Tab-Quelle referenziert weder `_settings` noch
     `isAdmin`.
-  - [ ] Karten-Disclaimer nutzt `ui_card_lab_disclaimer` (de wortgleich zum
+  - [x] Karten-Disclaimer nutzt `ui_card_lab_disclaimer` (de wortgleich zum
     bisherigen Text, en übersetzt) und folgt `setCardLanguage`; Paritätstest
     grün.
-  - [ ] `.labs-disclaimer` in `PANEL_CSS` definiert.
-  - [ ] `lab_hide_panel_disclaimer` in Backup und Diagnostics-Redaktion.
-- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_panel_js.py`,
-  `tests/test_translations.py`, `tests_e2e/test_lab_values_e2e.py`).
+  - [x] `.labs-disclaimer` in `PANEL_CSS` definiert.
+  - [x] `lab_hide_panel_disclaimer` in Backup und Diagnostics-Redaktion.
+- **Belege:** `tests/test_panel_js.py::test_req_hom_125_*` (Disclaimer vor dem
+  Leerzustand, „Alle Kategorien ausgeblendet", kein `_settings`/`isAdmin`,
+  `.labs-disclaimer` in `PANEL_CSS`, Admin-Checkbox),
+  `tests/test_ws_api.py::test_req_hom_125_*` (`panel_data`-Flag, Settings
+  akzeptiert/lehnt Nicht-Boolean ab),
+  `tests/test_card_js.py::test_req_hom_125_*` (lokalisierter Disclaimer,
+  Sprachwechsel, Parität), `tests/test_import_backup.py::test_req_hom_129_backup_collects_lab_retention_and_disclaimer`,
+  `tests/test_diagnostics.py::test_req_hom_129_redacts_new_lab_options_as_counts_only`;
+  E2E:
+  `tests_e2e/test_lab_values_e2e.py::test_req_hom_125_panel_disclaimer_visibility_and_empty_state`.
 
 #### REQ-HOM-126 — Beispiel-Dashboard für die Labs-Card
 - **Priorität:** P3 · **Aufwand:** S
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§9 Beispiel-Dashboard, §9.1 Testanpassung, §11 Akzeptanzkriterien)
 - **Bezug:** Erweiterung zu **REQ-HOM-122** (Labs-Card); reine
@@ -1413,12 +1437,16 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Konfigurationsschlüssel; ein aktiver Personenfilter auf eine nicht
   existierende Person wird vermieden (auskommentiert) und im README erläutert.
 - **Akzeptanzkriterien:**
-  - [ ] `examples/dashboard-labs-card.yaml` existiert, parst, nutzt nur
+  - [x] `examples/dashboard-labs-card.yaml` existiert, parst, nutzt nur
     `custom:health-o-mat-labs-card`-Keys aus `LABS_CARD_KEYS`.
-  - [ ] `pytest tests/test_dashboards.py` grün ohne Ausnahme-Regel für die neue
+  - [x] `pytest tests/test_dashboards.py` grün ohne Ausnahme-Regel für die neue
     Datei.
-  - [ ] README listet das neue Beispiel.
-- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_dashboards.py`).
+  - [x] README listet das neue Beispiel.
+- **Belege:** `tests/test_dashboards.py::test_req_hom_126_labs_card_example_exists_and_uses_only_labs_keys`
+  (zwei Ansichten, ausschließlich `LABS_CARD_KEYS`, Sammelprüfung ohne
+  Ausnahme-Regel für die neue Datei); das README verlinkt
+  `examples/dashboard-labs-card.yaml`; E2E:
+  `tests_e2e/test_lab_values_e2e.py::test_req_hom_126_labs_card_example_dashboard_renders`.
 
 #### REQ-HOM-127 — Fehlercode-/i18n-Umbau der bestehenden Pfade (eigener Plan)
 - **Priorität:** P2 · **Aufwand:** M–L
@@ -1447,9 +1475,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-128 — Batch-Undo (`remove_lab_report`)
 - **Priorität:** P2 · **Aufwand:** S–M
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§2.13 Service-Vertrag, §2.9 Audit-Log, §3.2 WS-Kommando, §6.5 UI-Aktion,
   §11 Akzeptanzkriterien, §13 Risiken)
@@ -1466,31 +1493,38 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Wiederherstellung erfolgt einzeln über den bestehenden `restore_entry`
   (`kind: lab_values`) — kein Gruppen-Restore.
 - **Akzeptanzkriterien:**
-  - [ ] Service `remove_lab_report` mit `ts` (Pflicht) + `report_ref` (optional)
+  - [x] Service `remove_lab_report` mit `ts` (Pflicht) + `report_ref` (optional)
     voidet **alle** aktiven Werte dieses Zeitpunkts (mit `report_ref`: nur
     passende).
-  - [ ] Grenzfall dokumentiert + getestet: ohne `report_ref` werden bei
+  - [x] Grenzfall dokumentiert + getestet: ohne `report_ref` werden bei
     mehreren Berichten mit identischem `ts` **alle** verworfen; mit
     `report_ref` nur der passende.
-  - [ ] Zeitvergleich über Instant (Offset-Varianten derselben Zeit treffen).
-  - [ ] Kein Treffer → `no_active_report`; ungültiges `ts` → `invalid_ts`.
-  - [ ] Ein Audit-Eintrag `lab_report_voided` (`count`, `reading_ids` ≤ 20,
+  - [x] Zeitvergleich über Instant (Offset-Varianten derselben Zeit treffen).
+  - [x] Kein Treffer → `no_active_report`; ungültiges `ts` → `invalid_ts`.
+  - [x] Ein Audit-Eintrag `lab_report_voided` (`count`, `reading_ids` ≤ 20,
     `created_at`), `void_reason = "report_discarded"`, ein Save, Rollback bei
     Save-Fehler.
-  - [ ] UI: „Diesen Bericht verwerfen" nur bei aktivem `labs.last_report`, mit
+  - [x] UI: „Diesen Bericht verwerfen" nur bei aktivem `labs.last_report`, mit
     Sicherheitsabfrage; nach Erfolg verschwindet die Aktion nach Refresh.
-  - [ ] Wiederherstellung einzeln über `restore_entry` (`kind: lab_values`)
+  - [x] Wiederherstellung einzeln über `restore_entry` (`kind: lab_values`)
     funktioniert.
-- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_logic.py`,
-  `tests/test_store.py`, `tests/test_lab_services.py`, `tests/test_ws_api.py`,
-  `tests/test_panel_js.py`, `tests/test_card_js.py`,
-  `tests/test_restore.py`, `tests_e2e/test_lab_values_e2e.py`).
+- **Belege:** `tests/test_logic.py::test_req_hom_128_lab_report_matches_*`
+  (Instant-Vergleich, `report_ref`-Filter, kaputte/fehlende `ts`),
+  `tests/test_store.py::test_req_hom_128_void_lab_report_*` (nur passender
+  Instant, ohne Ref alle, ein Audit, kein Write ohne Treffer, Rollback),
+  `tests/test_lab_services.py::test_req_hom_128_*` (Service-Vertrag,
+  `no_active_report`, `invalid_ts`, Schema), `tests/test_ws_api.py::test_req_hom_128_*`,
+  `tests/test_card_js.py::test_req_hom_128_*` (nur bei `last_report`,
+  Sicherheitsabfrage), `tests/test_panel_js.py::test_req_hom_128_*`; der
+  Einzel-Restore läuft über den generischen `restore_entry`-Pfad
+  (`tests/test_lab_services.py::test_req_hom_122_restore_entry_restores_voided_lab_reading`).
+  (Kein eigener E2E-Fall — die neuen E2E-Szenarien decken 123/124/125/126 ab;
+  das Verwerfen ist über die Unit-/JS-Tests belegt.)
 
 #### REQ-HOM-129 — Labor-Retention (`lab_retention_months`)
 - **Priorität:** P2 · **Aufwand:** S–M
-- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
-  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
-  Checkboxen.
+- **Status: Umgesetzt (2026-11-01, Branch `feat/lab-batch-visibility`)** —
+  Akzeptanzkriterien erfüllt; Belege am Kapitelende.
 - **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§2.14 Retention, §2.15 Export/Import-Folgen, §2.16 Backup/Restore, §11
   Akzeptanzkriterien, §13 Risiken)
@@ -1510,25 +1544,34 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   `voided_at`/`void_reason`; der Re-Import zählt sie als `skipped`. Die Option
   landet in `backup.lab_options` und in der Diagnostics-Redaktionsliste.
 - **Akzeptanzkriterien:**
-  - [ ] `lab_retention_months` (Default `0` = aus) im Options-Wizard
+  - [x] `lab_retention_months` (Default `0` = aus) im Options-Wizard
     „Grundlagen" neben `retention_months`, Bereich 0…120.
-  - [ ] Bei `> 0` werden beim Setup **nur** aktive Laborwerte älter als N
+  - [x] Bei `> 0` werden beim Setup **nur** aktive Laborwerte älter als N
     Monate **voidet** (`void_reason = "retention"`), kein Archiv, keine
     Listenkürzung, keine Änderung an Getränken/BD.
-  - [ ] Genau **ein** Audit-Eintrag `lab_values_retention` pro Lauf, nur wenn
+  - [x] Genau **ein** Audit-Eintrag `lab_values_retention` pro Lauf, nur wenn
     `count > 0`; Wiederholungslauf ohne neue alte Werte erzeugt keinen
     Eintrag.
-  - [ ] `restore_entry` (`kind: lab_values`) macht einen retention-voideten
+  - [x] `restore_entry` (`kind: lab_values`) macht einen retention-voideten
     Wert wieder aktiv.
-  - [ ] `lab_values.csv` enthält voidete Zeilen inkl. `voided_at`/
+  - [x] `lab_values.csv` enthält voidete Zeilen inkl. `voided_at`/
     `void_reason`; `drinks.csv` und Blutdruck-CSV bleiben unverändert (nur
     aktive).
-  - [ ] Re-Import der exportierten voideten Zeilen zählt sie als `skipped`,
+  - [x] Re-Import der exportierten voideten Zeilen zählt sie als `skipped`,
     nicht als neu.
-- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_store.py`,
-  `tests/test_lab_services.py`, `tests/test_config_flow.py`,
-  `tests/test_import_backup.py`, `tests/test_restore.py`,
-  `tests/test_translations.py`).
+- **Belege:** `tests/test_store.py::test_req_hom_129_void_lab_readings_before_*`
+  (nur ältere aktive Werte, idempotent, Rollback),
+  `tests/test_lab_services.py::test_req_hom_129_*` (Optionswert,
+  Default-No-op, Void vor Cutoff),
+  `tests/test_config_flow.py::test_req_hom_129_basics_step_*` (Bereich 0…120),
+  `tests/test_import_backup.py::test_req_hom_129_*` (Backup-Optionen, CSV mit
+  voideten Zeilen inkl. `voided_at`/`void_reason`, Re-Import = `skipped`,
+  Altdatei ohne Spalten, Spalten in beliebiger Kopfzeilen-Position),
+  `tests/test_diagnostics.py::test_req_hom_129_redacts_new_lab_options_as_counts_only`,
+  `tests/test_ws_api.py::test_req_hom_129_settings_merge_keeps_lab_retention`;
+  der Einzel-Restore (`kind: lab_values`) ist über
+  `tests/test_lab_services.py::test_req_hom_122_restore_entry_restores_voided_lab_reading`
+  abgedeckt.
 
 ---
 
@@ -1575,4 +1618,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-123…126 — Laborwerte: Batch-Erfassung & Sichtbarkeit** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Erweiterung zu REQ-HOM-122): **Status: Offen — geplant (Spec beschlossen, Umsetzung ausstehend)**, Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. Inhalt: **123** Batch-Check-in eines Laborberichts (`add_lab_report` als Service + WS-Kommando + Mehrzeilen-Dialog in Card und Panel; Teilmenge erlaubt, jede befüllte Zeile valide, alles-oder-nichts, ein Store-Write/ein Refresh/ein Audit-Eintrag), **124** Umrechnungen in der Admin-UI sichtbar (Katalog-Spalte „Umrechnung" mit Alt-Einheit × Faktor → kanonische Einheit, „Einheit Pflicht"-Badge, Faktor locale-fähig über `formatNumber`, Custom-Marker-Faktor als Nice-to-have), **125** kontextbezogener Medizin-Hinweis im Panel-Tab „Laborwerte" (v1 immer sichtbar, Wortlaut wie Card), **126** Beispiel-Dashboard `examples/dashboard-labs-card.yaml` + README-Verweis + `tests/test_dashboards.py`-Erweiterung. Kein neues Datenmodell (Store-Schema bleibt v5, `unique_id`s unverändert, Backup/Restore/CSV unberührt); REQ-HOM-122 bleibt gültig, sein Kriterium „Medizin-Disclaimer in Card/Panel/README" wird durch REQ-HOM-125 präzisiert. Belege folgen mit der Umsetzung. |
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-127…129 — Laborwerte-Erweiterung, Nachträge** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, §2.13/§2.14/§11): **127** Fehlercode-/i18n-Umbau der bestehenden Services/WS-Pfade auf strukturierte `{code, params}` + lokalisierte Meldungen — **eigener Plan, nicht Teil dieser Erweiterung** (§2.4/§14); **128** Batch-Undo `remove_lab_report` (voidet alle aktiven Werte desselben `ts`, optional gefiltert per `report_ref`, Grenzfall identischer `ts`, `no_active_report`/`invalid_ts`, ein Audit `lab_report_voided`, UI-Aktion „Diesen Bericht verwerfen" mit Sicherheitsabfrage, Einzel-Restore) — P2; **129** Labor-Retention `lab_retention_months` (Default `0` = aus, Options-Wizard „Grundlagen", 0…120, voidet beim Setup Laborwerte älter als N Monate mit `void_reason = "retention"`, kein Archiv, `restore_entry`-fähig, ein Audit `lab_values_retention`, Export enthält voidete Zeilen inkl. `voided_at`/`void_reason`, Re-Import = `skipped`) — P2. Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. |
 | 2026-11-01 | **REQ-HOM-123…125 an die finalen Spec-Entscheidungen angepasst** (Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`): **123** — ein gemeinsames `ts`, Duplikat im Batch = Fehler (`duplicate_marker`, Alias-Kollision), gestufte Limits **60** (UI) / **200** (Server), Hybrid-Füllung („Alle sichtbaren Marker"/„Zuletzt verwendete Marker"), Einheiten-Dropdown je Zeile, strukturierte Fehler `{code, params, message}` (§2.4) und `NaN`/`inf`-Härtung auch im Einzelpfad (`add_lab_value`); **124** — Faktor auch bei Custom-Markern (Nice-to-have) und Locale-Formatierung über `formatNumber`; **125** — Hinweis **abschaltbar** über die Admin-Checkbox `lab_hide_panel_disclaimer` (Transport über `panel_data`, **nicht** `get_settings`; Default `false` = sichtbar), Leerzustandstext „Alle Kategorien ausgeblendet", Karten-Disclaimer via `ui_card_lab_disclaimer` lokalisiert, Backup + Diagnostics-Redaktion. **126** bleibt unverändert (P3). |
-
+| 2026-11-01 | **REQ-HOM-123…126/128/129 umgesetzt — Laborwerte: Batch, Undo, Retention & Sichtbarkeit** (Branch `feat/lab-batch-visibility`; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Plan `docs/superpowers/plans/2026-11-01-lab-values-batch-and-visibility.md`): Service + WS `add_lab_report` (ein `ts`/`report_ref`, Leerzeilen ignoriert, Limits 60/200, strukturierte Fehler `{code, params, message}`, ein Store-Write/ein Audit `lab_values_added` mit Rollback), symmetrisches `remove_lab_report` (voidet alle aktiven Werte eines Zeitpunkts, optional per `report_ref`, Audit `lab_report_voided`, UI-Aktion mit Sicherheitsabfrage), Mehrzeilen-Dialog in Card und Panel (Hybrid-Füllung, Einheiten-Dropdown aus `alt_units`, Single-Flight), Admin-Spalte „Umrechnung" + Badge „Einheit Pflicht", Panel-Medizin-Hinweis (Default sichtbar, abschaltbar über `lab_hide_panel_disclaimer`, Transport via `panel_data`), Karten-Disclaimer lokalisiert, Labor-Retention `lab_retention_months` (Default 0, voidet statt Archiv, ein Audit `lab_values_retention`), `lab_values.csv` inkl. voideter Zeilen + `voided_at`/`void_reason` (Re-Import: `skipped`, header-basiert und unabhängig vom Bestand; Altdateien ohne die Spalten behalten das Positionsverhalten), Beispiel-Dashboard `examples/dashboard-labs-card.yaml`. Kein neues Datenmodell (Store v5, `unique_id`s unverändert, Backup/Restore-Format unberührt; Backup-Options additiv). **Belege:** `pytest -q` → **1495 passed** (0 failed), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests** (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19). **REQ-HOM-127 bleibt offen** (eigener Plan). **Kein Release/Tag in diesem Schritt.** |

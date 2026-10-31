@@ -1,9 +1,10 @@
-"""Tests: Beispiel-Dashboards — Struktur und Entity-Referenzen.
+"""Tests: Beispiel-Dashboards — Struktur, Entity-Referenzen und Karten-Keys.
 
 Läuft ohne Home Assistant: parst alle examples/*.yaml und prüft, dass jede
-Entity-Referenz dem englischen ID-Schema entspricht und ein bekanntes
-Suffix nutzt. So fallen Tippfehler (z. B. bp_warning statt
-blood_pressure_warning) schon in CI auf, nicht erst auf der Instanz.
+Entity-Referenz dem englischen ID-Schema entspricht, ein bekanntes Suffix
+nutzt und die mitgelieferten Karten nur unterstützte Konfigurationsschlüssel
+tragen. So fallen Tippfehler (z. B. bp_warning statt blood_pressure_warning)
+schon in CI auf, nicht erst auf der Instanz.
 """
 
 import glob
@@ -130,11 +131,26 @@ CARD_KEYS = {
     "quick_drinks",
 }
 
+# Laborwerte-Karte (REQ-HOM-122/126): eigener Typ + Schlüsselsatz.
+# Spiegel von `normalizeCardConfig` in `www/health-o-mat-labs-card.js`.
+LABS_CARD_TYPE = "custom:health-o-mat-labs-card"
+LABS_CARD_KEYS = {
+    "type",
+    "entry_id",
+    "person_mode",
+    "person_filter",
+    "default_person",
+    "show_categories",
+    "show_trend",
+    "allow_manual_entry",
+    "show_disclaimer",
+}
+
 
 def extract_card_configs(node, out):
-    """Sammle alle Konfigurationen der mitgelieferten Karte."""
+    """Sammle alle Konfigurationen der mitgelieferten Karten."""
     if isinstance(node, dict):
-        if node.get("type") == CARD_TYPE:
+        if node.get("type") in (CARD_TYPE, LABS_CARD_TYPE):
             out.append(node)
         for value in node.values():
             extract_card_configs(value, out)
@@ -159,12 +175,31 @@ def test_dashboards_valid_yaml_and_known_entity_ids():
         extract_entity_refs(data, refs)
         card_configs: list[dict] = []
         extract_card_configs(data, card_configs)
-        assert refs or card_configs, f"{path}: weder Entity-Referenzen noch {CARD_TYPE} gefunden"
+        assert refs or card_configs, (
+            f"{path}: weder Entity-Referenzen noch Karten-Konfiguration gefunden"
+        )
 
         for card in card_configs:
-            unknown = set(card) - CARD_KEYS
+            allowed = LABS_CARD_KEYS if card.get("type") == LABS_CARD_TYPE else CARD_KEYS
+            unknown = set(card) - allowed
             assert not unknown, f"{path}: unbekannte Karten-Keys {sorted(unknown)}"
 
         for entity_id in refs:
             problem = check_entity_id(entity_id)
             assert problem is None, f"{path}: {entity_id!r} — {problem}"
+
+
+def test_req_hom_126_labs_card_example_exists_and_uses_only_labs_keys():
+    """[REQ-HOM-126] Das Labs-Card-Beispiel parst und nutzt nur erlaubte Keys."""
+    path = os.path.join(os.path.dirname(__file__), "..", "examples", "dashboard-labs-card.yaml")
+    assert os.path.exists(path), "examples/dashboard-labs-card.yaml fehlt"
+    with open(path) as fh:
+        data = yaml.safe_load(fh)
+
+    assert isinstance(data, dict)
+    configs: list[dict] = []
+    extract_card_configs(data, configs)
+    assert len(configs) == 2, "das Beispiel zeigt zwei Ansichten der Labs-Card"
+    for card in configs:
+        assert card["type"] == LABS_CARD_TYPE
+        assert set(card) <= LABS_CARD_KEYS
