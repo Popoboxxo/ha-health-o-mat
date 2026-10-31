@@ -549,3 +549,18 @@ def test_req_hom_122_common_ui_keys_exist_in_all_three_files() -> None:
         assert not missing, f"{path}: fehlende Laborwert-UI-Keys: {missing}"
         empty = [key for key in _REQ_HOM_122_UI_KEYS if not str(common[key]).strip()]
         assert not empty, f"{path}: leere Laborwert-UI-Werte: {empty}"
+
+
+def test_req_hom_122_labs_area_label_translated() -> None:
+    """[REQ-HOM-122] Die vierte Fläche hat ein eigenes Label in Master + de + en."""
+    expected = {
+        "strings.json": "Lab values",
+        "de.json": "Laborwerte",
+        "en.json": "Lab values",
+    }
+    for filename, value in expected.items():
+        path = _MASTER if filename == "strings.json" else _TRANSLATIONS[filename[:2]]
+        common = _common(path)
+        assert common.get("ui_common_area_labs") == value, (
+            f"{filename}: ui_common_area_labs fehlt oder ist falsch"
+        )

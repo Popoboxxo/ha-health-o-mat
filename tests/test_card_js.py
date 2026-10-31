@@ -2118,3 +2118,98 @@ def test_req_hom_122_labs_card_is_standalone_vanilla_module():
         "labMarkerOptionsHtml",
     ):
         assert re.search(rf"function\s+{name}\s*\(", source), f"{name}() fehlt in der Karte"
+
+
+# --- REQ-HOM-122: Sprachabhaengige Katalog-Namen in der Labor-Karte ---------
+
+_NODE_LABS_CARD_I18N_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+const labs = {
+  categories: [
+    { key: "liver", name: "Leber", name_de: "Leber", name_en: "Liver", hidden: false },
+  ],
+  markers: {
+    alt: {
+      category: "liver",
+      name: "ALT (GPT)",
+      name_de: "ALT (GPT)",
+      name_en: "ALT (ALT/GPT)",
+      unit: "U/L",
+      value: 12,
+      ref_min: 10,
+      ref_max: 50,
+      in_range: true,
+      history: [],
+    },
+  },
+};
+
+function render(language) {
+  const card = new CardClass();
+  card._config = {
+    entry_id: "entry-1",
+    person_mode: "fixed",
+    show_trend: false,
+    allow_manual_entry: false,
+    show_disclaimer: false,
+  };
+  card._normalized = null;
+  card._data = { person: "Alex", labs };
+  card.hass = { language };
+  card._render();
+  return card.shadowRoot.innerHTML;
+}
+
+process.stdout.write(JSON.stringify({ de: render("de"), en: render("en-US") }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_122_labs_card_renders_localized_catalog_names(tmp_path):
+    """[REQ-HOM-122] Die Karte zeigt im EN-Fall `name_en`, im DE-Fall `name_de`."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_CARD_I18N_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_card_i18n",
+        )
+    )
+
+    assert "Leber" in out["de"] and "ALT (GPT)" in out["de"]
+    assert "Liver" not in out["de"], "englischer Kategoriename erscheint bei deutscher UI"
+    assert "Liver" in out["en"], "die Karte ignoriert `name_en` bei englischer UI"
+    assert "ALT (ALT/GPT)" in out["en"], "der englische Marker-Name fehlt"
+    assert "Leber" not in out["en"], "deutscher Kategoriename bleibt bei englischer UI"

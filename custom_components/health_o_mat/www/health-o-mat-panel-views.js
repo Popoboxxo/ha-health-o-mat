@@ -37,6 +37,7 @@ import {
   labReportedSubline,
   labChartHtml,
   labMarkerOptionsHtml,
+  labDisplayName,
   t,
   WS,
   errMsg,
@@ -902,7 +903,7 @@ function labCategoryBar(labs, activeCategory) {
             `<button class="lab-category${category.key === activeCategory ? " active" : ""}" type="button" data-action="lab-category" data-category="${escapeHtml(
               category.key
             )}" role="tab" aria-selected="${category.key === activeCategory ? "true" : "false"}">${escapeHtml(
-              category.name
+              labDisplayName(category, category.key)
             )}</button>`
         )
         .join("")}
@@ -921,7 +922,7 @@ function labMarkerRow(marker, markerKey) {
       : "\u2013";
   return `<div class="lab-row" data-marker="${escapeHtml(markerKey)}">
       <div class="lab-row-main">
-        <span class="lab-row-name">${escapeHtml(marker.name)}</span>
+        <span class="lab-row-name">${escapeHtml(labDisplayName(marker, markerKey))}</span>
         <span class="lab-row-value">${value}</span>
         ${labBadge(marker.in_range)}
       </div>

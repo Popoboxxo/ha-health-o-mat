@@ -4071,6 +4071,34 @@ def test_req_hom_122_panel_data_includes_labs_block(monkeypatch):
     assert alt["is_custom"] is False
 
 
+def test_req_hom_122_panel_data_labs_names_carry_both_languages(monkeypatch):
+    """Kategorien/Marker tragen `name_de` UND `name_en` (i18n-UI), `name` bleibt."""
+    entry = _entry(
+        options={
+            "lab_custom_markers": [{"name": "Vitamin D", "unit": "ng/mL", "ref_min": 30}],
+        }
+    )
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    labs = ws_api.build_panel_data(hass, "e1", NOW)["labs"]
+
+    liver = next(c for c in labs["categories"] if c["key"] == "liver")
+    assert liver["name"] == "Leber", "`name` muss als deutscher Kompatibilitätswert bleiben"
+    assert liver["name_de"] == "Leber"
+    assert liver["name_en"] == "Liver"
+
+    alt = labs["markers"]["alt"]
+    assert alt["name_de"] == "ALT (GPT)"
+    assert alt["name_en"] == "ALT (ALT/GPT)"
+    assert alt["name"] == "ALT (GPT)"
+
+    # Custom-Marker haben keine Sprachvarianten — beide Keys fallen auf den
+    # nutzervergebenen Namen zurück.
+    custom = labs["markers"]["vitamin_d"]
+    assert custom["name_de"] == "Vitamin D"
+    assert custom["name_en"] == "Vitamin D"
+
+
 def test_req_hom_122_panel_data_labs_marker_includes_history_and_subline(monkeypatch):
     """Letzter aktiver Wert, Befund-Zusatzzeile und Verlauf landen im Marker."""
     hass, store = _lab_panel_hass(_entry(), monkeypatch)

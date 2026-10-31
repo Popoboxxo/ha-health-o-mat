@@ -47,6 +47,7 @@
 import {
   PANEL_CSS,
   WS,
+  AREA_KEYS,
   SETTINGS_LIMITS,
   SETTINGS_FALLBACKS,
   REFRESH_DEBOUNCE_MS,
@@ -977,11 +978,16 @@ class HealthOMatPanel extends HTMLElement {
   }
 
   _readAreaCheckboxes() {
-    const read = (field) => {
-      const el = this.shadowRoot.querySelector(`[data-field="${field}"]`);
-      return !!(el && el.checked);
-    };
-    return { drink: read("area-drink"), bp: read("area-bp"), wellbeing: read("area-wellbeing") };
+    // Generisch über AREA_KEYS (spiegelt areas.py): eine neue Fläche darf nie
+    // durch eine vergessene Hardcodierung aus dem Settings-Payload fallen.
+    const areas = {};
+    AREA_KEYS.forEach((key) => {
+      const el = this.shadowRoot.querySelector(`[data-field="area-${key}"]`);
+      // Fehlt die Checkbox im DOM, gilt die Fläche als aktiv (wie
+      // normalizeAreas für unbekannte/ältere Payloads).
+      areas[key] = el ? !!el.checked : true;
+    });
+    return areas;
   }
 
   /* Validate + normalise the whole form. Returns { payload, errors }. */

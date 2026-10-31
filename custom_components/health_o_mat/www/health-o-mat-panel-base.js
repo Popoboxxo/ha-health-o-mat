@@ -618,6 +618,73 @@ export const PANEL_CSS = `
   .restore-result.err { border-left: 4px solid var(--error-color, #db4437); }
   .restore-result ul { margin: 0; padding-left: 18px; font-size: .82rem; }
   .restore-result li { overflow-wrap: anywhere; }
+
+  /* --- Laborwerte (REQ-HOM-122) ------------------------------------------ */
+  .lab-category-bar { display: flex; align-items: center; gap: 6px;
+    overflow-x: auto; padding: 2px 0; scrollbar-width: thin; }
+  .lab-category-bar .btn { flex: none; min-width: 44px; min-height: 44px;
+    padding: 0 10px; }
+  .lab-category {
+    flex: none; font: inherit; cursor: pointer; min-height: 44px;
+    padding: 8px 14px; border-radius: 999px; font-weight: 600;
+    border: 1px solid var(--divider-color, rgba(0,0,0,.2));
+    background: transparent; color: var(--primary-text-color, #212121);
+    white-space: nowrap;
+  }
+  .lab-category.active {
+    border-color: var(--primary-color, #03a9f4);
+    color: var(--primary-color, #03a9f4);
+    background: var(--secondary-background-color, rgba(3,169,244,.1));
+  }
+  .lab-category:focus-visible { outline: 3px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
+
+  .lab-rows { display: flex; flex-direction: column; gap: 10px; }
+  .lab-row {
+    display: flex; flex-direction: column; gap: 8px; padding: 12px 14px;
+    border-radius: 16px;
+    background: var(--card-background-color, var(--ha-card-background, #fff));
+    border: 1px solid var(--divider-color, rgba(0,0,0,.08));
+  }
+  .lab-row-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .lab-row-name { flex: 1 1 auto; min-width: 0; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lab-row-value { flex: none; font-size: 1.05rem; font-weight: 700; }
+  .lab-subline { font-size: .78rem; }
+  .lab-chart { width: 100%; }
+
+  .lab-entry-form {
+    border: 1px solid var(--divider-color, rgba(0,0,0,.12));
+    border-radius: 12px; padding: 8px 12px;
+    background: var(--secondary-background-color, rgba(0,0,0,.02));
+  }
+  .lab-entry-form > summary { cursor: pointer; min-height: 44px; display: flex;
+    align-items: center; font-size: .9rem; font-weight: 600; }
+  .lab-entry-form .field { margin-top: 8px; }
+
+  .lab-custom-list { list-style: none; margin: 8px 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: 6px; }
+  .lab-custom-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 6px 0; font-size: .85rem;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08)); }
+  .lab-custom-list li:last-child { border-bottom: none; }
+  .lab-custom-list .btn { margin-left: auto; min-height: 44px; min-width: 44px;
+    padding: 8px 12px; }
+
+  .lab-ref-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  .lab-ref-table th, .lab-ref-table td {
+    padding: 6px 8px; text-align: left; vertical-align: middle;
+    border-bottom: 1px solid var(--divider-color, rgba(0,0,0,.08));
+  }
+  .lab-ref-table th { color: var(--secondary-text-color, #727272); font-weight: 600; }
+  .lab-ref-table td input[type="number"] {
+    width: 76px; min-height: 40px; padding: 6px 8px; font: inherit;
+    border-radius: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
+    background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+  }
+  .lab-ref-table .btn { min-height: 44px; min-width: 44px; padding: 8px 10px; }
+  @media (max-width: 600px) {
+    .lab-ref-table { display: block; overflow-x: auto; }
+  }
 `;
 
 /* --- UI translations (HA-native, see health-o-mat-i18n.js) ----------------- */
@@ -1344,6 +1411,18 @@ export function bpHistoryChartHtml(entries, opts) {
  * Views (Panel-Tab, Übersicht-Tile, Lovelace-Card) entscheiden, was sie
  * zeigen. */
 
+/* Sprachabhängiger Katalog-Name aus dem `labs`-Block (REQ-HOM-122): bei
+ * englischer UI `name_en`, sonst `name_de`. `name` bleibt als Rückfall für
+ * ältere Payloads bzw. Custom-Marker ohne Sprachvarianten. */
+export function labDisplayName(item, fallback) {
+  const entry = item && typeof item === "object" ? item : {};
+  const de = entry.name_de || entry.name;
+  const en = entry.name_en || de;
+  const chosen = currentLanguage() === "en" ? en : de;
+  if (chosen) return String(chosen);
+  return fallback == null ? "" : String(fallback);
+}
+
 /* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
 export function labBadge(inRange) {
   if (inRange === true) return `<span class="status good" aria-hidden="true">✓</span>`;
@@ -1443,13 +1522,13 @@ export function labChartHtml(history, opts) {
  * Kategorie-Reihenfolge je Marker mit). */
 export function labMarkerOptionsHtml(markers, selectedKey) {
   const entries = Object.entries(markers || {}).sort(([, a], [, b]) =>
-    String(a.name).localeCompare(String(b.name))
+    labDisplayName(a, "").localeCompare(labDisplayName(b, ""))
   );
   return entries
     .map(
       ([key, marker]) =>
         `<option value="${escapeHtml(key)}"${key === selectedKey ? " selected" : ""}>${escapeHtml(
-          marker.name
+          labDisplayName(marker, key)
         )} (${escapeHtml(marker.unit)})</option>`
     )
     .join("");

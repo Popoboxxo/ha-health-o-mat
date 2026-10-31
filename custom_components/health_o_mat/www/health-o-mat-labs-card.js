@@ -67,6 +67,25 @@ function normalizeStringList(value) {
   return out;
 }
 
+/* UI-Sprache (BCP-47 wie "en-GB" -> "en"). Die Karte lädt keine
+ * Übersetzungsressourcen; sie braucht die Sprache nur für die
+ * sprachabhängigen Katalog-Namen (`name_de`/`name_en` aus `panel_data`). */
+let _language = "de";
+
+function setCardLanguage(hass) {
+  const raw = hass && hass.language != null ? String(hass.language).trim().toLowerCase() : "";
+  if (raw) _language = raw.split(/[-_]/)[0] || "de";
+}
+
+function labDisplayName(item, fallback) {
+  const entry = item && typeof item === "object" ? item : {};
+  const de = entry.name_de || entry.name;
+  const en = entry.name_en || de;
+  const chosen = _language === "en" ? en : de;
+  if (chosen) return String(chosen);
+  return fallback == null ? "" : String(fallback);
+}
+
 /* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
 function labBadge(inRange) {
   if (inRange === true) return `<span class="status good" aria-hidden="true">✓</span>`;
@@ -166,13 +185,15 @@ function formatRelativeTs(ts) {
  * `data-unit`-Attribut fuellt den Einheiten-Platzhalter ohne Re-Render. */
 function labMarkerOptionsHtml(markers, selectedKey) {
   return Object.entries(markers || {})
-    .sort(([, a], [, b]) => String(a && a.name).localeCompare(String(b && b.name)))
+    .sort(([, a], [, b]) =>
+      labDisplayName(a, "").localeCompare(labDisplayName(b, ""))
+    )
     .map(
       ([key, marker]) =>
         `<option value="${escapeHtml(key)}" data-unit="${escapeHtml(
           marker && marker.unit
         )}"${key === selectedKey ? " selected" : ""}>${escapeHtml(
-          (marker && marker.name) || key
+          labDisplayName(marker, key)
         )}${marker && marker.unit ? ` (${escapeHtml(marker.unit)})` : ""}</option>`
     )
     .join("");
@@ -367,6 +388,7 @@ class HealthOMatLabsCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    setCardLanguage(hass);
     if (!this._config) return;
     if (!this._data && !this._loading && !this._error) {
       this._loadData();
@@ -543,7 +565,9 @@ class HealthOMatLabsCard extends HTMLElement {
     if (!categoryKey) return [];
     return Object.entries(this._markers())
       .filter(([, marker]) => marker && marker.category === categoryKey)
-      .sort(([, a], [, b]) => String(a.name).localeCompare(String(b.name)));
+      .sort(([, a], [, b]) =>
+        labDisplayName(a, "").localeCompare(labDisplayName(b, ""))
+      );
   }
 
   _categoryTabs() {
@@ -560,7 +584,7 @@ class HealthOMatLabsCard extends HTMLElement {
           }" data-action="lab-category" data-category="${escapeHtml(
             category.key
           )}" role="tab" aria-selected="${category.key === active}">${escapeHtml(
-            category.name || category.key
+            labDisplayName(category, category.key)
           )}</button>`
       )
       .join("");
@@ -584,7 +608,7 @@ class HealthOMatLabsCard extends HTMLElement {
       range ? ` title="${escapeHtml(range)}"` : ""
     }>
       <div class="labs-marker">
-        <div class="labs-name">${escapeHtml(marker.name || key)} ${refLink}</div>
+        <div class="labs-name">${escapeHtml(labDisplayName(marker, key))} ${refLink}</div>
         ${subline}
       </div>
       <div class="labs-value">${valueText}</div>
@@ -631,9 +655,7 @@ class HealthOMatLabsCard extends HTMLElement {
     const categoryRows = this._categoryMarkers(this._activeCategoryKey());
     if (categoryRows.length) return categoryRows[0][0];
     const entries = Object.keys(markers).sort((a, b) =>
-      String(markers[a] && markers[a].name).localeCompare(
-        String(markers[b] && markers[b].name)
-      )
+      labDisplayName(markers[a], "").localeCompare(labDisplayName(markers[b], ""))
     );
     return entries.length ? entries[0] : "";
   }
@@ -907,6 +929,7 @@ class HealthOMatLabsCardEditor extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    setCardLanguage(hass);
     if (first && hass) {
       if (this._persons === null) this._loadPersons();
       this._maybeLoadCategories();
@@ -1224,7 +1247,7 @@ class HealthOMatLabsCardEditor extends HTMLElement {
           <input type="checkbox" data-role="category" data-key="${escapeHtml(
             category.key
           )}"${selected.includes(category.key) ? " checked" : ""} />
-          <span>${escapeHtml(category.name || category.key)}</span>
+          <span>${escapeHtml(labDisplayName(category, category.key))}</span>
         </label>`
       )
       .join("");

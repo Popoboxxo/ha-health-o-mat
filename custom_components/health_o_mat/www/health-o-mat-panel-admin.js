@@ -24,6 +24,7 @@ import {
   escapeHtml,
   attrValue,
   datasetLabel,
+  labDisplayName,
   normalizeAreas,
   personSlug,
   messageHtml,
@@ -147,6 +148,10 @@ function settingsForm(panel, settings, entryId, loadError) {
         <label class="check">
           <input type="checkbox" data-field="area-wellbeing"${areas.wellbeing ? " checked" : ""} />
           <span>${escapeHtml(t("ui_common_area_wellbeing", "Wohlbefinden"))}</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" data-field="area-labs"${areas.labs ? " checked" : ""} />
+          <span>${escapeHtml(t("ui_common_area_labs", "Laborwerte"))}</span>
         </label>
       </div>
 
@@ -350,7 +355,7 @@ export function labSettingsSection(panel, settings, entryId) {
   // a custom marker carries a single `alt_unit` object instead.
   const categoryName = (key) => {
     const hit = categories.find((category) => category.key === key);
-    return hit ? hit.name_de || hit.key : String(key == null ? "" : key);
+    return hit ? labDisplayName(hit, hit.key) : String(key == null ? "" : key);
   };
   const altUnitText = (marker) => {
     const altUnit = marker && marker.alt_unit;
@@ -365,7 +370,7 @@ export function labSettingsSection(panel, settings, entryId) {
       const refMax = override.ref_max != null ? override.ref_max : definition.ref_max;
       return `<tr>
           <td>${escapeHtml(categoryName(definition.category))}</td>
-          <td>${escapeHtml(definition.name_de || key)}</td>
+          <td>${escapeHtml(labDisplayName(definition, key))}</td>
           <td>${escapeHtml(definition.canonical_unit || "")}</td>
           <td>
             <input type="number" step="any" data-field="lab-ref-min-${escapeHtml(key)}"
@@ -389,7 +394,7 @@ export function labSettingsSection(panel, settings, entryId) {
           <input type="checkbox" data-field="lab-hide-${escapeHtml(category.key)}"${
         hidden.has(category.key) ? "" : " checked"
       } />
-          <span>${escapeHtml(category.name_de || category.key)}</span>
+          <span>${escapeHtml(labDisplayName(category, category.key))}</span>
         </label>`
     )
     .join("");
@@ -411,7 +416,7 @@ export function labSettingsSection(panel, settings, entryId) {
     .map(
       (category) =>
         `<option value="${escapeHtml(category.key)}">${escapeHtml(
-          category.name_de || category.key
+          labDisplayName(category, category.key)
         )}</option>`
     )
     .join("");

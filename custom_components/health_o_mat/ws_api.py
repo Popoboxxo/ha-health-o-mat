@@ -626,8 +626,16 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
     ref_overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
     hidden = set(logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES)))
 
+    # `name` bleibt die deutsche Anzeige (Abwärtskompatibilität); `name_de`/
+    # `name_en` erlauben Card und Panel die sprachabhängige Darstellung.
     categories = [
-        {"key": category["key"], "name": category["name_de"], "hidden": category["key"] in hidden}
+        {
+            "key": category["key"],
+            "name": category["name_de"],
+            "name_de": category["name_de"],
+            "name_en": category.get("name_en") or category["name_de"],
+            "hidden": category["key"] in hidden,
+        }
         for category in LAB_CATEGORIES
     ]
 
@@ -642,9 +650,12 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
             else []
         )
         value = last.get("value") if last else None
+        name_de = marker_def.get("name_de") or marker_def.get("name") or marker_key
         markers[marker_key] = {
             "category": marker_def.get("category"),
-            "name": marker_def.get("name") or marker_def.get("name_de"),
+            "name": marker_def.get("name") or name_de,
+            "name_de": name_de,
+            "name_en": marker_def.get("name_en") or name_de,
             "unit": marker_def.get("canonical_unit"),
             "ref_min": ref_min,
             "ref_max": ref_max,

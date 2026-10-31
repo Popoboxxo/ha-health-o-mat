@@ -3237,11 +3237,13 @@ def test_req_hom_122_panel_views_escapes_lab_values():
 
     row = _js_function_block(source, "labMarkerRow")
     bar = _js_function_block(source, "labCategoryBar")
-    assert "escapeHtml(marker.name)" in row
+    assert "escapeHtml(labDisplayName(marker, markerKey))" in row
     assert "escapeHtml(marker.unit)" in row
     assert "escapeHtml(marker.value)" in row, "der Messwert wird ungeschuetzt interpoliert"
-    assert re.search(r"escapeHtml\(\s*category\.name\s*\)", bar)
-    assert re.search(r"escapeHtml\(\s*category\.key\s*\)", bar)
+    assert re.search(r"escapeHtml\(\s*labDisplayName\(category, category\.key\)\s*\)", bar)
+    assert "labDisplayName(category, category.key)" in bar, (
+        "der Kategorie-Name wird nicht sprachabhaengig aufgeloest"
+    )
 
 
 def test_req_hom_122_panel_views_labs_tab_hides_empty_categories():
@@ -3308,3 +3310,205 @@ def test_req_hom_122_panel_base_export_datasets_include_lab_values():
     # Bestehende Eintraege bleiben unveraendert (nur additiv erweitert).
     for value in ("all", "drinks", "blood_pressure"):
         assert re.search(rf'value:\s*"{value}"', entries), f"{value} fehlt in EXPORT_DATASETS"
+
+
+# --- REQ-HOM-122: i18n der Labor-Namen ---------------------------------------
+#
+# `panel_data.labs` traegt seit dem E2E-Befund `name_de` UND `name_en`. Das
+# Panel waehlt ueber die BESTEHENDE Sprachmechanik (`setUiLanguage`/`t`) —
+# keine zweite Sprachlogik im Frontend.
+
+
+def test_req_hom_122_panel_base_exports_lab_display_name():
+    """[REQ-HOM-122] Sprachabhaengige Namensauflösung lebt im Basis-Modul."""
+    text = _panel_base_source()
+
+    assert re.search(r"export\s+function\s+labDisplayName\s*\(", text)
+    body = _js_function_block(text, "labDisplayName")
+    assert "name_en" in body and "name_de" in body
+    assert "currentLanguage()" in body, "die bestehende Sprachmechanik wird nicht genutzt"
+
+
+def test_req_hom_122_panel_admin_uses_localized_lab_names():
+    """[REQ-HOM-122] Admin-Tabelle/-Checkboxen/-Select nutzen `labDisplayName`."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    body = _js_function_block(admin, "labSettingsSection")
+
+    assert "labDisplayName(" in body
+    assert "| hit.name_de" not in body, "Kategorie-Namen bleiben auf Deutsch hartkodiert"
+
+
+_LAB_I18N_RUNNER = """import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+
+const viewsPath = process.argv[2];
+const views = await import(pathToFileURL(viewsPath).href);
+const base = await import(
+  pathToFileURL(join(dirname(viewsPath), "health-o-mat-panel-base.js")).href
+);
+
+const labs = {
+  categories: [
+    { key: "liver", name: "Leber", name_de: "Leber", name_en: "Liver", hidden: false },
+  ],
+  markers: {
+    alt: {
+      category: "liver",
+      name: "ALT (GPT)",
+      name_de: "ALT (GPT)",
+      name_en: "ALT (ALT/GPT)",
+      unit: "U/L",
+      value: 12,
+      ref_min: 10,
+      ref_max: 50,
+      in_range: true,
+      history: [],
+    },
+  },
+};
+const panel = { _labCategory: "", _formError: "", _busy: false };
+
+base.setUiLanguage("de");
+const german = views.labsTab(panel, { labs }, "entry-1");
+base.setUiLanguage("en");
+const english = views.labsTab(panel, { labs }, "entry-1");
+
+process.stdout.write(JSON.stringify({ german, english }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_122_panel_labs_render_german_and_english_names(tmp_path):
+    """[REQ-HOM-122] Kategorie-Leiste und Marker-Zeile folgen der UI-Sprache."""
+    views_copy = _prepare_views_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _LAB_I18N_RUNNER,
+            [str(views_copy)],
+            "runner_labs_i18n",
+        )
+    )
+
+    assert "Leber" in out["german"] and "ALT (GPT)" in out["german"]
+    assert "Liver" not in out["german"], "englischer Kategoriename erscheint im DE-Render"
+    assert "Liver" in out["english"], "englischer Kategoriename fehlt im EN-Render"
+    assert "ALT (ALT/GPT)" in out["english"], "englischer Marker-Name fehlt im EN-Render"
+    assert "Leber" not in out["english"], "deutscher Kategoriename bleibt im EN-Render"
+
+
+# --- REQ-HOM-122: Labor-Flaeche im Admin-Toggle -----------------------------
+
+_LAB_AREA_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() { this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    const field = match ? match[1] : "";
+    return this._fields[field] || null;
+  }
+  querySelectorAll() { return []; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel(fields) {
+  const panel = new PanelClass();
+  panel.shadowRoot._fields = fields;
+  return panel;
+}
+
+const full = makePanel({
+  "area-drink": { checked: true },
+  "area-bp": { checked: false },
+  "area-wellbeing": { checked: true },
+  "area-labs": { checked: false },
+});
+const legacy = makePanel({
+  "area-drink": { checked: true },
+  "area-bp": { checked: true },
+  "area-wellbeing": { checked: true },
+});
+
+process.stdout.write(JSON.stringify({
+  full: full._readAreaCheckboxes(),
+  legacy: legacy._readAreaCheckboxes(),
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_122_panel_admin_reads_labs_area_checkbox(tmp_path):
+    """[REQ-HOM-122] Die vierte Flaeche wird generisch über `AREA_KEYS` gelesen."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _LAB_AREA_RUNNER,
+            [str(panel_copy)],
+            "runner_labs_area_toggle",
+        )
+    )
+
+    assert out["full"] == {
+        "drink": True,
+        "bp": False,
+        "wellbeing": True,
+        "labs": False,
+    }, "die `area-labs`-Checkbox landet nicht im Settings-Payload"
+    # Alt-Payloads/aeltere DOM-Staende ohne die vierte Checkbox: Flaeche aktiv.
+    assert out["legacy"]["labs"] is True, (
+        "eine fehlende Checkbox darf die Labor-Flaeche nicht deaktivieren"
+    )
+
+
+def test_req_hom_122_panel_admin_renders_labs_area_checkbox_and_key():
+    """[REQ-HOM-122] Admin-Formular rendert die Checkbox mit eigenem UI-Key."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+
+    assert 'data-field="area-labs"' in admin
+    assert "ui_common_area_labs" in admin
+
+
+# --- REQ-HOM-122: Panel-Stylesheet fuer den Labor-Tab -----------------------
+
+
+def test_req_hom_122_panel_css_styles_lab_classes():
+    """[REQ-HOM-122] Alle Labor-Klassen sind im Panel-Stylesheet definiert."""
+    source = _panel_base_source()
+    match = re.search(r"export const PANEL_CSS = `(.*?)`;", source, re.S)
+    assert match is not None, "PANEL_CSS fehlt im Basis-Modul"
+    css = match.group(1)
+
+    for selector in (
+        ".lab-category-bar",
+        ".lab-category",
+        ".lab-rows",
+        ".lab-row",
+        ".lab-row-value",
+        ".lab-custom-list",
+        ".lab-entry-form",
+        ".lab-ref-table",
+    ):
+        assert selector in css, f"{selector} hat keine Panel-CSS-Regel"
+
+    # Dark/Light bleibt Sache der HA-Theme-Variablen (kein eigenes Farbschema).
+    for var in ("--card-background-color", "--divider-color", "--primary-color"):
+        assert var in css, f"{var} wird im Labor-Stylesheet nicht wiederverwendet"
