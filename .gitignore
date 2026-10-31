@@ -35,10 +35,8 @@ docker/ha_config_e2e/home-assistant.log*
 .opencode/
 .opencode/mcp.local.json
 .tmp/
-AGENTS.md
 AGENTS.personal.md
 CLAUDE.local.md
-CLAUDE.md
 CLAUDE.personal.md
 opencode.json
 sync.log

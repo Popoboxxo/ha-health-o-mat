@@ -184,9 +184,7 @@ gitignore:
   ignore-provider-dirs: true
   custom_entries:
   - .meta-config/platform-defaults.resolved.yaml
-  - AGENTS.md
   - opencode.json
-  - CLAUDE.md
 # Repo-Containment ('Gefängnis-Modus'): confines agent WRITE access to the project root (plus the tmp-sink). Opt-out: enabled: false.
 repo_containment:
   enabled: true
