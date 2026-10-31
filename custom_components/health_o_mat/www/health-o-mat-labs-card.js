@@ -23,7 +23,7 @@
 
 const CARD_TAG = "health-o-mat-labs-card";
 const EDITOR_TAG = "health-o-mat-labs-card-editor";
-const CARD_VERSION = "0.16.0";
+const CARD_VERSION = "0.16.1";
 
 const PERSON_MODES = ["selector", "fixed"];
 
