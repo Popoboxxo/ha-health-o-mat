@@ -24,7 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from . import logic, parser
-from .areas import AREAS, OPTION_AREAS, active_areas
+from .areas import AREA_LABS, AREAS, OPTION_AREAS, active_areas
 from .const import (
     AUDIT_LIMIT_OPTION,
     DEFAULT_DAILY_GOAL_ML,
@@ -36,6 +36,7 @@ from .const import (
     DRINK_LEXICON,
     LAB_CATEGORIES,
     LAB_MARKERS,
+    LAB_REPORT_REF_MAX_LEN,
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
@@ -102,6 +103,8 @@ COMMAND_PANEL_DATA = "health_o_mat/panel_data"
 COMMAND_BOOK_DRINK = "health_o_mat/book_drink"
 COMMAND_UNDO_LAST = "health_o_mat/undo_last"
 COMMAND_SAVE_MEASUREMENT = "health_o_mat/save_measurement"
+COMMAND_ADD_LAB_VALUE = "health_o_mat/add_lab_value"
+COMMAND_REMOVE_LAST_LAB_VALUE = "health_o_mat/remove_last_lab_value"
 COMMAND_SET_WELLBEING = "health_o_mat/set_wellbeing"
 COMMAND_LIST_HISTORY = "health_o_mat/list_history"
 COMMAND_VOID_ENTRY = "health_o_mat/void_entry"
@@ -488,6 +491,15 @@ def build_panel_data(hass: HomeAssistant, entry_id: str, now: datetime) -> dict[
         },
         "bp": _bp_block(entry, readings, now),
         "wellbeing": _wellbeing_block(data, entry),
+        # Additiv (REQ-HOM-122): alle Kategorien + effektiven Marker (Katalog +
+        # Custom) mit letztem aktivem Wert, Referenzbereich und Verlauf. Nur
+        # wenn die Lab-Fläche aktiv ist — sonst leerer Block statt Sonderfall
+        # im Frontend.
+        "labs": (
+            _labs_block(entry, store, now)
+            if active_areas(options).get(AREA_LABS)
+            else {"categories": [], "markers": {}}
+        ),
         # Additiv: die vollständige Skala inkl. eigener Bilder, damit Karte und
         # Panel dieselbe Quelle nutzen (Label/Emoji/Bild je Key).
         "wellbeing_scale": logic.wellbeing_scale(_wellbeing_images(entry)),
@@ -592,6 +604,63 @@ def _wellbeing_history(items: Any, images: dict[str, str] | None = None) -> list
             }
         )
     return history
+
+
+# --- Laborwerte (REQ-HOM-122) ----------------------------------------------
+
+# Obergrenze des Verlaufs je Marker im `panel_data`-Block (Payload-Grenze N-1).
+_LAB_HISTORY_LIMIT = 14
+
+
+def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
+    """Labor-Block für `panel_data` (REQ-HOM-122) — kein Zweit-Datenmodell.
+
+    Enthält ALLE Kategorien (inkl. `hidden`-Flag) und ALLE effektiven Marker
+    (Katalog + Custom), damit Card/Panel ohne weiteren WS-Request filtern,
+    sortieren und den Warn-Status berechnen können (§7.3 der Spec). Werte
+    kommen ausschließlich aus der AKTIVEN Store-Sicht (`last_active_lab_reading`
+    / `active_lab_readings`) — voided Einträge werden nie sichtbar.
+    """
+    options = getattr(entry, "options", None) or {}
+    custom_markers = options.get(OPTION_LAB_CUSTOM_MARKERS)
+    ref_overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
+    hidden = set(logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES)))
+
+    categories = [
+        {"key": category["key"], "name": category["name_de"], "hidden": category["key"] in hidden}
+        for category in LAB_CATEGORIES
+    ]
+
+    markers: dict[str, Any] = {}
+    for marker_key, marker_def in logic.effective_lab_markers(custom_markers).items():
+        overrides_for_marker = None if marker_def.get("is_custom") else ref_overrides
+        ref_min, ref_max = logic.resolve_lab_reference(marker_key, marker_def, overrides_for_marker)
+        last = store.last_active_lab_reading(entry.entry_id, marker_key) if store else None
+        history_items = (
+            store.active_lab_readings(entry.entry_id, marker_key=marker_key)[-_LAB_HISTORY_LIMIT:]
+            if store
+            else []
+        )
+        value = last.get("value") if last else None
+        markers[marker_key] = {
+            "category": marker_def.get("category"),
+            "name": marker_def.get("name") or marker_def.get("name_de"),
+            "unit": marker_def.get("canonical_unit"),
+            "ref_min": ref_min,
+            "ref_max": ref_max,
+            "is_custom": bool(marker_def.get("is_custom")),
+            "value": value,
+            "ts": last.get("ts") if last else None,
+            "in_range": logic.lab_marker_in_range(value, ref_min, ref_max),
+            "reported_value": last.get("reported_value") if last else None,
+            "reported_unit": last.get("reported_unit") if last else None,
+            "report_ref": last.get("report_ref") if last else None,
+            "history": [
+                {"ts": item.get("ts"), "value": item.get("value")} for item in history_items
+            ],
+        }
+
+    return {"categories": categories, "markers": markers}
 
 
 # --- HA-Zugriffe (defensiv) -------------------------------------------------
@@ -886,6 +955,23 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Optional("note"): str,
                 vol.Optional("ts"): str,
             },
+        ),
+        (
+            COMMAND_ADD_LAB_VALUE,
+            websocket_add_lab_value,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("marker"): str,
+                vol.Required("value"): vol.Coerce(float),
+                vol.Optional("unit"): str,
+                vol.Optional("ts"): str,
+                vol.Optional("report_ref"): str,
+            },
+        ),
+        (
+            COMMAND_REMOVE_LAST_LAB_VALUE,
+            websocket_remove_last_lab_value,
+            {vol.Required("entry_id"): str, vol.Required("marker"): str},
         ),
         (
             COMMAND_SET_WELLBEING,
@@ -1185,6 +1271,106 @@ async def websocket_save_measurement(
         actor=user_id_of(connection),
         audit_limit=_audit_limit(hass, entry_id),
     )
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+def _resolve_lab_marker_or_error(
+    connection: Any, msg: dict[str, Any], options: Any
+) -> tuple[str, dict] | None:
+    """Marker (Alias/Katalog/Custom) auflösen oder `unknown_marker` melden.
+
+    Gemeinsamer Validierungsschritt beider Labor-Kommandos — dieselbe
+    HA-freie Logik wie der `health_o_mat.add_lab_value`-Service, aber als
+    Karten-Fehlermeldung statt Service-Toast.
+    """
+    resolved = logic.resolve_lab_marker(msg.get("marker"), options.get(OPTION_LAB_CUSTOM_MARKERS))
+    if resolved is None:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unknown_marker")
+    return resolved
+
+
+async def websocket_add_lab_value(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/add_lab_value` → Laborwert erfassen (REQ-HOM-122).
+
+    Fehler (unbekannter Marker, Pflicht-Einheit fehlt, nicht unterstützte
+    Einheit) kommen als `connection.send_error` zurück, damit die Card/das
+    Panel sie als Karten-Fehlermeldung statt als HA-Service-Toast zeigen
+    (§7.1 der Spec) — bewusst NICHT über `hass.services.async_call`.
+    """
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    options = getattr(entry, "options", None) or {}
+    resolved = _resolve_lab_marker_or_error(connection, msg, options)
+    if resolved is None:
+        return
+    marker_key, marker_def = resolved
+    raw_unit = msg.get("unit")
+    if raw_unit is None and marker_def.get("require_explicit_unit"):
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unit_required")
+        return
+    try:
+        reported_value = float(msg.get("value"))
+        canonical_value, canonical_unit = logic.convert_lab_value(
+            marker_def, reported_value, raw_unit
+        )
+    except (TypeError, ValueError) as err:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "invalid_value")
+        return
+    report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
+    now = dt_util.now()
+    try:
+        ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
+    except ValueError as err:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+        return
+    await store.add_lab_reading(
+        entry_id,
+        ts_iso,
+        marker_key,
+        canonical_value,
+        canonical_unit,
+        reported_value,
+        raw_unit or canonical_unit,
+        report_ref=report_ref,
+        created_ts_iso=now.isoformat(),
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
+    signal_refresh(hass, entry_id)
+    connection.send_result(msg["id"])
+
+
+async def websocket_remove_last_lab_value(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/remove_last_lab_value` → letzten aktiven Wert EINES Markers entfernen."""
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    options = getattr(entry, "options", None) or {}
+    resolved = _resolve_lab_marker_or_error(connection, msg, options)
+    if resolved is None:
+        return
+    marker_key, _marker_def = resolved
+    changed = await store.remove_last_lab_reading(
+        entry_id,
+        marker_key,
+        actor=user_id_of(connection),
+        audit_limit=_audit_limit(hass, entry_id),
+    )
+    if not changed:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "no_active_value")
+        return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
 
