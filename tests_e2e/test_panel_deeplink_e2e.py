@@ -26,7 +26,7 @@ PANEL_PATH = "/health-o-mat"
 # Panel identity/contract anchors (custom_components/health_o_mat/panel.py and
 # www/health-o-mat-panel-views.js): the overview renders one `.tile` button per
 # person, the detail view a `.tabs` bar with one `.tab[data-tab]` per ENABLED
-# feature area (drink / bp / wellbeing).
+# feature area (drink / bp / wellbeing / labs).
 TILE = ".tile[data-action='open']"
 TAB = ".tab[data-action='tab']"
 
@@ -87,7 +87,7 @@ def test_deep_link_opens_the_person_detail_directly(logged_in_page, hass_base_ur
 
     assert person_param(page) == slug
     assert panel.locator(".person-head").inner_text().strip() == panel_person["display_name"]
-    assert tab_keys(panel) == ["drink", "bp", "wellbeing"]
+    assert tab_keys(panel) == ["drink", "bp", "wellbeing", "labs"]
 
 
 def test_tile_click_pushes_the_person_deep_link(logged_in_page, hass_base_url, panel_person):
@@ -110,7 +110,7 @@ def test_tile_click_pushes_the_person_deep_link(logged_in_page, hass_base_url, p
     page.wait_for_url(re.compile(r"[?&]person="), timeout=60000)
     assert person_param(page) == slug
     wait_for_detail(panel)
-    assert tab_keys(panel) == ["drink", "bp", "wellbeing"]
+    assert tab_keys(panel) == ["drink", "bp", "wellbeing", "labs"]
     assert page.evaluate("() => history.length") == history_before + 1, (
         "opening a person must push a history entry (pushState), not replace the URL"
     )
@@ -153,11 +153,22 @@ def test_unknown_person_param_falls_back_safely(logged_in_page, hass_base_url):
 
 
 def test_disabled_area_hides_its_tab(logged_in_page, hass_base_url, tab_person):
-    """A switched-off feature area must not render its detail tab."""
+    """A switched-off feature area must not render its detail tab.
+
+    `tab_person` disables exactly one area (`bp`); `labs` is not mentioned in
+    its fixture options and is therefore enabled by default. The assertion is
+    deliberately exhaustive — every enabled tab in order, including the
+    default-on `labs` — so it still proves that the ONE disabled area is gone
+    while its neighbours (and a sibling default area) survive. A weaker
+    "bp not in tabs" check alone would also pass if the tab bar stopped
+    rendering altogether.
+    """
     page = logged_in_page
 
     panel = open_panel(page, hass_base_url, person=tab_person["slug"])
     wait_for_detail(panel)
 
-    assert tab_keys(panel) == ["drink", "wellbeing"]
+    keys = tab_keys(panel)
+    assert keys == ["drink", "wellbeing", "labs"], f"unexpected tab set: {keys!r}"
+    assert "labs" in keys, "the default-enabled lab area must keep rendering its tab"
     assert panel.locator(".tab[data-tab='bp']").count() == 0
