@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-10-31 (Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`
+**Stand:** 2026-11-01 (Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126**, Spec beschlossen, Umsetzung ausstehend, Branch noch nicht angelegt; zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -17,6 +17,10 @@ Belege (REQ-HOM-122): **1395 Unit-Tests**, **19 E2E-Tests** (realer HA-Docker-St
 `ruff check .` + `ruff format --check .` clean (63 Dateien) ·
 Belege (UX-P1/0.14.0): **1159 Unit-Tests**, **18 E2E-Tests** (realer HA-Docker-Stack),
 `ruff check .` + `ruff format --check .` clean ·
+**REQ-HOM-123…126 geplant** (Laborwerte — Batch-Erfassung & Sichtbarkeit, Spec
+`docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`,
+2026-11-01; Status Offen — Spec beschlossen, Umsetzung ausstehend, Branch noch
+nicht angelegt) ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 **`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
 
@@ -24,7 +28,7 @@ Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 
 1. **Neue Anforderungen (Features)** — Kapitel 1, REQ-HOM-001…014: dokumentiert,
    Umsetzung in eigener Reihe (nicht Bestandteil des Fix-Plans).
-2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…122: Bugfix-/Qualitätsanforderungen
+2. **Funde & Risiken** — Kapitel 2, REQ-HOM-101…126: Bugfix-/Qualitätsanforderungen
    aus dem Review; deren priorisierter Umsetzungsplan liegt in
    **`plan-funde-risiken.md`** und ist das jetzt aktuelle Arbeitsprogramm.
    Ergänzt: **REQ-HOM-112** (Wohlbefinden-Score & Score-Chart) — ein Feature-
@@ -38,6 +42,10 @@ Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
    **REQ-HOM-121** (Wohlbefinden-Zahleneingabe als Number-Entity, Branch
    `feat/wellbeing-number-entity`, Release 0.15.0) und **REQ-HOM-122**
    (Laborwerte/Blutwerte als vierte Datendomäne, Branch `feat/lab-values`).
+   Danach **REQ-HOM-123…126** (Laborwerte — Batch-Erfassung & Sichtbarkeit,
+   Erweiterung zu REQ-HOM-122, Spec
+   `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`;
+   Status Offen — Spec beschlossen, Umsetzung ausstehend).
 
 **Legende:** Priorität P1 (muss bald) / P2 (soll) / P3 (nice-to-have) ·
 Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
@@ -1235,6 +1243,147 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     Quellen mit demselben Custom-Marker-Key gewinnt die erste Definition (inkl.
     `unit`/`alt_unit`), spätere abweichende Definitionen werden ignoriert.
 
+#### REQ-HOM-123 — Batch-Check-in eines Laborberichts (`add_lab_report`)
+- **Priorität:** P2 · **Aufwand:** L
+- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
+  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
+  Checkboxen.
+- **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+  (§2 Service-Vertrag, §2.3 Zeilen-Form, §2.4 Fehlercodes/Reihenfolge, §2.7/§2.8
+  Store und Audit, §3 WS-Vertrag, §6 Mehrzeilen-Dialog, §11
+  Akzeptanzkriterien, §13 Risiken)
+- **Bezug:** Erweiterung zu **REQ-HOM-122**; kein neues Datenmodell
+  (Store-Schema bleibt v5, `unique_id`s unverändert, Backup/Restore/CSV
+  unberührt).
+- **Anforderung:** Ein Laborbefund ist als **ein Vorgang** erfassbar statt als
+  N Einzelaufrufe: Service `health_o_mat.add_lab_report` und WS-Kommando
+  `health_o_mat/add_lab_report` nehmen eine Liste von Zeilen
+  (`{marker, value, unit}`) mit **einem** `ts` und **einer** `report_ref`
+  entgegen. Eine **Teilmenge ist erlaubt** (leere Zeilen werden ignoriert),
+  jede befüllte Zeile muss valide sein — **alles-oder-nichts**: ein Fehler
+  hinterlässt weder Lesungen noch Audit-Einträge. Der Vorgang erzeugt genau
+  **einen** Store-Write, **einen** Coordinator-Refresh und **einen**
+  Audit-Eintrag (`lab_values_added`, ohne `report_ref`). Card und Panel bieten
+  dazu einen Mehrzeilen-Dialog; `add_lab_value` bleibt unverändert der schnelle
+  Tagespfad.
+- **Akzeptanzkriterien:**
+  - [ ] Service: YAML-Beispiel aus §2.10 → `lab_readings` wächst um **4**
+    Einträge, alle mit demselben `ts`/`report_ref`; der Service gibt **nichts**
+    zurück (Vertrag §2.6).
+  - [ ] WS: derselbe Bericht liefert `send_result {"written": 4, "ts": …}`.
+  - [ ] Ungültige Zeile 3 (unbekannter Marker) → `ServiceValidationError` mit
+    `unknown_marker: Zeile 3 (...)`; `lab_readings` **und** `audit_log`
+    unverändert.
+  - [ ] Leerzeilen werden ignoriert: 3 Zeilen davon 1 leer → 2 Werte, kein
+    Fehler.
+  - [ ] Fehlercodes in genau dieser Reihenfolge: `invalid_ts`, `empty_report`,
+    `too_many_rows` (201 befüllte Zeilen), `unknown_marker`, `unit_required`,
+    `invalid_value`, `unsupported_unit`, `duplicate_marker`.
+  - [ ] `gpt` + `alt` im selben Batch → `duplicate_marker` (Alias-Kollision).
+  - [ ] Genau **ein** `_async_save`, genau **ein** `signal_refresh`, genau
+    **ein** Audit-Eintrag `lab_values_added` (ohne `report_ref`,
+    `marker_keys`/`reading_ids` ≤ 20, `count` = volle Zahl).
+  - [ ] `add_lab_value` mit `NaN`/`inf` → `invalid_value` (gehärtet, gleicher
+    Helper).
+  - [ ] WS: `send_result` mit `{"written": n, "ts": …}`; Fehler als
+    `send_error` mit Code-Prefix; fehlendes `entry_id` → bestehender
+    Entry-Fehler.
+- **Belege:** stehen mit der Umsetzung aus (Spec §12 Teststrategie:
+  `tests/test_logic.py`, `tests/test_store.py`, `tests/test_lab_services.py`,
+  `tests/test_ws_api.py`, `tests/test_panel_js.py`, `tests/test_card_js.py`,
+  `tests/test_translations.py`, `tests_e2e/test_lab_values_e2e.py`).
+
+#### REQ-HOM-124 — Umrechnungen in der Admin-UI sichtbar
+- **Priorität:** P2 · **Aufwand:** S–M
+- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
+  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
+  Checkboxen.
+- **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+  (§7 Admin-UI, §11 Akzeptanzkriterien)
+- **Bezug:** Erweiterung zu **REQ-HOM-122** (Admin-UI der Laborwerte, Katalog
+  und Custom-Marker); rein additive Anzeige.
+- **Anforderung:** Die in den Laborwert-Markern hinterlegten
+  Einheiten-Umrechnungen sind in der Admin-Referenztabelle **sichtbar**: je
+  Alt-Einheit-Paar die Richtung `{Alt-Einheit} × {Faktor} → {kanonische
+  Einheit}`, der Faktor **locale-fähig** formatiert (kein hartkodiertes
+  Trennzeichen, keine String-Konkatenation des Rohwerts), leeres Alt-Einheiten-
+  Paar → `—`. Marker mit verpflichtender Einheitenangabe tragen ein Badge
+  „Einheit Pflicht". Optional (Nice-to-have) zeigt die Custom-Marker-Zeile
+  zusätzlich ihren Faktor. Keine neue Server-API — die Werte stammen aus dem
+  bereits gelieferten Katalog (`settings.lab_catalog`).
+- **Akzeptanzkriterien:**
+  - [ ] Katalog-Tabelle zeigt für `creatinine` mit **Systemsprache DE**
+    `mg/dL × 88,4 → µmol/L` und mit **EN** `mg/dL × 88.4 → µmol/L` (Test setzt
+    die Sprache explizit; Faktor kommt aus `formatNumber`, kein hartkodiertes
+    Trennzeichen).
+  - [ ] Marker mit leerem `alt_units` zeigen `—`.
+  - [ ] `urine_protein_creatinine_ratio` zeigt Badge „Einheit Pflicht" +
+    Alt-Einheit.
+  - [ ] Kein neuer WS-Request/keine API-Änderung (Werte stammen aus
+    `settings.lab_catalog`).
+  - [ ] Neue Keys in `strings.json`/`de`/`en` und in `_REQ_HOM_122_UI_KEYS`.
+  - [ ] (Nice-to-have) Custom-Marker-Zeile zeigt `alt: nmol/L × 0,4`.
+- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_panel_js.py`,
+  `tests/test_translations.py`).
+
+#### REQ-HOM-125 — Medizin-Hinweis im Panel-Lab-Tab
+- **Priorität:** P2 · **Aufwand:** S
+- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
+  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
+  Checkboxen.
+- **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+  (§8 Medizin-Hinweis im Panel, §11 Akzeptanzkriterien)
+- **Bezug:** Präzisiert das Kriterium „Medizin-Disclaimer in Card/Panel/README"
+  aus **REQ-HOM-122** für den Panel-Lab-Tab, ohne REQ-HOM-122 rückwirkend
+  umzuformulieren.
+- **Anforderung:** Der Panel-Tab „Laborwerte" trägt einen **kontextbezogenen
+  Medizin-Hinweis** mit demselben Wortlaut wie die Labs-Card (deutsch exakt
+  gleich, englische Fassung sinngemäß), sichtbar **oberhalb** der
+  Kategorie-Leiste und **für alle Nutzer** — ohne Admin-Rechte und ohne
+  `get_settings`-Aufruf. In v1 ist der Hinweis **immer sichtbar** (keine
+  Option, kein Einstellungs-Schlüssel, kein Backup-Feld); die Stilklasse
+  `.labs-disclaimer` wird für das Panel eigenständig definiert, die Card bleibt
+  unberührt.
+- **Akzeptanzkriterien:**
+  - [ ] Lab-Tab zeigt den Hinweis mit dem Card-Wortlaut (de) und einer
+    englischen Fassung, **ohne** Admin-Rechte und ohne
+    `get_settings`-Aufruf.
+  - [ ] Keine neue Option/Settings-Key/Backup-Feld vorhanden (Grep-Beleg,
+    **auf `custom_components/` gescoped** — die Spec selbst enthält den String
+    `lab_hide_panel_disclaimer` als Nicht-Ziel): kein solcher Bezeichner im
+    Code.
+  - [ ] `.labs-disclaimer` in `PANEL_CSS` definiert (Panel-Rendering nutzt sie,
+    Card unberührt).
+  - [ ] Hinweis erscheint auch bei aktivem `areas.labs` in einer frisch
+    geöffneten Panel-Session ohne Settings-Load.
+- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_panel_js.py`,
+  `tests/test_translations.py`, `tests_e2e/test_lab_values_e2e.py`).
+
+#### REQ-HOM-126 — Beispiel-Dashboard für die Labs-Card
+- **Priorität:** P3 · **Aufwand:** S
+- **Status: Offen — geplant (Spec beschlossen 2026-11-01, Umsetzung
+  ausstehend)** — Branch noch nicht angelegt; Akzeptanzkriterien als offene
+  Checkboxen.
+- **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+  (§9 Beispiel-Dashboard, §9.1 Testanpassung, §11 Akzeptanzkriterien)
+- **Bezug:** Erweiterung zu **REQ-HOM-122** (Labs-Card); reine
+  Dokumentations-/Beispiel-Anforderung ohne Produktcode-Änderung.
+- **Anforderung:** Ein kopierbares Beispiel-Dashboard für die Laborwerte-Karte
+  liegt unter `examples/dashboard-labs-card.yaml` (Kommentar-Kopf,
+  Import-Hinweis, mehrere Ansichten), ist im README verlinkt und besteht die
+  bestehende Dashboard-Sammelprüfung der Tests **ohne** Ausnahme-Regel für die
+  neue Datei. Das Beispiel referenziert keine Entities (die Karte liest den
+  Panel-Payload) und nutzt ausschließlich die von der Karte unterstützten
+  Konfigurationsschlüssel; ein aktiver Personenfilter auf eine nicht
+  existierende Person wird vermieden (auskommentiert) und im README erläutert.
+- **Akzeptanzkriterien:**
+  - [ ] `examples/dashboard-labs-card.yaml` existiert, parst, nutzt nur
+    `custom:health-o-mat-labs-card`-Keys aus `LABS_CARD_KEYS`.
+  - [ ] `pytest tests/test_dashboards.py` grün ohne Ausnahme-Regel für die neue
+    Datei.
+  - [ ] README listet das neue Beispiel.
+- **Belege:** stehen mit der Umsetzung aus (Spec §12: `tests/test_dashboards.py`).
+
 ---
 
 ## 3. Mapping Funde → Anforderungen
@@ -1277,3 +1426,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-26 | **Neu angelegt: REQ-HOM-121 — Wohlbefinden-Zahleneingabe als Number-Entity** (Branch `feat/wellbeing-number-entity`) — **erledigt und mit Release 0.15.0 veröffentlicht (2026-10-26)**. Neue Number-Entity `number.…_wellbeing_input` (1…10, `step=1`, `mode=BOX`) als UI-loser Gegenpart zu Select und Melden-Buttons: `native_value` liefert den aktuellen Score, eine Eingabe wird über `logic.wellbeing_key_for_score` auf den Status-Key abgebildet und über `store.set_wellbeing` (inkl. Audit-Limit) gemeldet. Bereichs-Filter `wellbeing: false` erzeugt keine Entity; de/en-Übersetzungen und README ergänzt. **Belege:** `tests/test_number.py` (Wellbeing-Input-Fälle + Bereichs-Filter), `pytest -q` → **1167 passed**, `ruff check .` + `ruff format --check .` clean. **Release:** v0.15.0 veröffentlicht (MINOR, keine Migration; Release-Notes: `docs/RELEASE-NOTES-0.15.0.md`). |
 | 2026-10-26 | **v0.14.1 — Übersetzungs-Platzhalter-Fix + Dev-Instanz-Upgrade-Test:** Auf `ha-test` (HA 2026.9.1) wurde **HACS 2.0.5 temporär installiert**, `Popoboxxo/ha-health-o-mat` als Custom-Repository (`integration`) registriert und der echte **HACS-Install/Update-Pfad** getestet: Installation **v0.14.0** (HACS `installed_version=v0.14.0`, `pending_upgrade=true`) → Update **v0.14.1** (`pending_upgrade=false`), jeweils mit Neustart/Verifikation; danach HACS + GitHub-Token wieder entfernt. Zusätzlich Upgrade **0.10.2 → 0.14.0** per `bin/sync`: Store-Schema **v3 → v4** migriert (17 Einträge, keine Datenverluste), 4 Config-Entries geladen, **172 Entities** vollständig vorhanden, **keine verwaisten Entities/Devices** (Registry vs. States und Device-Registry geprüft); HACS-Test-Entities nach Entfernen ebenfalls bereinigt. Im Setup-Log fiel ein HA-Übersetzungsfehler auf: `restore_backup.fields.person_map.description` enthielt `{Quelle: Ziel-Entry-ID}` bzw. `{source: target entry ID}` und wurde als ungültiger Platzhalter validiert. **Fix:** Beschreibungen in `services.yaml`, `strings.json`, `de.json`, `en.json` ohne Platzhalter-Klammern; neue Tests für gültige Platzhalter und sprachübergreifende Platzhalter-Parität. **Belege:** `pytest -q` → **1161 passed**, `ruff check .` + `ruff format --check .` clean; Dev-Instanz nach Sync auf 0.14.1 ohne den Übersetzungsfehler. Patch-Release v0.14.1 (keine Migration, keine Entity-Änderungen). |
 | 2026-10-31 | **Neu angelegt und umgesetzt: REQ-HOM-122 — Laborwerte (Blutwerte) als vierte Datendomäne** (Branch `feat/lab-values`): Spec `docs/superpowers/specs/2026-10-30-lab-values-design.md`, Implementierungsplan `docs/superpowers/plans/2026-10-31-lab-values.md`. 9 Kategorien, 29 Katalog-Marker, Custom-Marker mit optionalem Alt-Unit-Paar, bidirektionale Einheiten-Konvertierung, zwei neue Services, Sensor je Marker + Warn-Binary je Kategorie, Admin-UI, eigene Lovelace-Card, Panel-Tab mit Swipe, Overview-Tile-Zeile, Backup v3/Restore/CSV-Export/-Import; ergänzend `areas.labs` mit Config-Flow-Toggle und Admin-Area-Checkbox, `lab_values` in Service-Schemata/WS-Export/UI-Selector, zweisprachige Katalog-Namen (`name_de`/`name_en`) und Lab-Panel-CSS. Store Schema v4 → v5. **Belege:** `pytest -q` → **1395 passed** (0 failed, 1 vorbestehende DeprecationWarning), E2E `tests_e2e/` → **19 passed**, `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert. Noch kein Release/Tag. |
+| 2026-11-01 | **Neu aufgenommen: REQ-HOM-123…126 — Laborwerte: Batch-Erfassung & Sichtbarkeit** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Erweiterung zu REQ-HOM-122): **Status: Offen — geplant (Spec beschlossen, Umsetzung ausstehend)**, Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. Inhalt: **123** Batch-Check-in eines Laborberichts (`add_lab_report` als Service + WS-Kommando + Mehrzeilen-Dialog in Card und Panel; Teilmenge erlaubt, jede befüllte Zeile valide, alles-oder-nichts, ein Store-Write/ein Refresh/ein Audit-Eintrag), **124** Umrechnungen in der Admin-UI sichtbar (Katalog-Spalte „Umrechnung" mit Alt-Einheit × Faktor → kanonische Einheit, „Einheit Pflicht"-Badge, Faktor locale-fähig über `formatNumber`, Custom-Marker-Faktor als Nice-to-have), **125** kontextbezogener Medizin-Hinweis im Panel-Tab „Laborwerte" (v1 immer sichtbar, Wortlaut wie Card), **126** Beispiel-Dashboard `examples/dashboard-labs-card.yaml` + README-Verweis + `tests/test_dashboards.py`-Erweiterung. Kein neues Datenmodell (Store-Schema bleibt v5, `unique_id`s unverändert, Backup/Restore/CSV unberührt); REQ-HOM-122 bleibt gültig, sein Kriterium „Medizin-Disclaimer in Card/Panel/README" wird durch REQ-HOM-125 präzisiert. Belege folgen mit der Umsetzung. |
