@@ -42,6 +42,11 @@ opencode.json
 sync.log
 # --- end agent-meta managed ---
 
+# --- lokale Runtime-Artefakte (nicht versionieren) ---
+# .meta-viz/: Checkpoints/Visualisierungs-Dumps der agent-meta-Werkzeuge —
+# entstehen bei jedem Lauf neu und gehoeren nicht ins Repo.
+.meta-viz/
+
 # --- lokale Beleg-Verzeichnisse (nicht versionieren) ---
 # artifacts/: lokale Scratch-Kopie der E2E-Belege — die committete Fassung
 # liegt unter docs/e2e-2026-10-19-wellbeing-score/.
