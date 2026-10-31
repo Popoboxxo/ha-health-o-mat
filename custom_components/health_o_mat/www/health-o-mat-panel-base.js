@@ -131,6 +131,8 @@ export const WS = {
   undoLast: "health_o_mat/undo_last",
   saveMeasurement: "health_o_mat/save_measurement",
   setWellbeing: "health_o_mat/set_wellbeing",
+  // Laborwerte (REQ-HOM-122).
+  addLabValue: "health_o_mat/add_lab_value",
   listHistory: "health_o_mat/list_history",
   voidEntry: "health_o_mat/void_entry",
   restoreEntry: "health_o_mat/restore_entry",
@@ -148,12 +150,13 @@ export const WS = {
 };
 
 /* Feature areas per person (mirrors areas.py). A missing key means "enabled". */
-export const AREA_KEYS = ["drink", "bp", "wellbeing"];
+export const AREA_KEYS = ["drink", "bp", "wellbeing", "labs"];
 
 export const AREA_LABELS = {
   drink: "Trinken",
   bp: "Blutdruck",
   wellbeing: "Wohlbefinden",
+  labs: "Laborwerte",
 };
 
 /* Detail tabs, in fixed order; `area` links a tab to its feature toggle. */
@@ -166,6 +169,7 @@ export const TABS = [
     labelKey: "ui_common_area_wellbeing",
     area: "wellbeing",
   },
+  { key: "labs", label: "Laborwerte", labelKey: "ui_panel_tab_labs", area: "labs" },
 ];
 
 /* Detail-Tab -> kanonisches Korrektur-Ziel der History-API. */
@@ -819,7 +823,12 @@ export function fmtMl(value) {
 /* Feature-area normalisation: a missing `areas` object OR a missing key means
  * "enabled" — only an explicit `false` hides an area (mirrors areas.py). */
 export function normalizeAreas(raw) {
-  const out = { drink: true, bp: true, wellbeing: true };
+  // Start from "every known area enabled" so a NEW area (e.g. labs) is active
+  // for legacy payloads that never mention it.
+  const out = {};
+  AREA_KEYS.forEach((key) => {
+    out[key] = true;
+  });
   if (raw && typeof raw === "object") {
     AREA_KEYS.forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key] !== false;
@@ -1320,6 +1329,125 @@ export function bpHistoryChartHtml(entries, opts) {
   const sysLabel = t("ui_panel_chart_bp_systolic", "Systolisch");
   const diaLabel = t("ui_panel_chart_bp_diastolic", "Diastolisch");
   return `<div class="card">${head}<div class="bp-chart"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(summary)}" preserveAspectRatio="xMidYMid meet">${grid}<path class="bp-line bp-sys" d="${path(sysCoords)}"></path><path class="bp-line bp-dia" d="${path(diaCoords)}"></path>${dots}${xLabels.join("")}</svg></div><div class="bp-legend"><span class="bp-sys">${escapeHtml(sysLabel)}</span><span class="bp-dia">${escapeHtml(diaLabel)}</span></div></div>`;
+}
+
+/* ---- Laborwerte (REQ-HOM-122) ---------------------------------------------
+ *
+ * Reine Rendering-Helfer über den `labs`-Block aus `panel_data` (Task 15):
+ * Kategorien inkl. `hidden`-Flag, Marker mit `value`/`unit`/`ref_min`/
+ * `ref_max`/`in_range`/`history`. Keine Datenbeschaffung, kein State — die
+ * Views (Panel-Tab, Übersicht-Tile, Lovelace-Card) entscheiden, was sie
+ * zeigen. */
+
+/* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
+export function labBadge(inRange) {
+  if (inRange === true) return `<span class="status good" aria-hidden="true">✓</span>`;
+  if (inRange === false) return `<span class="status bad" aria-hidden="true">⚠️</span>`;
+  return `<span class="muted" aria-hidden="true">–</span>`;
+}
+
+/* Dezente Subzeile "↷ eingegeben als <reported_value> <reported_unit>" — nur
+ * wenn die Eingabe-Einheit von der kanonischen Einheit abweicht (§7.1 der
+ * Spec). Entfällt komplett bei Gleichheit, kein Rauschen im Normalfall. */
+export function labReportedSubline(marker) {
+  if (!marker || marker.reported_unit == null || marker.reported_unit === marker.unit) {
+    return "";
+  }
+  return `<div class="lab-subline muted">↷ ${escapeHtml(
+    t("ui_panel_lab_reported_as", "eingegeben als {value} {unit}", {
+      value: marker.reported_value,
+      unit: marker.reported_unit,
+    })
+  )}</div>`;
+}
+
+/* Kompakte Sparkline (Card): reine SVG-Polyline über die letzten Werte,
+ * dasselbe Berechnungsmuster wie der bestehende Wellbeing-/BD-Chart (kein
+ * neues Rendering-Konzept, keine Bibliothek). */
+export function labSparklineHtml(history, opts) {
+  const options = opts || {};
+  const points = (Array.isArray(history) ? history : []).filter((p) =>
+    Number.isFinite(toNumber(p && p.value, NaN))
+  );
+  if (points.length < 2) return `<span class="muted">–</span>`;
+  const values = points.map((p) => toNumber(p.value, 0));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const width = options.width || 60;
+  const height = options.height || 20;
+  const coords = values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * width;
+      const y = height - ((v - min) / span) * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return `<svg class="lab-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="${width}" height="${height}">
+      <polyline points="${coords}" fill="none" stroke="var(--primary-color)" stroke-width="1.5" />
+    </svg>`;
+}
+
+/* Vollwertiger SVG-Chart (Panel): Referenzbereich als Band + Werte-Linie,
+ * analog zum bestehenden BD-Verlaufsgraph (bpHistoryChartHtml) — Y-Achse
+ * = Referenzbereich ± Puffer statt Blutdruck-Kategorien. */
+export function labChartHtml(history, opts) {
+  const options = opts || {};
+  const points = (Array.isArray(history) ? history : []).filter((p) =>
+    Number.isFinite(toNumber(p && p.value, NaN))
+  );
+  const title = options.title ? String(options.title) : "";
+  const head = title ? `<div class="card-title">${escapeHtml(title)}</div>` : "";
+  if (points.length < 2) {
+    return `<div class="card">${head}${messageHtml(
+      t("ui_panel_chart_lab_empty", "Noch zu wenige Werte – der Verlauf erscheint ab zwei Messungen."),
+      false
+    )}</div>`;
+  }
+  const values = points.map((p) => toNumber(p.value, 0));
+  const refMinRaw = toNumber(options.refMin, NaN);
+  const refMaxRaw = toNumber(options.refMax, NaN);
+  const refMin = Number.isFinite(refMinRaw) ? refMinRaw : null;
+  const refMax = Number.isFinite(refMaxRaw) ? refMaxRaw : null;
+  const dataMin = Math.min(...values, refMin != null ? refMin : Infinity);
+  const dataMax = Math.max(...values, refMax != null ? refMax : -Infinity);
+  const buffer = (dataMax - dataMin || 1) * 0.15;
+  const min = dataMin - buffer;
+  const max = dataMax + buffer;
+  const span = max - min || 1;
+  const width = 280;
+  const height = 100;
+  const toY = (v) => height - ((v - min) / span) * height;
+  const coords = values
+    .map((v, i) => `${((i / (values.length - 1)) * width).toFixed(1)},${toY(v).toFixed(1)}`)
+    .join(" ");
+  const band =
+    refMin != null && refMax != null
+      ? `<rect x="0" y="${toY(refMax).toFixed(1)}" width="${width}" height="${(toY(refMin) - toY(refMax)).toFixed(1)}" fill="var(--primary-color)" opacity="0.1" />`
+      : "";
+  return `<div class="card">${head}
+      <svg class="lab-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="${height}">
+        ${band}
+        <polyline points="${coords}" fill="none" stroke="var(--primary-color)" stroke-width="2" />
+      </svg>
+    </div>`;
+}
+
+/* <option>-Liste für den Marker-Picker im Eingabe-Block (Card/Panel),
+ * alphabetisch nach Marker-Name (der `labs`-Block liefert keine
+ * Kategorie-Reihenfolge je Marker mit). */
+export function labMarkerOptionsHtml(markers, selectedKey) {
+  const entries = Object.entries(markers || {}).sort(([, a], [, b]) =>
+    String(a.name).localeCompare(String(b.name))
+  );
+  return entries
+    .map(
+      ([key, marker]) =>
+        `<option value="${escapeHtml(key)}"${key === selectedKey ? " selected" : ""}>${escapeHtml(
+          marker.name
+        )} (${escapeHtml(marker.unit)})</option>`
+    )
+    .join("");
 }
 
 /* Empty-state message block, shared by every view. */

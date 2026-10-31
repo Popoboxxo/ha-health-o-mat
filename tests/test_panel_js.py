@@ -238,6 +238,15 @@ def _js_function_block(text: str, name: str) -> str:
     return text[match.end() : end]
 
 
+def _js_method_block(text: str, name: str) -> str:
+    """Quelltext des Methodenrumpfs von `name()` (bis zur Zeile `  }`)."""
+    match = re.search(rf"\n\s+{re.escape(name)}\s*\([^)]*\)\s*\{{", text)
+    assert match is not None, f"{name}() fehlt im Quelltext"
+    end = text.find("\n  }", match.end())
+    assert end != -1, f"{name}() hat keinen abschliessenden Block"
+    return text[match.end() : end]
+
+
 def test_req_hom_112_panel_base_exports_wellbeing_series_with_current_point():
     """[REQ-HOM-112] Das Basis-Modul exportiert die Series-Logik (Historie + aktuell)."""
     text = _panel_base_source()
@@ -3032,3 +3041,256 @@ def test_req_hom_117_panel_translations_load_fallback_and_language_switch(tmp_pa
     assert "Trinken" not in html, "deutscher Tab-Text bleibt trotz en aktiv"
     assert "ui_" not in html, "roher ui_-Key im gerenderten HTML"
     assert "Gut" not in html, "das Server-Label wird nicht per Key übersetzt"
+
+
+# --- REQ-HOM-122: Laborwerte im Admin-Formular ------------------------------
+#
+# Die Referenzdaten (`lab_catalog`, read-only aus const.py) und die drei
+# Options-Felder (`lab_ref_overrides`, `lab_hidden_categories`,
+# `lab_custom_markers`) kommen aus `get_settings`. Die Admin-Maske rendert
+# daraus die Referenzbereich-Tabelle, die Kategorie-Checkboxen und den
+# Custom-Marker-Editor; das Entry-Modul sammelt die Eingaben wieder ein.
+
+
+def test_req_hom_122_panel_admin_exports_lab_settings_section():
+    """[REQ-HOM-122] Die Admin-Maske exportiert den Laborwerte-Abschnitt."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+
+    assert "export function labSettingsSection" in admin
+    # Der Abschnitt wird auch tatsächlich in das Settings-Formular gespleisst.
+    assert "labSettingsSection(panel, s, entryId)" in admin
+
+
+def test_req_hom_122_panel_admin_lab_section_renders_hide_checkboxes():
+    """[REQ-HOM-122] Je Kategorie eine Checkbox (abgewählt = ausgeblendet)."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+
+    assert "lab-hide-" in admin
+    assert "lab_custom_markers" in admin
+
+
+def test_req_hom_122_panel_admin_lab_section_renders_ref_override_inputs():
+    """[REQ-HOM-122] Referenzbereich je Marker ist editierbar (min/max)."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+
+    assert "lab-ref-min-" in admin
+    assert "lab-ref-max-" in admin
+    assert "ref_min" in admin and "ref_max" in admin
+
+
+def test_req_hom_122_panel_admin_lab_section_renders_custom_marker_form():
+    """[REQ-HOM-122] Eigene Marker lassen sich anlegen und wieder entfernen."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+
+    assert "lab-custom-add" in admin
+    assert "lab-custom-remove" in admin
+    assert "lab-ref-reset" in admin
+
+
+def test_req_hom_122_panel_admin_lab_section_escapes_dynamic_values():
+    """[REQ-HOM-122] Marker-/Kategorienamen laufen durch `escapeHtml`/`attrValue`."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    body = _js_function_block(admin, "labSettingsSection")
+
+    assert "escapeHtml(" in body
+    assert "attrValue(" in body
+    assert "${marker.name_de}" not in body and "${category.name_de}" not in body, (
+        "dynamische Werte werden ungeschützt interpoliert"
+    )
+
+
+def test_req_hom_122_panel_js_collects_lab_settings_fields():
+    """[REQ-HOM-122] Das Entry-Modul sammelt alle drei Labor-Optionen ein."""
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+    collect = _js_method_block(entry, "_collectSettingsPayload")
+    changed = _js_method_block(entry, "_changedSettings")
+
+    assert "lab_ref_overrides" in collect
+    assert "lab_hidden_categories" in collect
+    assert "lab_custom_markers" in collect
+    # PATCH-Semantik: nur echte Änderungen werden gesendet.
+    assert "out.lab_ref_overrides" in changed
+    assert "out.lab_hidden_categories" in changed
+    assert "out.lab_custom_markers" in changed
+
+
+def test_req_hom_122_panel_js_has_lab_custom_draft_state():
+    """[REQ-HOM-122] Der Custom-Marker-Editor hält seinen Entwurf im Speicher."""
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert "_labCustomDraft" in entry
+    assert re.search(r"this\._labCustomDraft\s*=\s*\{\s*\}", entry), (
+        "der Draft-State wird nicht initialisiert"
+    )
+
+
+# --- REQ-HOM-122: geteilte Labor-Rendering-Helfer im Basis-Modul ------------
+#
+# Panel-Tab (Task 17), Übersicht-Tile (Task 18) und Lovelace-Card (Task 19)
+# zeigen dieselben Marker-Daten — Badge, Eingabe-Subzeile, Sparkline, Chart
+# und Marker-Picker leben deshalb EINMAL im geteilten Basis-Modul, nicht
+# dreimal kopiert.
+
+
+def test_req_hom_122_panel_base_exports_lab_helpers():
+    """[REQ-HOM-122] Die Labor-Helfer werden aus dem Basis-Modul exportiert."""
+    text = _panel_base_source()
+
+    for name in (
+        "labBadge",
+        "labReportedSubline",
+        "labSparklineHtml",
+        "labChartHtml",
+        "labMarkerOptionsHtml",
+    ):
+        assert re.search(rf"export\s+function\s+{name}\s*\(", text), (
+            f"{name}() fehlt im Panel-Basis-Modul"
+        )
+
+
+def test_req_hom_122_panel_base_lab_helpers_reuse_existing_formatters():
+    """[REQ-HOM-122] Keine Duplikate: bestehende Helfer werden wiederverwendet."""
+    text = _panel_base_source()
+
+    for name in (
+        "labBadge",
+        "labReportedSubline",
+        "labSparklineHtml",
+        "labChartHtml",
+        "labMarkerOptionsHtml",
+    ):
+        body = _js_function_block(text, name)
+        assert "innerHTML" not in body, f"{name}() baut HTML ausserhalb des Helfer-Modells"
+
+    # Dynamische Werte laufen durch die gemeinsamen Escaper/Formatter.
+    assert "escapeHtml(" in _js_function_block(text, "labReportedSubline")
+    assert "escapeHtml(" in _js_function_block(text, "labChartHtml")
+    assert "escapeHtml(" in _js_function_block(text, "labMarkerOptionsHtml")
+    assert "toNumber(" in _js_function_block(text, "labSparklineHtml")
+    assert "toNumber(" in _js_function_block(text, "labChartHtml")
+    assert "messageHtml(" in _js_function_block(text, "labChartHtml")
+
+
+# --- REQ-HOM-122: Panel-Tab "Laborwerte" (Task 17) --------------------------
+#
+# Der vierte Tab laeuft ueber denselben `TABS`/`enabledTabs`-Mechanismus wie die
+# drei bestehenden Tabs — eine deaktivierte `labs`-Flaeche blendet ihn aus.
+# Kategorie-Wechsel laeuft ohne Gesture-Library: Klick auf die Leiste bzw.
+# horizontales Wischen (touchstart/touchend) innerhalb des Tabs.
+
+
+def test_req_hom_122_tabs_include_labs_entry():
+    """[REQ-HOM-122] `TABS` enthaelt den vierten Eintrag fuer Laborwerte."""
+    source = _panel_base_source()
+
+    assert '"labs"' in source
+    assert "ui_panel_tab_labs" in source
+    # Die Flaeche muss in `AREA_KEYS` stehen, sonst ignoriert `normalizeAreas`
+    # ein explizites `areas.labs = false` aus dem Backend.
+    assert re.search(r'AREA_KEYS\s*=\s*\[[^\]]*"labs"', source), (
+        "labs fehlt in AREA_KEYS — der Tab liesse sich nicht abschalten"
+    )
+    # Fehlt der Schluessel im Payload (Alt-Entry), muss die Flaeche AKTIV sein.
+    normalize = _js_function_block(source, "normalizeAreas")
+    assert "AREA_KEYS.forEach" in normalize
+    assert "out[key] = true" in normalize, "neue Flaechen waeren per Default aus"
+
+
+def test_req_hom_122_panel_views_exports_labs_tab():
+    """[REQ-HOM-122] Die Views exportieren die Render-Funktion des Tabs."""
+    source = _panel_views_source()
+
+    assert "function labsTab" in source
+    assert re.search(r"export\s+function\s+labsTab\s*\(", source)
+    # Der Tab wird aus der bestehenden if/else-if-Kette heraus aufgerufen.
+    assert 'activeTab === "labs"' in source
+    assert "labsTab(panel, data, entryId)" in source
+
+
+def test_req_hom_122_panel_views_renders_category_bar():
+    """[REQ-HOM-122] Kategorie-Leiste mit Klick-Zielen und aktivem Zustand."""
+    source = _panel_views_source()
+
+    assert "lab-category" in source
+    assert 'data-action="lab-category"' in source
+    assert "lab-category-prev" in source
+    assert "lab-category-next" in source
+    assert "aria-selected=" in source
+
+
+def test_req_hom_122_panel_views_wires_touch_swipe():
+    """[REQ-HOM-122] Wischen wechselt die Kategorie (vanilla touch events)."""
+    source = _panel_views_source()
+
+    assert "touchstart" in source
+    assert "touchend" in source
+    # Nur im Laborwerte-Tab aktiv — andere Tabs haben kein Kategorie-Konzept.
+    assert 'panel._tab !== "labs"' in source or '_tab !== "labs"' in source
+    # Horizontale Geste erkennen, ohne vertikales Scrollen zu kapern.
+    assert "deltaX" in source and "deltaY" in source
+    assert "passive: true" in source
+
+
+def test_req_hom_122_panel_views_escapes_lab_values():
+    """[REQ-HOM-122] Marker-/Kategorie-Daten laufen durch `escapeHtml`."""
+    source = _panel_views_source()
+
+    row = _js_function_block(source, "labMarkerRow")
+    bar = _js_function_block(source, "labCategoryBar")
+    assert "escapeHtml(marker.name)" in row
+    assert "escapeHtml(marker.unit)" in row
+    assert "escapeHtml(marker.value)" in row, "der Messwert wird ungeschuetzt interpoliert"
+    assert re.search(r"escapeHtml\(\s*category\.name\s*\)", bar)
+    assert re.search(r"escapeHtml\(\s*category\.key\s*\)", bar)
+
+
+def test_req_hom_122_panel_views_labs_tab_hides_empty_categories():
+    """[REQ-HOM-122] Versteckte/kategorielose Marker erzeugen keinen Tab-Inhalt."""
+    source = _panel_views_source()
+
+    body = _js_function_block(source, "visibleLabCategories")
+    assert "category.hidden" in body
+    assert "marker.category === category.key" in body
+    # Leerer Zustand nutzt den gemeinsamen Message-Block.
+    labs = _js_function_block(source, "labsTab")
+    assert "messageHtml(" in labs
+    assert "labMarkerOptionsHtml(" in labs
+
+
+# --- REQ-HOM-122: Uebersicht-Kachel (Task 18) -------------------------------
+
+
+def test_req_hom_122_panel_views_exports_lab_warning_count():
+    """[REQ-HOM-122] Warn-Zaehler arbeitet rein auf `panel_data` (§7.3)."""
+    source = _panel_views_source()
+
+    assert "_labWarningCount" in source
+    body = _js_function_block(source, "_labWarningCount")
+    assert "marker.in_range === false" in body
+    assert "hidden" in body
+    assert "_ws(" not in body and "callWS" not in body, (
+        "der Warn-Zaehler darf keinen zusaetzlichen Request ausloesen"
+    )
+
+
+def test_req_hom_122_panel_views_tile_shows_lab_row():
+    """[REQ-HOM-122] Die Kachel zeigt eine Labor-Zeile (nur bei aktiver Flaeche)."""
+    source = _panel_views_source()
+    tile = _js_function_block(source, "renderTile")
+
+    assert "lab-row-tile" in tile
+    assert "areas.labs" in tile
+    assert "ui_panel_tile_lab_warning" in tile
+    assert "ui_panel_tile_lab_ok" in tile
+
+
+def test_req_hom_122_panel_views_tile_head_badge_mentions_lab():
+    """[REQ-HOM-122] Ein gemeinsames ⚠-Badge nennt beide Ursachen im Tooltip."""
+    source = _panel_views_source()
+    tile = _js_function_block(source, "renderTile")
+
+    assert "ui_panel_lab_threshold_title" in tile
+    # Der bestehende BD-Grund bleibt erhalten (Badge ist additiv, nie ersetzend).
+    assert "ui_panel_bp_threshold_title" in tile
+    assert "warn || labWarn" in tile
+    assert "warnTitleParts.join" in tile

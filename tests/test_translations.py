@@ -495,3 +495,57 @@ def test_req_hom_122_lab_warnings_cover_every_non_other_category() -> None:
             assert binary_sensor[key]["name"] == expected_name, (
                 f"{path}: {key}.name != '{expected_name}'"
             )
+
+
+# --- Laborwert-UI-Texte im Web-Panel (REQ-HOM-122) -------------------------
+
+# Statische Liste der in `www/health-o-mat-panel-*.js` per `t("<key>", …)`
+# referenzierten Laborwert-Texte. Der dynamische Test
+# `test_req_hom_117_every_js_key_exists_in_both_languages` prüft zusätzlich,
+# dass kein weiterer Key verwendet wird, ohne übersetzt zu sein.
+_REQ_HOM_122_UI_KEYS = (
+    "ui_admin_lab_title",
+    "ui_admin_lab_ref_title",
+    "ui_admin_lab_category",
+    "ui_admin_lab_marker",
+    "ui_admin_lab_unit",
+    "ui_admin_lab_range",
+    "ui_admin_lab_reset",
+    "ui_admin_lab_hide_title",
+    "ui_admin_lab_custom_title",
+    "ui_admin_lab_custom_name",
+    "ui_admin_lab_custom_unit",
+    "ui_admin_lab_custom_category",
+    "ui_admin_lab_custom_range",
+    "ui_admin_lab_custom_alt_unit",
+    "ui_admin_lab_custom_alt_unit_name",
+    "ui_admin_lab_custom_alt_factor",
+    "ui_admin_lab_custom_submit",
+    "ui_admin_lab_feedback",
+    "ui_panel_lab_reported_as",
+    "ui_panel_chart_lab_empty",
+    "ui_panel_tab_labs",
+    "ui_panel_lab_prev",
+    "ui_panel_lab_next",
+    "ui_panel_lab_no_categories",
+    "ui_panel_lab_add_value",
+    "ui_panel_lab_marker",
+    "ui_panel_lab_value_field",
+    "ui_panel_lab_unit_field",
+    "ui_panel_lab_report_ref",
+    "ui_panel_lab_save",
+    "ui_panel_tile_lab_warning",
+    "ui_panel_tile_lab_ok",
+    "ui_panel_lab_threshold_title",
+    "ui_panel_val_lab_value",
+)
+
+
+def test_req_hom_122_common_ui_keys_exist_in_all_three_files() -> None:
+    """[REQ-HOM-122] Laborwert-UI-Texte stehen in Master, de und en."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        common = _common(path)
+        missing = [key for key in _REQ_HOM_122_UI_KEYS if key not in common]
+        assert not missing, f"{path}: fehlende Laborwert-UI-Keys: {missing}"
+        empty = [key for key in _REQ_HOM_122_UI_KEYS if not str(common[key]).strip()]
+        assert not empty, f"{path}: leere Laborwert-UI-Werte: {empty}"
