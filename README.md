@@ -195,9 +195,9 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | sensor | `goal_streak` | Ziel-Serie / Goal streak | Tage in Folge mit erreichtem Tagesziel (+ Bestwert) |
 | sensor | `caffeine_today` | Koffein heute / Caffeine today | **geschätzte** mg Koffein heute |
 | binary_sensor | `daily_goal_reached` / `blood_pressure_warning` | Tagesziel erreicht, Blutdruck-Warnung | Status |
-| sensor | `lab_<marker>` (z. B. `lab_creatinine`, `lab_crp`) | Laborwert (z. B. Kreatinin / Creatinine, CRP) | zeitlich neuester aktiver Wert in kanonischer Einheit (+ `ts`, `category`, `ref_min`, `ref_max`, `in_range`) |
+| sensor | Katalog: `creatinine`, `crp` … (englischer Markername) · eigene Marker: `lab_<key>` (z. B. `lab_vitamin_d`) | Laborwert (z. B. Kreatinin / Creatinine, CRP) | zeitlich neuester aktiver Wert in kanonischer Einheit (+ `ts`, `category`, `ref_min`, `ref_max`, `in_range`) |
 | binary_sensor | `binary_lab_warning_<category>` (z. B. `binary_lab_warning_liver`) | Laborwert-Warnung (z. B. Leber / Liver) | `on`, wenn ≥ 1 aktiver Marker der Kategorie außerhalb des Referenzbereichs liegt |
-| button | Quick-Drinks (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Void/Speichern | Alltagseingabe |
+| button | `quick_drink_1` … `quick_drink_4` (Label aus der Konfiguration), `book_custom_amount`, `undo_last_drink`, `save_measurement` | Buchen/Void/Speichern | Alltagseingabe |
 | button | `report_very_bad` … `report_excellent` | Melden: … / Report: … | Wohlbefinden (zehn Stufen) |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
@@ -331,8 +331,9 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
 **Buttons**
 
 - **Quick-Drinks** — je konfiguriertem Quick-Drink ein Button (Label, mL und
-  Icon kommen aus der Integration-Konfiguration; der Button-Name ist daher
-  nutzerdefiniert, z. B. `button.…_glas_wasser`).
+  Icon kommen aus der Integration-Konfiguration; der **Anzeigename** ist
+  nutzerdefiniert, die **Entity-ID** dagegen slot-basiert und stabil:
+  `button.…_quick_drink_1` … `…_quick_drink_4`).
 - `button.…_book_custom_amount` — bucht die unter `number.…_custom_drink_amount`
   eingetragene Menge.
 - `button.…_undo_last_drink` — **voidet** die letzte aktive Getränkebuchung
@@ -396,6 +397,44 @@ persistiert in den Config-Entry-Options) und `custom_amount_ml` (Eigenmenge,
 Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
 
 ### Migration (Entity-IDs & Konfiguration)
+
+> ### ⚠️ Entity-IDs ab 0.17.0 (bewusst als MINOR veröffentlicht)
+>
+> Quick-Drink-Buttons und eigene Laborwert-Marker bekommen **neue, sprachunabhängige
+> Entity-IDs**. Die Migration läuft beim ersten Start nach dem Update automatisch,
+> verlustfrei und ohne Zutun; `unique_id`, Anzeigename, Gerätezuordnung, Messdaten und
+> Verlauf bleiben erhalten.
+>
+> | vorher (Beispiel) | nachher |
+> |---|---|
+> | `button.…_glas_wasser` | `button.…_quick_drink_1` |
+> | `button.…_flasche_wasser` | `button.…_quick_drink_2` |
+> | `button.…_tasse_kaffee` | `button.…_quick_drink_3` |
+> | `button.…_glas_saft` | `button.…_quick_drink_4` |
+> | `sensor.…_vitamin_d` (eigener Marker) | `sensor.…_lab_vitamin_d` |
+>
+> **Was du anpassen musst:** Automationen, Skripte, Dashboards, Szenen, Helfer und
+> Template-Sensoren, die die alten IDs referenzieren — Home Assistant benennt sie **nicht**
+> automatisch um. Die Regel ist mechanisch: Quick-Drink-Slot *n* (in der
+> Options-Reihenfolge, ab 1) → `…_quick_drink_n`; eigene Laborwert-Marker → `…_lab_<key>`
+> (der `key` ist ein ASCII-Slug, z. B. `h_moglobin`).
+>
+> **Was nicht bricht:** `unique_id`, Anzeigename (`original_name`), Gerätezuordnung und
+> Messdaten bleiben unverändert; Verlauf und Langzeitstatistik laufen unter der neuen
+> `entity_id` weiter (Home Assistant schreibt die Recorder-Metadaten um, nicht die
+> historischen Messwerte). Der Store-Inhalt ist unverändert.
+>
+> **Bei einer ID-Kollision** (z. B. eine manuell umbenannte Entity belegt die Ziel-ID)
+> wird die Person nicht geladen und das Log nennt die Paare (Quelle, `unique_id`, Ziel,
+> Grund). Auflösung: kollidierende Entity umbenennen oder entfernen, dann Home Assistant
+> **vollständig neu starten** (Reload genügt nicht, der Eintrag gilt als nicht
+> wiederherstellbar). Durch die Härtung der Marker-Kategorien können außerdem verwaiste
+> Warn-Entities für früher frei wählbare Kategorien übrig bleiben — in der Geräteansicht
+> prüfen und löschen (nie die `unique_id` ändern).
+>
+> Das ist eine **bewusste MINOR-Veröffentlichung** (0.17.0) trotz Bruch — der Grund steht
+> in den vollständigen Migrationshinweisen: an erster Stelle in
+> [CHANGELOG.md](CHANGELOG.md) und in `docs/RELEASE-NOTES-0.17.0.md`.
 
 - **Update von v0.2.0 oder älter:** betroffene Entities registrieren sich
   beim ersten Start **neu mit englischen IDs**; alte Registry-Einträge
@@ -511,9 +550,11 @@ ruft die Referenz **nie selbst auf**.
 
 ### Laborwert-Entities
 
-- **Ein Sensor je Katalog- und Custom-Marker** — Entity-ID aus dem englischen
-  Markernamen (Katalog) bzw. dem vergebenen Namen (Custom), z. B.
-  `sensor.…_creatinine` oder `sensor.…_crp`, mit
+- **Ein Sensor je Katalog- und Custom-Marker** — Entity-ID-Suffix aus dem
+  englischen Markernamen (Katalog), z. B.
+  `sensor.…_creatinine` oder `sensor.…_crp`; eigene Marker registrieren
+  sprachunabhängig als `sensor.…_lab_<key>` (z. B.
+  `sensor.…_lab_vitamin_d`), mit
   `state_class: measurement`; Zustand = zeitlich neuester aktiver Wert in der
   kanonischen Einheit. Attribute: `ts`, `category`, `ref_min`, `ref_max`, `in_range`.
   Gelöschte (voided) Werte erscheinen nicht als Zustand; der stabile
@@ -1200,8 +1241,9 @@ Katalog-Namen (de/en).
 
 ## E2E-Tests (Playwright)
 
-**Aktueller Stand:** **24 E2E-Tests** (realer HA-Docker-Stack) und **1500
-Unit-Tests**; `ruff check .` und `ruff format --check .` sind clean. Der
+**Aktueller Stand:** **25 E2E-Tests** (realer HA-Docker-Stack) und **1563
+Unit-Tests** (`pytest -q`; CI-äquivalent 1562 passed, 1 skipped); `ruff check .`
+und `ruff format --check .` sind clean. Der
 Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
 abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
 **Chromium** (Playwright) an. Das Panel ist ein bundler-freies Vanilla-JS-Web-
@@ -1245,6 +1287,12 @@ Zusätzlich (`tests_e2e/test_lab_values_e2e.py`, REQ-HOM-122):
   überschreiben
 - Wert über den Laborwerte-Tab erfassen und Wert samt In-Range-Badge prüfen
 - Warnzeile der Personen-Kachel und die neu erzeugte Marker-Entity prüfen
+
+Zusätzlich (`tests_e2e/test_entity_ids_e2e.py`, REQ-HOM-130/A-4):
+
+- Eine frisch angelegte Person bekommt bei deutscher Systemsprache
+  sprachunabhängige, englische Entity-IDs — Quick-Drink-Buttons
+  `…_quick_drink_1` … `…_quick_drink_4`, Custom-Marker `…_lab_<key>`
 
 Die Karten-Konfiguration ist außerdem in `tests_e2e/test_card_config_e2e.py`
 abgesichert (Sichtbarkeit der Blöcke, explizite BD-Eingabe, Wellbeing-Eingabe,

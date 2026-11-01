@@ -42,7 +42,7 @@ import {
   t,
   WS,
   errMsg,
-} from "./health-o-mat-panel-base.js?v=0.16.2";
+} from "./health-o-mat-panel-base.js?v=0.17.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 

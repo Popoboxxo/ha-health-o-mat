@@ -5,6 +5,72 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.17.0] — 2026-11-02
+
+### 💥 Breaking changes — entity ids of quick-drink buttons and custom lab markers
+
+- **Quick-drink buttons** are now registered by slot index instead of their label:
+  `button.<device>_glas_wasser` → `button.<device>_quick_drink_1`,
+  `…_flasche_wasser` → `…_quick_drink_2`, `…_tasse_kaffee` → `…_quick_drink_3`,
+  `…_glas_saft` → `…_quick_drink_4` (1-based, order of the configured quick drinks).
+- **Custom lab markers** are now registered from their stable key instead of the user
+  text: `sensor.<device>_vitamin_d` → `sensor.<device>_lab_vitamin_d`,
+  `…_hamoglobin` → `…_lab_h_moglobin` (the key is an ASCII slug).
+- **You must update** automations, scripts, dashboards, scenes, helpers and template
+  sensors that reference the old ids — Home Assistant does **not** rename references.
+- **What stays:** `unique_id`, display names, device assignment, stored measurements and
+  history. Recorder metadata (`states_meta`, `statistics_meta`) is rewritten to the new
+  `entity_id`; the historical state rows themselves are untouched.
+- **Automatic migration:** runs on the first start after the update (`config entry v2 → v3`).
+  On an id collision the person is **not loaded** and the log lists the pairs; rename or
+  remove the colliding entity and **restart Home Assistant completely** (a reload is
+  blocked, the entry is marked unrecoverable).
+- **Why a MINOR?** Deliberate decision: the migration is automatic and lossless and
+  touches only two entity classes — but the break is real, so treat this section as
+  mandatory reading.
+
+### Added
+
+- **Category validation for custom lab markers (REQ-HOM-131, A-1):** a category outside
+  `LAB_CATEGORIES` falls back to `other` instead of producing an untranslated warning
+  entity with a localized object id.
+- **Marker key preservation (REQ-HOM-131, A-2):** a client that re-sends markers without a
+  `key` now inherits the stored key when the name matches, so the `unique_id` cannot drift.
+- **Drift regression test (REQ-HOM-131, A-3):** every wellbeing state's report-button
+  translation is guarded in the master strings and both translations.
+
+### Changed
+
+- **English, language-independent `object_id`s (REQ-HOM-130):** quick-drink buttons and
+  custom lab markers now derive their `entity_id` from the stable `unique_id` instead of the
+  localized display name, so the ids no longer change with the Home Assistant system
+  language. Existing persons are migrated by `async_migrate_entry` (`v2 → v3`) and freshly
+  registered persons are pinned via `suggested_object_id`.
+- **E2E regression for English object ids (REQ-HOM-131, A-4):** a live test asserts English
+  object ids for a freshly registered person on a German-language instance, including the
+  area-prefix case.
+
+### Fixed
+
+- **Mixed-language entity ids:** with a German system language, quick-drink buttons and
+  custom lab markers could previously be registered with German label slugs; the migration
+  resolves the divergence between fresh and migrated installations.
+
+### Migration
+
+1. Install the update via HACS and restart Home Assistant.
+2. The config entry migrates automatically from `v2` to `v3` on the first start.
+3. Update automations, scripts, dashboards, scenes, helpers and template sensors that use
+   the old entity ids (see the table above). A backup before updating is recommended.
+4. If the log reports an id collision, the person is not loaded: rename or remove the
+   colliding entity and restart Home Assistant completely — a reload is blocked
+   (`MIGRATION_ERROR`, `recoverable = False`).
+5. After the release, check the device view for orphaned entities that are no longer
+   created (for example warning entities for foreign categories, see A-1) and remove them
+   manually — never by changing `unique_id`s.
+
+[0.17.0]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.16.2...v0.17.0
+
 ## [0.16.2] — 2026-10-31
 
 ### Added

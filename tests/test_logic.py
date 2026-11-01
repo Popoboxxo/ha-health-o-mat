@@ -2010,3 +2010,64 @@ def test_req_hom_128_lab_report_matches_tolerates_broken_or_missing_ts():
     assert logic.lab_report_matches({"ts": "kaputt"}, target) is False
     assert logic.lab_report_matches({}, target) is False
     assert logic.lab_report_matches("kein-dict", target) is False
+
+
+# --- REQ-HOM-130/131: custom marker hardening (A-1/A-2) --------------------
+
+
+def test_req_hom_130_normalize_rejects_unknown_category():
+    from custom_components.health_o_mat import logic
+
+    normalized = logic.normalize_lab_custom_markers(
+        [
+            {"name": "Vitamin D", "unit": "ng/mL", "category": "vitamins"},
+            {"name": "CRP", "unit": "mg/L", "category": "inflammation"},
+            {"name": "Ferritin", "unit": "µg/L", "category": ""},
+            {"name": "Hämoglobin", "unit": "g/dL", "category": "Blood_Count"},
+        ]
+    )
+    assert [item["category"] for item in normalized] == [
+        "other",
+        "inflammation",
+        "other",
+        "blood_count",
+    ]
+
+
+def test_req_hom_130_normalize_keeps_key_for_previous_name():
+    from custom_components.health_o_mat import logic
+
+    previous = [{"key": "vitamin_d", "name": "Vitamin D", "unit": "ng/mL"}]
+    normalized = logic.normalize_lab_custom_markers(
+        [{"name": "Vitamin D", "unit": "ng/mL", "category": "other"}], previous
+    )
+    assert normalized[0]["key"] == "vitamin_d"
+
+
+def test_req_hom_130_normalize_explicit_key_wins():
+    from custom_components.health_o_mat import logic
+
+    previous = [{"key": "vitamin_d", "name": "Vitamin D", "unit": "ng/mL"}]
+    normalized = logic.normalize_lab_custom_markers(
+        [{"name": "Vitamin D", "unit": "ng/mL", "key": "vit_d3"}], previous
+    )
+    assert normalized[0]["key"] == "vit_d3"
+
+
+def test_req_hom_130_normalize_new_name_gets_new_key():
+    from custom_components.health_o_mat import logic
+
+    previous = [{"key": "vitamin_d", "name": "Vitamin D", "unit": "ng/mL"}]
+    normalized = logic.normalize_lab_custom_markers(
+        [{"name": "Ferritin gesamt", "unit": "µg/L"}], previous
+    )
+    assert normalized[0]["key"] == "ferritin_gesamt"
+
+
+def test_req_hom_130_normalize_without_previous_unchanged():
+    from custom_components.health_o_mat import logic
+
+    raw = [{"name": "Vitamin D", "unit": "ng/mL", "category": "vitamins"}]
+    assert logic.normalize_lab_custom_markers(raw) == [
+        {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
+    ]

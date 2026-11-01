@@ -400,6 +400,9 @@ def test_req_hom_122_lab_values_smoke(
     lab_entity_id = str(entity["registry"]["entity_id"])
     registry_entry = entity["registry"]
     assert lab_entity_id.startswith("sensor."), f"unexpected domain: {lab_entity_id!r}"
+    # REQ-HOM-130/A-5: the object id is derived from the stable marker key, not
+    # from the user text (a rename of the marker must not move the id).
+    assert lab_entity_id.endswith(f"_lab_{marker_key}"), lab_entity_id
     assert registry_entry["platform"] == "health_o_mat"
     assert registry_entry["unique_id"] == _lab_unique_id(entry_id, marker_key)
 

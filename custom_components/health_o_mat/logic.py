@@ -991,7 +991,22 @@ def _norm_unit(value: Any) -> str:
     return text.strip().lower()
 
 
-def normalize_lab_custom_markers(raw: Any) -> list[dict]:
+def _previous_marker_keys(previous: Any) -> dict[str, str]:
+    """``stripped name -> key`` from already persisted markers (first hit wins)."""
+    keys: dict[str, str] = {}
+    if not isinstance(previous, list):
+        return keys
+    for item in previous:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        key = str(item.get("key") or "").strip().lower()
+        if name and key:
+            keys.setdefault(name, key)
+    return keys
+
+
+def normalize_lab_custom_markers(raw: Any, previous: Any = None) -> list[dict]:
     """`entry.options["lab_custom_markers"]` normalisieren (HA-frei, §2.2).
 
     Jeder Eintrag erhält einen stabilen `key` (slugify aus `name`, bei
@@ -999,9 +1014,17 @@ def normalize_lab_custom_markers(raw: Any) -> list[dict]:
     dieses Aufrufs mit `_2`/`_3`/... suffixiert — Reihenfolge bleibt stabil).
     Unbrauchbare Einträge (kein `name`/`unit`) werden übersprungen, kein
     Absturz bei Teil-Murks aus altem Options-Bestand.
+
+    REQ-HOM-130: `previous` schützt den `key` gegen Fremd-Client-Drift (A-2) —
+    ein Eintrag ohne `key`, dessen `name` exakt einem gespeicherten Marker
+    entspricht, erbt dessen `key` statt neu geslugt zu werden (der `key` ist
+    Teil der `unique_id`). Ein explizit gesendeter `key` gewinnt immer.
+    A-1: eine `category` außerhalb von `LAB_CATEGORIES` fällt auf `other`.
     """
     if not isinstance(raw, list):
         return []
+    inherited = _previous_marker_keys(previous)
+    known_categories = {category["key"] for category in LAB_CATEGORIES}
     used_keys: set[str] = set(LAB_MARKERS.keys())
     result: list[dict] = []
     for item in raw:
@@ -1011,7 +1034,11 @@ def normalize_lab_custom_markers(raw: Any) -> list[dict]:
         unit = str(item.get("unit") or "").strip()
         if not name or not unit:
             continue
-        base_key = str(item.get("key") or "").strip().lower() or _slugify_lab_marker_name(name)
+        explicit_key = str(item.get("key") or "").strip().lower()
+        if explicit_key:
+            base_key = explicit_key
+        else:
+            base_key = inherited.get(name) or _slugify_lab_marker_name(name)
         key = base_key
         suffix = 2
         while key in used_keys:
@@ -1019,7 +1046,9 @@ def normalize_lab_custom_markers(raw: Any) -> list[dict]:
             suffix += 1
         used_keys.add(key)
 
-        category = str(item.get("category") or LAB_CATEGORY_OTHER).strip() or LAB_CATEGORY_OTHER
+        category = str(item.get("category") or "").strip().lower()
+        if category not in known_categories:
+            category = LAB_CATEGORY_OTHER
         entry: dict[str, Any] = {"key": key, "name": name, "category": category, "unit": unit}
         for bound in ("ref_min", "ref_max"):
             if item.get(bound) is not None:

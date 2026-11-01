@@ -592,3 +592,25 @@ def test_req_hom_122_labs_area_label_translated() -> None:
         assert common.get("ui_common_area_labs") == value, (
             f"{filename}: ui_common_area_labs fehlt oder ist falsch"
         )
+
+
+def test_req_hom_131_wellbeing_report_buttons_cover_every_state() -> None:
+    """[REQ-HOM-131] Every wellbeing state has its report-button name.
+
+    Analogous to `test_req_hom_122_lab_warnings_cover_every_non_other_category`:
+    the dynamic `report_{key}` key comes from `const.WELLBEING_STATES`; if it is
+    missing in one of the three files, HA registers the button through the
+    device-class fallback (localized object_id). A-3 closes that gap.
+    """
+    const = _load_const()
+    expected = {f"report_{state['key']}" for state in const.WELLBEING_STATES}
+
+    for path, _name_field in _LAB_NAME_FIELDS:
+        button = _load(path)["entity"]["button"]
+        actual = {key for key in button if key.startswith("report_")}
+        assert actual == expected, (
+            f"{path}: report keys diverge from WELLBEING_STATES "
+            f"(missing: {sorted(expected - actual)}, extra: {sorted(actual - expected)})"
+        )
+        for key in sorted(expected):
+            assert button[key]["name"].strip(), f"{path}: {key}.name is empty"

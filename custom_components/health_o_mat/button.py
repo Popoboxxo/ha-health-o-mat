@@ -76,11 +76,22 @@ class QuickDrinkButton(HealthOMatButton):
         super().__init__(coordinator, entry, store, f"button_quick_{index}")
         quick_drinks = entry.options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
         qd = quick_drinks[index]
+        self._index = index  # slot index; stable, already part of the unique_id
         self._ml = int(qd.get("ml", 200))
         self._label = str(qd.get("label") or f"Quick {index + 1}")
         self._icon = str(qd.get("icon") or "mdi:cup-water")
         self._attr_name = self._label
         self._attr_icon = self._icon
+
+    @property
+    def suggested_object_id(self) -> str | None:
+        """Object-id stem for new registrations (REQ-HOM-130, A-5).
+
+        Only the entity part: HA still prefixes the device name because
+        `has_entity_name = True`. Fresh installs therefore register the same
+        ids the migration produces for existing ones.
+        """
+        return f"quick_drink_{self._index + 1}"
 
     async def async_press(self) -> None:
         await self._book(self._ml, self._label, "quick_button")

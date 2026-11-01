@@ -10,11 +10,13 @@ any custom_components imports happen.
 
 from __future__ import annotations
 
+import re
 import sys
 import types
+import unicodedata
 from datetime import datetime
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import voluptuous as vol
 
@@ -84,6 +86,15 @@ if not _USING_REAL_HA:
         @property
         def has_entity_name(self) -> bool:
             return getattr(self, "_attr_has_entity_name", False)
+
+        # Set by HA's platform base before registration. `None` makes the
+        # central `HealthOMatEntity.suggested_object_id` pinning fall through
+        # to `super()` instead of touching HA-internal name resolution.
+        platform_data: Any = None
+
+        @property
+        def suggested_object_id(self) -> str | None:
+            return None
 
         @property
         def device_info(self) -> Any:
@@ -369,6 +380,18 @@ if not _USING_REAL_HA:
             setattr(mod, attr_name, value)
         return mod
 
+    def _slugify(value: Any) -> str:
+        """Stand-in for ``homeassistant.util.slugify`` (ASCII, lower, `_`).
+
+        Implemented for real (not as a MagicMock): the entity id migration
+        derives the device prefix from `slugify(device.name)`, so a swallowing
+        Mock would make every migration test vacuous.
+        """
+        text = unicodedata.normalize("NFKD", str(value))
+        text = text.encode("ascii", "ignore").decode("ascii").lower()
+        text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+        return text
+
     # --- Frontend / HTTP / Lovelace / WebSocket shims (wave 3) -------------
     # These modules are the handful that MUST behave for real rather than as
     # a bare MagicMock: the tests assert on what they write into `hass.data`
@@ -482,7 +505,7 @@ if not _USING_REAL_HA:
             HomeAssistantError=HomeAssistantError,
             ServiceValidationError=ServiceValidationError,
         ),
-        "homeassistant.util": _module("homeassistant.util"),
+        "homeassistant.util": _module("homeassistant.util", slugify=_slugify),
         "homeassistant.util.dt": _dt_module,
         "homeassistant.config_entries": _module(
             "homeassistant.config_entries",
@@ -570,6 +593,9 @@ if not _USING_REAL_HA:
             "homeassistant.helpers.entity_registry",
             async_get=MagicMock(),
             async_entries_for_config_entry=MagicMock(),
+            # Coroutine-capable on purpose: a MagicMock would swallow a missing
+            # `await` and mask exactly the B-1 bug (Spec §6.2).
+            async_migrate_entries=AsyncMock(),
         ),
         "homeassistant.helpers.entity": _module(
             "homeassistant.helpers.entity",

@@ -118,8 +118,8 @@ for e in \
   if "$HA_TEST/bin/ha" GET "/api/states/$eid" >/dev/null 2>&1; then pass "registriert: $eid"; else fail "registriert: $eid"; fi
 done
 
-# Quick-Drinks aus Default-Konfiguration
-for e in "button:${P}_glas_wasser" "button:${P}_flasche_wasser" "button:${P}_tasse_kaffee" "button:${P}_glas_saft"; do
+# Quick-Drinks aus Default-Konfiguration (REQ-HOM-130: slot-basierte IDs)
+for e in "button:${P}_quick_drink_1" "button:${P}_quick_drink_2" "button:${P}_quick_drink_3" "button:${P}_quick_drink_4"; do
   eid="${e#*:}"
   "$HA_TEST/bin/ha" GET "/api/states/$eid" >/dev/null 2>&1 && pass "quick: $eid" || fail "quick: $eid"
 done
@@ -127,7 +127,7 @@ done
 # ------------------------------------------------------------------ Getränke
 step "Getränke-Batterie"
 v0=$(state "sensor.${P}_drinks_today")
-"$HA_TEST/bin/ha" POST /api/services/button/press "{\"entity_id\": \"button.${P}_glas_wasser\"}" >/dev/null
+"$HA_TEST/bin/ha" POST /api/services/button/press "{\"entity_id\": \"button.${P}_quick_drink_1\"}" >/dev/null
 sleep 1
 expect_eq "quick-drink +200ml" "$(state "sensor.${P}_drinks_today")" "$(( ${v0%.*} + 200 ))"
 "$HA_TEST/bin/ha" POST /api/services/number/set_value "{\"entity_id\": \"number.${P}_custom_drink_amount\", \"value\": 333}" >/dev/null

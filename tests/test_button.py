@@ -111,3 +111,21 @@ def test_button_unique_ids_stable_across_area_toggle():
     assert drink_ids <= on_keys
     assert drink_ids.isdisjoint(off_keys)
     assert on_again_keys == on_keys
+
+
+def _make_entry() -> MagicMock:
+    """Entry ohne quick_drinks-Option → DEFAULT_QUICK_DRINKS (Index 2 = Tasse Kaffee)."""
+    entry = MagicMock()
+    entry.entry_id = _ENTRY_ID
+    entry.options = {}
+    return entry
+
+
+def test_req_hom_130_quick_drink_suggested_object_id_is_one_based():
+    """[REQ-HOM-130] New quick drinks register as `quick_drink_<n>` (A-5)."""
+    entry = _make_entry()
+    button = button_module.QuickDrinkButton(MagicMock(), entry, MagicMock(), 2)
+
+    assert button.suggested_object_id == "quick_drink_3"
+    # The display name stays the user label — no literal name in the id.
+    assert button.name == "Tasse Kaffee"

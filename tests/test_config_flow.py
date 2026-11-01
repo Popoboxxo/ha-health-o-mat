@@ -100,9 +100,9 @@ def test_config_flow_get_options_flow_returns_options_flow_instance():
 
 
 def test_config_flow_version():
-    """ConfigFlow VERSION 2 (quick_drinks → options, Fund F1 / REQ-HOM-101)."""
+    """ConfigFlow VERSION 3 (v1→v2 data, v2→v3 entity ids; REQ-HOM-101/130)."""
     config_flow = config_flow_module.HealthOMatConfigFlow()
-    assert config_flow.VERSION == 2
+    assert config_flow.VERSION == 3
 
 
 # --- Menü-Navigation (REQ-HOM-119) -----------------------------------------

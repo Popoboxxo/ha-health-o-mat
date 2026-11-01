@@ -361,7 +361,8 @@ def merge_lab_custom_markers(current: list[dict], incoming: list[dict]) -> list[
     normalized_current = normalize_lab_custom_markers(current)
     existing_keys = {marker["key"] for marker in normalized_current}
     merged = list(normalized_current)
-    for marker in normalize_lab_custom_markers(incoming):
+    # A-2: keyless backup entries inherit the local key instead of shifting it.
+    for marker in normalize_lab_custom_markers(incoming, previous=current):
         if marker["key"] not in existing_keys:
             merged.append(marker)
             existing_keys.add(marker["key"])
