@@ -533,6 +533,12 @@ def test_expected_lab_entity_keys_matches_platform_setup():
     assert "binary_lab_warning_liver" in keys
     assert "binary_lab_warning_lipids" in keys
     assert "binary_lab_warning_other" not in keys
+    # REQ-HOM-133 (#73): neue Kategorie inkl. HbA1c-Sensor/Warnung.
+    assert "binary_lab_warning_metabolism" in keys
+    assert "lab_hba1c" in keys
+    assert len(keys) == len(const.LAB_MARKERS) + (
+        len(const.LAB_CATEGORIES) - 1  # alle außer "other"
+    )
     # Jede Warn-Kategorie stammt aus const.LAB_CATEGORIES.
     categories = {category["key"] for category in const.LAB_CATEGORIES}
     for key in keys:

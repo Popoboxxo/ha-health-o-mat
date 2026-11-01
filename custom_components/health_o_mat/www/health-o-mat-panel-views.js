@@ -1064,7 +1064,16 @@ function unitOptions(marker, selectedUnit) {
         }>${escapeHtml(unit)}</option>`
     )
     .join("");
-  return `${options}<option value="__custom__"${
+  // REQ-HOM-133 (#73): Pflicht-Marker warnen im Dropdown, BEVOR der Server
+  // mit `unit_required` ablehnt. Der Hinweis ist eine deaktivierte Zeile —
+  // die kanonische Einheit bleibt vorausgewählt und damit ein gültiger Wert.
+  const requiredHint =
+    marker && marker.require_explicit_unit
+      ? `<option value="" disabled>${escapeHtml(
+          t("ui_panel_lab_unit_required", "Einheit erforderlich")
+        )}</option>`
+      : "";
+  return `${requiredHint}${options}<option value="__custom__"${
     current === "__custom__" ? " selected" : ""
   }>${escapeHtml(t("ui_panel_lab_unit_custom", "Andere …"))}</option>`;
 }

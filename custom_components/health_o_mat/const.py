@@ -182,6 +182,10 @@ LAB_CATEGORIES: list[dict] = [
     {"key": "inflammation", "name_de": "Entzündung/Immunsystem", "name_en": "Inflammation"},
     {"key": "digestion", "name_de": "Verdauung", "name_en": "Digestion"},
     {"key": "drug_levels", "name_de": "Medikamentenspiegel", "name_en": "Drug levels"},
+    # REQ-HOM-133 (#73): HbA1c gehört nicht in "Sonstige" — "other" bleibt
+    # Fallback für Custom-Marker und muss deshalb der letzte Eintrag sein
+    # (binary_sensor.py leitet die Warn-Entities aus dieser Liste ab).
+    {"key": "metabolism", "name_de": "Stoffwechsel", "name_en": "Metabolism"},
     {"key": LAB_CATEGORY_OTHER, "name_de": "Sonstige", "name_en": "Other"},
 ]
 
@@ -240,6 +244,28 @@ LAB_MARKERS: dict[str, dict] = {
         "alt_units": {},
         "require_explicit_unit": False,
     },
+    # REQ-HOM-133 (#73): Laborbefund-Katalog, Werte wörtlich aus dem Issue.
+    # Faktor in `alt_units` rechnet GEMELDET -> kanonisch.
+    "albumin": {
+        "category": "liver",
+        "name_de": "Albumin",
+        "name_en": "Albumin",
+        "canonical_unit": "g/L",
+        "ref_min": 35,
+        "ref_max": 52,
+        "alt_units": {"g/dL": 10},
+        "require_explicit_unit": True,
+    },
+    "alkaline_phosphatase": {
+        "category": "liver",
+        "name_de": "Alkalische Phosphatase (AP)",
+        "name_en": "Alkaline phosphatase (ALP)",
+        "canonical_unit": "U/L",
+        "ref_min": 35,
+        "ref_max": 105,
+        "alt_units": {"µkat/L": 60},
+        "require_explicit_unit": True,
+    },
     "creatinine": {
         "category": "kidney",
         "name_de": "Kreatinin",
@@ -280,6 +306,18 @@ LAB_MARKERS: dict[str, dict] = {
         # Bekannte Verwechslungsgefahr g/g vs. mg/g (Faktor 1000) — deshalb
         # KEIN impliziter Default, unit ist Pflichtfeld (§5.1 der Spec).
         "alt_units": {"g/g": 1000},
+        "require_explicit_unit": True,
+    },
+    "uric_acid": {
+        "category": "kidney",
+        "name_de": "Harnsäure",
+        "name_en": "Uric acid",
+        "canonical_unit": "mg/dL",
+        "ref_min": 2.3,
+        "ref_max": 6.1,
+        # µmol/L -> mg/dL (Faktor 0.01681); ohne Einheit wäre die Zahl
+        # hundertfach falsch, deshalb Pflichtfeld.
+        "alt_units": {"µmol/L": 0.01681},
         "require_explicit_unit": True,
     },
     "sodium": {
@@ -331,6 +369,17 @@ LAB_MARKERS: dict[str, dict] = {
         "ref_max": 107,
         "alt_units": {},
         "require_explicit_unit": False,
+    },
+    "phosphate": {
+        "category": "electrolytes",
+        "name_de": "Phosphat",
+        "name_en": "Phosphate",
+        "canonical_unit": "mmol/L",
+        "ref_min": 0.87,
+        "ref_max": 1.45,
+        # mg/dL -> mmol/L (Faktor 0.3229).
+        "alt_units": {"mg/dL": 0.3229},
+        "require_explicit_unit": True,
     },
     "cholesterol_total": {
         "category": "lipids",
@@ -432,6 +481,59 @@ LAB_MARKERS: dict[str, dict] = {
         "alt_units": {},
         "require_explicit_unit": False,
     },
+    "mch": {
+        "category": "blood_count",
+        "name_de": "MCH",
+        "name_en": "MCH",
+        "canonical_unit": "pg",
+        "ref_min": 27.0,
+        "ref_max": 33.5,
+        "alt_units": {},
+        "require_explicit_unit": False,
+    },
+    "erythrocytes": {
+        "category": "blood_count",
+        "name_de": "Erythrozyten",
+        "name_en": "Erythrocytes",
+        "canonical_unit": "10^12/L",
+        "ref_min": 3.9,
+        "ref_max": 5.2,
+        # 1:1-Alias (10⁶/µL == 10^12/L) — reine Schreibweisen-Variante.
+        "alt_units": {"10⁶/µL": 1},
+        "require_explicit_unit": False,
+    },
+    "hematocrit": {
+        "category": "blood_count",
+        "name_de": "Hämatokrit",
+        "name_en": "Hematocrit",
+        "canonical_unit": "L/L",
+        "ref_min": 0.355,
+        "ref_max": 0.455,
+        # 42 % -> 0,42 L/L (Faktor 0.01).
+        "alt_units": {"%": 0.01},
+        "require_explicit_unit": True,
+    },
+    "mchc": {
+        "category": "blood_count",
+        "name_de": "MCHC",
+        "name_en": "MCHC",
+        "canonical_unit": "g/dL",
+        "ref_min": 31.5,
+        "ref_max": 36.0,
+        "alt_units": {},
+        "require_explicit_unit": True,
+    },
+    "mcv": {
+        "category": "blood_count",
+        "name_de": "MCV",
+        "name_en": "MCV",
+        "canonical_unit": "fl",
+        "ref_min": 80.0,
+        "ref_max": 99.0,
+        # 1:1-Alias (µm³ == fl).
+        "alt_units": {"µm³": 1},
+        "require_explicit_unit": False,
+    },
     "crp": {
         "category": "inflammation",
         "name_de": "CRP",
@@ -481,6 +583,40 @@ LAB_MARKERS: dict[str, dict] = {
         "ref_max": 15,
         "alt_units": {},
         "require_explicit_unit": False,
+    },
+    # Laborabhängige Talspiegel: keine feste Referenz (ref_min/ref_max = None).
+    "ciclosporin": {
+        "category": "drug_levels",
+        "name_de": "Ciclosporin (Talspiegel)",
+        "name_en": "Ciclosporin (trough)",
+        "canonical_unit": "ng/mL",
+        "ref_min": None,
+        "ref_max": None,
+        # 1:1-Alias (µg/L == ng/mL).
+        "alt_units": {"µg/L": 1},
+        "require_explicit_unit": False,
+    },
+    "everolimus": {
+        "category": "drug_levels",
+        "name_de": "Everolimus (Talspiegel)",
+        "name_en": "Everolimus (trough)",
+        "canonical_unit": "ng/mL",
+        "ref_min": None,
+        "ref_max": None,
+        "alt_units": {"µg/L": 1},
+        "require_explicit_unit": False,
+    },
+    # HbA1c in mmol/mol (IFCC). Die DCCT-Einheit % ist NICHT linear
+    # umrechenbar und bleibt deshalb `unsupported_unit` (Beschluss D3/B5).
+    "hba1c": {
+        "category": "metabolism",
+        "name_de": "HbA1c",
+        "name_en": "HbA1c",
+        "canonical_unit": "mmol/mol",
+        "ref_min": 29,
+        "ref_max": 42,
+        "alt_units": {},
+        "require_explicit_unit": True,
     },
 }
 

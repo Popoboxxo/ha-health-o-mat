@@ -164,6 +164,39 @@ def test_req_hom_122_add_lab_value_missing_unit_required_marker_raises():
         _run(registered["add_lab_value"](call))
 
 
+def test_req_hom_133_add_lab_value_blank_unit_required_marker_raises():
+    """[REQ-HOM-133] Leerstring/Whitespace = keine Angabe → `unit_required`.
+
+    Vorher meldete der Einzel-Pfad `unsupported_unit`, weil der Leerstring
+    erst in `convert_lab_value` ankam; Batch und Service müssen sich gleich
+    verhalten.
+    """
+    for blank in ("", "   "):
+        store = MagicMock()
+        hass = MagicMock()
+        registered = _wire_services(hass, store)
+        call = _make_call({"marker": "hba1c", "value": 42, "unit": blank})
+
+        with pytest.raises(ServiceValidationError, match="unit_required"):
+            _run(registered["add_lab_value"](call))
+
+
+def test_req_hom_133_add_lab_value_blank_unit_optional_marker_uses_canonical():
+    """[REQ-HOM-133] Ohne Pflicht bleibt die leere Einheit „keine Angabe“."""
+    store = MagicMock()
+    store.add_lab_reading = AsyncMock()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call({"marker": "mch", "value": 30, "unit": ""})
+
+    _run(registered["add_lab_value"](call))
+
+    args, _kwargs = store.add_lab_reading.call_args
+    assert args[2] == "mch"
+    assert args[4] == "pg"
+    assert args[6] == "pg"  # reported_unit fällt auf kanonisch zurück
+
+
 def test_req_hom_122_add_lab_value_unsupported_unit_raises():
     store = MagicMock()
     hass = MagicMock()

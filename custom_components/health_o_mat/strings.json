@@ -283,6 +283,42 @@
       },
       "lab_tacrolimus": {
         "name": "Tacrolimus (trough)"
+      },
+      "lab_albumin": {
+        "name": "Albumin"
+      },
+      "lab_alkaline_phosphatase": {
+        "name": "Alkaline phosphatase (ALP)"
+      },
+      "lab_uric_acid": {
+        "name": "Uric acid"
+      },
+      "lab_phosphate": {
+        "name": "Phosphate"
+      },
+      "lab_mch": {
+        "name": "MCH"
+      },
+      "lab_erythrocytes": {
+        "name": "Erythrocytes"
+      },
+      "lab_hematocrit": {
+        "name": "Hematocrit"
+      },
+      "lab_mchc": {
+        "name": "MCHC"
+      },
+      "lab_mcv": {
+        "name": "MCV"
+      },
+      "lab_ciclosporin": {
+        "name": "Ciclosporin (trough)"
+      },
+      "lab_everolimus": {
+        "name": "Everolimus (trough)"
+      },
+      "lab_hba1c": {
+        "name": "HbA1c"
       }
     },
     "binary_sensor": {
@@ -318,6 +354,9 @@
       },
       "lab_warning_drug_levels": {
         "name": "Drug levels warning"
+      },
+      "lab_warning_metabolism": {
+        "name": "Metabolism warning"
       }
     },
     "button": {
@@ -1057,6 +1096,7 @@
     "ui_panel_lab_report_limit": "At most 60 rows per report.",
     "ui_panel_lab_report_empty": "Record at least one value.",
     "ui_panel_lab_unit_custom": "Other …",
+    "ui_panel_lab_unit_required": "Unit required",
     "ui_panel_lab_report_discard": "Discard this report",
     "ui_panel_lab_report_discard_confirm": "Discard this report with {count} values?",
     "ui_panel_val_lab_value": "Please enter a marker and a numeric value."

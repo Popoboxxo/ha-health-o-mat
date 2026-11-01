@@ -283,6 +283,42 @@
       },
       "lab_tacrolimus": {
         "name": "Tacrolimus (Talspiegel)"
+      },
+      "lab_albumin": {
+        "name": "Albumin"
+      },
+      "lab_alkaline_phosphatase": {
+        "name": "Alkalische Phosphatase (AP)"
+      },
+      "lab_uric_acid": {
+        "name": "Harnsäure"
+      },
+      "lab_phosphate": {
+        "name": "Phosphat"
+      },
+      "lab_mch": {
+        "name": "MCH"
+      },
+      "lab_erythrocytes": {
+        "name": "Erythrozyten"
+      },
+      "lab_hematocrit": {
+        "name": "Hämatokrit"
+      },
+      "lab_mchc": {
+        "name": "MCHC"
+      },
+      "lab_mcv": {
+        "name": "MCV"
+      },
+      "lab_ciclosporin": {
+        "name": "Ciclosporin (Talspiegel)"
+      },
+      "lab_everolimus": {
+        "name": "Everolimus (Talspiegel)"
+      },
+      "lab_hba1c": {
+        "name": "HbA1c"
       }
     },
     "binary_sensor": {
@@ -318,6 +354,9 @@
       },
       "lab_warning_drug_levels": {
         "name": "Medikamentenspiegel-Warnung"
+      },
+      "lab_warning_metabolism": {
+        "name": "Stoffwechsel-Warnung"
       }
     },
     "button": {
@@ -1057,6 +1096,7 @@
     "ui_panel_lab_report_limit": "Höchstens 60 Zeilen pro Bericht.",
     "ui_panel_lab_report_empty": "Bitte mindestens einen Wert erfassen.",
     "ui_panel_lab_unit_custom": "Andere …",
+    "ui_panel_lab_unit_required": "Einheit erforderlich",
     "ui_panel_lab_report_discard": "Diesen Bericht verwerfen",
     "ui_panel_lab_report_discard_confirm": "Diesen Bericht mit {count} Werten verwerfen?",
     "ui_panel_val_lab_value": "Bitte Marker und einen numerischen Wert angeben."

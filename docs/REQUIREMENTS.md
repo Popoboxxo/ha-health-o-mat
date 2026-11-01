@@ -1886,6 +1886,72 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ---
 
+#### REQ-HOM-133 — Laborwert-Katalog #73: 12 Marker, Kategorie `metabolism`, Einheiten-Härtung
+- **Priorität:** P1 · **Aufwand:** M
+- **Status: Umgesetzt** (Branch `feat/73-lab-catalog-and-units`, 2026-11-01) —
+  noch kein Release/Tag (Release-Schritt 0.19.0).
+- **ID-Wahl:** **133 ist die nächste freie ID** — geprüft per
+  `grep -rn "REQ-HOM-133\|REQ-HOM-134"` über das Repo (0 Treffer); 131 ist
+  durch die Migrations-Härtungen A-1…A-4 belegt, 132 durch die optionalen
+  Service-Antworten/CSV-Upload (`REQ-HOM-132`). Keine bestehende REQ wurde
+  umnummeriert.
+- **Bezug:** GitHub-Issue **#73**; Plan `docs/PLAN-OPEN-ISSUES.md` §3 WP3
+  inkl. §2 D1/D3 und O-1 (Katalog 1:1 aus dem Issue); Beschluss **B3**
+  (Custom-Marker-`require_explicit_unit`); baut auf **REQ-HOM-122** auf.
+- **Anforderung:** Der Laborwert-Katalog wächst um zwölf Marker — `mch`,
+  `erythrocytes`, `hematocrit`, `mchc`, `albumin`, `phosphate`, `mcv`,
+  `uric_acid`, `alkaline_phosphatase`, `ciclosporin`, `everolimus`, `hba1c` —
+  auf **41 Keys** (29 Bestands-Keys unverändert). Neue Kategorie
+  **`metabolism`** („Stoffwechsel") **vor** `other`; `other` bleibt Fallback.
+  Kanonisch ist immer die Einheit der Katalogspalte, `alt_units` rechnet
+  **gemeldet → kanonisch** (`reported * factor`), `reported_value`/
+  `reported_unit` bleiben erhalten. Für `mchc`, `hematocrit`, `albumin`,
+  `alkaline_phosphatase`, `phosphate`, `uric_acid`, `hba1c` ist die Einheit
+  **Pflicht** (`require_explicit_unit`): fehlt sie (auch als Leerstring/
+  Whitespace), liefern Service, WebSocket **und** Batch `unit_required`
+  statt `unsupported_unit`. Der Einheitenvergleich ist tolerant (ASCII `u` →
+  Mikro-Präfix, Superscript-Exponenten, `Prozent` ≡ `%`), aber nie
+  stillschweigend falsch: `U/l` bleibt Enzymeinheit, HbA1c in `%` bleibt
+  `unsupported_unit`. `require_explicit_unit` wird über `panel_data`
+  ausgeliefert (`ws_api.py:730`). Die Warnung „Einheit erforderlich" erscheint
+  als deaktivierte Dropdown-Zeile im Einheiten-Select des **Berichts-Dialogs**
+  (Karte `_unitOptions`, Panel `unitOptions`) und im Placeholder des
+  Karten-Einheitenfelds der Schnelleingabe (`_updateUnitPlaceholder`); das
+  Freitext-Feld `lab-add-unit` der Panel-Schnelleingabe bleibt als „optional"
+  beschriftet — dort lehnt der Server korrekt mit `unit_required` ab.
+  Custom-Marker dürfen das Flag selbst setzen (Default `False`).
+- **Akzeptanzkriterien (Plan §3 WP3 AK 1–4):**
+  - [x] `LAB_CATEGORIES` enthält `metabolism` direkt vor `other`; alle 12
+    Marker sind auflösbar, haben `canonical_unit` und erscheinen als Sensor
+    (`unique_id = {entry_id}_lab_{key}`); `hba1c`+`binary_lab_warning_metabolism`.
+  - [x] `alt_units` rechnet in die kanonische Einheit: Hämatokrit 42 % →
+    0,42 L/L · Albumin 4,5 g/dL → 45 g/L · Phosphat 3,5 mg/dL → **1,13015**
+    mmol/L · Harnsäure 350 µmol/L → **5,8835** mg/dL · AP 1,2 µkat/L → 72 U/L;
+    `reported_value`/`reported_unit` bleiben; `unit=""` bei den sieben
+    Pflicht-Markern → `unit_required`, bei optionalen → kanonische Einheit.
+  - [x] `_norm_unit`: `umol/l` ≡ `µmol/l`, `10¹²/L` ≡ `10^12/L`,
+    `Prozent` ≡ `%`; `U/l` wird **nicht** `µ/l`. Dropdown-Warnung
+    („Einheit erforderlich") bei Pflicht-Markern; Custom-Marker mit
+    `require_explicit_unit: true` erzwingt die Einheit (B3).
+  - [x] 29 Bestands-Keys unverändert + 12 neue = **41 Keys**;
+    `pytest -q` grün, `ruff` clean, README-Katalogtabelle aktualisiert.
+- **Belege:** `tests/test_logic.py` (Katalogform/41 Keys, `_norm_unit`-Tabelle
+  inkl. `U/l`-Negativfall, `convert_lab_value` je neuem `alt_unit` mit
+  `pytest.approx(abs=1e-6)`, HbA1c-`%`-Ablehnung, Batch-`unit_required`,
+  Custom-Marker-Flag — `test_req_hom_133_*` sowie die tragenden
+  `test_req_hom_122_*`-Fälle), `tests/test_lab_services.py` (Service-Leerstring),
+  `tests/test_ws_api.py` (WS-Leerstring, `panel_data`-Flag),
+  `tests/test_diagnostics.py` (Sollmenge inkl. `metabolism`),
+  `tests/test_panel_js.py` (`test_req_hom_133_panel_unit_dropdown_warns_only_for_required_markers`,
+  `test_req_hom_133_panel_unit_options_read_the_required_flag`),
+  `tests/test_card_js.py` (`test_req_hom_133_labs_card_unit_dropdown_warns_for_required_marker`,
+  `test_req_hom_133_labs_card_reads_require_explicit_unit`).
+  `tests/test_translations.py` ist in diesem Branch unverändert (die
+  `lab_warning_*`-Parität deckt `metabolism` bereits dynamisch über
+  `test_req_hom_122_lab_warnings_cover_every_non_other_category` ab).
+
+---
+
 ## 3. Mapping Funde → Anforderungen
 
 | Fund | Schwere | REQ (Fix) | Vollständige Lösung |
@@ -1930,6 +1996,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-127…129 — Laborwerte-Erweiterung, Nachträge** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, §2.13/§2.14/§11): **127** Fehlercode-/i18n-Umbau der bestehenden Services/WS-Pfade auf strukturierte `{code, params}` + lokalisierte Meldungen — **eigener Plan, nicht Teil dieser Erweiterung** (§2.4/§14); **128** Batch-Undo `remove_lab_report` (voidet alle aktiven Werte desselben `ts`, optional gefiltert per `report_ref`, Grenzfall identischer `ts`, `no_active_report`/`invalid_ts`, ein Audit `lab_report_voided`, UI-Aktion „Diesen Bericht verwerfen" mit Sicherheitsabfrage, Einzel-Restore) — P2; **129** Labor-Retention `lab_retention_months` (Default `0` = aus, Options-Wizard „Grundlagen", 0…120, voidet beim Setup Laborwerte älter als N Monate mit `void_reason = "retention"`, kein Archiv, `restore_entry`-fähig, ein Audit `lab_values_retention`, Export enthält voidete Zeilen inkl. `voided_at`/`void_reason`, Re-Import = `skipped`) — P2. Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. |
 | 2026-11-01 | **REQ-HOM-123…125 an die finalen Spec-Entscheidungen angepasst** (Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`): **123** — ein gemeinsames `ts`, Duplikat im Batch = Fehler (`duplicate_marker`, Alias-Kollision), gestufte Limits **60** (UI) / **200** (Server), Hybrid-Füllung („Alle sichtbaren Marker"/„Zuletzt verwendete Marker"), Einheiten-Dropdown je Zeile, strukturierte Fehler `{code, params, message}` (§2.4) und `NaN`/`inf`-Härtung auch im Einzelpfad (`add_lab_value`); **124** — Faktor auch bei Custom-Markern (Nice-to-have) und Locale-Formatierung über `formatNumber`; **125** — Hinweis **abschaltbar** über die Admin-Checkbox `lab_hide_panel_disclaimer` (Transport über `panel_data`, **nicht** `get_settings`; Default `false` = sichtbar), Leerzustandstext „Alle Kategorien ausgeblendet", Karten-Disclaimer via `ui_card_lab_disclaimer` lokalisiert, Backup + Diagnostics-Redaktion. **126** bleibt unverändert (P3). |
 | 2026-11-01 | **REQ-HOM-123…126/128/129 umgesetzt — Laborwerte: Batch, Undo, Retention & Sichtbarkeit** (Branch `feat/lab-batch-visibility`; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Plan `docs/superpowers/plans/2026-11-01-lab-values-batch-and-visibility.md`): Service + WS `add_lab_report` (ein `ts`/`report_ref`, Leerzeilen ignoriert, Limits 60/200, strukturierte Fehler `{code, params, message}`, ein Store-Write/ein Audit `lab_values_added` mit Rollback), symmetrisches `remove_lab_report` (voidet alle aktiven Werte eines Zeitpunkts, optional per `report_ref`, Audit `lab_report_voided`, UI-Aktion mit Sicherheitsabfrage), Mehrzeilen-Dialog in Card und Panel (Hybrid-Füllung, Einheiten-Dropdown aus `alt_units`, Single-Flight), Admin-Spalte „Umrechnung" + Badge „Einheit Pflicht", Panel-Medizin-Hinweis (Default sichtbar, abschaltbar über `lab_hide_panel_disclaimer`, Transport via `panel_data`), Karten-Disclaimer lokalisiert, Labor-Retention `lab_retention_months` (Default 0, voidet statt Archiv, ein Audit `lab_values_retention`), `lab_values.csv` inkl. voideter Zeilen + `voided_at`/`void_reason` (Re-Import: `skipped`, header-basiert und unabhängig vom Bestand; Altdateien ohne die Spalten behalten das Positionsverhalten), Beispiel-Dashboard `examples/dashboard-labs-card.yaml`. Kein neues Datenmodell (Store v5, `unique_id`s unverändert, Backup/Restore-Format unberührt; Backup-Options additiv). **Belege:** `pytest -q` → **1500 passed** (0 failed), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests** (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19). **REQ-HOM-127 bleibt offen** (eigener Plan). **Kein Release/Tag in diesem Schritt.** |
+| 2026-11-01 | **Neu angelegt und umgesetzt: REQ-HOM-133 — Laborwert-Katalog #73 (12 Marker, Kategorie `metabolism`, Einheiten-Härtung, B3)** (Branch `feat/73-lab-catalog-and-units`; Plan `docs/PLAN-OPEN-ISSUES.md` §3 WP3, §2 D1/D3/O-1): **ID 133** ist die nächste freie Nummer — 131 (Migrations-Härtungen A-1…A-4) und 132 (Service-Antworten/CSV-Upload) sind vergeben, `REQ-HOM-133`/`-134` hatten vor der Anlage **0 Treffer** im Repo. Inhalt: `LAB_MARKERS` 29 → **41** Keys (Bestand unverändert), neue Kategorie `metabolism` vor `other`, `alt_units` = gemeldet→kanonisch, `require_explicit_unit` für sieben Marker (Service/WS/Batch → `unit_required` auch bei Leerstring), tolerante `_norm_unit` (`u`→µ nur vor Mikro-Einheiten, Superscript-Exponenten, `Prozent`→`%`), HbA1c-`%` bleibt `unsupported_unit`, Flag in `panel_data` + Dropdown-Warnung in Karte/Panel, B3 Custom-Marker-Flag. Rein additiv: keine `unique_id`-, Store- oder Entry-Version-Änderung, `manifest.version` unangetastet. |
 | 2026-11-02 | **REQ-HOM-130 umgesetzt — Entity-ID-Migration auf sprachunabhängige `object_id`s** (Branch `feat/entity-id-migration`; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`, Plan `docs/superpowers/plans/2026-11-02-entity-id-migration.md`): Quick-Drinks `…_quick_drink_<n>` (1-basiert), Custom-Marker `…_lab_<key>`, Migration über `async_migrate_entry` (`ConfigFlow VERSION 2 → 3`, HA-freies `migration.py`, Callback setzt nur `new_entity_id`, Drift-Diagnose, fail-closed bei Kollision), Pinning für Neuregistrierungen; Härtungen **A-1** Kategorie-Validierung (`other`-Fallback), **A-2** Key-Erhalt (WS + Restore), **A-3** `WELLBEING_STATES`-Drift-Test, **A-4** E2E-Regression englische IDs (weiterhin in REQ-HOM-130 integriert, kein separates Folge-REQ). `unique_id`s, Store und Verlauf unverändert. Bewusst **MINOR 0.17.0** (Nutzerentscheidung, Spec §5.4); README-Kasten „Entity-IDs ab 0.17.0" ergänzt. **Belege:** `pytest -q` → **1566 passed** (CI-äquivalent 1565 passed, 1 skipped), `ruff` clean; `tests_e2e/` → **25 Tests** (neu `test_entity_ids_e2e.py`); Live-Migration auf `/home/hermes/ha-test` (4 Entries auf Version 3, `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler). **Live-Negativprobe und Restore-Pfad sind belegt** (Kollisionsprobe: 3 migriert / 1 `target_occupied` übersprungen, Entry blieb Version 2 → nach Kollisionsauflösung + Neustart alle 4 migriert/Version 3, zweiter Neustart idempotent, Custom-Marker `…_lab_vitamin_d` migriert, Cleanup bit-identisch; `/var/tmp/opencode/migration-live/REPORT.md`). **Offen:** Tag/GitHub-Release, HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1 (Repair-Issue + Erfolgs-Notification). |
 | 2026-11-02 | **B2 — Doku-Statusdrift bereinigt (Branch `chore/28-31-ci-and-e2e-hardening`):** **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen — Status **umgesetzt (0.17.0/0.17.1/0.17.2)**; die frühere Zuordnung „kein separates Härtungs-REQ" in REQ-HOM-130 ist damit überholt. **REQ-HOM-130** Release-Status von „0.17.0 noch nicht veröffentlicht" auf `0.17.2` korrigiert (`manifest.json:22`, `docs/RELEASE-NOTES-0.17.1.md`, `-0.17.2.md`). **REQ-HOM-001…004** und **008** mit belegtem Status „Umgesetzt" ergänzt; **REQ-HOM-006** (Blueprints: E2E-Import fehlt) und **REQ-HOM-010** (Text-Entity `measurement_note` fehlt) als **teilweise** belegt; **REQ-HOM-108** auf umgesetzt (grep-clean). **REQ-HOM-132** geprüft: Eintrag vollständig (Titel, Status, AK, Belege). Spec-Statusköpfe nachgezogen: Lab-Werte 0.16.0, Batch/Sichtbarkeit 0.16.2, Lexikon/Reset-Uhrzeit umgesetzt. `docs/REVIEW-2026-10-14.md`: N-11/N-13/N-14 mit Beleg auf erledigt. Keine Code-/Teständerung. |
 | 2026-11-02 | **Neu aufgenommen: REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s** (Branch `feat/entity-id-migration` **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md` §5 Variante B): **P1 · Aufwand L · Status „Offen — geplant"** (überholt — **umgesetzt**, siehe Eintrag darüber). Inhalt: Migration der zwei abweichenden Entity-Klassen (Audit F-1 `QuickDrinkButton`, F-2 Custom-Labor-Marker) auf ein einheitliches Schema — Quick-Drinks `…_quick_drink_<n>` (**1-basiert**, aus der 0-basierten `unique_id` abgeleitet), Custom-Marker `…_lab_<key>` (nur bei slug-sicherem `key`, sonst Skip) — über `async_migrate_entry` (ConfigFlow `VERSION 2 → 3`, `async_migrate_entries` **awaited**) inklusive `suggested_object_id`-Pinning für Neuregistrierungen; `unique_id`, `original_name`, `device_id`, Store und Verlauf bleiben unverändert. Fail-closed bei Kollision/nicht eindeutigem `device_slug` (`target_occupied`, `device_slug_ambiguous`/`_unresolved`, `invalid_key`), **Version wird nur bei Erfolg** in genau einem `async_update_entry` gesetzt, Idempotenz + Retry nach Teil-Lauf. **Härtungen A-1…A-4** in REQ-HOM-130 integriert (Spec §4 führt sie ausdrücklich „in denselben Plan" und §8.2 nimmt sie in denselben REQ-Vorschlag auf — daher **kein** separates Härtungs-REQ): A-1 Kategorie-Validierung (`LAB_CATEGORIES`-Fremdwerte → `other`), A-2 Key-Erhalt für keylose Marker per Namens-Match (`previous`-Parameter), A-3 Drift-Test `WELLBEING_STATES` → `report_*` (Master/de/en), A-4 E2E-Regression englischer `object_id`s bei Systemsprache `de` inkl. Area-Fall. **Release: MINOR `0.17.0`** — **bewusste Abweichung** von der Repo-Regel „Entity-Änderung = MAJOR" (Nutzerentscheidung, Spec §5.4); Konsequenz: 💥-Migrationshinweis **an erster Stelle** in `CHANGELOG.md` und `docs/RELEASE-NOTES-0.17.0.md`, Nutzer müssen Automationen/Skripte/Dashboards/Szenen/Helfer/Template-Sensoren selbst anpassen, **der Verlauf bleibt** (Recorder-Metadaten werden auf die neue `entity_id` umgeschrieben). **Verbindlich:** Live-Migrationstest auf der geteilten Testinstanz `/home/hermes/ha-test` inkl. Negativprobe (Kollision + Retry) und Restore-Prozedur (Registry + Device-Registry + Config-Entries **gemeinsam** zurückspielen). Akzeptanzkriterien 1:1 aus Spec §8.2/§6.5 als offene Checkboxen; Belege folgen mit der Umsetzung. |

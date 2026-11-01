@@ -725,6 +725,9 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
             # Additiv (REQ-HOM-123): Alt-Einheiten fürs Einheiten-Dropdown.
             # Katalog: `alt_units`; Custom: das eine optionale Alt-Paar.
             "alt_units": dict(marker_def.get("alt_units") or {}),
+            # REQ-HOM-133 (#73): Vorwarnung in der Eingabe-UI — der Server
+            # lehnt eine leere Einheit bei diesen Markern mit `unit_required` ab.
+            "require_explicit_unit": bool(marker_def.get("require_explicit_unit")),
             "ref_min": ref_min,
             "ref_max": ref_max,
             "is_custom": bool(marker_def.get("is_custom")),
@@ -1579,7 +1582,9 @@ async def websocket_add_lab_value(
     if resolved is None:
         return
     marker_key, marker_def = resolved
-    raw_unit = msg.get("unit")
+    # REQ-HOM-133: Leerstring/Whitespace ist "keine Angabe" — erst danach
+    # greift die Einheiten-Pflicht (konsistent zum Batch-Pfad in logic.py).
+    raw_unit = str(msg.get("unit") or "").strip() or None
     if raw_unit is None and marker_def.get("require_explicit_unit"):
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unit_required")
         return

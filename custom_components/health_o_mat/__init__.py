@@ -1113,7 +1113,10 @@ def _register_services(hass: HomeAssistant) -> None:
         if resolved is None:
             raise ServiceValidationError("unknown_marker")
         marker_key, marker_def = resolved
-        raw_unit = call.data.get("unit")
+        # REQ-HOM-133: Leerstring/Whitespace ist "keine Angabe" — erst danach
+        # greift die Einheiten-Pflicht (sonst meldete der Pfad
+        # `unsupported_unit` statt `unit_required`).
+        raw_unit = str(call.data.get("unit") or "").strip() or None
         if raw_unit is None and marker_def.get("require_explicit_unit"):
             raise ServiceValidationError("unit_required")
         value = logic.coerce_lab_number(call.data["value"])

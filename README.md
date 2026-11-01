@@ -21,9 +21,9 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   `cola`, `Ingwertee 400` — alles funktioniert
 - 🩺 **Blutdruck**: Eingabefelder (sys/dia/puls) + Speichern-Button, Verlaufs-Sensoren,
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
-- 🧪 **Laborwerte**: 29 Marker in 9 Kategorien (Leber, Niere, Elektrolyte,
-  Lipide, Schilddrüse, Blutbild, Entzündung, Verdauung, Medikamentenspiegel)
-  mit Referenzbereichen und Einheiten-Umrechnung; dazu eigene Marker,
+- 🧪 **Laborwerte**: 41 Marker in 10 Kategorien (Leber, Niere, Elektrolyte,
+  Lipide, Schilddrüse, Blutbild, Entzündung, Verdauung, Medikamentenspiegel,
+  Stoffwechsel) mit Referenzbereichen und Einheiten-Umrechnung; dazu eigene Marker,
   Referenz-Overrides und ausgeblendete Kategorien. Ein Sensor je Marker und
   ein Warn-Binary je Kategorie
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
@@ -515,19 +515,20 @@ Runtime-Speicher) — das sind Datenfelder, keine Einheiten.
 
 Die vierte Datendomäne neben Trinken, Blutdruck und Wohlbefinden: **Laborwerte**
 aus Blut- und Urinbefunden — strukturiert, mit Referenzbereichen und ohne
-manuelle Entity-Pflege. Der Katalog umfasst **29 Marker in 9 Kategorien**:
+manuelle Entity-Pflege. Der Katalog umfasst **41 Marker in 10 Kategorien**:
 
 | Kategorie | Marker (Auswahl) |
 |---|---|
-| Leber | ALT (GPT), AST (GOT), GGT, Bilirubin gesamt, Gesamteiweiß |
-| Niere | Kreatinin, eGFR, Harnstoff, Protein/Kreatinin-Quotient (Urin) |
-| Elektrolyte | Natrium, Kalium, Calcium gesamt, Magnesium, Chlorid |
+| Leber | ALT (GPT), AST (GOT), GGT, Bilirubin gesamt, Gesamteiweiß, Albumin, Alkalische Phosphatase (AP) |
+| Niere | Kreatinin, eGFR, Harnstoff, Protein/Kreatinin-Quotient (Urin), Harnsäure |
+| Elektrolyte | Natrium, Kalium, Calcium gesamt, Magnesium, Chlorid, Phosphat |
 | Lipide | Gesamtcholesterin, LDL, HDL, Triglyceride |
 | Schilddrüse | TSH, fT4, fT3 |
-| Blutbild | Hämoglobin, Leukozyten, Thrombozyten |
+| Blutbild | Hämoglobin, Leukozyten, Thrombozyten, MCH, Erythrozyten, Hämatokrit, MCHC, MCV |
 | Entzündung/Immunsystem | CRP, BSG |
 | Verdauung | Lipase, Amylase |
-| Medikamentenspiegel | Tacrolimus (Talspiegel) |
+| Medikamentenspiegel | Tacrolimus, Ciclosporin, Everolimus (jeweils Talspiegel; Ciclosporin/Everolimus ohne feste Referenz) |
+| Stoffwechsel | HbA1c (mmol/mol) |
 
 Zusätzlich gibt es die Kategorie **„Sonstige"** für **eigene Marker**. Die legt
 man pro Person im **Admin-Bereich des Panels** an (Name, Einheit, Kategorie,
@@ -538,9 +539,14 @@ einzelne Kategorien ausblenden.
 Werte werden intern in der **kanonischen Einheit** des Markers gespeichert.
 Wird ein Wert in einer bekannten Alternativ-Einheit erfasst, rechnet die
 Integration um (z. B. `mg/dL` → `µmol/L`); der eingegebene Wert bleibt als
-`reported_value`/`reported_unit` nachvollziehbar. Bei Markern mit
-Verwechslungsgefahr (z. B. Protein/Kreatinin-Quotient: `g/g` vs. `mg/g`) ist
-`unit` deshalb Pflicht. Ein optionales `report_ref` (Link oder externe ID des
+`reported_value`/`reported_unit` nachvollziehbar. Bei Markern, bei denen eine
+fehlende Einheit eine falsche Gesundheitszahl ergäbe (z. B.
+Protein/Kreatinin-Quotient: `g/g` vs. `mg/g`, Hämatokrit `%` vs. `L/L`, HbA1c
+`%` vs. `mmol/mol`), ist `unit` **Pflicht** — der Service meldet sonst
+`unit_required`. Die Schreibweise wird tolerant verglichen (`umol/L` ≡ `µmol/L`
+≡ `μmol/L`, `10¹²/L` ≡ `10^12/L`, `Prozent` ≡ `%`); `U/l` bleibt dabei die
+Enzym-Einheit und wird nie zu `µ/l`. Für HbA1c ist `%` (DCCT) nicht linear
+umrechenbar und wird als `unsupported_unit` abgelehnt. Ein optionales `report_ref` (Link oder externe ID des
 Laborberichts, **max. 500 Zeichen**) verweist auf den Befund — die Integration
 ruft die Referenz **nie selbst auf**.
 
