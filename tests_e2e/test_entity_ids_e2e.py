@@ -1,4 +1,4 @@
-"""E2E: entity ids of a freshly registered person (REQ-HOM-131, A-4).
+"""E2E: entity ids of a freshly registered person (REQ-HOM-130, A-4).
 
 A-4 is the regression net for the `suggested_object_id` override: HA's
 `platform_data` / `_name_internal` / `default_language_platform_translations`

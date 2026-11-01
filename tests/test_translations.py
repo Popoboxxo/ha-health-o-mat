@@ -594,8 +594,8 @@ def test_req_hom_122_labs_area_label_translated() -> None:
         )
 
 
-def test_req_hom_131_wellbeing_report_buttons_cover_every_state() -> None:
-    """[REQ-HOM-131] Every wellbeing state has its report-button name.
+def test_req_hom_130_wellbeing_report_buttons_cover_every_state() -> None:
+    """[REQ-HOM-130] Every wellbeing state has its report-button name.
 
     Analogous to `test_req_hom_122_lab_warnings_cover_every_non_other_category`:
     the dynamic `report_{key}` key comes from `const.WELLBEING_STATES`; if it is

@@ -36,7 +36,11 @@ Belege (REQ-HOM-130): **1566 Unit-Tests** (`pytest -q`; CI-äquivalent 1565 pass
 1 skipped), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/`
 → **25 Tests** (24 bestehende + `test_entity_ids_e2e.py`); **Live-Migration auf
 `/home/hermes/ha-test` gelaufen** (4 Config-Entries auf Version 3,
-`quick_drink_1…4`, `unique_id`s unverändert, keine Fehler); Negativprobe folgt ·
+`quick_drink_1…4`, `unique_id`s unverändert, keine Fehler); **Negativprobe live
+belegt, Restore-Pfad durch Snapshots abgesichert** (3 Buttons migriert, 1
+`target_occupied` übersprungen, Entry blieb Version 2 → Kollision aufgelöst →
+alle 4 migriert, Version 3; zweiter Neustart idempotent; Custom-Marker
+`…_lab_vitamin_d` migriert; Cleanup bit-identisch) ·
 Umsetzungsplan Funde/Risiken in **`plan-funde-risiken.md`**, UX-P1 in
 **`docs/PLAN-UX-P1.md`** (eigene Plan-Dokumente, Per Planner-Konvention)
 
@@ -1675,31 +1679,49 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     *Beleg:* `tests/test_logic.py::test_req_hom_130_normalize_*` (A-1/A-2),
     `tests/test_ws_api.py::test_req_hom_130_set_settings_keeps_key_for_previous_name`
     (A-2), `tests/test_restore.py::test_req_hom_130_restore_inherits_key_from_current`
-    (A-2), `tests/test_translations.py::test_req_hom_131_wellbeing_report_buttons_cover_every_state`
-    (A-3; Testname trägt noch die im Plan verwendete 131-Nummer, inhaltlich
-    gehört er zu REQ-HOM-130/A-3), `tests_e2e/test_entity_ids_e2e.py` (A-4).
-  - [ ] `pytest -q`, `ruff check .`, `ruff format --check .` und
+    (A-2), `tests/test_translations.py::test_req_hom_130_wellbeing_report_buttons_cover_every_state`
+    (A-3), `tests_e2e/test_entity_ids_e2e.py` (A-4).
+  - [x] `pytest -q`, `ruff check .`, `ruff format --check .` und
     `pytest tests_e2e/` sind grün; die **Live-Migration auf der geteilten
     Testinstanz `/home/hermes/ha-test`** ist inklusive Negativprobe (Kollision
     präparieren → Skip + Version 2 → auflösen → Retry → Version 3) dokumentiert
     (Spec §8.2 Nr. 6, §6.3/§6.4).
-    **Stand:** Suiten grün (1566 Unit-Tests, 25 E2E-Tests, ruff clean) und
-    Live-Migration erfolgreich; die **Negativprobe steht noch aus** und wird
-    separat nachgetragen.
-  - [ ] **Restore-Prozedur** der Testinstanz ist belegt: bei Bedarf werden
+    *Beleg:* Suiten grün (1566 Unit-Tests, 25 E2E-Tests, ruff clean); Live-Lauf
+    `E2E-Tab` (`/var/tmp/opencode/migration-live/REPORT.md`): Kollisionsprobe →
+    **3 Buttons migriert, 1 `target_occupied` übersprungen**, **Entry blieb auf
+    Version 2** (Live-State `migration_error`); nach Kollisionsauflösung +
+    Neustart **alle 4 Buttons migriert, Version 3** (nur der übersprungene
+    Button erneut geschrieben); **zweiter Neustart idempotent**
+    (`core.entity_registry`/`core.config_entries` byte-identisch, 0
+    added/removed/changed im Entry-Subset); Custom-Marker
+    `…_lab_vitamin_d` korrekt migriert (`stale_marker_key`-Pfad); Cleanup
+    danach **bit-identisch** (Device-Registry und Store sha256 unverändert,
+    423 Entities wie zuvor, keine Duplikate).
+  - [x] **Restore-Prozedur** der Testinstanz ist belegt: bei Bedarf werden
     `core.entity_registry`, `core.device_registry` und `core.config_entries`
     **gemeinsam** aus dem Snapshot zurückgespielt (einzeln wäre der Entry auf
     Version 3 bei alten IDs und liefe nie wieder); Acceptance danach
     `version == 2` und `unique_id`-Menge == Snapshot (Spec §6.3 Phase 4
     Schritt 17).
-    **Stand:** nicht ausgelöst — der Live-Lauf lief ohne Kollision, ein Rollback
-    war nicht nötig; das Verfahren bleibt in der Spec dokumentiert.
+    *Beleg:* Vor jeder Schreiboperation wurden `core.config_entries`,
+    `core.device_registry`, `core.entity_registry` und der Store mit
+    sha256 gesichert (`/var/tmp/opencode/migration-live/before/`); das
+    Zurückspielen selbst war **nicht nötig** — der Cleanup endete bit-identisch
+    zum Snapshot (Device-Registry und Store `sha256` unverändert), das
+    Verfahren bleibt in der Spec §6.3 Phase 4 dokumentiert.
   - [ ] **Release:** `manifest.version`/Tag `v0.17.0` (MINOR, bewusste
     Abweichung), alle `?v=`-Cache-Buster und JS-Versionskonstanten mitgezogen,
     💥-Migrationshinweis an erster Stelle in `CHANGELOG.md` und
     `docs/RELEASE-NOTES-0.17.0.md` (Spec §5.1/§5.3/§5.4).
-    **Stand:** Release-Vorbereitung läuft (Task 19); Tag und GitHub-Release
-    folgen separat.
+    **Stand:** Release-Commit `19c61f0` (`chore(release): 0.17.0`) gemergt,
+    `manifest.version` = `0.17.0`; Tag `v0.17.0` und GitHub-Release folgen.
+  - [ ] **HACS-Update-Test** (v0.16.2 → v0.17.0 auf der Dev-Instanz) — HACS
+    liefert nur freigegebene Releases aus, der Test läuft daher erst **nach**
+    dem Release-Dreiklang (Workflow-Schritt 7).
+  - [ ] **Folge-REQ aus Spec §9 O-1:** Repair-Issue
+    (`ir.async_create_issue`) für den Kollisions-/`device_slug_ambiguous`-Fall
+    und `persistent_notification` nach erfolgreicher Migration — in 0.17.0
+    bewusst log-only.
 - **Belege:** Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   (Ziel-Schemata, Migrationsverträge, Teststrategie §6.1–§6.4) und Audit
   `docs/reviews/entity-id-stability-audit.md` (F-1/F-2, §5 Variante B).
@@ -1715,9 +1737,15 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   `tests_e2e/test_entity_ids_e2e.py` (A-4).
   **Live:** Migration auf der geteilten Testinstanz `/home/hermes/ha-test`
   gelaufen — **4 Config-Entries auf Version 3**, Quick-Drink-IDs
-  `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler im Log. Die
-  **Negativprobe** (Kollision → Skip + Version bleibt → auflösen → Retry) ist
-  noch offen und wird separat nachgetragen.
+  `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler im Log.
+  **Negativprobe belegt** (`/var/tmp/opencode/migration-live/REPORT.md`):
+  Kollisionsprobe → **3 migriert, 1 `target_occupied` übersprungen, Entry
+  blieb auf Version 2**; nach Kollisionsauflösung + Neustart **alle 4
+  migriert, Version 3**; zweiter Neustart **idempotent** (Registry und
+  Config-Entries byte-identisch); Custom-Marker `…_lab_vitamin_d` migriert;
+  Cleanup **bit-identisch** zum Snapshot. Offen bleiben nur Release (Tag/
+  GitHub-Release), HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1
+  (Repair-Issue + Erfolgs-Notification).
 
 ---
 
@@ -1765,5 +1793,5 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-127…129 — Laborwerte-Erweiterung, Nachträge** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, §2.13/§2.14/§11): **127** Fehlercode-/i18n-Umbau der bestehenden Services/WS-Pfade auf strukturierte `{code, params}` + lokalisierte Meldungen — **eigener Plan, nicht Teil dieser Erweiterung** (§2.4/§14); **128** Batch-Undo `remove_lab_report` (voidet alle aktiven Werte desselben `ts`, optional gefiltert per `report_ref`, Grenzfall identischer `ts`, `no_active_report`/`invalid_ts`, ein Audit `lab_report_voided`, UI-Aktion „Diesen Bericht verwerfen" mit Sicherheitsabfrage, Einzel-Restore) — P2; **129** Labor-Retention `lab_retention_months` (Default `0` = aus, Options-Wizard „Grundlagen", 0…120, voidet beim Setup Laborwerte älter als N Monate mit `void_reason = "retention"`, kein Archiv, `restore_entry`-fähig, ein Audit `lab_values_retention`, Export enthält voidete Zeilen inkl. `voided_at`/`void_reason`, Re-Import = `skipped`) — P2. Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. |
 | 2026-11-01 | **REQ-HOM-123…125 an die finalen Spec-Entscheidungen angepasst** (Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`): **123** — ein gemeinsames `ts`, Duplikat im Batch = Fehler (`duplicate_marker`, Alias-Kollision), gestufte Limits **60** (UI) / **200** (Server), Hybrid-Füllung („Alle sichtbaren Marker"/„Zuletzt verwendete Marker"), Einheiten-Dropdown je Zeile, strukturierte Fehler `{code, params, message}` (§2.4) und `NaN`/`inf`-Härtung auch im Einzelpfad (`add_lab_value`); **124** — Faktor auch bei Custom-Markern (Nice-to-have) und Locale-Formatierung über `formatNumber`; **125** — Hinweis **abschaltbar** über die Admin-Checkbox `lab_hide_panel_disclaimer` (Transport über `panel_data`, **nicht** `get_settings`; Default `false` = sichtbar), Leerzustandstext „Alle Kategorien ausgeblendet", Karten-Disclaimer via `ui_card_lab_disclaimer` lokalisiert, Backup + Diagnostics-Redaktion. **126** bleibt unverändert (P3). |
 | 2026-11-01 | **REQ-HOM-123…126/128/129 umgesetzt — Laborwerte: Batch, Undo, Retention & Sichtbarkeit** (Branch `feat/lab-batch-visibility`; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Plan `docs/superpowers/plans/2026-11-01-lab-values-batch-and-visibility.md`): Service + WS `add_lab_report` (ein `ts`/`report_ref`, Leerzeilen ignoriert, Limits 60/200, strukturierte Fehler `{code, params, message}`, ein Store-Write/ein Audit `lab_values_added` mit Rollback), symmetrisches `remove_lab_report` (voidet alle aktiven Werte eines Zeitpunkts, optional per `report_ref`, Audit `lab_report_voided`, UI-Aktion mit Sicherheitsabfrage), Mehrzeilen-Dialog in Card und Panel (Hybrid-Füllung, Einheiten-Dropdown aus `alt_units`, Single-Flight), Admin-Spalte „Umrechnung" + Badge „Einheit Pflicht", Panel-Medizin-Hinweis (Default sichtbar, abschaltbar über `lab_hide_panel_disclaimer`, Transport via `panel_data`), Karten-Disclaimer lokalisiert, Labor-Retention `lab_retention_months` (Default 0, voidet statt Archiv, ein Audit `lab_values_retention`), `lab_values.csv` inkl. voideter Zeilen + `voided_at`/`void_reason` (Re-Import: `skipped`, header-basiert und unabhängig vom Bestand; Altdateien ohne die Spalten behalten das Positionsverhalten), Beispiel-Dashboard `examples/dashboard-labs-card.yaml`. Kein neues Datenmodell (Store v5, `unique_id`s unverändert, Backup/Restore-Format unberührt; Backup-Options additiv). **Belege:** `pytest -q` → **1500 passed** (0 failed), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests** (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19). **REQ-HOM-127 bleibt offen** (eigener Plan). **Kein Release/Tag in diesem Schritt.** |
-| 2026-11-02 | **REQ-HOM-130 umgesetzt — Entity-ID-Migration auf sprachunabhängige `object_id`s** (Branch `feat/entity-id-migration`; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`, Plan `docs/superpowers/plans/2026-11-02-entity-id-migration.md`): Quick-Drinks `…_quick_drink_<n>` (1-basiert), Custom-Marker `…_lab_<key>`, Migration über `async_migrate_entry` (`ConfigFlow VERSION 2 → 3`, HA-freies `migration.py`, Callback setzt nur `new_entity_id`, Drift-Diagnose, fail-closed bei Kollision), Pinning für Neuregistrierungen; Härtungen **A-1** Kategorie-Validierung (`other`-Fallback), **A-2** Key-Erhalt (WS + Restore), **A-3** `WELLBEING_STATES`-Drift-Test, **A-4** E2E-Regression englische IDs (weiterhin in REQ-HOM-130 integriert, kein separates REQ-HOM-131). `unique_id`s, Store und Verlauf unverändert. Bewusst **MINOR 0.17.0** (Nutzerentscheidung, Spec §5.4); README-Kasten „Entity-IDs ab 0.17.0" ergänzt. **Belege:** `pytest -q` → **1566 passed** (CI-äquivalent 1565 passed, 1 skipped), `ruff` clean; `tests_e2e/` → **25 Tests** (neu `test_entity_ids_e2e.py`); Live-Migration auf `/home/hermes/ha-test` (4 Entries auf Version 3, `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler). **Negativprobe, Restore-Prozedur und Release (Tag/Notes) stehen noch aus.** |
-| 2026-11-02 | **Neu aufgenommen: REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s** (Branch `feat/entity-id-migration` **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md` §5 Variante B): **P1 · Aufwand L · Status „Offen — geplant"** (überholt — **umgesetzt**, siehe Eintrag darüber). Inhalt: Migration der zwei abweichenden Entity-Klassen (Audit F-1 `QuickDrinkButton`, F-2 Custom-Labor-Marker) auf ein einheitliches Schema — Quick-Drinks `…_quick_drink_<n>` (**1-basiert**, aus der 0-basierten `unique_id` abgeleitet), Custom-Marker `…_lab_<key>` (nur bei slug-sicherem `key`, sonst Skip) — über `async_migrate_entry` (ConfigFlow `VERSION 2 → 3`, `async_migrate_entries` **awaited**) inklusive `suggested_object_id`-Pinning für Neuregistrierungen; `unique_id`, `original_name`, `device_id`, Store und Verlauf bleiben unverändert. Fail-closed bei Kollision/nicht eindeutigem `device_slug` (`target_occupied`, `device_slug_ambiguous`/`_unresolved`, `invalid_key`), **Version wird nur bei Erfolg** in genau einem `async_update_entry` gesetzt, Idempotenz + Retry nach Teil-Lauf. **Härtungen A-1…A-4** in REQ-HOM-130 integriert (Spec §4 führt sie ausdrücklich „in denselben Plan" und §8.2 nimmt sie in denselben REQ-Vorschlag auf — daher **kein** separates REQ-HOM-131): A-1 Kategorie-Validierung (`LAB_CATEGORIES`-Fremdwerte → `other`), A-2 Key-Erhalt für keylose Marker per Namens-Match (`previous`-Parameter), A-3 Drift-Test `WELLBEING_STATES` → `report_*` (Master/de/en), A-4 E2E-Regression englischer `object_id`s bei Systemsprache `de` inkl. Area-Fall. **Release: MINOR `0.17.0`** — **bewusste Abweichung** von der Repo-Regel „Entity-Änderung = MAJOR" (Nutzerentscheidung, Spec §5.4); Konsequenz: 💥-Migrationshinweis **an erster Stelle** in `CHANGELOG.md` und `docs/RELEASE-NOTES-0.17.0.md`, Nutzer müssen Automationen/Skripte/Dashboards/Szenen/Helfer/Template-Sensoren selbst anpassen, **der Verlauf bleibt** (Recorder-Metadaten werden auf die neue `entity_id` umgeschrieben). **Verbindlich:** Live-Migrationstest auf der geteilten Testinstanz `/home/hermes/ha-test` inkl. Negativprobe (Kollision + Retry) und Restore-Prozedur (Registry + Device-Registry + Config-Entries **gemeinsam** zurückspielen). Akzeptanzkriterien 1:1 aus Spec §8.2/§6.5 als offene Checkboxen; Belege folgen mit der Umsetzung. |
+| 2026-11-02 | **REQ-HOM-130 umgesetzt — Entity-ID-Migration auf sprachunabhängige `object_id`s** (Branch `feat/entity-id-migration`; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`, Plan `docs/superpowers/plans/2026-11-02-entity-id-migration.md`): Quick-Drinks `…_quick_drink_<n>` (1-basiert), Custom-Marker `…_lab_<key>`, Migration über `async_migrate_entry` (`ConfigFlow VERSION 2 → 3`, HA-freies `migration.py`, Callback setzt nur `new_entity_id`, Drift-Diagnose, fail-closed bei Kollision), Pinning für Neuregistrierungen; Härtungen **A-1** Kategorie-Validierung (`other`-Fallback), **A-2** Key-Erhalt (WS + Restore), **A-3** `WELLBEING_STATES`-Drift-Test, **A-4** E2E-Regression englische IDs (weiterhin in REQ-HOM-130 integriert, kein separates Folge-REQ). `unique_id`s, Store und Verlauf unverändert. Bewusst **MINOR 0.17.0** (Nutzerentscheidung, Spec §5.4); README-Kasten „Entity-IDs ab 0.17.0" ergänzt. **Belege:** `pytest -q` → **1566 passed** (CI-äquivalent 1565 passed, 1 skipped), `ruff` clean; `tests_e2e/` → **25 Tests** (neu `test_entity_ids_e2e.py`); Live-Migration auf `/home/hermes/ha-test` (4 Entries auf Version 3, `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler). **Live-Negativprobe und Restore-Pfad sind belegt** (Kollisionsprobe: 3 migriert / 1 `target_occupied` übersprungen, Entry blieb Version 2 → nach Kollisionsauflösung + Neustart alle 4 migriert/Version 3, zweiter Neustart idempotent, Custom-Marker `…_lab_vitamin_d` migriert, Cleanup bit-identisch; `/var/tmp/opencode/migration-live/REPORT.md`). **Offen:** Tag/GitHub-Release, HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1 (Repair-Issue + Erfolgs-Notification). |
+| 2026-11-02 | **Neu aufgenommen: REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s** (Branch `feat/entity-id-migration` **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md` §5 Variante B): **P1 · Aufwand L · Status „Offen — geplant"** (überholt — **umgesetzt**, siehe Eintrag darüber). Inhalt: Migration der zwei abweichenden Entity-Klassen (Audit F-1 `QuickDrinkButton`, F-2 Custom-Labor-Marker) auf ein einheitliches Schema — Quick-Drinks `…_quick_drink_<n>` (**1-basiert**, aus der 0-basierten `unique_id` abgeleitet), Custom-Marker `…_lab_<key>` (nur bei slug-sicherem `key`, sonst Skip) — über `async_migrate_entry` (ConfigFlow `VERSION 2 → 3`, `async_migrate_entries` **awaited**) inklusive `suggested_object_id`-Pinning für Neuregistrierungen; `unique_id`, `original_name`, `device_id`, Store und Verlauf bleiben unverändert. Fail-closed bei Kollision/nicht eindeutigem `device_slug` (`target_occupied`, `device_slug_ambiguous`/`_unresolved`, `invalid_key`), **Version wird nur bei Erfolg** in genau einem `async_update_entry` gesetzt, Idempotenz + Retry nach Teil-Lauf. **Härtungen A-1…A-4** in REQ-HOM-130 integriert (Spec §4 führt sie ausdrücklich „in denselben Plan" und §8.2 nimmt sie in denselben REQ-Vorschlag auf — daher **kein** separates Härtungs-REQ): A-1 Kategorie-Validierung (`LAB_CATEGORIES`-Fremdwerte → `other`), A-2 Key-Erhalt für keylose Marker per Namens-Match (`previous`-Parameter), A-3 Drift-Test `WELLBEING_STATES` → `report_*` (Master/de/en), A-4 E2E-Regression englischer `object_id`s bei Systemsprache `de` inkl. Area-Fall. **Release: MINOR `0.17.0`** — **bewusste Abweichung** von der Repo-Regel „Entity-Änderung = MAJOR" (Nutzerentscheidung, Spec §5.4); Konsequenz: 💥-Migrationshinweis **an erster Stelle** in `CHANGELOG.md` und `docs/RELEASE-NOTES-0.17.0.md`, Nutzer müssen Automationen/Skripte/Dashboards/Szenen/Helfer/Template-Sensoren selbst anpassen, **der Verlauf bleibt** (Recorder-Metadaten werden auf die neue `entity_id` umgeschrieben). **Verbindlich:** Live-Migrationstest auf der geteilten Testinstanz `/home/hermes/ha-test` inkl. Negativprobe (Kollision + Retry) und Restore-Prozedur (Registry + Device-Registry + Config-Entries **gemeinsam** zurückspielen). Akzeptanzkriterien 1:1 aus Spec §8.2/§6.5 als offene Checkboxen; Belege folgen mit der Umsetzung. |
