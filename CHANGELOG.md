@@ -5,6 +5,43 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.17.3] — 2026-11-02
+
+### Added
+
+- **Lab values are a history target (#70):** `list_history` accepts
+  `kind=lab_values` (aliases `lab_value`, `lab_readings`), including
+  `include_voided`. Each entry carries `id`, `ts`, `created_at`, `voided_at`,
+  `voided_by`, `void_reason` plus `marker_key`, `value`, `unit`, `reported_value`
+  and `reported_unit`, newest first — so a lab value can be voided or restored by
+  its id, symmetric to drinks, blood pressure and wellbeing.
+- **Pagination and time filter for `list_history` (#70):** `limit` (1…1000; lab
+  values default to 200, an over-cap value is rejected as `invalid_format` instead
+  of being silently capped), `offset` (default 0), `has_more` in the response, and
+  `since` as an inclusive lower bound compared on the UTC instant (offset- and
+  DST-proof). The existing kinds stay unbounded when `limit` is omitted.
+- **Void/restore symmetry for lab values (#70):** `void_entry`/`restore_entry` and
+  the WebSocket `void`/`restore` accept `kind=lab_values`; the target-to-method
+  mapping now lives in a single table in `logic.py`, and the `_LAB_STATE_*` special
+  path in the service layer is gone.
+- **`report_ref` stays opt-in (#70):** the sensitive report reference is only
+  included with `include_report_ref: true` (default `false`).
+
+### Fixed
+
+- **`remove_last_entry` with `kind=lab_values` reports a validation error:** lab
+  values have no global "remove last entry" (the undo is marker-specific,
+  `remove_last_lab_value`), so the call now returns a clear validation message
+  instead of a `KeyError`.
+
+### Changed
+
+- **Internal plan for the open issues:** `docs/PLAN-OPEN-ISSUES.md` records the
+  implementation plan for #28, #31, #33 and #70–#73 across releases 0.17.3, 0.18.0
+  and 0.19.0.
+
+[0.17.3]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.17.2...v0.17.3
+
 ## [0.17.2] — 2026-11-02
 
 ### Fixed
