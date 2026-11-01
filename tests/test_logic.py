@@ -2012,7 +2012,7 @@ def test_req_hom_128_lab_report_matches_tolerates_broken_or_missing_ts():
     assert logic.lab_report_matches("kein-dict", target) is False
 
 
-# --- REQ-HOM-130/131: custom marker hardening (A-1/A-2) --------------------
+# --- REQ-HOM-130: custom marker hardening (A-1/A-2) -----------------------
 
 
 def test_req_hom_130_normalize_rejects_unknown_category():

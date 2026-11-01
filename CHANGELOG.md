@@ -31,12 +31,12 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 
 ### Added
 
-- **Category validation for custom lab markers (REQ-HOM-131, A-1):** a category outside
+- **Category validation for custom lab markers (REQ-HOM-130, A-1):** a category outside
   `LAB_CATEGORIES` falls back to `other` instead of producing an untranslated warning
   entity with a localized object id.
-- **Marker key preservation (REQ-HOM-131, A-2):** a client that re-sends markers without a
+- **Marker key preservation (REQ-HOM-130, A-2):** a client that re-sends markers without a
   `key` now inherits the stored key when the name matches, so the `unique_id` cannot drift.
-- **Drift regression test (REQ-HOM-131, A-3):** every wellbeing state's report-button
+- **Drift regression test (REQ-HOM-130, A-3):** every wellbeing state's report-button
   translation is guarded in the master strings and both translations.
 
 ### Changed
@@ -46,7 +46,7 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
   localized display name, so the ids no longer change with the Home Assistant system
   language. Existing persons are migrated by `async_migrate_entry` (`v2 → v3`) and freshly
   registered persons are pinned via `suggested_object_id`.
-- **E2E regression for English object ids (REQ-HOM-131, A-4):** a live test asserts English
+- **E2E regression for English object ids (REQ-HOM-130, A-4):** a live test asserts English
   object ids for a freshly registered person on a German-language instance, including the
   area-prefix case.
 

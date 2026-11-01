@@ -109,13 +109,13 @@ umgebogen.
 
 ## Weitere Änderungen
 
-- **A-1 — Kategorie-Validierung:** Unbekannte Kategorien bei
+- **A-1 — Kategorie-Validierung (REQ-HOM-130):** Unbekannte Kategorien bei
   Custom-Labor-Markern fallen auf `other` zurück.
-- **A-2 — Key-Erhalt:** Keylose Marker-Einträge erben den gespeicherten Key,
+- **A-2 — Key-Erhalt (REQ-HOM-130):** Keylose Marker-Einträge erben den gespeicherten Key,
   wenn der Name exakt übereinstimmt; der `unique_id` kann nicht mehr driften.
-- **A-3 — Drift-Test:** Für jeden Wellbeing-State wird die
+- **A-3 — Drift-Test (REQ-HOM-130):** Für jeden Wellbeing-State wird die
   `report_*`-Übersetzung in Master, `de` und `en` abgesichert.
-- **A-4 — E2E-Regression:** Ein Live-Test prüft englische `object_id`s bei
+- **A-4 — E2E-Regression (REQ-HOM-130):** Ein Live-Test prüft englische `object_id`s bei
   Systemsprache `de` inklusive Area-Präfix-Fall.
 
 ## Vollständiger Changelog
@@ -231,13 +231,13 @@ in the process — orphaned entities are removed, not repointed.
 
 ## Other changes
 
-- **A-1 — Category validation:** unknown categories on custom lab markers fall
+- **A-1 — Category validation (REQ-HOM-130):** unknown categories on custom lab markers fall
   back to `other`.
-- **A-2 — Key preservation:** keyless marker entries inherit the stored key
+- **A-2 — Key preservation (REQ-HOM-130):** keyless marker entries inherit the stored key
   when the name matches exactly, so the `unique_id` can no longer drift.
-- **A-3 — Drift test:** every wellbeing state's `report_*` translation is
+- **A-3 — Drift test (REQ-HOM-130):** every wellbeing state's `report_*` translation is
   guarded in the master, `de` and `en`.
-- **A-4 — E2E regression:** a live test asserts English `object_id`s on a
+- **A-4 — E2E regression (REQ-HOM-130):** a live test asserts English `object_id`s on a
   German-language instance, including the area-prefix case.
 
 ## Full changelog
