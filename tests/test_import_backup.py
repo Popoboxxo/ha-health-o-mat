@@ -79,7 +79,9 @@ class _FakeServices:
     def has_service(self, domain, name) -> bool:
         return name in self.registered
 
-    def async_register(self, domain, name, *, schema=None, service_func=None) -> None:
+    def async_register(
+        self, domain, name, *, schema=None, service_func=None, supports_response=None
+    ) -> None:
         self.registered[name] = (schema, service_func)
 
     async def async_call(self, *args, **kwargs) -> None:
@@ -567,8 +569,17 @@ def test_import_csv_service_writes_via_runtime_data(tmp_path):
     init._register_services(hass)
 
     _schema, func = hass.services.registered["import_csv"]
-    _run(func(_call({"filename": "drinks.csv", "dataset": "all", "person": "Max"})))
+    call = _call({"filename": "drinks.csv", "dataset": "all", "person": "Max"})
+    call.context.user_id = None  # Automation/Skript → Admin-Gate lässt durch
+    call.return_response = False
+    assert _run(func(call)) is None  # Optionale Response: ohne Anforderung None
 
+    call.return_response = True
+    result = _run(func(call))
+
+    assert set(result) == {"imported", "skipped", "rejected", "errors"}
+    assert result["imported"] == 0  # zweiter Lauf: alles Duplikat
+    assert result["skipped"] == 2
     assert len(store.entry("e1")["drinks"]) == 2
 
 
@@ -1126,7 +1137,12 @@ def test_req_hom_122_export_csv_writes_lab_values_file(tmp_path):
     assert "32.0" in content
     assert "U/L" in content
     assert "https://example.com/x" in content
-    assert paths == str(written[0])
+    assert paths == {
+        "filename": written[0].name,
+        "filenames": [written[0].name],
+        "rows": 1,
+        "dataset": "lab_values",
+    }
 
 
 def test_req_hom_122_export_csv_lab_values_only_when_selected(tmp_path):
@@ -1370,7 +1386,8 @@ def test_req_hom_122_plan_import_lab_values_rejects_unsupported_unit():
 
     assert plan.lab_readings == []
     assert plan.rejected == 1
-    assert "furlongs" in plan.errors[0]
+    # Redigiert (#WP1-01): nur Zeile + stabiler Grund, nie der Zellinhalt.
+    assert plan.errors == ["Zeile 2: nicht unterstützte Einheit"]
 
 
 def test_req_hom_122_plan_import_lab_values_empty_unit_falls_back_to_canonical():
@@ -1402,8 +1419,7 @@ def test_req_hom_122_plan_import_lab_values_empty_unit_rejected_if_required():
 
     assert plan.lab_readings == []
     assert plan.rejected == 1
-    assert marker in plan.errors[0]
-    assert "Einheit erforderlich" in plan.errors[0]
+    assert plan.errors == ["Zeile 2: Einheit erforderlich"]
 
 
 def test_req_hom_122_async_import_csv_writes_lab_readings(tmp_path):
@@ -1702,3 +1718,390 @@ def test_req_hom_129_import_finds_void_columns_in_any_header_position():
     assert record["reported_value"] == 32.0
     assert record["reported_unit"] == "U/L"
     assert record["report_ref"] is None
+
+
+# ============================================================================
+# #71/#72: Service-Responses, Import-Upload, Dedupe, Atomarität
+# ============================================================================
+
+
+def _lab_csv(*rows: str) -> str:
+    return "\n".join((_LAB_CSV_HEADER, *rows)) + "\n"
+
+
+def test_export_csv_response_contract_lists_all_files_and_total_rows(tmp_path):
+    """[#71/O-2] filename = erste Datei, filenames = alle, rows = Summe."""
+    exporter = _load("exporter")
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    _run(store.add_reading("e1", "2026-10-14T09:00:00", 120, 80, 60, "morgens"))
+    _run(store.add_lab_reading("e1", "2026-10-14T10:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+
+    result = _run(exporter.async_export_csv(hass, store, _call({"dataset": "all"})))
+
+    assert set(result) == {"filename", "filenames", "rows", "dataset"}
+    assert result["dataset"] == "all"
+    assert result["rows"] == 3
+    assert result["filename"] == result["filenames"][0]
+    assert len(result["filenames"]) == 3
+    assert all(os.sep not in name for name in result["filenames"])
+
+
+def test_export_csv_service_returns_response_only_when_requested(tmp_path):
+    """[#71] Ohne `return_response` bleibt der Service bei `None`."""
+    init = _load_init()
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    hass = _import_hass(tmp_path)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    _schema, func = hass.services.registered["export_csv"]
+    call = _call({"dataset": "drinks"})
+    call.context.user_id = None
+
+    call.return_response = False
+    assert _run(func(call)) is None
+
+    call.return_response = True
+    result = _run(func(call))
+    assert result is not None
+    assert result["dataset"] == "drinks"
+    assert result["filenames"] and result["filename"] == result["filenames"][0]
+
+
+def test_backup_service_returns_filename_datasets_and_rows(tmp_path):
+    """[#71] backup → {filename, datasets, rows} (Basename, keine Pfade)."""
+    init = _load_init()
+    store = _fresh_store()
+    _run(store.set_person("e1", "Caro"))
+    _run(store.add_drink("e1", "2026-10-14T08:00:00", 250, "Wasser", "button"))
+    archive = _fresh_store()
+    hass = _import_hass(tmp_path)
+    hass.data[_DOMAIN]["shared"]["store"] = store
+    hass.data[_DOMAIN]["shared"]["archive_store"] = archive
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    _schema, func = hass.services.registered["backup"]
+    call = _call({})
+    call.context.user_id = None
+    call.return_response = True
+
+    result = _run(func(call))
+
+    assert set(result) == {"filename", "datasets", "rows"}
+    assert result["filename"].startswith("health_o_mat_backup_")
+    assert result["filename"].endswith(".json")
+    assert os.sep not in result["filename"]
+    assert result["datasets"] == ["drinks"]
+    assert result["rows"] == 1
+
+
+def test_restore_backup_service_response_passes_through_restore_result(monkeypatch):
+    """[#71] restore_backup reicht das Restore-Ergebnis flach durch."""
+    init = _load_init()
+    hass = _import_hass(Path("/tmp"))
+    hass.data[_DOMAIN]["shared"]["store"] = _fresh_store()
+    hass.services = _FakeServices()
+    init._register_services(hass)
+    restore_mod = importlib.import_module(f"{_PKG}.init.restore")
+    result = {
+        "applied": True,
+        "dry_run": False,
+        "counts": {"e1": {"drinks": {"added": 1, "skipped": 0, "conflicts": 0, "errors": 0}}},
+        "totals": {"added": 1, "skipped": 0, "conflicts": 0, "errors": 0},
+        "warnings": ["Hinweis"],
+    }
+    monkeypatch.setattr(restore_mod, "async_restore_command", AsyncMock(return_value=result))
+    _schema, func = hass.services.registered["restore_backup"]
+    call = _call({"filename": "/config/health_o_mat_export/backup.json"})
+    call.context.user_id = None
+    call.return_response = True
+
+    response = _run(func(call))
+
+    assert set(response) == {
+        "filename",
+        "applied",
+        "dry_run",
+        "counts",
+        "totals",
+        "warnings",
+    }
+    assert response["filename"] == "backup.json"
+    assert response["applied"] is True
+    assert response["dry_run"] is False
+    assert response["totals"]["added"] == 1
+    assert response["warnings"] == ["Hinweis"]
+
+
+def test_import_csv_response_caps_errors_but_keeps_authoritative_counters(tmp_path):
+    """[#71] errors ≤ 20; `rejected` zählt weiterhin alle Zeilen."""
+    folder = _import_dir(tmp_path)
+    bad_rows = "\n".join("?;?;Max;Kaffee;abc;" for _ in range(25))
+    (folder / "bad.csv").write_text(bad_rows + "\n", encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "bad.csv", "dataset": "drinks"})
+        )
+    )
+
+    assert result["imported"] == 0
+    assert result["rejected"] == 25
+    assert len(result["errors"]) == 20
+
+
+def test_import_csv_service_rejects_non_admin(tmp_path):
+    """[#72] Der Service ist admin-only (wie Export/Backup)."""
+    init = _load_init()
+    hass = _import_hass(tmp_path)
+    hass.data[_DOMAIN]["shared"]["store"] = _fresh_store()
+    hass.services = _FakeServices()
+    hass.auth = MagicMock()
+    hass.auth.async_get_user = AsyncMock(return_value=types.SimpleNamespace(is_admin=False))
+    init._register_services(hass)
+    _schema, func = hass.services.registered["import_csv"]
+    call = _call({"filename": "drinks.csv"})
+    call.context.user_id = "user-1"
+
+    with pytest.raises(init.ServiceValidationError, match="Administratoren"):
+        _run(func(call))
+
+
+def test_import_csv_reads_csv_from_private_export_dir(tmp_path):
+    """[#72] Eine gerade exportierte CSV ist ohne Umkopieren importierbar."""
+    export_dir = tmp_path / "health_o_mat_export"
+    export_dir.mkdir()
+    (export_dir / "drinks.csv").write_text(_drinks_csv(), encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "drinks.csv", "dataset": "drinks"})
+        )
+    )
+
+    assert result["imported"] == 2
+    assert len(store.entry("e1")["drinks"]) == 2
+
+
+def test_import_csv_rejects_comma_delimiter_without_silent_reinterpretation(tmp_path):
+    """[#72] Nur `;` — eine `,`-Datei wird als ungültig gemeldet, nicht umgedeutet."""
+    folder = _import_dir(tmp_path)
+    (folder / "comma.csv").write_text(
+        "datum,uhrzeit,person,getraenk,menge_ml,quelle\n"
+        "2026-10-14,08:00:00,Max,Wasser,250,button\n",
+        encoding="utf-8",
+    )
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "comma.csv", "dataset": "drinks"})
+        )
+    )
+
+    assert result["imported"] == 0
+    assert result["rejected"] >= 1  # Kopf- und Datenzeile bleiben ungültig
+    assert store.entry("e1")["drinks"] == []
+
+
+def test_import_csv_rejects_non_utf8_file(tmp_path):
+    """[#72] cp1252-Bytes werden nicht still uminterpretiert (UTF-8-only)."""
+    folder = _import_dir(tmp_path)
+    (folder / "latin1.csv").write_bytes(
+        "datum;uhrzeit;person;getränk;menge_ml;quelle\n".encode("cp1252")
+    )
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    with pytest.raises(importer.ServiceValidationError, match="UTF-8"):
+        _run(
+            importer.async_import_csv(
+                hass, store, "e1", _call({"filename": "latin1.csv", "dataset": "drinks"})
+            )
+        )
+
+
+def test_import_errors_are_redacted_line_and_reason_only(tmp_path):
+    """[#WP1-01] Import-Meldungen enthalten weder Zellinhalte noch Messwerte."""
+    folder = _import_dir(tmp_path)
+    text = (
+        "datum;uhrzeit;person;getraenk;menge_ml;quelle\n"
+        "2026-10-14;08:00:00;Max;Kaffee;abc;\n"  # ungültige Menge
+        "not-a-date;08:00:00;Max;Tee;250;\n"  # ungültiger Zeitstempel
+    )
+    (folder / "bad.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "bad.csv", "dataset": "drinks"})
+        )
+    )
+
+    assert result["rejected"] == 2
+    assert result["errors"] == [
+        "Zeile 2: ungültige Menge",
+        "Zeile 3: ungültiger Zeitstempel",
+    ]
+    rendered = " ".join(result["errors"])
+    for raw in ("abc", "Kaffee", "not-a-date", "Tee", "250", ";"):
+        assert raw not in rendered
+
+
+def test_import_errors_lab_value_reason_has_no_measured_value(tmp_path):
+    """[#WP1-01] Labor-Fehler nennen den Wert nicht (z. B. `4,8`/`not-a-number`)."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;abc;U/L;;;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["errors"] == ["Zeile 2: ungültiger Laborwert"]
+    assert "abc" not in result["errors"][0]
+
+
+def test_import_csv_uses_bulk_ids_as_authoritative_counter(tmp_path, monkeypatch):
+    """[#WP1-02] `imported` zählt geschriebene IDs; Verworfene werden `skipped`."""
+    folder = _import_dir(tmp_path)
+    text = f"{_LAB_CSV_HEADER_LINE}\n2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;\n"
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    async def _drop_all(entry_id, groups, **kwargs):
+        return []
+
+    monkeypatch.setattr(store, "add_lab_readings_bulk", _drop_all)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 0
+    assert result["skipped"] == 1
+    assert store.entry("e1")["lab_readings"] == []
+
+
+def test_import_csv_content_upload_writes_without_touching_disk(tmp_path):
+    """[#72] `content` wird direkt importiert — kein Datei-I/O."""
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+    (tmp_path / importer.IMPORT_DIR_NAME).mkdir()
+    before = set((tmp_path / importer.IMPORT_DIR_NAME).iterdir())
+
+    result = _run(
+        importer.async_import_csv(
+            hass,
+            store,
+            "e1",
+            _call({"dataset": "drinks"}),
+            content=_drinks_csv(),
+        )
+    )
+
+    assert result["imported"] == 2
+    assert len(store.entry("e1")["drinks"]) == 2
+    assert set((tmp_path / importer.IMPORT_DIR_NAME).iterdir()) == before
+
+
+def test_import_csv_lab_dedupe_uses_ts_and_marker_not_value(tmp_path):
+    """[#72] Gleiches `(ts, marker_key)` mit neuem Wert → skipped, kein Abbruch."""
+    folder = _import_dir(tmp_path)
+    text = _lab_csv(
+        "2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;",
+        "2026-10-31T09:00:00;Caro;alt;liver;99.0;U/L;99.0;U/L;",
+        "2026-10-31T09:00:00;Caro;crp;inflammation;4.8;mg/L;4.8;mg/L;",
+    )
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert result["imported"] == 2
+    assert result["skipped"] == 1
+    values = {item["marker_key"]: item["value"] for item in store.entry("e1")["lab_readings"]}
+    assert values == {"alt": 32.0, "crp": 4.8}
+    # Ein Bericht = ein Audit (Gruppe), nicht eine Zeile = ein Audit.
+    assert len(store.entry("e1")["audit_log"]) == 1
+
+
+def test_import_csv_lab_writes_one_save_for_the_dataset(tmp_path):
+    """[#72/O-3] Ein Labor-Dataset = genau ein Speichervorgang."""
+    folder = _import_dir(tmp_path)
+    text = _lab_csv(
+        "2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;",
+        "2026-10-31T09:00:00;Caro;crp;inflammation;4.8;mg/L;4.8;mg/L;",
+    )
+    (folder / "labs.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    store._store.async_save = AsyncMock(return_value=None)
+    hass = _import_hass(tmp_path)
+
+    _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "labs.csv", "dataset": "lab_values"})
+        )
+    )
+
+    assert store._store.async_save.await_count == 1
+    assert len(store.entry("e1")["lab_readings"]) == 2
+
+
+def test_import_csv_passes_actor_into_the_audit(tmp_path):
+    """[#WP1-03] Der WS-Actor landet im Audit (kein stiller `actor=None`)."""
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    _run(
+        importer.async_import_csv(
+            hass,
+            store,
+            "e1",
+            dataset="drinks",
+            content=_drinks_csv(),
+            actor="user-1",
+        )
+    )
+    _run(
+        importer.async_import_csv(
+            hass,
+            store,
+            "e1",
+            dataset="lab_values",
+            content=_lab_csv("2026-10-31T09:00:00;Caro;alt;liver;32.0;U/L;32.0;U/L;"),
+            actor="user-1",
+        )
+    )
+
+    actions = [event["action"] for event in store.entry("e1")["audit_log"]]
+    assert actions == ["drink_added", "drink_added", "lab_values_added"]
+    assert all(event["actor"] == "user-1" for event in store.entry("e1")["audit_log"])

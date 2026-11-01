@@ -2045,18 +2045,24 @@ def test_req_hom_122_n6_last_active_lab_reading_tiebreak_is_last_inserted(mock_s
     zuletzt eingetragene Eintrag (Semantik der vorherigen Sortier-Variante)."""
     store, _ = mock_store_fixture
     _async_test(store.async_load())
-    for value in (20.0, 30.0):
-        _async_test(
-            store.add_lab_reading(
-                "e1",
-                "2026-11-03T09:00:00+01:00",
-                "alt",
-                value,
-                "U/L",
-                value,
-                "U/L",
-                created_ts_iso="2026-11-03T09:05:00+01:00",
-            )
+    # Alt-/Migrationsbestand: der Schreibpfad lehnt gleiche (ts, marker_key)
+    # inzwischen ab (#71/#72), historische Daten können sie aber enthalten.
+    for index, value in enumerate((20.0, 30.0)):
+        store.entry("e1")["lab_readings"].append(
+            {
+                "id": f"r{index}",
+                "ts": "2026-11-03T09:00:00+01:00",
+                "marker_key": "alt",
+                "value": value,
+                "unit": "U/L",
+                "reported_value": value,
+                "reported_unit": "U/L",
+                "report_ref": None,
+                "created_at": "2026-11-03T09:05:00+01:00",
+                "voided_at": None,
+                "voided_by": None,
+                "void_reason": None,
+            }
         )
 
     last = store.last_active_lab_reading("e1", "alt")
@@ -2454,3 +2460,193 @@ def test_req_hom_129_void_lab_readings_before_rolls_back_on_save_error(
 
     assert store.entry("e1")["lab_readings"] == [original]
     assert store.entry("e1")["audit_log"] == []
+
+
+# --- #71/#72: kanonische Dedupe-Regel + Mehrgruppen-Save --------------------
+
+
+def test_req_hom_122_add_lab_reading_rejects_same_ts_and_marker(mock_store_fixture):
+    """[#72] Gleiches `(ts, marker_key)` — auch mit neuem Wert — ist ein Duplikat."""
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(
+        store.add_lab_reading("e1", "2026-11-01T09:00:00+01:00", "alt", 32.0, "U/L", 32.0, "U/L")
+    )
+    mock_save.async_save.reset_mock()
+
+    with pytest.raises(ValueError, match="duplicate_marker"):
+        _async_test(
+            store.add_lab_reading("e1", "2026-11-01T08:00:00Z", "alt", 99.0, "U/L", 99.0, "U/L")
+        )
+
+    assert [item["value"] for item in store.entry("e1")["lab_readings"]] == [32.0]
+    assert len(store.entry("e1")["audit_log"]) == 1
+    mock_save.async_save.assert_not_awaited()
+
+
+def test_req_hom_122_add_lab_reading_duplicate_also_counts_voided(mock_store_fixture):
+    """[#72] Auch ein voideter Wert blockiert denselben `(ts, marker_key)`."""
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "2026-11-01T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    _async_test(store.void_lab_reading("e1", store.entry("e1")["lab_readings"][0]["id"]))
+
+    with pytest.raises(ValueError, match="duplicate_marker"):
+        _async_test(
+            store.add_lab_reading("e1", "2026-11-01T09:00:00", "alt", 33.0, "U/L", 33.0, "U/L")
+        )
+
+
+def test_req_hom_123_add_lab_readings_rejects_duplicate_report_without_partial_state(
+    mock_store_fixture,
+):
+    """[#72] Bericht mit vorhandenem `(ts, marker_key)` → nichts geschrieben."""
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.add_lab_reading("e1", "2026-11-01T09:00:00", "alt", 32.0, "U/L", 32.0, "U/L"))
+    mock_save.async_save.reset_mock()
+
+    with pytest.raises(ValueError, match="duplicate_marker"):
+        _async_test(
+            store.add_lab_readings(
+                "e1",
+                "2026-11-01T09:00:00",
+                [
+                    {
+                        "marker_key": "crp",
+                        "value": 4.8,
+                        "unit": "mg/L",
+                        "reported_value": 4.8,
+                        "reported_unit": "mg/L",
+                    },
+                    {
+                        "marker_key": "alt",
+                        "value": 99.0,
+                        "unit": "U/L",
+                        "reported_value": 99.0,
+                        "reported_unit": "U/L",
+                    },
+                ],
+            )
+        )
+
+    assert [item["marker_key"] for item in store.entry("e1")["lab_readings"]] == ["alt"]
+    mock_save.async_save.assert_not_awaited()
+
+
+def test_req_hom_123_add_lab_readings_bulk_writes_groups_with_one_save(
+    mock_store_fixture,
+):
+    """[#72/O-3] N Gruppen → ein Save, ein Audit je Bericht, IDs in Reihenfolge."""
+    store, mock_save = mock_store_fixture
+    _async_test(store.async_load())
+
+    ids = _async_test(
+        store.add_lab_readings_bulk(
+            "e1",
+            [
+                {
+                    "ts_iso": "2026-11-01T09:00:00+01:00",
+                    "report_ref": "Labor A",
+                    "rows": _lab_rows(2),
+                },
+                {
+                    "ts_iso": "2026-10-01T09:00:00+01:00",
+                    "report_ref": None,
+                    "rows": _lab_rows(1),
+                },
+            ],
+            actor="user-1",
+        )
+    )
+
+    readings = store.entry("e1")["lab_readings"]
+    assert [item["marker_key"] for item in readings] == ["marker_0", "marker_1", "marker_0"]
+    assert [item["id"] for item in readings] == ids
+    assert readings[0]["report_ref"] == "Labor A"
+    assert readings[2]["report_ref"] is None
+    audit = store.entry("e1")["audit_log"]
+    assert len(audit) == 2
+    assert [event["details"]["count"] for event in audit] == [2, 1]
+    mock_save.async_save.assert_awaited_once()
+
+
+def test_req_hom_123_add_lab_readings_bulk_skips_duplicates_without_abort(
+    mock_store_fixture,
+):
+    """[#72/O-3] Wiederholter Import schreibt nur fehlende Zeilen (kein Fehler)."""
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(
+        store.add_lab_readings_bulk(
+            "e1",
+            [
+                {
+                    "ts_iso": "2026-11-01T09:00:00+01:00",
+                    "report_ref": None,
+                    "rows": _lab_rows(2),
+                }
+            ],
+        )
+    )
+
+    ids = _async_test(
+        store.add_lab_readings_bulk(
+            "e1",
+            [
+                {
+                    "ts_iso": "2026-11-01T09:00:00+01:00",
+                    "report_ref": None,
+                    "rows": _lab_rows(4),  # 0/1 Duplikat, 2/3 neu
+                }
+            ],
+        )
+    )
+
+    assert len(ids) == 2
+    assert [item["marker_key"] for item in store.entry("e1")["lab_readings"]] == [
+        "marker_0",
+        "marker_1",
+        "marker_2",
+        "marker_3",
+    ]
+
+
+def test_req_hom_123_add_lab_readings_bulk_rolls_back_all_groups_on_save_error(
+    mock_store_fixture, monkeypatch
+):
+    """[#72/O-3] Save-Fehler setzt In-Memory-Zustand über ALLE Gruppen zurück."""
+    store, _mock_save = mock_store_fixture
+    _async_test(store.async_load())
+    existing = {"id": "old-reading", "marker_key": "alt", "value": 32.0}
+    store.entry("e1")["lab_readings"] = [existing]
+    store.entry("e1")["audit_log"] = [
+        {
+            "id": "audit-1",
+            "ts": "2026-10-01T08:00:00+02:00",
+            "action": "lab_value_added",
+            "kind": "lab_readings",
+            "target_id": "old-reading",
+            "actor": None,
+            "details": {},
+        }
+    ]
+
+    async def _fail_save() -> None:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(store, "_async_save", _fail_save)
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        _async_test(
+            store.add_lab_readings_bulk(
+                "e1",
+                [
+                    {"ts_iso": "2026-11-01T09:00:00", "report_ref": "A", "rows": _lab_rows(2)},
+                    {"ts_iso": "2026-10-01T09:00:00", "report_ref": "B", "rows": _lab_rows(2)},
+                ],
+            )
+        )
+
+    assert store.entry("e1")["lab_readings"] == [existing]
+    assert [event["id"] for event in store.entry("e1")["audit_log"]] == ["audit-1"]

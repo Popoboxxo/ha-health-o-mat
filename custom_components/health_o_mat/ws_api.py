@@ -40,6 +40,7 @@ from .const import (
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
+    MAX_IMPORT_CONTENT_BYTES,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
     OPTION_LAB_CUSTOM_MARKERS,
@@ -124,6 +125,7 @@ COMMAND_DELETE_PERSON = "health_o_mat/delete_person"
 COMMAND_BACKUP = "health_o_mat/backup"
 COMMAND_RESTORE_BACKUP = "health_o_mat/restore_backup"
 COMMAND_LIST_IMPORT_FILES = "health_o_mat/list_import_files"
+COMMAND_IMPORT_CSV = "health_o_mat/import_csv"
 
 # Admin-only (Konzept §8.4, Entscheidung 4): Settings lesen/schreiben und
 # Export sind Verwaltungsvorgänge. Die Alltags-Schreibkommandos
@@ -139,6 +141,7 @@ ADMIN_ONLY_COMMANDS: frozenset[str] = frozenset(
         COMMAND_BACKUP,
         COMMAND_RESTORE_BACKUP,
         COMMAND_LIST_IMPORT_FILES,
+        COMMAND_IMPORT_CSV,
     }
 )
 
@@ -182,6 +185,10 @@ else:  # pragma: no cover - nur ohne WS-Komponente
 ERR_EXPORT_FAILED = "export_failed"
 ERR_BACKUP_FAILED = "backup_failed"
 ERR_RESTORE_FAILED = "restore_failed"
+# CSV-Import (#72): fachliche Fehler (Datei fehlt, Whitelist-Verletzung, …).
+ERR_IMPORT_FAILED = "import_failed"
+# Upload-Grenze (#72): eigener Code, damit die UI die Ursache eindeutig zeigen kann.
+ERR_CONTENT_TOO_LARGE = "content_too_large"
 
 
 # --- Admin-/Settings-Kommandos (L3, Konzept §4.5/§8.4) ---------------------
@@ -1003,6 +1010,19 @@ def build_history(
 # --- WebSocket-Kommandos ----------------------------------------------------
 
 
+def _require_exactly_one_import_source(value: dict[str, Any]) -> dict[str, Any]:
+    """Schema-Nachprüfung (#72): genau `filename` **oder** `content`, nie beides.
+
+    ``vol.Exclusive`` allein weist nur „beides" ab; „keines" muss die
+    Nachprüfung übernehmen, damit HA ein sauberes ``invalid_format`` liefert.
+    """
+    has_filename = bool(str(value.get("filename") or "").strip())
+    has_content = isinstance(value.get("content"), str) and value.get("content") != ""
+    if has_filename == has_content:
+        raise vol.Invalid("Genau eines von 'filename' oder 'content' angeben")
+    return value
+
+
 async def async_register_ws_api(hass: HomeAssistant) -> None:
     """Registriert die Kommandos genau EINMAL pro HA-Prozess (idempotent).
 
@@ -1205,16 +1225,34 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Optional("restore_audit", default=False): bool,
             },
         ),
+        (
+            COMMAND_IMPORT_CSV,
+            websocket_import_csv,
+            {
+                vol.Required("entry_id"): str,
+                # Genau eine Quelle (D7): beide oder keine → invalid_format.
+                vol.Exclusive("filename", "import_source"): str,
+                vol.Exclusive("content", "import_source"): str,
+                vol.Optional("dataset", default="all"): vol.In(
+                    ["drinks", "blood_pressure", "lab_values", "all"]
+                ),
+            },
+        ),
     )
     for command, handler, extra in commands:
         wrapped = websocket_api.async_response(handler)
+        schema = _schema(command, extra)
+        if command == COMMAND_IMPORT_CSV:
+            # `vol.Exclusive` wehrt nur "beides" ab; "keines" muss zusätzlich
+            # als `invalid_format` abgewiesen werden (#72).
+            schema = vol.All(schema, _require_exactly_one_import_source)
         if command in ADMIN_ONLY_COMMANDS:
             # HAs `require_admin` ist ein SYNCHRONER Wrapper und ruft den inneren
             # Handler ohne `await` — die Reihenfolge ist deshalb zwingend
             # `require_admin(async_response(handler))` (umgekehrt erzeugt
             # `async_response` einen Task für `None`).
             wrapped = _admin_guard(wrapped)
-        websocket_api.async_register_command(hass, command, wrapped, _schema(command, extra))
+        websocket_api.async_register_command(hass, command, wrapped, schema)
     shared[WS_MARKER] = True
 
 
@@ -1556,19 +1594,25 @@ async def websocket_add_lab_value(
     except ValueError as err:
         connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
         return
-    await store.add_lab_reading(
-        entry_id,
-        ts_iso,
-        marker_key,
-        canonical_value,
-        canonical_unit,
-        reported_value,
-        raw_unit or canonical_unit,
-        report_ref=report_ref,
-        created_ts_iso=now.isoformat(),
-        actor=user_id_of(connection),
-        audit_limit=_audit_limit(hass, entry_id),
-    )
+    try:
+        await store.add_lab_reading(
+            entry_id,
+            ts_iso,
+            marker_key,
+            canonical_value,
+            canonical_unit,
+            reported_value,
+            raw_unit or canonical_unit,
+            report_ref=report_ref,
+            created_ts_iso=now.isoformat(),
+            actor=user_id_of(connection),
+            audit_limit=_audit_limit(hass, entry_id),
+        )
+    except ValueError as err:
+        # Kanonische Dedupe-Regel (#71/#72): gleiches (ts, marker_key) → kein
+        # zweiter Wert, kein Teilzustand. Der Fehlercode ist stabil.
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "duplicate_marker")
+        return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
 
@@ -1610,15 +1654,28 @@ async def websocket_add_lab_report(
         connection.send_result(msg["id"], _lab_error_result(error))
         return
     report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
-    await store.add_lab_readings(
-        entry_id,
-        ts_iso,
-        rows,
-        report_ref=report_ref,
-        created_ts_iso=now.isoformat(),
-        actor=user_id_of(connection),
-        audit_limit=_audit_limit(hass, entry_id),
-    )
+    try:
+        await store.add_lab_readings(
+            entry_id,
+            ts_iso,
+            rows,
+            report_ref=report_ref,
+            created_ts_iso=now.isoformat(),
+            actor=user_id_of(connection),
+            audit_limit=_audit_limit(hass, entry_id),
+        )
+    except ValueError as err:
+        connection.send_result(
+            msg["id"],
+            _lab_error_result(
+                {
+                    "code": "duplicate_marker",
+                    "params": {},
+                    "message": str(err) or "duplicate_marker",
+                }
+            ),
+        )
+        return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"], {"ok": True, "written": len(rows), "ts": ts_iso})
 
@@ -2228,6 +2285,72 @@ async def websocket_list_import_files(
         _send_unauthorized(connection, msg)
         return
     connection.send_result(msg["id"], {"files": _list_import_files(hass.config.config_dir)})
+
+
+async def websocket_import_csv(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
+    """`health_o_mat/import_csv` → CSV aus Datei ODER Upload importieren (#72).
+
+    Admin-only (fail-closed über `is_admin_connection`; zusätzlich in
+    `ADMIN_ONLY_COMMANDS`, damit HAs `require_admin`-Wrapper greift). Es gilt
+    **genau eine** Quelle: `filename` (Whitelist Import-/privat­er Export-Ordner
+    über `safe_import_path`) oder `content` (UTF-8-Text, ≤ 2 MiB, nie auf
+    Platte geschrieben). Rückgabe ist der `import_csv`-Response-Kontrakt
+    `{imported, skipped, rejected, errors}` (#71).
+    """
+    if not is_admin_connection(connection):
+        _send_unauthorized(connection, msg)
+        return
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    filename = (msg.get("filename") or "").strip()
+    content = msg.get("content")
+    has_content = isinstance(content, str) and content != ""
+    if bool(filename) == has_content:
+        connection.send_error(
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "Genau eines von 'filename' oder 'content' angeben",
+        )
+        return
+    if has_content:
+        try:
+            size = len(content.encode("utf-8"))
+        except UnicodeEncodeError:
+            connection.send_error(msg["id"], ERR_INVALID_FORMAT, "content ist kein gültiges UTF-8")
+            return
+        # Längenprüfung VOR dem Parsen — zu großer Inhalt wird abgelehnt, nie
+        # abgeschnitten (Event-Loop-Schutz, kein Schreibzugriff).
+        if size > MAX_IMPORT_CONTENT_BYTES:
+            connection.send_error(
+                msg["id"],
+                ERR_CONTENT_TOO_LARGE,
+                f"content überschreitet {MAX_IMPORT_CONTENT_BYTES} Bytes",
+            )
+            return
+    from .importer import async_import_csv
+
+    try:
+        # Explizite Parameter statt Fake-ServiceCall über die Modulgrenze:
+        # der Actor landet so im Audit, und ein späterer `call.context`-Zugriff
+        # kann nicht still brechen (#WP1-03).
+        result = await async_import_csv(
+            hass,
+            store,
+            entry_id,
+            audit_limit=_audit_limit(hass, entry_id),
+            content=content if has_content else None,
+            filename=filename or None,
+            dataset=msg.get("dataset", "all"),
+            actor=user_id_of(connection),
+        )
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], ERR_IMPORT_FAILED, str(err))
+        return
+    connection.send_result(msg["id"], result)
 
 
 async def websocket_restore_backup(

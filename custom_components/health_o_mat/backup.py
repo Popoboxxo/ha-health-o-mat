@@ -151,6 +151,51 @@ def backup_filename(created: datetime) -> str:
     return f"health_o_mat_backup_{created.strftime('%Y%m%d-%H%M%S')}.json"
 
 
+# Store-Listen → öffentliche Datensatz-Namen des Service-Response-Vertrags.
+_BACKUP_DATASET_NAMES: dict[str, str] = {
+    "drinks": "drinks",
+    "readings": "blood_pressure",
+    "wellbeing": "wellbeing",
+    "lab_readings": "lab_values",
+}
+
+
+def backup_summary(
+    store: HealthOMatStore,
+    archive_store: HealthOMatStore | None,
+    path: str,
+) -> dict[str, Any]:
+    """Service-Response des Backups (#71): ``{filename, datasets, rows}``.
+
+    ``filename`` ist der Basename (nie ein absoluter Pfad — Responses landen im
+    Automation-Trace), ``datasets`` die tatsächlich enthaltenen Datensätze in
+    fester Reihenfolge, ``rows`` die Summe aller gesicherten Einträge
+    (Haupt-Store **und** Retention-Archiv).
+    """
+    flags = dict.fromkeys(_BACKUP_DATASET_NAMES.values(), False)
+    rows = 0
+    entries = store.raw_data().get("entries", {}) if store is not None else {}
+    for entry in entries.values() if isinstance(entries, dict) else []:
+        counts = _entry_counts(entry)
+        for key, label in _BACKUP_DATASET_NAMES.items():
+            total = int((counts.get(key) or {}).get("total", 0))
+            if total:
+                flags[label] = True
+                rows += total
+    if archive_store is not None:
+        for counts in _archive_counts(archive_store.raw_data()).values():
+            for key, label in _BACKUP_DATASET_NAMES.items():
+                total = int((counts.get(key) or {}).get("total", 0))
+                if total:
+                    flags[label] = True
+                    rows += total
+    return {
+        "filename": os.path.basename(str(path)) if path else "",
+        "datasets": [label for label, present in flags.items() if present],
+        "rows": rows,
+    }
+
+
 async def async_backup(
     hass: HomeAssistant,
     store: HealthOMatStore,

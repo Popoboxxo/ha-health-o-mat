@@ -324,11 +324,21 @@ Zweitwert (vor/nach Belastung) ist ein separater Aufruf mit eigenem `ts`/`report
 | Aufrufer | Erfolg | Fachfehler |
 |---|---|---|
 | Service | **kein** Rückgabewert (konsistent zu allen bestehenden Services; kein `SupportsResponse` im Repo) | `ServiceValidationError(error["message"])` |
+
+> **Hinweis (2026-11-01):** Diese Festlegung ist durch Issue **#71** (Service-Antworten,
+> `SupportsResponse.OPTIONAL`) überholt — siehe `docs/PLAN-OPEN-ISSUES.md` §2 D6 und
+> `docs/SERVICE-RESPONSES.md`. Die übrigen Aussagen dieses Abschnitts bleiben gültig.
+
 | WS `add_lab_report` | `send_result(id, {"ok": true, "written": n, "ts": ts_iso})` | `send_result(id, {"ok": false, "error": {...}})` (§3) |
 | WS `remove_lab_report` | `send_result(id, {"ok": true, "voided": n})` | `send_result(id, {"ok": false, "error": {...}})` (§3) |
 
 `n` = Anzahl tatsächlich geschriebener Werte (ohne ignorierte Leerzeilen). Ein
 Service-Response (`SupportsResponse`) wird **nicht** eingeführt — neues Muster, kein Bedarf.
+
+> **Hinweis (2026-11-01):** Diese Festlegung ist durch Issue **#71** (Service-Antworten,
+> `SupportsResponse.OPTIONAL`) überholt — siehe `docs/PLAN-OPEN-ISSUES.md` §2 D6 und
+> `docs/SERVICE-RESPONSES.md`. Die übrigen Aussagen dieses Abschnitts bleiben gültig.
+
 
 ### 2.8 Store-API
 
@@ -917,6 +927,8 @@ Labs-Card-Abschnitt (README 576-577).
 - **Batch-Daten ändern das Backup-Format nicht:** nur zwei additive Optionsschlüssel
   (§2.16); `lab_readings[]` bleibt unverändert. Das **Lab-CSV** ändert sich (§2.15, bewusst).
 - **Kein Service-Response** (`SupportsResponse`) und kein neuer Webhook/HTTP-Endpunkt.
+  *(Überholt durch #71: die fünf Verwaltungs-Services antworten optional — siehe
+  `docs/SERVICE-RESPONSES.md`; ein HTTP-Endpunkt bleibt ausgeschlossen.)*
 - **Keine Migration der bestehenden Fehlerpfade** auf code-only/strukturiert — das ist
   REQ-HOM-127 mit eigenem Plan.
 - **Kein Gruppen-Restore** eines Berichts (nur einzeln über `restore_entry`).

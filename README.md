@@ -789,10 +789,12 @@ Store-/Refresh-Pfad wie das Panel. Die Laborwert-Services `add_lab_value` und
 ### CSV-Import
 
 Importiert eine zuvor exportierte CSV (oder eine Datei im gleichen Format) in
-die Historie einer Person:
+die Historie einer Person — **nur für Administratoren** (Service **und**
+WebSocket-Kommando):
 
 1. Datei nach `/config/health_o_mat_import/` kopieren (Ordner bei Bedarf
-   anlegen).
+   anlegen) — oder direkt eine Datei aus dem privaten Export-Ordner
+   `/config/health_o_mat_export/` verwenden (kein Umkopieren nötig).
 2. Service aufrufen:
 
 ```yaml
@@ -800,12 +802,41 @@ action: health_o_mat.import_csv
 data: { person: "Caro", filename: "health_o_mat_drinks_Caro_20261014-1200.csv" }
 ```
 
-Der Import ist bewusst tolerant: Semikolon-getrennt, UTF-8 mit oder ohne BOM,
-`#`-Kommentarzeilen und eine fehlende/abweichende Kopfzeile werden akzeptiert.
+**Format (bewusst streng):** ausschließlich Semikolon (`;`) als Trennzeichen
+und UTF-8 (mit oder ohne BOM). Es gibt **keine** automatische Erkennung: eine
+Komma-getrennte Datei wird als ungültig (`rejected`) gemeldet und eine
+`cp1252`-Datei mit einer klaren Meldung abgelehnt — nichts wird still
+uminterpretiert. `#`-Kommentarzeilen und eine fehlende/abweichende Kopfzeile
+werden weiterhin toleriert.
+
 Bestehende Einträge werden als Duplikate erkannt und übersprungen (Getränke über
 Zeitstempel + Menge, Blutdruck über Zeitstempel + systolisch + diastolisch,
-Laborwerte über Zeitstempel + Marker + Wert); unlesbare Zeilen werden abgelehnt.
-Eine Notification meldet das Ergebnis als `imported / skipped / rejected`.
+**Laborwerte über Zeitstempel + Marker** — ein abweichender Wert zum selben
+Zeitpunkt/Marker ist ein Duplikat und überschreibt den Befund nicht). Unlesbare
+Zeilen werden abgelehnt. Ein Laborbericht wird atomar geschrieben (nie halb)
+und ein Labor-Dataset in genau einem Speichervorgang; ein zweiter Import
+derselben Datei ergänzt nur fehlende Zeilen.
+
+#### CSV-Upload über die WebSocket-API
+
+Das Kommando `health_o_mat/import_csv` (Admin-only) importiert wahlweise eine
+Datei (`filename`, Whitelist: Import- oder Export-Ordner) **oder** einen
+direkt übermittelten Text (`content`, UTF-8, max. 2 MiB, wird nie auf die Platte
+geschrieben) — genau eine der beiden Quellen. Der Inhalt wird vor dem Parsen auf
+die Größe geprüft; zu große Uploads werden mit `content_too_large` abgelehnt,
+nicht abgeschnitten. Die Antwort entspricht dem Service-Response
+`{imported, skipped, rejected, errors}` (`errors` ist auf 20 Texte gedeckelt,
+die Zähler bleiben maßgeblich). Fehlertexte nennen nur Zeilennummer und Grund
+(`Zeile 2: ungültiger Laborwert`) — keine Zellinhalte, keine Messwerte.
+
+### Service-Antworten (optional)
+
+`export_csv`, `import_csv`, `backup`, `restore_backup` und `weekly_report`
+registrieren `SupportsResponse.OPTIONAL`: Aufrufe **ohne** `return_response`
+(Automationen, Skripte) verhalten sich unverändert; mit
+`return_response: true` liefern sie einen flachen, snake_case-Antwortkontrakt
+(Details: [`docs/SERVICE-RESPONSES.md`](docs/SERVICE-RESPONSES.md)). Antworten
+enthalten nur Zähler und Dateinamen, nie Messwerte.
 
 ### Backup (JSON-Voll-Export)
 

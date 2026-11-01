@@ -811,6 +811,7 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_BACKUP,
     ws_api.COMMAND_LIST_IMPORT_FILES,
     ws_api.COMMAND_RESTORE_BACKUP,
+    ws_api.COMMAND_IMPORT_CSV,
 )
 
 
@@ -2786,6 +2787,7 @@ def test_admin_only_commands_are_marked():
         ws_api.COMMAND_BACKUP,
         ws_api.COMMAND_RESTORE_BACKUP,
         ws_api.COMMAND_LIST_IMPORT_FILES,
+        ws_api.COMMAND_IMPORT_CSV,
     }
     for command in (
         ws_api.COMMAND_BOOK_DRINK,
@@ -5430,3 +5432,196 @@ def test_req_hom_130_set_settings_call_site_feeds_previous_markers():
 
     stored = hass.config_entries.updates[0]["options"]["lab_custom_markers"]
     assert [marker["key"] for marker in stored] == ["vit_d3"]
+
+
+# --- #72: WS `health_o_mat/import_csv` --------------------------------------
+
+
+def _importer_module():
+    """Das bereits von `ws_api` geladene Import-Modul (kein zweiter Ladevorgang)."""
+    return importlib.import_module(f"{_PKG}.importer")
+
+
+def _import_msg(**extra):
+    return {"id": 1, "type": ws_api.COMMAND_IMPORT_CSV, "entry_id": "e1", **extra}
+
+
+def _import_hass():
+    return _write_hass(_write_store(), [_entry("e1")])
+
+
+def _import_result():
+    return {"imported": 2, "skipped": 0, "rejected": 0, "errors": []}
+
+
+def test_import_csv_ws_command_is_admin_only(monkeypatch):
+    """[#72] Das Kommando steht in `ADMIN_ONLY_COMMANDS` (require_admin-Wrapper)."""
+    assert ws_api.COMMAND_IMPORT_CSV in ws_api.ADMIN_ONLY_COMMANDS
+
+    hass = FakeHass()
+    registered: list[str] = []
+    monkeypatch.setattr(
+        ws_api.websocket_api,
+        "async_register_command",
+        lambda hass_, command, handler, schema: registered.append(command),
+    )
+
+    asyncio.run(ws_api.async_register_ws_api(hass))
+
+    assert ws_api.COMMAND_IMPORT_CSV in registered
+
+
+def test_import_csv_ws_rejects_non_admin(monkeypatch):
+    """[#72] Nicht-Admin → `unauthorized`, kein Import."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = FakeConnection(is_admin=False)
+
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(filename="drinks.csv"))
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "unauthorized"
+    called.assert_not_awaited()
+
+
+def test_import_csv_ws_requires_exactly_one_source(monkeypatch):
+    """[#72] Beides oder keines → `invalid_format` (Handler-Ebene)."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+    hass = _import_hass()
+
+    asyncio.run(
+        ws_api.websocket_import_csv(
+            hass, connection, _import_msg(filename="drinks.csv", content="a;b")
+        )
+    )
+    asyncio.run(ws_api.websocket_import_csv(hass, connection, _import_msg()))
+
+    assert [error[1] for error in connection.errors] == ["invalid_format", "invalid_format"]
+    called.assert_not_awaited()
+
+
+def test_import_csv_ws_schema_requires_exactly_one_source():
+    """[#72] Das Schema erzwingt bereits genau eine Quelle (vol.Exclusive)."""
+    hass = FakeHass()
+    schemas: dict = {}
+    original = ws_api.websocket_api.async_register_command
+
+    def _spy(hass_, command, handler, schema):
+        schemas[command] = schema
+
+    ws_api.websocket_api.async_register_command = _spy
+    try:
+        asyncio.run(ws_api.async_register_ws_api(hass))
+    finally:
+        ws_api.websocket_api.async_register_command = original
+
+    schema = schemas[ws_api.COMMAND_IMPORT_CSV]
+    with pytest.raises(vol.Invalid):
+        schema({"id": 1, "type": ws_api.COMMAND_IMPORT_CSV, "entry_id": "e1"})
+    with pytest.raises(vol.Invalid):
+        schema(
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_IMPORT_CSV,
+                "entry_id": "e1",
+                "filename": "a.csv",
+                "content": "x",
+            }
+        )
+    assert (
+        schema({"id": 1, "type": ws_api.COMMAND_IMPORT_CSV, "entry_id": "e1", "content": "x"})[
+            "dataset"
+        ]
+        == "all"
+    )
+
+
+def test_import_csv_ws_rejects_content_above_two_mib_without_import(monkeypatch):
+    """[#72] > 2 MiB → `content_too_large`, Längenprüfung vor dem Parsen."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+    content = "x" * (ws_api.MAX_IMPORT_CONTENT_BYTES + 1)
+
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(content=content))
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "content_too_large"
+    called.assert_not_awaited()
+
+
+def test_import_csv_ws_accepts_content_at_cap(monkeypatch):
+    """[#72] Exakt 2 MiB sind erlaubt (kein Off-by-one)."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+    content = "x" * ws_api.MAX_IMPORT_CONTENT_BYTES
+
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(content=content))
+    )
+
+    assert connection.errors == []
+    assert connection.results[0][1] == _import_result()
+    kwargs = called.await_args.kwargs
+    assert kwargs["content"] == content
+
+
+def test_import_csv_ws_content_returns_import_contract(monkeypatch):
+    """[#72] Rückgabe ist der `import_csv`-Response-Kontrakt (#71)."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_import_csv(
+            _import_hass(), connection, _import_msg(content="a;b", dataset="drinks")
+        )
+    )
+
+    assert connection.results == [(1, _import_result())]
+    args = called.await_args.args
+    assert args[2] == "e1"  # entry_id als Positionsargument
+    kwargs = called.await_args.kwargs
+    assert kwargs["dataset"] == "drinks"
+    assert kwargs["filename"] is None
+    assert kwargs["content"] == "a;b"
+    assert kwargs["actor"] == "user-1"
+
+
+def test_import_csv_ws_filename_uses_empty_content(monkeypatch):
+    """[#72] `filename` wird ohne `content` an den Importer gereicht."""
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(filename="drinks.csv"))
+    )
+
+    assert connection.errors == []
+    kwargs = called.await_args.kwargs
+    assert kwargs["filename"] == "drinks.csv"
+    assert kwargs["content"] is None
+    assert kwargs["actor"] == "user-1"
+
+
+def test_import_csv_ws_reports_import_errors_structured(monkeypatch):
+    """[#72] Fachfehler (z. B. Whitelist) → `import_failed`, kein Crash."""
+    called = AsyncMock(side_effect=ServiceValidationError("Pfad verlässt das Import-Verzeichnis"))
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(filename="../x.csv"))
+    )
+
+    assert connection.results == []
+    assert connection.errors[0][1] == "import_failed"
+    assert "Import-Verzeichnis" in connection.errors[0][2]

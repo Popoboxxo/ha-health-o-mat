@@ -1747,6 +1747,49 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   GitHub-Release), HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1
   (Repair-Issue + Erfolgs-Notification).
 
+#### REQ-HOM-132 — Optionale Service-Antworten, CSV-Upload und atomarer Import
+- **Priorität:** P1 · **Aufwand:** M
+- **Status: Umgesetzt** (Branch `feat/71-72-service-responses-and-import-upload`,
+  2026-11-01) — noch kein Release/Tag.
+- **Bezug:** Issues **#71** (Service-Responses) und **#72** (Import von außen);
+  Plan `docs/PLAN-OPEN-ISSUES.md` §3 WP1 inkl. D6, D7, D7b und O-2/O-3; Doku
+  `docs/SERVICE-RESPONSES.md`.
+- **Anforderung:** Die fünf Verwaltungs-Services `export_csv`, `import_csv`,
+  `backup`, `restore_backup` und `weekly_report` antworten **optional**
+  (`SupportsResponse.OPTIONAL`, nie `ONLY`) mit einem flachen
+  snake_case-Kontrakt; Aufrufe ohne `return_response` bleiben unverändert.
+  Fehler bleiben Exceptions, Teilausfälle werden als Daten geliefert
+  (`weekly_report` je Person, `errors` ≤ 20). Der CSV-Import ist auf beiden
+  Pfaden (Service **und** WebSocket `health_o_mat/import_csv`) **admin-only**,
+  akzeptiert genau eine Quelle (`filename` über die Whitelist Import-/privater
+  Export-Ordner **oder** `content` ≤ 2 MiB, nie auf Platte) und unterstützt
+  ausschließlich `;` + UTF-8 (kein Sniffing, kein `cp1252`). Laborwerte werden
+  je Bericht atomar und je Dataset in **einem** Speichervorgang geschrieben;
+  Dedupe ist kanonisch `(ts, marker_key)` (auch voided, auch mit abweichendem
+  Wert → `skipped`/`duplicate_marker`, kein Abbruch).
+- **Akzeptanzkriterien (Plan §3 WP1 AK 1–8):**
+  - [x] Responses nur bei `return_response`, exakte Key-Mengen; `export_csv`
+    mit `filenames` und `rows` = Summe (O-2).
+  - [x] `errors` ≤ 20, Zähler autoritativ, Fachfehler als Exception.
+  - [x] WS „genau eines" von `filename`/`content`, 2-MiB-Cap, Admin-Gate auf
+    Service und WS.
+  - [x] CSV aus dem Export-Ordner importierbar; `,`/cp1252 werden abgelehnt.
+  - [x] Atomarer Importpfad (ein Save je Dataset, ein Audit je Bericht,
+    Rollback über alle Gruppen), wiederholbar ohne Duplikate.
+  - [x] Einzel-Add (`add_lab_value`/`add_lab_report`, Service und WS) lehnt
+    `(ts, marker_key)`-Duplikate ab.
+  - [x] `weekly_report`-Teilausfall: Person A `delivered:true`, Person B
+    `delivered:false`, `failed ≥ 1`, Response kommt zurück.
+  - [x] `pytest -q` grün, `ruff` clean, `services.yaml`/README/Doku aktualisiert.
+- **Belege:** `tests/test_import_backup.py` (Response-Kontrakte, `errors`-Cap,
+  Export-Ordner, `,`-Ablehnung, cp1252, `content`-Upload, `(ts, marker_key)`-Dedupe,
+  ein Save je Dataset, Admin-Gate des Services), `tests/test_wave_a.py`
+  (`SupportsResponse.OPTIONAL`, `weekly_report`-Teilausfall, Restore-Response),
+  `tests/test_ws_api.py` (WS-Import: genau eine Quelle, 2-MiB-Grenze ±1 Byte,
+  Admin-Gate, Fehlercode), `tests/test_store.py` (Dedupe, Bulk-Save,
+  Snapshot-Rollback über N Gruppen), `tests/test_lab_services.py`
+  (Einzel-Add `duplicate_marker` mit echtem Store).
+
 ---
 
 ## 3. Mapping Funde → Anforderungen

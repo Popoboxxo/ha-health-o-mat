@@ -88,7 +88,7 @@ def _wire_services_and_schemas(hass, store, entry_id="e1", options=None):
     registered = {}
     schemas = {}
 
-    def _register(domain, name, schema=None, service_func=None):
+    def _register(domain, name, schema=None, service_func=None, supports_response=None):
         registered[name] = service_func
         schemas[name] = schema
 
@@ -767,3 +767,99 @@ def test_req_hom_129_apply_lab_retention_voids_before_cutoff(monkeypatch):
     assert args[0] == "e1"
     assert args[1] == "2025-11-01T12:00:00+00:00"
     assert kwargs["months"] == 12
+
+
+# ---------------------------------------------------------------------------
+# #71/#72: Einzel-Add lehnt Duplikate `(ts, marker_key)` ab
+# ---------------------------------------------------------------------------
+
+
+def _freeze_clock(monkeypatch) -> None:
+    """`dt_util.now` fixieren: die festen Test-`ts` müssen in der Vergangenheit liegen.
+
+    Andere Suiten setzen `dt_util.now` teils dauerhaft (Modul-Attribut); ohne
+    Fixierung hinge das Ergebnis hier von der Testreihenfolge ab.
+    """
+    monkeypatch.setattr(hass_init.dt_util, "now", lambda: datetime(2026, 11, 5, 12, 0))
+
+
+def test_req_hom_122_add_lab_value_duplicate_marker_raises(monkeypatch):
+    """[#72] Store meldet Duplikat → ServiceValidationError, kein Refresh."""
+    _freeze_clock(monkeypatch)
+    store = MagicMock()
+    store.add_lab_reading = AsyncMock(side_effect=ValueError("duplicate_marker"))
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call({"marker": "alt", "value": 32.0, "ts": "2026-10-31T09:00:00"})
+
+    with pytest.raises(ServiceValidationError, match="duplicate_marker"):
+        _run(registered["add_lab_value"](call))
+
+    store.add_lab_reading.assert_awaited_once()
+
+
+def test_req_hom_123_add_lab_report_duplicate_marker_raises(monkeypatch):
+    """[#72] Bericht mit vorhandenem `(ts, marker_key)` → ServiceValidationError."""
+    _freeze_clock(monkeypatch)
+    store = MagicMock()
+    store.add_lab_readings = AsyncMock(side_effect=ValueError("duplicate_marker"))
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    call = _make_call(
+        {
+            "ts": "2026-10-31T09:00:00",
+            "values": [{"marker": "alt", "value": 32.0, "unit": "U/L"}],
+        }
+    )
+
+    with pytest.raises(ServiceValidationError, match="duplicate_marker"):
+        _run(registered["add_lab_report"](call))
+
+    store.add_lab_readings.assert_awaited_once()
+
+
+def test_req_hom_122_add_lab_value_second_write_is_rejected_by_real_store(monkeypatch):
+    """[#72] Echter Store: gleicher ts/Marker, neuer Wert → kein zweiter Eintrag."""
+    _freeze_clock(monkeypatch)
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    first = _make_call({"marker": "alt", "value": 32.0, "ts": "2026-10-31T09:00:00+01:00"})
+    # Derselbe Instant in anderer Schreibweise ist ebenfalls ein Duplikat.
+    second = _make_call({"marker": "alt", "value": 99.0, "ts": "2026-10-31T08:00:00Z"})
+
+    _run(registered["add_lab_value"](first))
+    with pytest.raises(ServiceValidationError, match="duplicate_marker"):
+        _run(registered["add_lab_value"](second))
+
+    readings = store.entry("e1")["lab_readings"]
+    assert [item["value"] for item in readings] == [32.0]
+
+
+def test_req_hom_123_add_lab_report_second_write_is_rejected_by_real_store(monkeypatch):
+    """[#72] Echter Store: Bericht mit gleichem `(ts, marker)` → alles-oder-nichts."""
+    _freeze_clock(monkeypatch)
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+    first = _make_call(
+        {
+            "ts": "2026-10-31T09:00:00",
+            "values": [{"marker": "alt", "value": 32.0, "unit": "U/L"}],
+        }
+    )
+    second = _make_call(
+        {
+            "ts": "2026-10-31T09:00:00",
+            "values": [
+                {"marker": "crp", "value": 4.8, "unit": "mg/L"},
+                {"marker": "alt", "value": 99.0, "unit": "U/L"},
+            ],
+        }
+    )
+
+    _run(registered["add_lab_report"](first))
+    with pytest.raises(ServiceValidationError, match="duplicate_marker"):
+        _run(registered["add_lab_report"](second))
+
+    assert [item["marker_key"] for item in store.entry("e1")["lab_readings"]] == ["alt"]

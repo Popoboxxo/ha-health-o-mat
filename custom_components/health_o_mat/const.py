@@ -510,3 +510,13 @@ LAB_REPORT_REF_MAX_LEN = 500
 # LEICHTER Batch-Vertrag (REQ-HOM-123): Server-Limit je Bericht; die UI hat
 # einen eigenen Soft-Cap (60). Beide Werte sind bewusst unabhängig.
 LAB_REPORT_MAX_ROWS = 200
+
+# CSV-Upload über die WebSocket-API (#72): Obergrenze des `content`-Strings.
+# Die Länge wird VOR dem Parsen geprüft (Event-Loop-Schutz) und nie
+# abgeschnitten — zu großer Inhalt wird vollständig abgelehnt.
+MAX_IMPORT_CONTENT_BYTES = 2 * 1024 * 1024
+
+# Obergrenze der Fehlertexte in einer Import-Antwort (#71): die Zähler
+# (`imported`/`skipped`/`rejected`) bleiben autoritativ, die Liste ist nur
+# eine Hilfe für die UI.
+IMPORT_ERROR_LIMIT = 20
