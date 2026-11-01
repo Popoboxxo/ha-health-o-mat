@@ -5,6 +5,28 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.17.2] — 2026-11-02
+
+### Fixed
+
+- **`device_slug_ambiguous` is gone for renamed persons, renamed devices and
+  foreign `device_id`s:** the object-id prefix is no longer taken from the device
+  name or a single device link. It is derived from the entities that are about to be
+  renamed themselves (their sibling ids, `_sibling_prefix`), so a renamed person or
+  device — and a foreign `device_id` — can no longer move or block the pass. Entries
+  that stayed on `config entry v2` with `device_slug_ambiguous` migrate on the next
+  start.
+- **Catalog lab sensors confirm and trim the prefix:** the structural anchors
+  (`lab_<key>` catalog markers first) only confirm or word-boundary-trim the prefix
+  derived from the migration candidates. A completely hand-renamed id forms its own
+  first-token group and can never erase the prefix of the majority group; two equally
+  large groups remain a genuine ambiguity instead of a guess.
+- **Hint and device deviation are a warning, not a failure:** a diverging device name
+  (`hint_mismatch`) or device link (`device_id_mismatch`) is reported once as a
+  non-blocking warning. `recoverable` stays `True`, there is no `MIGRATION_ERROR`.
+
+[0.17.2]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.17.1...v0.17.2
+
 ## [0.17.1] — 2026-11-02
 
 ### Fixed
