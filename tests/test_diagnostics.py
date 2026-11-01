@@ -469,3 +469,241 @@ def test_redact_entity_ids_without_registry_metadata_keeps_ids():
     out = diagnostics.redact_diagnostics({"entity_ids": ["sensor.a", "sensor.b"]})
 
     assert out["entities"] == ["sensor.a", "sensor.b"]
+
+
+# ============================================================================
+# Post-Release-Befund 1 — verwaiste Labor-Entities (Soll/Ist-Vergleich)
+# ============================================================================
+#
+# Nach der A-1-Normalisierung (unbekannte Custom-Kategorie -> "other") können
+# Labor-Entities in der Registry stehen, die das Setup nicht mehr anlegt. Sie
+# sind als "restored"/"unavailable" weiter sichtbar — ein Check "Registry-
+# Eintrag ohne State" findet sie deshalb NICHT. Die Sektion
+# `lab_entity_orphans` vergleicht die Soll-Menge (dieselben Keys, die
+# sensor.py/binary_sensor.py beim Setup erzeugen) mit der Registry.
+
+_LAB_ENTRY_ID = "e1"
+
+
+class _States:
+    """Minimal-``hass.states`` mit ``get(entity_id)``."""
+
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def get(self, entity_id):
+        return self._mapping.get(entity_id)
+
+
+def _lab_registry(monkeypatch, entries):
+    """Registry-Fake mit vollständigen Labor-Records (platform + unique_id)."""
+    return _registry_fake(
+        monkeypatch,
+        [
+            SimpleNamespace(
+                entity_id=entity_id,
+                unique_id=f"{_LAB_ENTRY_ID}_{key_part}",
+                platform=platform,
+            )
+            for entity_id, key_part, platform in entries
+        ],
+    )
+
+
+def _lab_hass(states=None):
+    return SimpleNamespace(data={DOMAIN: {}}, states=_States(states or {}))
+
+
+def _lab_entry(options=None):
+    return SimpleNamespace(entry_id=_LAB_ENTRY_ID, version=5, options=dict(options or {}))
+
+
+def _custom_marker(key="ferritin", name="Ferritin", category="blood_count", unit="ng/mL"):
+    return {"key": key, "name": name, "category": category, "unit": unit}
+
+
+def test_expected_lab_entity_keys_matches_platform_setup():
+    """[Orphan-Diagnose] Soll-Menge = ein Sensor je Marker + Warnung je Kategorie."""
+    keys = diagnostics.expected_lab_entity_keys({})
+
+    # Katalog: ein Sensor je Marker.
+    for marker_key in const.LAB_MARKERS:
+        assert f"lab_{marker_key}" in keys
+    # Warnungen je Markt-Kategorie — "other" hat bewusst keine Warn-Entity.
+    assert "binary_lab_warning_liver" in keys
+    assert "binary_lab_warning_lipids" in keys
+    assert "binary_lab_warning_other" not in keys
+    # Jede Warn-Kategorie stammt aus const.LAB_CATEGORIES.
+    categories = {category["key"] for category in const.LAB_CATEGORIES}
+    for key in keys:
+        if key.startswith("binary_lab_warning_"):
+            assert key.removeprefix("binary_lab_warning_") in categories
+
+
+def test_expected_lab_entity_keys_adds_custom_marker_and_category():
+    """[Orphan-Diagnose] Custom-Marker erweitert Soll-Menge (Sensor + Warnung)."""
+    keys = diagnostics.expected_lab_entity_keys(
+        {const.OPTION_LAB_CUSTOM_MARKERS: [_custom_marker()]}
+    )
+
+    assert "lab_ferritin" in keys
+    # blood_count existiert bereits im Katalog -> keine neue Kategorie.
+    assert "binary_lab_warning_blood_count" in keys
+
+
+def test_expected_lab_entity_keys_empty_when_labs_area_disabled():
+    """[Orphan-Diagnose] Bereich "labs" aus -> Soll-Menge leer, hypothetisch nicht."""
+    options = {"areas": {"labs": False}}
+
+    assert diagnostics.expected_lab_entity_keys(options) == set()
+    assert "lab_alt" in diagnostics.expected_lab_entity_keys(options, ignore_area=True)
+
+
+def test_lab_entity_orphans_flags_foreign_category(monkeypatch):
+    """[Orphan-Diagnose] Warn-Entity einer Fremdkategorie wird als Orphan erkannt.
+
+    A-1: eine unbekannte Custom-Kategorie fällt auf "other" — die frühere
+    Warn-Entity ``binary_lab_warning_hair_analysis`` legt das Setup nicht mehr
+    an. Der Sensor desselben Markers bleibt gültig.
+    """
+    _lab_registry(
+        monkeypatch,
+        [
+            (
+                "binary_sensor.max_lab_warning_hair_analysis",
+                "binary_lab_warning_hair_analysis",
+                DOMAIN,
+            ),
+            ("sensor.max_haar", "lab_haar", DOMAIN),
+            ("sensor.max_alt", "lab_alt", DOMAIN),
+        ],
+    )
+    options = {
+        const.OPTION_LAB_CUSTOM_MARKERS: [
+            _custom_marker(key="haar", name="Haaranalyse", category="hair_analysis"),
+        ]
+    }
+
+    out = asyncio.run(
+        diagnostics.async_get_config_entry_diagnostics(_lab_hass(), _lab_entry(options))
+    )
+
+    orphans = out["lab_entity_orphans"]
+    assert orphans["count"] == 1
+    assert orphans["items"] == [
+        {
+            "entity_id": "binary_sensor.***_lab_warning_hair_analysis",
+            "unique_id": "e1_binary_lab_warning_hair_analysis",
+            "state": "missing",
+            "reason": "unknown_category",
+        }
+    ]
+    # Der Sensor des Custom-Markers ist KEIN Orphan (er wird weiter angelegt).
+    assert "sensor.***_lab_custom_1" in out["entities"]
+
+
+def test_lab_entity_orphans_flags_stale_marker_key_and_masks_it(monkeypatch):
+    """[Orphan-Diagnose/N-1] Entfernter Custom-Marker: Orphan, aber maskiert."""
+    _lab_registry(
+        monkeypatch,
+        [
+            ("sensor.max_hiv_test", "lab_hiv_test", DOMAIN),
+            ("sensor.max_alt", "lab_alt", DOMAIN),
+        ],
+    )
+
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(_lab_hass(), _lab_entry({})))
+
+    orphans = out["lab_entity_orphans"]
+    assert orphans["count"] == 1
+    item = orphans["items"][0]
+    assert item["reason"] == "stale_marker_key"
+    assert item["entity_id"] == "sensor.***_lab_custom_1"
+    assert item["unique_id"] == "e1_lab_custom_1"
+    # Der Freitext-Key (potenziell eine Diagnose) darf nirgends auftauchen.
+    blob = _blob(out)
+    for token in ("hiv_test", "max_hiv"):
+        assert token not in blob, f"geleakt: {token!r}"
+
+
+def test_lab_entity_orphans_does_not_flag_valid_entities(monkeypatch):
+    """[Orphan-Diagnose] Korrekt angelegte Labor-Entities sind keine Orphans."""
+    _lab_registry(
+        monkeypatch,
+        [
+            ("sensor.max_alt", "lab_alt", DOMAIN),
+            ("sensor.max_ferritin", "lab_ferritin", DOMAIN),
+            ("binary_sensor.max_lab_warning_blood_count", "binary_lab_warning_blood_count", DOMAIN),
+            ("binary_sensor.max_lab_warning_liver", "binary_lab_warning_liver", DOMAIN),
+        ],
+    )
+    options = {const.OPTION_LAB_CUSTOM_MARKERS: [_custom_marker()]}
+
+    out = asyncio.run(
+        diagnostics.async_get_config_entry_diagnostics(_lab_hass(), _lab_entry(options))
+    )
+
+    assert out["lab_entity_orphans"] == {"count": 0, "items": []}
+
+
+def test_lab_entity_orphans_reports_not_provided_when_area_disabled(monkeypatch):
+    """[Orphan-Diagnose] Bereich "labs" aus -> gültige Keys sind nicht bereitgestellt."""
+    _lab_registry(monkeypatch, [("sensor.max_alt", "lab_alt", DOMAIN)])
+    options = {"areas": {"labs": False}}
+
+    out = asyncio.run(
+        diagnostics.async_get_config_entry_diagnostics(_lab_hass(), _lab_entry(options))
+    )
+
+    assert out["lab_entity_orphans"]["count"] == 1
+    assert out["lab_entity_orphans"]["items"][0]["reason"] == "not_provided"
+
+
+def test_lab_entity_orphans_honours_platform_filter(monkeypatch):
+    """[Orphan-Diagnose] Nur eigene Plattform-Einträge werden bewertet."""
+    _lab_registry(
+        monkeypatch,
+        [
+            ("sensor.max_alt", "lab_alt", "other_integration"),
+            ("sensor.max_ghost", "lab_ghost", "other_integration"),
+        ],
+    )
+
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(_lab_hass(), _lab_entry({})))
+
+    assert out["lab_entity_orphans"] == {"count": 0, "items": []}
+
+
+def test_lab_entity_orphans_reports_state_class_never_the_value(monkeypatch):
+    """[Orphan-Diagnose/N-5] State wird als Klasse ausgegeben, nie als Messwert."""
+    _lab_registry(
+        monkeypatch,
+        [
+            ("sensor.max_hiv_test", "lab_hiv_test", DOMAIN),
+            ("sensor.max_old", "lab_old", DOMAIN),
+            ("sensor.max_gone", "lab_gone", DOMAIN),
+        ],
+    )
+    states = {
+        "sensor.max_hiv_test": SimpleNamespace(state="restored"),
+        # Ein echter Laborwert darf NICHT in den Output wandern.
+        "sensor.max_old": SimpleNamespace(state="42.7"),
+    }
+
+    out = asyncio.run(
+        diagnostics.async_get_config_entry_diagnostics(_lab_hass(states), _lab_entry({}))
+    )
+
+    by_reason = {item["entity_id"]: item["state"] for item in out["lab_entity_orphans"]["items"]}
+    # Ordinal = sortierte Custom-Keys: gone=1, hiv_test=2, old=3.
+    assert by_reason["sensor.***_lab_custom_2"] == "restored"
+    assert by_reason["sensor.***_lab_custom_3"] == "provided"
+    assert by_reason["sensor.***_lab_custom_1"] == "missing"
+    assert "42.7" not in _blob(out)
+
+
+def test_lab_entity_orphans_defaults_to_empty_without_registry():
+    """[Orphan-Diagnose] Ohne Registry-Metadaten: definierte leere Sektion."""
+    out = diagnostics.redact_diagnostics({"entity_ids": ["sensor.a"]})
+
+    assert out["lab_entity_orphans"] == {"count": 0, "items": []}

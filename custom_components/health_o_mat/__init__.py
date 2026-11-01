@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+from collections.abc import Callable
 from datetime import datetime
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -672,6 +674,136 @@ async def async_unload_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
         # blieb es bis zum HA-Neustart stehen).
         await _async_apply_panel_layer(hass, exclude_entry_id=entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> None:
+    """Langzeitstatistik der Entities eines gelöschten Entrys aufräumen.
+
+    Post-Release-Befund 2: Beim Entfernen eines Config-Entry über ``DELETE``
+    leert HA nur die Entity-Registry (``ent_reg.async_clear_config_entry``,
+    ``config_entries.py`` → ``_async_clean_up``). Die ``statistics_meta``-Zeilen
+    (und damit die Langzeitstatistik) der Entities bleiben bestehen —
+    ``recorder.purge_entities`` entfernt sie nicht, weil eine verwaiste
+    Statistik weiterhin eine gültige ``statistic_id`` besitzt.
+
+    Ablauf: Entity-IDs aus der Registry (sie ist beim Aufruf noch gefüllt; HA
+    leert sie erst NACH ``async_remove_entry``), danach die zugehörigen
+    Statistik-IDs aufräumen. Ein Entity-Statistik-Eintrag heißt exakt wie die
+    Entity-ID, deshalb ist die Registry-Liste bereits die Statistik-ID-Liste.
+
+    Bewusst NICHT hier: Löschung des Store-Eintrags, ``unique_id``-Änderungen,
+    Registry-Eingriffe. Reines Aufräumen der Recorder-Seite — und defensiv:
+    ohne Recorder (nicht eingerichtet/deaktiviert) oder ohne die API in der
+    installierten HA-Version wird still übersprungen (debug-Log). Das Entfernen
+    der Integration darf NIE an diesem Cleanup scheitern.
+    """
+    entity_ids = _entry_entity_ids(hass, entry)
+    if not entity_ids:
+        _LOGGER.debug(
+            "Health-O-Mat: keine Entities zu Entry %s — Statistik-Cleanup übersprungen",
+            entry.entry_id,
+        )
+        return
+    if await _async_clear_statistics(hass, entity_ids):
+        _LOGGER.debug(
+            "Health-O-Mat: Langzeitstatistik von %d Entities des Entrys %s entfernt",
+            len(entity_ids),
+            entry.entry_id,
+        )
+    else:
+        _LOGGER.debug(
+            "Health-O-Mat: Recorder nicht verfügbar — Statistik-Cleanup für Entry %s übersprungen",
+            entry.entry_id,
+        )
+
+
+def _entry_entity_ids(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> list[str]:
+    """Entity-IDs des Entrys aus der Registry (best effort, stabil sortiert).
+
+    Kein ``platform``-Filter: die Registry-Abfrage ist bereits auf den
+    ``entry_id`` eingeschränkt, jede zurückgelieferte Entity gehört damit zu
+    diesem Entry. Ein zusätzlicher Filter würde bei Registry-Einträgen ohne
+    ``platform`` (Alt-Bestand) stillschweigend Statistik-Waisen hinterlassen.
+    """
+    try:
+        registry = er.async_get(hass)
+        entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+    except Exception:  # Cleanup ist nie remove-kritisch
+        _LOGGER.debug(
+            "Health-O-Mat: Entity-Registry für Entry %s nicht lesbar",
+            getattr(entry, "entry_id", "?"),
+            exc_info=True,
+        )
+        return []
+    return sorted(
+        {
+            str(getattr(reg, "entity_id", "") or "")
+            for reg in entries
+            if str(getattr(reg, "entity_id", "") or "")
+        }
+    )
+
+
+async def _async_clear_statistics(hass: HomeAssistant, statistic_ids: list[str]) -> bool:
+    """Statistik-IDs über die Recorder-API aufräumen (True = Aufruf erfolgt).
+
+    Zwei API-Formen, in dieser Reihenfolge (gegen das installierte HA 2026.2.3
+    geprüft): die Modul-API ``async_clear_statistics`` aus
+    ``homeassistant.components.recorder.statistics``, falls die HA-Version sie
+    anbietet (in 2026.2.3 NICHT vorhanden — der Import schlägt dort fehl), sonst
+    ``Recorder.async_clear_statistics`` auf der Instanz aus ``get_instance``.
+    Ein Fehler in einer der beiden Formen wird geloggt und als "nicht
+    aufgeräumt" gemeldet, nie geworfen.
+    """
+    module_clear = _module_clear_statistics()
+    if module_clear is not None:
+        try:
+            result = module_clear(hass, statistic_ids)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # Cleanup ist nie remove-kritisch
+            _LOGGER.debug("Health-O-Mat: Statistiken nicht aufräumbar", exc_info=True)
+            return False
+        return True
+
+    instance_clear = _instance_clear_statistics(hass)
+    if instance_clear is None:
+        return False
+    try:
+        instance_clear(statistic_ids)
+    except Exception:  # Cleanup ist nie remove-kritisch
+        _LOGGER.debug("Health-O-Mat: Statistiken nicht aufräumbar", exc_info=True)
+        return False
+    return True
+
+
+def _module_clear_statistics() -> Callable[..., Any] | None:
+    """``async_clear_statistics`` aus der Recorder-Statistik-API, sonst ``None``."""
+    try:
+        from homeassistant.components.recorder import statistics as recorder_statistics
+    except ImportError:
+        return None
+    clear = getattr(recorder_statistics, "async_clear_statistics", None)
+    return clear if callable(clear) else None
+
+
+def _instance_clear_statistics(hass: HomeAssistant) -> Callable[[list[str]], Any] | None:
+    """``Recorder.async_clear_statistics`` der laufenden Instanz, sonst ``None``.
+
+    ``get_instance`` wirft, wenn der Recorder nicht eingerichtet ist (bzw. der
+    Recorder-Schlüssel fehlt) — das ist der dokumentierte Fall "Recorder
+    deaktiviert" und wird hier zu ``None``.
+    """
+    try:
+        from homeassistant.components.recorder import get_instance
+    except ImportError:
+        return None
+    try:
+        instance = get_instance(hass)
+    except Exception:  # Recorder nicht eingerichtet (nicht gecachter Fehlerpfad)
+        return None
+    clear = getattr(instance, "async_clear_statistics", None)
+    return clear if callable(clear) else None
 
 
 def _has_runtime_entries(hass: HomeAssistant) -> bool:
