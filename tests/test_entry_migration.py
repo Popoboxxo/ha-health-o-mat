@@ -563,3 +563,86 @@ def test_req_hom_130_custom_entity_id_warns_and_still_bumps_version(monkeypatch,
     assert "schema_drift" not in caplog.text
     assert registry.async_get("button.mein_wasser") is not None
     assert registry.async_get(f"button.{SLUG}_quick_drink_3") is not None
+
+
+# --- production repro (0.17.2): the device must not decide the migration -------
+
+CARO_SLUG = "health_o_mat_caro"
+PRODUCTION_CATALOG = ("alt", "crp", "creatinine", "ggt")
+
+
+def _production_entries() -> list[_RegEntry]:
+    """Live layout of the 0.17.1 failure: Caro's entry on config version 2."""
+    entries = [
+        _RegEntry(f"button.{CARO_SLUG}_glas_wasser", f"{ENTRY_ID}_button_quick_0"),
+        _RegEntry(f"button.{CARO_SLUG}_flasche_wasser", f"{ENTRY_ID}_button_quick_1"),
+        _RegEntry(f"button.{CARO_SLUG}_tasse_kaffee", f"{ENTRY_ID}_button_quick_2"),
+        _RegEntry(f"button.{CARO_SLUG}_glas_saft", f"{ENTRY_ID}_button_quick_3"),
+    ]
+    entries += [
+        _RegEntry(f"sensor.{CARO_SLUG}_{key}", f"{ENTRY_ID}_lab_{key}", f"lab_{key}")
+        for key in PRODUCTION_CATALOG
+    ]
+    entries += [
+        _RegEntry(f"sensor.{CARO_SLUG}_drinks_today", f"{ENTRY_ID}_today", "today"),
+        # Hand-renamed by the user: keeps its id, must never block the pass.
+        _RegEntry("sensor.caro_gewicht", f"{ENTRY_ID}_weight", "weight"),
+    ]
+    return entries
+
+
+def test_req_hom_130_renamed_device_does_not_block_the_migration(monkeypatch, caplog):
+    """0.17.1 regression: a diverging device name left all four buttons behind."""
+    registry = _FakeRegistry(_production_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Caro", name_by_user="Mama"))
+    init = _load_init()
+    hass = _make_hass()
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.config_entries.async_update_entry.assert_called_once()
+    _args, kwargs = hass.config_entries.async_update_entry.call_args
+    assert kwargs["version"] == 3
+    for slot in range(1, 5):
+        assert registry.async_get(f"button.{CARO_SLUG}_quick_drink_{slot}") is not None
+    assert registry.async_get("sensor.caro_gewicht") is not None
+    # ONE non-blocking warning, never a failure summary.
+    assert caplog.text.count("hint_mismatch") == 1
+    assert "Migration läuft weiter" in caplog.text
+    assert "fehlgeschlagen" not in caplog.text
+
+
+def test_req_hom_130_missing_device_still_migrates(monkeypatch):
+    """No device entry at all (renamed/unfindable): the entities decide."""
+    registry = _FakeRegistry(_production_entries())
+    migrate = _install(monkeypatch, registry, None)
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    migrate.assert_awaited_once()
+    hass.config_entries.async_update_entry.assert_called_once()
+    _args, kwargs = hass.config_entries.async_update_entry.call_args
+    assert kwargs["version"] == 3
+    for slot in range(1, 5):
+        assert registry.async_get(f"button.{CARO_SLUG}_quick_drink_{slot}") is not None
+
+
+def test_req_hom_130_foreign_device_id_only_warns(monkeypatch, caplog):
+    """One candidate linked to another device must not fail the whole pass."""
+    entries = _production_entries()
+    entries[0].device_id = "dev2"
+    registry = _FakeRegistry(entries)
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Caro"))
+    init = _load_init()
+    hass = _make_hass()
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.config_entries.async_update_entry.assert_called_once()
+    assert registry.async_get(f"button.{CARO_SLUG}_quick_drink_1") is not None
+    assert caplog.text.count("device_id_mismatch") == 1
+    assert "fehlgeschlagen" not in caplog.text

@@ -549,3 +549,221 @@ def test_req_hom_130_plan_is_idempotent_for_a_second_pass():
     second = _plan(second_entities)
     assert second.renames == ()
     assert second.skipped == ()
+
+
+# --- sibling prefix (0.17.2): slug from the candidates, never from the device --
+#
+# 0.17.1 still failed in production: Caro and Daniel kept `device_slug_ambiguous`
+# with target `None`, all four buttons skipped, entries left on v2. The anchor /
+# hint heuristics are unusable on that installation (renamed device, diverging
+# hint, foreign `device_id`). The prefix is therefore derived from the entities
+# that are about to be renamed — it belongs to them by construction.
+
+_PRODUCTION_CATALOG = ("alt", "ast", "crp", "creatinine", "ggt", "h_moglobin")
+
+_CARO_QUICK_RENAMES = {
+    (f"button.{_CARO_SLUG}_glas_wasser", f"button.{_CARO_SLUG}_quick_drink_1"),
+    (f"button.{_CARO_SLUG}_flasche_wasser", f"button.{_CARO_SLUG}_quick_drink_2"),
+    (f"button.{_CARO_SLUG}_tasse_kaffee", f"button.{_CARO_SLUG}_quick_drink_3"),
+    (f"button.{_CARO_SLUG}_glas_saft", f"button.{_CARO_SLUG}_quick_drink_4"),
+}
+
+
+def _production_caro_entities() -> list[dict]:
+    """Live layout of the failure: four old buttons, catalog labs, one renamed id.
+
+    The catalog lab sensors carry catalog keys as suffix (`lab_<key>`), so their
+    ids contain no user text and can prove where the device segment ends. No
+    usable device hint is part of the fixture on purpose.
+    """
+    entities = [
+        _entity(f"button.{_CARO_SLUG}_glas_wasser", f"{ENTRY}_button_quick_0"),
+        _entity(f"button.{_CARO_SLUG}_flasche_wasser", f"{ENTRY}_button_quick_1"),
+        _entity(f"button.{_CARO_SLUG}_tasse_kaffee", f"{ENTRY}_button_quick_2"),
+        _entity(f"button.{_CARO_SLUG}_glas_saft", f"{ENTRY}_button_quick_3"),
+    ]
+    entities += [
+        _entity(f"sensor.{_CARO_SLUG}_{key}", f"{ENTRY}_lab_{key}", translation_key=f"lab_{key}")
+        for key in _PRODUCTION_CATALOG
+    ]
+    entities += [
+        _entity(f"sensor.{_CARO_SLUG}_drinks_today", f"{ENTRY}_today", translation_key="today"),
+        _entity(f"sensor.{_CARO_SLUG}_bp_systolic", f"{ENTRY}_bp", translation_key="bp_systolic"),
+        # Hand-renamed by the user: stays untouched, must never block the pass.
+        _entity("sensor.caro_gewicht", f"{ENTRY}_weight", translation_key="weight"),
+    ]
+    return entities
+
+
+def _production_plan(
+    *, hint: str | None = None, device_id: str | None = "dev1", entities: list[dict] | None = None
+):
+    materialized = _production_caro_entities() if entities is None else entities
+    return migration.build_migration_plan(
+        ENTRY,
+        materialized,
+        device_slug_hint=hint,
+        device_id=device_id,
+        catalog_keys=_PRODUCTION_CATALOG,
+        occupied_entity_ids={entity["entity_id"] for entity in materialized},
+    )
+
+
+def test_req_hom_130_sibling_prefix_needs_two_supporting_ids():
+    assert migration._sibling_prefix([]) is None
+    assert migration._sibling_prefix([f"button.{_CARO_SLUG}_glas_wasser"]) is None
+
+
+def test_req_hom_130_sibling_prefix_uses_the_candidate_ids_only():
+    assert (
+        migration._sibling_prefix(
+            [
+                f"button.{_CARO_SLUG}_glas_wasser",
+                f"button.{_CARO_SLUG}_flasche_wasser",
+                f"button.{_CARO_SLUG}_tasse_kaffee",
+                f"button.{_CARO_SLUG}_glas_saft",
+            ]
+        )
+        == _CARO_SLUG
+    )
+    # A completely hand-renamed id forms its own group and cannot erase the
+    # prefix of the majority group.
+    assert (
+        migration._sibling_prefix(
+            [
+                "button.mein_wasser",
+                f"button.{_CARO_SLUG}_flasche_wasser",
+                f"button.{_CARO_SLUG}_tasse_kaffee",
+            ]
+        )
+        == _CARO_SLUG
+    )
+
+
+@pytest.mark.parametrize("hint", [None, "caro", "mama", "health_o_mat_person"])
+def test_req_hom_130_plan_derives_the_slug_from_the_candidates(hint):
+    """Production repro: no hint variant may block the migration.
+
+    ``None`` (device gone), ``caro`` (device renamed to the bare person name),
+    ``mama`` (device renamed to a foreign name) and ``health_o_mat_person``
+    (person display changed after registration) all have to yield the prefix
+    that the four buttons carry themselves.
+    """
+    plan = _production_plan(hint=hint)
+
+    assert plan.device_slug == _CARO_SLUG
+    assert plan.skipped == ()
+    assert {(item.source_entity_id, item.target_entity_id) for item in plan.renames} == (
+        _CARO_QUICK_RENAMES
+    )
+
+
+def test_req_hom_130_plan_warns_once_on_a_diverging_hint():
+    """A diverging hint is a confirmation mismatch, never a blocker."""
+    plan = _production_plan(hint="mama")
+
+    assert plan.device_slug == _CARO_SLUG
+    assert plan.warnings == (migration.WARN_HINT_MISMATCH,)
+    assert len(plan.renames) == 4
+
+    matching = _production_plan(hint="caro")
+    assert matching.warnings == ()
+    assert len(matching.renames) == 4
+
+
+def test_req_hom_130_plan_foreign_device_id_only_warns():
+    """One foreign `device_id` used to fail all four buttons (0.17.1 bug)."""
+    entities = _production_caro_entities()
+    entities[0] = {**entities[0], "device_id": "dev2"}
+
+    plan = _production_plan(entities=entities)
+
+    assert plan.device_slug == _CARO_SLUG
+    assert migration.WARN_DEVICE_ID_MISMATCH in plan.warnings
+    assert len(plan.renames) == 4
+
+
+def test_req_hom_130_sibling_path_keeps_custom_entity_id_non_blocking():
+    entities = _production_caro_entities()
+    entities[0] = _entity("button.mein_wasser", f"{ENTRY}_button_quick_0")
+
+    plan = _production_plan(entities=entities)
+
+    assert plan.device_slug == _CARO_SLUG
+    assert [(item.source_entity_id, item.reason) for item in plan.skipped] == [
+        ("button.mein_wasser", migration.SKIP_CUSTOM_ENTITY_ID)
+    ]
+    assert len(plan.renames) == 3
+    assert migration.SKIP_CUSTOM_ENTITY_ID in migration.NON_BLOCKING_SKIP_REASONS
+
+
+def test_req_hom_130_single_candidate_without_catalog_sensors_stays_closed():
+    """Fail-closed: one id plus one anchor can never prove a device boundary."""
+    entities = [
+        _entity(f"button.{_SLUG}_glas_wasser", f"{ENTRY}_button_quick_0"),
+        _entity(f"sensor.{_SLUG}_drinks_today", f"{ENTRY}_today", translation_key="today"),
+    ]
+
+    plan = migration.build_migration_plan(
+        ENTRY,
+        entities,
+        device_slug_hint=_SLUG,
+        device_id="dev1",
+        catalog_keys=CATALOG,
+        occupied_entity_ids={entity["entity_id"] for entity in entities},
+    )
+
+    assert plan.device_slug is None
+    assert plan.renames == ()
+    assert {item.reason for item in plan.skipped} == {migration.SKIP_DEVICE_SLUG_UNRESOLVED}
+
+
+def test_req_hom_130_sibling_prefix_is_trimmed_to_the_device_boundary():
+    """Four labels all starting with `Glas` must not become the device segment."""
+    resolution = migration.resolve_device_slug(
+        [
+            _candidate("button.health_o_mat_max_glas_wasser"),
+            _candidate("button.health_o_mat_max_glas_saft"),
+        ],
+        [
+            _anchor("sensor.health_o_mat_max_crp", "lab_crp"),
+            _anchor("sensor.health_o_mat_max_creatinine", "lab_creatinine"),
+        ],
+        hint="mama",
+        device_id="dev1",
+        catalog_keys=CATALOG,
+    )
+    assert resolution.slug == _SLUG
+    assert resolution.reason is None
+
+
+def test_req_hom_130_label_prefix_without_structure_is_not_guessed():
+    """Without structural ids, `…_glas` is as plausible as the real device slug."""
+    resolution = migration.resolve_device_slug(
+        [
+            _candidate("button.health_o_mat_max_glas_wasser"),
+            _candidate("button.health_o_mat_max_glas_saft"),
+        ],
+        [],
+        hint=None,
+        device_id="dev1",
+    )
+    assert resolution.slug is None
+    assert resolution.reason in {
+        migration.SKIP_DEVICE_SLUG_UNRESOLVED,
+        migration.SKIP_DEVICE_SLUG_AMBIGUOUS,
+    }
+
+
+def test_req_hom_130_plan_is_idempotent_after_the_sibling_migration():
+    first = _production_plan()
+    renamed = {item.source_entity_id: item.target_entity_id for item in first.renames}
+    second_entities = [
+        {**entity, "entity_id": renamed.get(entity["entity_id"], entity["entity_id"])}
+        for entity in _production_caro_entities()
+    ]
+
+    second = _production_plan(entities=second_entities)
+
+    assert second.renames == ()
+    assert second.skipped == ()

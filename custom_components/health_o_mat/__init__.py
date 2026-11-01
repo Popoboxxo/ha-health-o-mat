@@ -177,11 +177,13 @@ async def _async_migrate_entity_ids(
 
     Diagnostics contract: each planned skip is reported exactly ONCE — blocking
     reasons inside the single failure summary below, ``custom_entity_id`` as its
-    own warning (the entity keeps a hand-picked id on purpose). The drift check
-    therefore ignores entities that already carry a planned skip (they
-    intentionally stay on their old id), and one summary line carries the whole
-    failure (counts plus pairs). The plan itself is returned instead of a bare
-    ``bool`` so the caller's success line can report the counters.
+    own warning (the entity keeps a hand-picked id on purpose). Confirmation
+    mismatches of a sibling-derived prefix (device name, device link) collapse into
+    exactly ONE warning on the success path — never double-reported, never blocking.
+    The drift check therefore ignores entities that already carry a planned skip
+    (they intentionally stay on their old id), and one summary line carries the
+    whole failure (counts plus pairs). The plan itself is returned instead of a
+    bare ``bool`` so the caller's success line can report the counters.
     """
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, entry.entry_id)
@@ -303,6 +305,18 @@ async def _async_migrate_entity_ids(
             drift,
         )
         return None
+
+    if plan.warnings:
+        # The prefix was derived from the entities that are being renamed, so a
+        # diverging device name or device link is only a confirmation mismatch:
+        # ONE warning on the success path, never a blocker (0.17.1 production bug).
+        _LOGGER.warning(
+            "Entity-ID-Migration %s: Präfix %s aus den Entity-IDs abgeleitet, "
+            "Bestätigung weicht ab (%s) — Migration läuft weiter",
+            entry.title,
+            plan.device_slug,
+            ", ".join(plan.warnings),
+        )
     return plan
 
 
