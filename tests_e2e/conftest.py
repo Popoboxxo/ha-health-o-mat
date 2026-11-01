@@ -28,6 +28,7 @@ from scripts.e2e_bootstrap import (
     bootstrap,
     clear_ui_selection,
     ensure_fixtures,
+    ensure_non_admin_user,
 )
 
 # `hass_base_url` may point at a shared instance; every entry starts at the
@@ -87,6 +88,22 @@ def hass_fixtures(hass_base_url: str, hass_bearer_token: str) -> dict[str, dict]
     `/health-o-mat` would not exist at all.
     """
     return ensure_fixtures(hass_base_url, hass_bearer_token)["persons"]
+
+
+@pytest.fixture(scope="session")
+def non_admin(hass_base_url: str, hass_bearer_token: str) -> dict:
+    """A real non-admin HA user (`system-users`) plus its access token (#28).
+
+    Created through HA's own `config/auth/create` (idempotently) because the
+    onboarding user is the instance owner and therefore always admin — the
+    admin gate of the admin-only websocket commands can only be verified
+    against a user that actually lacks `is_admin`.
+
+    `ensure_non_admin_user` raises instead of returning a partly usable handle
+    (user exists but is admin, login fails, wrong group), so a broken setup
+    fails the test loudly instead of skipping the gate assertions.
+    """
+    return ensure_non_admin_user(hass_base_url, hass_bearer_token)
 
 
 def _person_ref(person: dict) -> dict:

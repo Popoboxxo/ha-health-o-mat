@@ -3,9 +3,11 @@
 # because this one needs a browser runtime (~2 GB) that the fast HA-free unit
 # tests must never depend on.
 #
-# The base image ships the browser binaries; `playwright install` is still run
-# so the pip-installed Playwright version always has its matching browser build
-# (the pin in requirements_e2e.txt may be newer than the image tag).
+# The base image ships the browser binaries; requirements_e2e.txt pins
+# `playwright==1.47.0` to EXACTLY this image tag, so `pip install` can never
+# resolve a driver newer than the bundled browsers (a mismatch fails with a
+# headless-shell error that looks like an app regression). `playwright install`
+# is still run so the deps are present for the pinned version.
 FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
 WORKDIR /workspace

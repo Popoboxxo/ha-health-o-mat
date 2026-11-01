@@ -64,6 +64,37 @@ def _now_iso() -> str:
     return dt_util.now().isoformat()
 
 
+def lab_dedupe_key(ts: Any, marker_key: Any) -> tuple[str, str]:
+    """Kanonischer Duplikat-Schlüssel eines Laborwerts: ``(ts, marker_key)``.
+
+    Ein Zeitpunkt zählt als *derselbe*, wenn er denselben Instant beschreibt —
+    ``…T09:00:00+01:00`` und ``…T08:00:00Z`` sind also ein Duplikat. Nicht
+    parsebare Zeitstempel fallen auf ihren Rohstring zurück (kein
+    ``datetime.min``-Kollaps, der unabhängige Alt-Werte verschlucken würde).
+
+    HA-frei und damit auch vom Importer/den Tests nutzbar; der Store ist die
+    führende Instanz dieser Regel (#71/#72, kanonische Dedupe-Regel).
+    """
+    raw = "" if ts is None else str(ts).strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return (raw, str(marker_key or ""))
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return (parsed.isoformat(), str(marker_key or ""))
+
+
+def _existing_lab_keys(entry: dict) -> set[tuple[str, str]]:
+    """Duplikat-Schlüssel **aller** (auch voideter) Laborwerte eines Eintrags."""
+    keys: set[tuple[str, str]] = set()
+    for item in entry.get("lab_readings") or []:
+        if not isinstance(item, dict):
+            continue
+        keys.add(lab_dedupe_key(item.get("ts"), item.get("marker_key")))
+    return keys
+
+
 def _deterministic_id(entry_id: str, kind: str, index: int, ts: Any) -> str:
     """Stabile UUID für migrierte Einträge (uuid5 aus Entry/Kind/Index/ts).
 
@@ -653,7 +684,17 @@ class HealthOMatStore:
         actor: str | None = None,
         audit_limit: int = DEFAULT_AUDIT_LIMIT,
     ) -> None:
-        """Laborwert erfassen; `reported_*` ist der Wert wie im Befund gedruckt."""
+        """Laborwert erfassen; `reported_*` ist der Wert wie im Befund gedruckt.
+
+        Kanonische Dedupe-Regel (#71/#72): ein bereits vorhandener Eintrag mit
+        demselben ``(ts, marker_key)`` — auch voided — ist ein Duplikat. Der
+        Aufruf endet dann mit ``ValueError("duplicate_marker")``, ohne etwas zu
+        schreiben (kein Teilzustand); der Wert wird bewusst NICHT verglichen.
+        """
+        entry = self.entry(entry_id)
+        key = lab_dedupe_key(ts_iso, marker_key)
+        if key in _existing_lab_keys(entry):
+            raise ValueError("duplicate_marker")
         reading: dict = {
             "id": str(uuid.uuid4()),
             "ts": ts_iso,
@@ -668,7 +709,7 @@ class HealthOMatStore:
             "voided_by": None,
             "void_reason": None,
         }
-        self.entry(entry_id).setdefault("lab_readings", []).append(reading)
+        entry.setdefault("lab_readings", []).append(reading)
         self._append_audit(
             entry_id,
             "lab_value_added",
@@ -697,9 +738,19 @@ class HealthOMatStore:
         Save, genau ein Audit-Eintrag; schlägt der Save fehl, wird der
         In-Memory-Zustand (deepcopy-Snapshot) exakt zurückgesetzt und der Fehler
         weitergereicht.
+
+        Kanonische Dedupe-Regel (#71/#72): existiert ein Wert mit demselben
+        ``(ts, marker_key)`` bereits (auch voided) oder doppelt sich eine Zeile
+        innerhalb des Berichts, wird **nichts** geschrieben und
+        ``ValueError("duplicate_marker")`` gemeldet — der Bericht bleibt
+        alles-oder-nichts.
         """
         created = created_ts_iso or _now_iso()
         entry = self.entry(entry_id)
+        existing = _existing_lab_keys(entry)
+        requested = [lab_dedupe_key(ts_iso, row["marker_key"]) for row in rows]
+        if len(set(requested)) != len(requested) or any(key in existing for key in requested):
+            raise ValueError("duplicate_marker")
         readings_before = copy.deepcopy(entry.get("lab_readings") or [])
         audit_before = copy.deepcopy(entry.get("audit_log") or [])
         reading_ids: list[str] = []
@@ -738,6 +789,93 @@ class HealthOMatStore:
                 audit_limit,
             )
             await self._async_save()
+        except Exception:
+            entry["lab_readings"] = readings_before
+            entry["audit_log"] = audit_before
+            raise
+        return reading_ids
+
+    async def add_lab_readings_bulk(
+        self,
+        entry_id: str,
+        groups: list[dict],
+        *,
+        actor: str | None = None,
+        audit_limit: int = DEFAULT_AUDIT_LIMIT,
+    ) -> list[str]:
+        """Mehrere Berichte (Gruppen) in EINEM Speichervorgang schreiben.
+
+        Vertrag (#71/#72, O-3): ``groups`` ist eine Liste von
+        ``{"ts_iso": str, "report_ref": str | None, "rows": list[dict]}``;
+        ``rows`` haben dieselbe Form wie bei :meth:`add_lab_readings`. Für den
+        gesamten Aufruf gibt es **genau einen** ``_async_save()`` (sobald
+        mindestens eine Zeile geschrieben wurde) und **ein** Audit-Ereignis
+        ``lab_values_added`` je Gruppe (= je Bericht).
+
+        Duplikate ``(ts, marker_key)`` (Bestand inkl. voided oder doppelt in
+        diesem Aufruf) werden übersprungen — der wiederholbare Import holt
+        fehlende Zeilen nach, ohne je zu scheitern (O-3). Schlägt der Save
+        fehl, werden ``lab_readings`` **und** ``audit_log`` über den
+        deepcopy-Snapshot vollständig zurückgesetzt (kein Teilzustand über
+        mehrere Gruppen).
+
+        Returns:
+            IDs aller tatsächlich geschriebenen Einträge in Gruppen-/
+            Zeilenreihenfolge.
+        """
+        entry = self.entry(entry_id)
+        created = _now_iso()
+        readings_before = copy.deepcopy(entry.get("lab_readings") or [])
+        audit_before = copy.deepcopy(entry.get("audit_log") or [])
+        seen = _existing_lab_keys(entry)
+        reading_ids: list[str] = []
+        try:
+            for group in groups:
+                ts_iso = group["ts_iso"]
+                report_ref = group.get("report_ref")
+                group_ids: list[str] = []
+                group_markers: list[str] = []
+                for row in group.get("rows") or []:
+                    key = lab_dedupe_key(ts_iso, row["marker_key"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    reading = {
+                        "id": str(uuid.uuid4()),
+                        "ts": ts_iso,
+                        "marker_key": row["marker_key"],
+                        "value": float(row["value"]),
+                        "unit": row["unit"],
+                        "reported_value": float(row["reported_value"]),
+                        "reported_unit": row["reported_unit"],
+                        "report_ref": report_ref,
+                        "created_at": created,
+                        "voided_at": None,
+                        "voided_by": None,
+                        "void_reason": None,
+                    }
+                    entry.setdefault("lab_readings", []).append(reading)
+                    reading_ids.append(reading["id"])
+                    group_ids.append(reading["id"])
+                    group_markers.append(reading["marker_key"])
+                if not group_ids:
+                    continue  # reine Duplikat-Gruppe: kein leeres Audit
+                self._append_audit(
+                    entry_id,
+                    "lab_values_added",
+                    "lab_readings",
+                    None,
+                    actor,
+                    {
+                        "count": len(group_ids),
+                        "marker_keys": group_markers[:20],
+                        "reading_ids": group_ids[:20],
+                        "created_at": created,
+                    },
+                    audit_limit,
+                )
+            if reading_ids:
+                await self._async_save()
         except Exception:
             entry["lab_readings"] = readings_before
             entry["audit_log"] = audit_before

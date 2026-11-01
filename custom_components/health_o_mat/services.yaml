@@ -172,7 +172,8 @@ export_csv:
   name: CSV-Export
   description: >-
     Exportiert die Daten als Excel-taugliche CSV nach /config/health_o_mat_export/.
-    Nur für Administratoren.
+    Nur für Administratoren. Mit aktivierter Antwort (return_response) meldet der
+    Service Dateinamen, alle geschriebenen Dateien sowie die Zeilenzahl.
   fields:
     person:
       name: Person
@@ -196,12 +197,19 @@ export_csv:
 import_csv:
   name: CSV-Import
   description: >-
-    Importiert Getränke-, Blutdruck- oder Laborwertdaten aus /config/health_o_mat_import/
-    (nur dieses Verzeichnis, niemals /config/www).
+    Importiert Getränke-, Blutdruck- oder Laborwertdaten aus
+    /config/health_o_mat_import/ oder /config/health_o_mat_export/ (beide privat,
+    niemals /config/www). Nur für Administratoren. Unterstützt ausschließlich
+    Semikolon-getrennte UTF-8-Dateien (mit oder ohne BOM) — Komma-Trenner und
+    cp1252 werden abgelehnt, nicht umgedeutet. Mit aktivierter Antwort
+    (return_response) meldet der Service importierte, übersprungene und
+    abgelehnte Zeilen.
   fields:
     filename:
       name: Dateiname
-      description: Dateiname innerhalb des Import-Ordners /config/health_o_mat_import/.
+      description: >-
+        Dateiname innerhalb von /config/health_o_mat_import/ oder
+        /config/health_o_mat_export/.
       example: "health_o_mat_drinks_Max_20261014-1200.csv"
       required: true
     person:
@@ -228,7 +236,8 @@ backup:
   name: Backup
   description: >-
     Sichert alle Personen und Datensätze als JSON nach /config/health_o_mat_export/.
-    Nur für Administratoren.
+    Nur für Administratoren. Mit aktivierter Antwort (return_response) meldet der
+    Service Dateiname, enthaltene Datensätze und Zeilenzahl.
 
 restore_backup:
   name: Backup wiederherstellen
@@ -237,7 +246,9 @@ restore_backup:
     /config/health_o_mat_export/ kontrolliert zurück
     (Merge oder Replace, optional nur bestimmte Personen/Datensätze/Zeiträume).
     Vor jedem echten Restore wird ein Sicherheitsbackup im Export-Ordner
-    angelegt. Nur für Administratoren.
+    angelegt. Nur für Administratoren. Mit aktivierter Antwort (return_response)
+    meldet der Service Dateiname, ob angewendet wurde, Dry-Run-Status, Zähler,
+    Summen und Warnungen.
   fields:
     filename:
       name: Dateiname
@@ -317,7 +328,8 @@ weekly_report:
   description: >-
     Sendet die letzten sieben Tage je Person als Markdown-Benachrichtigung
     (kein Datei-Export). Leerer Benachrichtigungsdienst erzeugt einen Hinweis
-    in Home Assistant.
+    in Home Assistant. Mit aktivierter Antwort (return_response) meldet der
+    Service je Person den Zustellstatus sowie die Summen zugestellt/fehlgeschlagen.
   fields:
     person:
       name: Person

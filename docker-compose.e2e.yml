@@ -32,7 +32,34 @@ name: health-o-mat-e2e
 
 services:
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    # PINNED ON PURPOSE — never `stable`, never `latest`.
+    #
+    # The HA *minor* version silently defines the integration surface this suite
+    # asserts against:
+    #   * the onboarding REST API (`POST /api/onboarding/users` + flow
+    #     completion) that scripts/e2e_bootstrap.py drives,
+    #   * `panel_custom` schema validation on panel registration
+    #     (REQ-HOM-012),
+    #   * object_id generation: HA >= 2026.9 derives entity_ids from the
+    #     *localized* name for languages in NATIVE_ENTITY_IDS, which is why
+    #     HealthOMatEntity pins `suggested_object_id` to English.
+    # With a floating tag a green->red transition is indistinguishable from a
+    # real regression: the failure would be caused by a version change nobody
+    # reviewed. Pinning keeps the signal attributable.
+    #
+    # Bumping the pin (deliberate, reviewable):
+    #   1. Verify the tag exists BEFORE merging — a typo'd tag fails only at
+    #      `docker compose up`, i.e. weeks later in CI:
+    #        docker manifest inspect \
+    #          ghcr.io/home-assistant/home-assistant:<new-tag>
+    #   2. Change the tag here. This file is the SINGLE source of truth: the
+    #      workflow .github/workflows/e2e.yaml does not reference an image
+    #      itself, it runs `docker compose -f docker-compose.e2e.yml`.
+    #   3. Keep it equal to the shared dev instance (/home/hermes/ha-test) so
+    #      local and CI runs agree.
+    #   4. Run the full suite locally before pushing; re-check pins whose
+    #      behaviour depends on the HA minor (see the three points above).
+    image: ghcr.io/home-assistant/home-assistant:2026.9.1
     volumes:
       # Minimal seed config (default_config + panel_custom) plus HA's own
       # runtime state, which survives `down` — see the warning above.

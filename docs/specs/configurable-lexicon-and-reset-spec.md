@@ -1,6 +1,11 @@
 # Spec: Configurable Drink Lexicon & Configurable Daily-Reset Hour
 
-Status: draft (concept only, no implementation yet)
+Status: draft (concept only, no implementation yet) → **umgesetzt** (Feature 1
+Drink-Lexikon: Options-Schritt `drink_lexicon` + `parser.format_lexicon`/
+`parse_lexicon_text`, `text.py` liest `entry.options["drink_lexicon"]`; Feature 2
+Reset-Uhrzeit: Option `daily_reset_hour`, REQ-HOM-005 seit v0.6.0. Belege:
+`parser.py:42-48`, `config_flow.py:236-240`, `text.py:42-43`,
+`tests/test_text.py`, `tests/test_sensor.py`, `tests/test_config_flow.py`)
 Branch: `feat/configurable-lexicon-and-reset`
 Author input: user-supplied Ist-Analyse + design proposal (verified against current
 code on this branch, see "Deviations" for every point where reality required a

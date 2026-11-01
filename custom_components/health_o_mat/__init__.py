@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, NamedTuple
@@ -11,7 +12,7 @@ from typing import Any, NamedTuple
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -971,6 +972,17 @@ def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
     return parsed.isoformat()
 
 
+def _service_response(call: ServiceCall, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Strukturierte Service-Antwort — nur wenn der Aufrufer sie angefordert hat.
+
+    Die fünf Verwaltungs-Services sind mit ``SupportsResponse.OPTIONAL``
+    registriert (#71): ein Aufruf ohne ``return_response`` (Automationen,
+    Skripte, interne Aufrufe) bleibt unverändert und bekommt ``None``; mit
+    ``return_response=True`` kommt exakt der dokumentierte flache Kontrakt.
+    """
+    return payload if getattr(call, "return_response", False) else None
+
+
 async def _async_require_admin(hass: HomeAssistant, call: ServiceCall) -> None:
     """Admin-Gate für Verwaltungs-Services (z. B. Restore).
 
@@ -1115,19 +1127,24 @@ def _register_services(hass: HomeAssistant) -> None:
         now = dt_util.now()
         ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        await store.add_lab_reading(
-            entry_id,
-            ts_iso,
-            marker_key,
-            canonical_value,
-            canonical_unit,
-            value,
-            raw_unit or canonical_unit,
-            report_ref=report_ref,
-            created_ts_iso=now.isoformat(),
-            actor=_service_actor(call),
-            audit_limit=_entry_audit_limit(hass, entry_id),
-        )
+        try:
+            await store.add_lab_reading(
+                entry_id,
+                ts_iso,
+                marker_key,
+                canonical_value,
+                canonical_unit,
+                value,
+                raw_unit or canonical_unit,
+                report_ref=report_ref,
+                created_ts_iso=now.isoformat(),
+                actor=_service_actor(call),
+                audit_limit=_entry_audit_limit(hass, entry_id),
+            )
+        except ValueError as err:
+            # Kanonische Dedupe-Regel (#71/#72): gleiches (ts, marker_key) —
+            # auch mit anderem Wert — wird nie ein zweiter Eintrag.
+            raise ServiceValidationError(str(err) or "duplicate_marker") from err
         signal_refresh(hass, entry_id)
 
     async def add_lab_report(call: ServiceCall) -> None:
@@ -1160,15 +1177,18 @@ def _register_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(error["message"])
         report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
-        await store.add_lab_readings(
-            entry_id,
-            ts_iso,
-            rows,
-            report_ref=report_ref,
-            created_ts_iso=now.isoformat(),
-            actor=_service_actor(call),
-            audit_limit=_entry_audit_limit(hass, entry_id),
-        )
+        try:
+            await store.add_lab_readings(
+                entry_id,
+                ts_iso,
+                rows,
+                report_ref=report_ref,
+                created_ts_iso=now.isoformat(),
+                actor=_service_actor(call),
+                audit_limit=_entry_audit_limit(hass, entry_id),
+            )
+        except ValueError as err:
+            raise ServiceValidationError(str(err) or "duplicate_marker") from err
         signal_refresh(hass, entry_id)
 
     async def remove_lab_report(call: ServiceCall) -> None:
@@ -1310,8 +1330,12 @@ def _register_services(hass: HomeAssistant) -> None:
         """Einen gelöschten Eintrag wiederherstellen."""
         await _set_entry_state(hass, call, restore=True)
 
-    async def export_csv(call: ServiceCall) -> None:
-        """CSV-Export (Admin-only, wie das WS-Pendant)."""
+    async def export_csv(call: ServiceCall) -> dict[str, Any] | None:
+        """CSV-Export (Admin-only, wie das WS-Pendant).
+
+        Response (#71, O-2): ``{filename, filenames, rows, dataset}`` —
+        ``filename`` ist die erste Datei, ``filenames`` enthält alle.
+        """
         await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
@@ -1320,88 +1344,131 @@ def _register_services(hass: HomeAssistant) -> None:
         archive_store = await async_load_archive_store(hass, create=False)
         from .exporter import async_export_csv
 
-        await async_export_csv(hass, store, call, archive_store=archive_store)
+        result = await async_export_csv(hass, store, call, archive_store=archive_store)
+        return _service_response(call, result)
 
-    async def import_csv(call: ServiceCall) -> None:
+    async def import_csv(call: ServiceCall) -> dict[str, Any] | None:
+        """CSV-Import (Admin-only, wie alle Verwaltungs-Services; #72).
+
+        Response (#71): ``{imported, skipped, rejected, errors}``.
+        """
+        await _async_require_admin(hass, call)
         entry_id, _info = get_runtime_data(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
         from .importer import async_import_csv
 
-        await async_import_csv(
+        result = await async_import_csv(
             hass,
             store,
             entry_id,
             call,
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
+        return _service_response(call, result)
 
-    async def backup(call: ServiceCall) -> None:
-        """JSON-Backup schreiben (Admin-only, wie das WS-Pendant)."""
+    async def backup(call: ServiceCall) -> dict[str, Any] | None:
+        """JSON-Backup schreiben (Admin-only, wie das WS-Pendant).
+
+        Response (#71): ``{filename, datasets, rows}``.
+        """
         await _async_require_admin(hass, call)
         shared = hass.data.get(DOMAIN, {}).get("shared", {})
         store: HealthOMatStore = shared.get("store")
         # B-2: wie export_csv — Archiv on demand nachladen, nie still weglassen.
         archive_store = await async_load_archive_store(hass, create=False)
-        from .backup import async_backup
+        from .backup import async_backup, backup_summary
 
-        await async_backup(hass, store, archive_store)
+        path = await async_backup(hass, store, archive_store)
+        return _service_response(call, backup_summary(store, archive_store, path))
 
-    async def restore_backup(call: ServiceCall) -> None:
-        """Backup kontrolliert zurückspielen (Admin-only, optional Dry-Run)."""
+    async def restore_backup(call: ServiceCall) -> dict[str, Any] | None:
+        """Backup kontrolliert zurückspielen (Admin-only, optional Dry-Run).
+
+        Response (#71): ``{filename, applied, dry_run, counts, totals,
+        warnings}`` — das bestehende Restore-Ergebnis, um den Basename ergänzt.
+        """
         await _async_require_admin(hass, call)
         from .restore import RestoreError, async_restore_command
 
         try:
-            await async_restore_command(hass, dict(call.data), actor=_service_actor(call))
+            result = await async_restore_command(hass, dict(call.data), actor=_service_actor(call))
         except RestoreError as err:
             raise ServiceValidationError(str(err)) from err
+        plan = result.get("plan") or {}
+        payload = {
+            "filename": os.path.basename(str(call.data.get("filename") or "")),
+            "applied": result.get("applied"),
+            "dry_run": result.get("dry_run"),
+            "counts": result.get("counts", plan.get("counts", {})),
+            "totals": result.get("totals", plan.get("totals", {})),
+            "warnings": result.get("warnings", plan.get("warnings", [])),
+        }
+        return _service_response(call, payload)
 
-    async def weekly_report(call: ServiceCall) -> None:
+    async def weekly_report(call: ServiceCall) -> dict[str, Any] | None:
         """Wochenbericht als Markdown-Notification senden (REQ-HOM-118).
 
         Kein Datei-Schreiben, kein Export-Ordner: der Bericht ist eine reine
         Notification. Ohne ``person`` bekommt jede laufende Person einen
         eigenen Bericht; eine unbekannte Person wird abgelehnt.
+
+        Response (#71): ``{reports: [{person, notify_service, delivered}],
+        delivered, failed}``. Der Versand läuft **je Person** in einem eigenen
+        try/except: ein fehlschlagender Notify-Dienst bricht die übrigen
+        Personen nicht ab (sonst wäre ``failed`` immer 0). Fehler beim
+        Auflösen von Store/Personen bleiben Exceptions.
         """
         store: HealthOMatStore = hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
-        try:
-            if store is None:
+        if store is None:
+            raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+        if (call.data.get("person") or "").strip():
+            entry_id, _info = get_runtime_data(hass, call)
+            target_ids = [entry_id]
+        else:
+            target_ids = [
+                key
+                for key, value in hass.data.get(DOMAIN, {}).items()
+                if key not in _NON_ENTRY_KEYS and isinstance(value, dict) and "coordinator" in value
+            ]
+            if not target_ids:
                 raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
-            if (call.data.get("person") or "").strip():
-                entry_id, _info = get_runtime_data(hass, call)
-                target_ids = [entry_id]
-            else:
-                target_ids = [
-                    key
-                    for key, value in hass.data.get(DOMAIN, {}).items()
-                    if key not in _NON_ENTRY_KEYS
-                    and isinstance(value, dict)
-                    and "coordinator" in value
-                ]
-                if not target_ids:
-                    raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
-            entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
-            language = getattr(hass.config, "language", "de")
-            now = dt_util.now()
-            for entry_id in target_ids:
-                entry = entries.get(entry_id)
-                if entry is None:
-                    continue
-                options = entry.options or {}
-                report = normalize_weekly_report(options.get(OPTION_WEEKLY_REPORT))
+        entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
+        language = getattr(hass.config, "language", "de")
+        now = dt_util.now()
+        reports: list[dict[str, Any]] = []
+        delivered = 0
+        failed = 0
+        for entry_id in target_ids:
+            entry = entries.get(entry_id)
+            if entry is None:
+                continue
+            options = entry.options or {}
+            person = effective_person(entry)
+            report = normalize_weekly_report(options.get(OPTION_WEEKLY_REPORT))
+            notify_service = report["notify_service"]
+            try:
                 metrics = collect_weekly_metrics(store.active_entry(entry_id), options, now)
-                person = effective_person(entry)
                 await async_send_notification(
                     hass,
-                    report["notify_service"],
+                    notify_service,
                     weekly_report_title(person, language),
                     render_weekly_report_markdown(metrics, person, language),
                 )
-        except ServiceValidationError:
-            raise
-        except Exception as err:  # noqa: BLE001 - einheitliche Service-Fehlersemantik
-            raise ServiceValidationError(f"Wochenbericht fehlgeschlagen: {err}") from err
+            except Exception:  # noqa: BLE001 - Teilausfall je Person, kein Abbruch
+                # Kein Personenname im Log (PII): die stabile Entry-ID reicht.
+                _LOGGER.exception("Health-O-Mat: Wochenbericht für %s fehlgeschlagen", entry_id)
+                failed += 1
+                reports.append(
+                    {"person": person, "notify_service": notify_service, "delivered": False}
+                )
+                continue
+            delivered += 1
+            reports.append({"person": person, "notify_service": notify_service, "delivered": True})
+        return _service_response(
+            call,
+            {"reports": reports, "delivered": delivered, "failed": failed},
+        )
 
     hass.services.async_register(
         DOMAIN,
@@ -1561,6 +1628,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 ),
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
         service_func=export_csv,
     )
     hass.services.async_register(
@@ -1575,12 +1643,14 @@ def _register_services(hass: HomeAssistant) -> None:
                 ),
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
         service_func=import_csv,
     )
     hass.services.async_register(
         DOMAIN,
         "backup",
         schema=vol.Schema({}),
+        supports_response=SupportsResponse.OPTIONAL,
         service_func=backup,
     )
     hass.services.async_register(
@@ -1600,11 +1670,13 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("restore_audit", default=False): bool,
             }
         ),
+        supports_response=SupportsResponse.OPTIONAL,
         service_func=restore_backup,
     )
     hass.services.async_register(
         DOMAIN,
         "weekly_report",
         schema=vol.Schema({vol.Optional("person"): str}),
+        supports_response=SupportsResponse.OPTIONAL,
         service_func=weekly_report,
     )

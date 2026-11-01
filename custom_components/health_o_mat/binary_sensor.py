@@ -72,8 +72,9 @@ class GoalReachedEntity(HealthOMatBinary):
 class BloodPressureWarningEntity(HealthOMatBinary):
     _attr_translation_key = "bp_warning"
     _attr_icon = "mdi:alert-octagon"
-    # is_on == True bedeutet: letzte Messung liegt ueber dem sys/dia-Schwellwert,
-    # also "Problem erkannt" - passt zur PROBLEM-Semantik (on = Problem).
+    # is_on == True bedeutet: letzte Messung liegt auf oder ueber dem
+    # sys/dia-Schwellwert (Code: >=), also "Problem erkannt" - passt zur
+    # PROBLEM-Semantik (on = Problem).
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
     def __init__(self, coordinator, entry, store) -> None:

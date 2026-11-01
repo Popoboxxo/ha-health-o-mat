@@ -340,6 +340,8 @@ class _FakeServices:
 
     def __init__(self) -> None:
         self.registered: dict[str, tuple] = {}
+        # `SupportsResponse` je registriertem Service (#71).
+        self.response_modes: dict[str, object] = {}
         # Vorhandene Fremd-Services (z. B. notify.mobile_app_phone).
         self.known: set[str] = set()
         self.async_call = AsyncMock()
@@ -347,8 +349,11 @@ class _FakeServices:
     def has_service(self, domain, name) -> bool:
         return name in self.registered or f"{domain}.{name}" in self.known
 
-    def async_register(self, domain, name, *, schema=None, service_func=None) -> None:
+    def async_register(
+        self, domain, name, *, schema=None, service_func=None, supports_response=None
+    ) -> None:
         self.registered[name] = (schema, service_func)
+        self.response_modes[name] = supports_response
 
 
 def _runtime_hass(entries, *, store=None, archive_store=None) -> MagicMock:
@@ -1376,3 +1381,146 @@ def test_export_and_backup_services_allow_automation(service, monkeypatch):
     _run(func(call))
 
     called.assert_awaited_once()
+
+
+# --- #71: optionale Service-Responses ---------------------------------------
+
+_RESPONSE_SERVICES = ("export_csv", "import_csv", "backup", "restore_backup", "weekly_report")
+
+
+def test_response_services_are_registered_as_optional_never_only():
+    """[#71/D6] Alle fünf Services nutzen `OPTIONAL` — `ONLY` bräche Automationen."""
+    init = _load_init()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=_fresh_store())
+
+    init._register_services(hass)
+
+    for name in _RESPONSE_SERVICES:
+        assert hass.services.response_modes[name] is init.SupportsResponse.OPTIONAL
+        assert hass.services.response_modes[name] is not init.SupportsResponse.ONLY
+
+
+def test_weekly_report_partial_failure_returns_per_person_result(monkeypatch):
+    """[#71/AK7] Person A zugestellt, Person B fehlgeschlagen → Response kommt."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    broken = {"weekly_report": {"enabled": False, "notify_service": "mobile_app_broken"}}
+    hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro", broken)], store=store)
+    hass.config.language = "de"
+
+    async def _send(hass_, notify_service, title, message):
+        if notify_service == "mobile_app_broken":
+            raise RuntimeError("Handy offline")
+        return True
+
+    monkeypatch.setattr(init, "async_send_notification", _send)
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+    call = _call({})
+    call.return_response = True
+
+    result = _run(func(call))
+
+    assert result["delivered"] == 1
+    assert result["failed"] == 1
+    assert result["reports"] == [
+        {"person": "Max", "notify_service": "", "delivered": True},
+        {"person": "Caro", "notify_service": "mobile_app_broken", "delivered": False},
+    ]
+
+
+def test_weekly_report_without_response_still_sends_and_returns_none(monkeypatch):
+    """[#71] Ohne `return_response` bleibt der Rückgabewert `None`."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    hass.config.language = "de"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+    call = _call({})
+    call.return_response = False
+
+    assert _run(func(call)) is None
+    assert hass.services.async_call.await_count == 1
+
+
+_RESPONSE_MODULE_CASES = (
+    ("export_csv", "exporter", "async_export_csv"),
+    ("import_csv", "importer", "async_import_csv"),
+    ("backup", "backup", "async_backup"),
+    ("restore_backup", "restore", "async_restore_command"),
+)
+
+
+@pytest.mark.parametrize(("service", "module", "func_name"), _RESPONSE_MODULE_CASES)
+def test_service_response_is_none_unless_requested(service, module, func_name, monkeypatch):
+    """[#71/AK1] Ohne `return_response` → `None`; mit → der Kontrakt."""
+    init = _load_init()
+    store = _fresh_store()
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.config.path = MagicMock(return_value="/tmp")
+    payload = {"marker": service}
+    lazy = importlib.import_module(f"{_PKG}.init.{module}")
+    monkeypatch.setattr(lazy, func_name, AsyncMock(return_value=payload))
+    if module == "backup":
+        monkeypatch.setattr(
+            lazy,
+            "backup_summary",
+            lambda store_, archive_, path: {"filename": "x.json", "datasets": [], "rows": 0},
+        )
+    init._register_services(hass)
+    _schema, func = hass.services.registered[service]
+    call = _call({} if service in ("export_csv", "backup") else {"filename": "x.csv"})
+    call.context.user_id = None
+
+    call.return_response = False
+    assert _run(func(call)) is None
+
+    call.return_response = True
+    result = _run(func(call))
+    if service == "backup":
+        assert set(result) == {"filename", "datasets", "rows"}
+    elif service == "restore_backup":
+        assert set(result) == {
+            "filename",
+            "applied",
+            "dry_run",
+            "counts",
+            "totals",
+            "warnings",
+        }
+    else:
+        assert result == payload
+
+
+def test_weekly_report_response_is_none_unless_requested(monkeypatch):
+    """[#71/AK1] `weekly_report` verhält sich identisch (Kontrakt nur auf Anfrage)."""
+    init = _load_init()
+    monkeypatch.setattr(
+        init, "dt_util", types.SimpleNamespace(now=lambda: datetime(2026, 10, 26, 18, 0))
+    )
+    store = _fresh_store()
+    _seed_week(store)
+    hass = _runtime_hass([_cfg_entry("e1", "Max")], store=store)
+    hass.config.language = "de"
+    init._register_services(hass)
+    _schema, func = hass.services.registered["weekly_report"]
+    call = _call({})
+
+    call.return_response = False
+    assert _run(func(call)) is None
+
+    call.return_response = True
+    result = _run(func(call))
+    assert result["delivered"] == 1
+    assert result["failed"] == 0
+    assert result["reports"][0]["person"] == "Max"

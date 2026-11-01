@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
@@ -53,8 +54,13 @@ async def async_export_csv(
     call: ServiceCall,
     archive_store: HealthOMatStore | None = None,
     lab_custom_markers_by_entry: dict[str, list[dict]] | None = None,
-) -> str:
-    """Schreibt Getränke-/BP-CSV(s) nach /config/health_o_mat_export/.
+) -> dict[str, Any]:
+    """Schreibt Getränke-/BP-/Labor-CSV(s) nach /config/health_o_mat_export/.
+
+    Rückgabe: der Service-Response-Vertrag (#71, O-2) —
+    ``{filename, filenames, rows, dataset}``. ``filenames`` enthält **alle**
+    geschriebenen Dateien (Basenamen), ``filename`` ist die erste,
+    ``rows`` die Summe der Datenzeilen über alle Dateien.
 
     `archive_store` (Retention, REQ-HOM-109) wird — falls vorhanden — mit den
     aktuellen Daten zusammengeführt, damit der Export weiterhin die vollständige
@@ -107,9 +113,10 @@ async def async_export_csv(
 
     export_dir = hass.config.path("health_o_mat_export")
 
-    def _write_files() -> list[str]:
+    def _write_files() -> tuple[list[str], int]:
         os.makedirs(export_dir, exist_ok=True)
-        written = []
+        written: list[str] = []
+        rows_total = 0
         for eid in entry_ids:
             data = store.all_entries()[eid]
             person = data.get("person") or "Person"
@@ -121,6 +128,7 @@ async def async_export_csv(
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
                     f.write(rows_to_csv_string(rows))
                 written.append(path)
+                rows_total += len(rows) - 1  # ohne Kopfzeile
             if dataset in ("blood_pressure", "all"):
                 rows = [["zeitstempel", "person", "systolisch", "diastolisch", "puls", "notiz"]]
                 for r in sorted(readings, key=lambda x: x.get("ts", "")):
@@ -142,6 +150,7 @@ async def async_export_csv(
                         buf += ";".join(str(c) for c in row) + "\n"
                     f.write(buf)
                 written.append(path)
+                rows_total += len(rows) - 1
             if dataset in ("lab_values", "all"):
                 markers = _lab_markers(eid)
                 rows = [list(_LAB_VALUES_HEADER)]
@@ -168,9 +177,10 @@ async def async_export_csv(
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
                     f.write(rows_to_csv_string(rows))
                 written.append(path)
-        return written
+                rows_total += len(rows) - 1
+        return written, rows_total
 
-    paths = await hass.async_add_executor_job(_write_files)
+    paths, rows_total = await hass.async_add_executor_job(_write_files)
     if not paths:
         raise ServiceValidationError("Keine Daten zum Exportieren")
 
@@ -180,4 +190,10 @@ async def async_export_csv(
         {"title": "HA Health-O-Mat Export", "message": "Exportiert:\n" + "\n".join(paths)},
         blocking=False,
     )
-    return paths[0]
+    filenames = [os.path.basename(path) for path in paths]
+    return {
+        "filename": filenames[0],
+        "filenames": filenames,
+        "rows": rows_total,
+        "dataset": dataset,
+    }

@@ -15,6 +15,10 @@ on:
       - "tests_e2e/**"
       - "docker-compose.e2e.yml"
       - "Dockerfile.e2e"
+      # Runner dependencies carry the playwright pin that must match
+      # Dockerfile.e2e's base image; a drift here breaks the suite only at run
+      # time, so changes must re-trigger this workflow.
+      - "requirements_e2e.txt"
       # Seed config of the E2E HA instance: a broken configuration.yaml takes
       # the whole suite down (HA boots into recovery mode, no custom
       # integration loads), so changes to it must re-trigger this workflow.

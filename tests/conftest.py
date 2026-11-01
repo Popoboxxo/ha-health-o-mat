@@ -352,6 +352,13 @@ if not _USING_REAL_HA:
     class ServiceCall:
         """Minimal stand-in for homeassistant.core.ServiceCall (type hints only)."""
 
+    class SupportsResponse:
+        """Minimal stand-in for homeassistant.core.SupportsResponse (#71)."""
+
+        NONE = "none"
+        ONLY = "only"
+        OPTIONAL = "optional"
+
     class HomeAssistantError(Exception):
         """Minimal stand-in for homeassistant.exceptions.HomeAssistantError."""
 
@@ -499,6 +506,7 @@ if not _USING_REAL_HA:
             HomeAssistant=HomeAssistant,
             ServiceCall=ServiceCall,
             callback=callback,
+            SupportsResponse=SupportsResponse,
         ),
         "homeassistant.exceptions": _module(
             "homeassistant.exceptions",

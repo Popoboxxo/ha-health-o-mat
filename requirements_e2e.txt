@@ -5,7 +5,12 @@
 #   pip install -r requirements_e2e.txt && playwright install chromium
 
 # Browser driver + pytest integration (fixtures `page`, `context`, ...).
-playwright>=1.47
+# Pinned EXACTLY to the Playwright version baked into Dockerfile.e2e's base
+# image (mcr.microsoft.com/playwright/python:v1.47.0-jammy). A range here lets
+# pip resolve a newer driver than the image's browser binaries, which makes the
+# run fail with a headless-shell mismatch that looks like an app regression.
+# Bump together with Dockerfile.e2e, never alone.
+playwright==1.47.0
 pytest-playwright>=0.5
 
 # scripts/e2e_bootstrap.py: HA onboarding / config-entry / options-flow REST

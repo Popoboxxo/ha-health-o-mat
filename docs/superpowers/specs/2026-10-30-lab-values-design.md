@@ -1,6 +1,8 @@
 # Konzept: Laborwerte (Blutwerte) — HA Health-O-Mat
 
-**Status:** Entwurf (2026-10-30) · **Verwandt:** `docs/IDEATION-VISION.md` §5.1,
+**Status:** Entwurf (2026-10-30) · **Umgesetzt:** **0.16.0** (2026-10-31,
+REQ-HOM-122; Beleg `CHANGELOG.md` §[0.16.0], `docs/RELEASE-NOTES-0.16.0.md`)
+· **Verwandt:** `docs/IDEATION-VISION.md` §5.1,
 `docs/REQUIREMENTS.md`, `docs/CONCEPT-UI.md`
 
 > Erfassung von Laborwerten (Blutwerte) als vierte Datendomäne neben

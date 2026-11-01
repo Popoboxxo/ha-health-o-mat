@@ -12,12 +12,19 @@ Everything the browser tests need is prepared here, without a single UI click:
    per-person feature areas). The options are written through the REAL options
    flow, because that is exactly the code path the panel registration depends
    on (`health_o_mat/__init__.py` update listener -> `panel.async_apply_panel_state`).
+4. **Non-admin user** (optional, `--create-user`) — a second HA user in a
+   non-admin group (`--group`, default `system-users`), created through HA's
+   own `config/auth/create` websocket command. The admin gate of the
+   integration's admin-only commands (`get_settings`, `export_csv`,
+   `import_csv`, …) can only be verified against a user that really lacks
+   `is_admin`; the owner minted by onboarding has it by definition.
 
 Idempotent by construction: an already onboarded instance (previously
 bootstrapped, or onboarded by a human) is reused via a normal password login,
 and the persons are looked up by their stable slug (`entry.data["person"]`,
 exposed as `person_slug` by `health_o_mat/list_persons`) instead of being
-created twice.
+created twice. The non-admin user is looked up in `config/auth/list` first and
+only created when it does not exist yet.
 
 Scope guard: only entries whose slug is one of `PERSON_FIXTURES` are ever
 touched — foreign config entries (a human's real persons on a shared instance)
@@ -26,10 +33,14 @@ are read-only for this script.
 Usage:
     python scripts/e2e_bootstrap.py [--base-url http://localhost:8123]
         [--username e2e] [--password ...] [--json-out e2e-state.json]
+        [--create-user e2e-nonadmin] [--group system-users]
 
-Note: stdout/`--json-out` contain a live Home Assistant **access token** for the
-target instance. Treat it like a password — never commit it, never paste it
-into an issue or a log that is kept.
+Credentials never leave the process through a log channel: the in-process API
+returns a live Home Assistant **access token** for the target instance (the
+tests need it), but stdout and `--json-out` are passed through
+`redact_secrets`, which drops every `token`/`password` key. The state file is
+still gitignored (`e2e-state.json`, `.e2e-state*`) so a future field cannot be
+committed by accident.
 """
 
 from __future__ import annotations
@@ -66,6 +77,22 @@ class CommandUnavailable(BootstrapError):
 # admin account during onboarding; on a reused instance it is the login.
 USERNAME = os.environ.get("HASS_USERNAME", "e2e")
 PASSWORD = os.environ.get("HASS_PASSWORD", "e2e-bootstrap-password-not-a-secret")
+
+# Non-admin E2E user (`--create-user`). HA's default non-admin groups are
+# `system-users` (can use the instance) and `system-read-only` (can only look);
+# `system-users` is the interesting one for the admin gate: the user may work
+# normally but must NOT reach the admin-only websocket commands (#28).
+NON_ADMIN_USERNAME = os.environ.get("HASS_NONADMIN_USERNAME", "e2e-nonadmin")
+NON_ADMIN_NAME = "E2E Non-Admin"
+NON_ADMIN_PASSWORD = os.environ.get("HASS_NONADMIN_PASSWORD", "e2e-nonadmin-password-not-a-secret")
+DEFAULT_GROUP = "system-users"
+
+# HA's group id that carries `is_admin`; used to report (never to grant) admin.
+ADMIN_GROUP = "system-admin"
+
+# Keys that must never reach a log channel: `main` prints the bootstrap state
+# and writes it to `--json-out` (CI logs, terminal scrollback, artifacts).
+SECRET_KEYS = frozenset({"token", "password"})
 
 # The two persons the suite owns. Slugs are URL-safe on purpose (no spaces) so
 # `?person=<slug>` stays readable in assertions and traces.
@@ -110,6 +137,21 @@ def _ws_url(base_url: str) -> str:
 
 def _headers(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
+
+
+def redact_secrets(value: Any) -> Any:
+    """Return a copy of `value` without any `token`/`password` key.
+
+    Only the CLI output path (`main` → stdout and `--json-out`) uses this: those
+    are log channels. The programmatic API (`bootstrap`,
+    `ensure_non_admin_user`, `ensure_fixtures`) keeps the access token, because
+    the E2E fixtures authenticate with it.
+    """
+    if isinstance(value, dict):
+        return {key: redact_secrets(item) for key, item in value.items() if key not in SECRET_KEYS}
+    if isinstance(value, list):
+        return [redact_secrets(item) for item in value]
+    return value
 
 
 def _post_json(url: str, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -271,6 +313,179 @@ def bootstrap(base_url: str, username: str = USERNAME, password: str = PASSWORD)
         else _login_for_token(base_url, username, password)
     )
     return _finish_onboarding(base_url, access_token)
+
+
+# --- non-admin user (admin gate, #28) ---------------------------------------
+
+
+def list_auth_users(base_url: str, admin_token: str) -> list[dict[str, Any]]:
+    """All HA users via `config/auth/list` (admin-only command).
+
+    Each entry carries `id`, `username`, `is_owner`, `is_active` and
+    `group_ids` — exactly what is needed to tell an existing non-admin user
+    apart from a missing one without creating a duplicate.
+    """
+    result = _ws_command(base_url, admin_token, {"type": "config/auth/list"})
+    return result if isinstance(result, list) else []
+
+
+def find_auth_user(base_url: str, admin_token: str, username: str) -> dict[str, Any] | None:
+    """Look up one HA user by username (`None` when it does not exist).
+
+    HA lowercases usernames on creation, so the comparison is case-insensitive
+    to stay idempotent regardless of how `--create-user` was spelled.
+    """
+    wanted = username.strip().lower()
+    for user in list_auth_users(base_url, admin_token):
+        if str(user.get("username") or "").lower() == wanted:
+            return user
+    return None
+
+
+def _user_is_admin(user: dict[str, Any]) -> bool:
+    return ADMIN_GROUP in [str(group) for group in (user.get("group_ids") or [])]
+
+
+def _create_user_with_credentials(
+    base_url: str,
+    admin_token: str,
+    *,
+    username: str,
+    password: str,
+    group: str,
+) -> str:
+    """Create one HA user AND its username/password login; returns the user id.
+
+    Two admin-only websocket commands, because HA splits the two concerns
+    (verified against HA 2026.9):
+
+    1. ``config/auth/create`` — ``{name, group_ids, local_only}`` creates the
+       user record. It intentionally has NO username/password fields.
+    2. ``config/auth_provider/homeassistant/create`` — ``{user_id, username,
+       password}`` attaches the password credentials that make the normal
+       password login work.
+
+    A user created in step 1 but without step 2 cannot log in, so the creation
+    is rolled back (`config/auth/delete`) if attaching the credentials fails —
+    otherwise every retry would leave another credential-less orphan behind
+    that the idempotent lookup could not match.
+    """
+    result = _ws_command(
+        base_url,
+        admin_token,
+        {
+            "type": "config/auth/create",
+            "name": NON_ADMIN_NAME,
+            "group_ids": [group],
+            # Explicitly not local-only: the login flow must accept the user
+            # the same way it accepts the admin account.
+            "local_only": False,
+        },
+    )
+    created = (result or {}).get("user") if isinstance(result, dict) else None
+    user_id = str((created or {}).get("id") or "")
+    if not user_id:
+        raise BootstrapError(
+            f"config/auth/create did not return a user for {username!r}: {result!r}"
+        )
+
+    try:
+        _ws_command(
+            base_url,
+            admin_token,
+            {
+                "type": "config/auth_provider/homeassistant/create",
+                "user_id": user_id,
+                "username": username,
+                "password": password,
+            },
+        )
+    except Exception:
+        # Best-effort rollback; the original error is the one worth reporting.
+        try:
+            _ws_command(base_url, admin_token, {"type": "config/auth/delete", "user_id": user_id})
+        except Exception:  # noqa: BLE001 - rollback must not mask the cause
+            pass
+        raise
+    return user_id
+
+
+def ensure_non_admin_user(
+    base_url: str,
+    admin_token: str,
+    *,
+    username: str = NON_ADMIN_USERNAME,
+    password: str = NON_ADMIN_PASSWORD,
+    group: str = DEFAULT_GROUP,
+) -> dict[str, Any]:
+    """Create (or reuse) a non-admin HA user and log in as it.
+
+    The admin gate of `health_o_mat/*` is a `connection.user.is_admin` check, so
+    it can only be exercised by a user that is genuinely not an admin. The
+    onboarding user is the instance owner and therefore always admin.
+
+    Idempotent: an existing user with this username is reused as-is (no
+    password reset, no group change) — repeated runs and a reused config
+    directory must not depend on the account having been created by this run.
+
+    Fails loudly (BootstrapError) instead of returning an unusable handle when
+    the login does not work: a silently skipped non-admin user would turn the
+    #28 assertions into free passes.
+
+    Returns the user (id, group_ids, is_admin) and a valid access token for
+    that user — deliberately WITHOUT the password: no caller needs it, so it
+    must not travel any further than the login call.
+    """
+    user = find_auth_user(base_url, admin_token, username)
+    created = False
+    if user is None:
+        _create_user_with_credentials(
+            base_url,
+            admin_token,
+            username=username,
+            password=password,
+            group=group,
+        )
+        created = True
+        # Re-read the authoritative list: the create result carries a wrapped
+        # `user` object, and `group_ids` is what the gate is asserted against —
+        # read it back from the same list the lookup used.
+        user = find_auth_user(base_url, admin_token, username)
+        if user is None:
+            raise BootstrapError(
+                f"user {username!r} was created but does not show up in "
+                "config/auth/list (missing credentials?)"
+            )
+
+    groups = [str(value) for value in (user.get("group_ids") or [])]
+    if _user_is_admin(user):
+        # Not repaired automatically: silently demoting a user that already
+        # exists (possibly a human's) is worse than a clear failure. The test
+        # must fail hard here, never skip.
+        raise BootstrapError(
+            f"user {username!r} exists but is in the admin group {ADMIN_GROUP!r} "
+            f"(groups={groups}) — the admin gate cannot be verified with it. "
+            f"Delete that user or pass a different --create-user name."
+        )
+    if group not in groups:
+        raise BootstrapError(
+            f"user {username!r} exists but is not in group {group!r} "
+            f"(groups={groups}) — pass --group with one of its groups, or delete "
+            f"the user so it is created fresh."
+        )
+
+    token = _login_for_token(base_url, username, password)
+    return {
+        "username": username,
+        "user_id": str(user["id"]),
+        "group_ids": groups,
+        # Derived from the authoritative group list (the same source the gate
+        # itself is checked against) instead of a literal: the caller asserts
+        # this value, so it must not be a constant that asserts itself.
+        "is_admin": _user_is_admin(user),
+        "created": created,
+        "token": token,
+    }
 
 
 # --- persons + options ------------------------------------------------------
@@ -489,7 +704,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--username", default=USERNAME)
     parser.add_argument("--password", default=PASSWORD)
-    parser.add_argument("--json-out", help="write the bootstrap result to this file")
+    parser.add_argument(
+        "--json-out",
+        help=(
+            "write the bootstrap result to this file (tokens and passwords are "
+            "stripped; the file stays gitignored)"
+        ),
+    )
+    parser.add_argument(
+        "--create-user",
+        metavar="USERNAME",
+        help=(
+            "additionally ensure an HA user with this username in --group "
+            "(non-admin, `config/auth/create`); its user id, groups and admin "
+            "flag are added to the result under `non_admin` (admin gate, #28)"
+        ),
+    )
+    parser.add_argument(
+        "--group",
+        default=DEFAULT_GROUP,
+        help=f"HA user group for --create-user (default: {DEFAULT_GROUP})",
+    )
+    parser.add_argument(
+        "--create-user-password",
+        default=NON_ADMIN_PASSWORD,
+        help="password for --create-user (only used when the user is created)",
+    )
     parser.add_argument(
         "--no-persons",
         action="store_true",
@@ -501,12 +741,26 @@ def main(argv: list[str] | None = None) -> int:
     try:
         token = bootstrap(base_url, args.username, args.password)
         state: dict[str, Any] = {"base_url": base_url, "username": args.username, "token": token}
+        if args.create_user:
+            state["non_admin"] = ensure_non_admin_user(
+                base_url,
+                token,
+                username=args.create_user,
+                password=args.create_user_password,
+                group=args.group,
+            )
         if not args.no_persons:
-            state = ensure_fixtures(base_url, token)
+            # `ensure_fixtures` re-reads base_url/username/token and adds the
+            # persons; merging (instead of replacing the dict) keeps the
+            # optional `non_admin` entry.
+            state.update(ensure_fixtures(base_url, token))
     except Exception as exc:  # noqa: BLE001 - CLI error path
         print(f"e2e_bootstrap failed: {exc}", file=sys.stderr)
         return 1
 
+    # stdout and the state file are log channels (CI output, artifacts): strip
+    # the access tokens before they can be captured somewhere that is kept.
+    state = redact_secrets(state)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:
             json.dump(state, handle, indent=2)

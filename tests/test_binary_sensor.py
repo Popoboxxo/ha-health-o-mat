@@ -219,6 +219,30 @@ def test_apply_options_mirrors_bp_thresholds_on_setup():
     assert (entry.runtime_data.sys_threshold, entry.runtime_data.dia_threshold) == (130, 85)
 
 
+def test_bp_warning_and_panel_payload_agree_on_threshold_boundary():
+    """[B4/O-5] 140/90 warnt in Binary Sensor UND Panel, 139/89 in keinem von beiden.
+
+    Der Panel-Payload kommt aus `ws_api._bp_block` (Feld `bp.warning`); beide
+    Seiten lesen die Schwelle seither inklusiv (`>=`), passend zur
+    Richtlinien-Lesart "Hypertonie ab 140/90 mmHg".
+    """
+    init = _load_init()
+    entry = _bp_entry()
+    entry.runtime_data = init.HealthOMatData()  # Default-Schwellen 140/90
+
+    ws_api = sys.modules.get(f"{_PKG}.ws_api") or _load("ws_api")
+    now = datetime(2026, 10, 15, 12, 0)
+
+    on_threshold = [{"ts": "2026-10-15T09:00:00", "sys": 140, "dia": 90}]
+    below_threshold = [{"ts": "2026-10-15T09:00:00", "sys": 139, "dia": 89}]
+
+    assert _bp_entity(entry, on_threshold).is_on is True
+    assert ws_api._bp_block(entry, on_threshold, now)["warning"] is True
+
+    assert _bp_entity(entry, below_threshold).is_on is False
+    assert ws_api._bp_block(entry, below_threshold, now)["warning"] is False
+
+
 # --- REQ-HOM-009: pro-Person Bereichs-Toggles filtern das Binary-Sensor-Setup ---
 
 _ENTRY_ID = "test-entry-1"
