@@ -5,6 +5,51 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.19.0] — 2026-11-02
+
+### Added
+
+- **Twelve new lab catalog markers (REQ-HOM-133, #73):** `mch`, `erythrocytes`,
+  `hematocrit`, `mchc`, `mcv` (blood count), `albumin`,
+  `alkaline_phosphatase` (liver), `phosphate` (electrolytes), `uric_acid`
+  (kidney), `ciclosporin`, `everolimus` (drug levels) and `hba1c` (metabolism).
+  The catalog grows from **29 to 41** entries; existing markers are unchanged.
+- **New category `metabolism` ("Stoffwechsel")** with its own warning entity
+  (`binary_sensor.<person>_lab_warning_metabolism`), ordered before `other`.
+- **Unit required for seven markers:** `mchc`, `hematocrit`, `albumin`,
+  `alkaline_phosphatase`, `phosphate`, `uric_acid` and `hba1c` answer with
+  `unit_required` when the unit is missing or empty (service, WebSocket command
+  and batch import). Custom markers can carry the flag
+  (`require_explicit_unit`) as well.
+- **More tolerant unit detection:** `umol/L` ≡ `µmol/L`, `10¹²/L` ≡ `10^12/L`
+  and `Prozent` ≡ `%` are recognised. Comparison only — the canonical unit is
+  still what gets stored.
+- **Unit-requirement hint in the UI:** the panel report dialog and the labs card
+  indicate when a marker requires a unit.
+
+### Changed
+
+- **`require_explicit_unit` is part of the panel payload** (previously
+  deliberately omitted). Only clients evaluating `panel_data` themselves are
+  affected; the built-in panel and cards are already adapted.
+- Removed dead code leftovers and brought the requirement/spec status up to date
+  (no behaviour change).
+
+### Fixed
+
+- Lab marker units spelled as `umol/L`, with superscript exponents
+  (`10¹²/L`) or as `Prozent` were not matched against the canonical spellings;
+  they now normalise correctly instead of being rejected.
+
+### Notes
+
+- **No migration:** 12 new sensors and 1 new warning binary appear per person;
+  `unique_id`s, entity ids, store schema (`schema: 5`) and the `config entry`
+  version (3) are unchanged. Existing entities, automations and history are not
+  touched.
+- **HbA1c in `%` is deliberately unsupported** (`unsupported_unit`) — only
+  `mmol/mol`; the non-linear IFCC ↔ DCCT conversion is not part of this release.
+
 ## [0.18.0] — 2026-11-02
 
 ### Added
