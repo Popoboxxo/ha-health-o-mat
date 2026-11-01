@@ -3628,6 +3628,91 @@ def test_req_hom_123_panel_views_renders_report_form():
     assert "LAB_REPORT_MAX_ROWS_UI" in views
 
 
+_NODE_LAB_UNIT_REQUIRED_RUNNER = """import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.argv[2]).href);
+const spec = JSON.parse(process.argv[3]);
+const entryId = "entry-1";
+const panel = {
+  _busy: false,
+  _labReportOpen: {},
+  _labReportDraft: {
+    [entryId]: { ts: "", reportRef: "", rows: spec.rows },
+  },
+};
+const html = mod.labReportForm(panel, { markers: spec.markers }, entryId);
+process.stdout.write(JSON.stringify({ html }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_133_panel_unit_dropdown_warns_only_for_required_markers(tmp_path):
+    """[REQ-HOM-133] Pflicht-Marker zeigen „Einheit erforderlich" IM Dropdown.
+
+    Der Hinweis ist eine deaktivierte Zeile; die kanonische Einheit bleibt
+    vorausgewählt, damit das Absenden weiterhin einen gültigen Wert schickt.
+    Optional-Marker (mch) rendern keinen Hinweis.
+    """
+    views_copy = _prepare_views_copy(tmp_path)
+    spec = {
+        "markers": {
+            "hba1c": {
+                "category": "metabolism",
+                "name": "HbA1c",
+                "name_de": "HbA1c",
+                "name_en": "HbA1c",
+                "unit": "mmol/mol",
+                "alt_units": {},
+                "require_explicit_unit": True,
+                "ref_min": 29,
+                "ref_max": 42,
+            },
+            "mch": {
+                "category": "blood_count",
+                "name": "MCH",
+                "name_de": "MCH",
+                "name_en": "MCH",
+                "unit": "pg",
+                "alt_units": {},
+                "require_explicit_unit": False,
+                "ref_min": 27,
+                "ref_max": 33.5,
+            },
+        },
+        "rows": [
+            {"marker": "hba1c", "value": "", "unit": ""},
+            {"marker": "mch", "value": "", "unit": ""},
+        ],
+    }
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LAB_UNIT_REQUIRED_RUNNER,
+            [str(views_copy), json.dumps(spec)],
+            "runner_lab_unit_required",
+        )
+    )
+    html = out["html"]
+
+    assert '<option value="" disabled>Einheit erforderlich</option>' in html
+    # Genau ein Hinweis: nur der Pflicht-Marker (hba1c), nicht mch.
+    assert html.count("Einheit erforderlich") == 1
+    # Die kanonische Einheit bleibt als gültige Auswahl erhalten.
+    assert '<option value="mmol/mol" selected>mmol/mol</option>' in html
+
+
+def test_req_hom_133_panel_unit_options_read_the_required_flag():
+    """[REQ-HOM-133] `unitOptions` nutzt `require_explicit_unit` + UI-Key."""
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "unitOptions")
+
+    assert "require_explicit_unit" in body
+    assert "ui_panel_lab_unit_required" in body
+    assert "disabled" in body
+    assert "escapeHtml(" in body
+
+
 def test_req_hom_123_panel_hybrid_buttons_send_entry_id():
     """[REQ-HOM-123] Beide Hybrid-Buttons tragen `data-entry` (E2E-Befund Batch-Dialog).
 

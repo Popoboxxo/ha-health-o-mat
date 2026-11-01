@@ -415,6 +415,30 @@ add_lab_value:
               value: "amylase"
             - label: Tacrolimus (Talspiegel)
               value: "tacrolimus"
+            - label: Albumin
+              value: "albumin"
+            - label: Alkalische Phosphatase (AP)
+              value: "alkaline_phosphatase"
+            - label: Harnsäure
+              value: "uric_acid"
+            - label: Phosphat
+              value: "phosphate"
+            - label: MCH
+              value: "mch"
+            - label: Erythrozyten
+              value: "erythrocytes"
+            - label: Hämatokrit
+              value: "hematocrit"
+            - label: MCHC
+              value: "mchc"
+            - label: MCV
+              value: "mcv"
+            - label: Ciclosporin (Talspiegel)
+              value: "ciclosporin"
+            - label: Everolimus (Talspiegel)
+              value: "everolimus"
+            - label: HbA1c
+              value: "hba1c"
     value:
       name: Wert
       description: Messwert in der angegebenen (oder Standard-)Einheit.
@@ -538,6 +562,30 @@ add_lab_report:
                       value: "amylase"
                     - label: Tacrolimus (Talspiegel)
                       value: "tacrolimus"
+                    - label: Albumin
+                      value: "albumin"
+                    - label: Alkalische Phosphatase (AP)
+                      value: "alkaline_phosphatase"
+                    - label: Harnsäure
+                      value: "uric_acid"
+                    - label: Phosphat
+                      value: "phosphate"
+                    - label: MCH
+                      value: "mch"
+                    - label: Erythrozyten
+                      value: "erythrocytes"
+                    - label: Hämatokrit
+                      value: "hematocrit"
+                    - label: MCHC
+                      value: "mchc"
+                    - label: MCV
+                      value: "mcv"
+                    - label: Ciclosporin (Talspiegel)
+                      value: "ciclosporin"
+                    - label: Everolimus (Talspiegel)
+                      value: "everolimus"
+                    - label: HbA1c
+                      value: "hba1c"
             value:
               label: Wert
               required: true

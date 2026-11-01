@@ -705,7 +705,7 @@ bestehende `<details class="lab-entry-form">`, `health-o-mat-panel-views.js:1093
 | Zeilenlimit | ✅ 60 | ✅ 200 | UI-Soft-Cap vs. Server-Hartgrenze |
 | Marker auflösbar | ❌ | ✅ | Client kennt die Alias-Tabelle nicht (`LAB_MARKER_ALIASES` ist nicht im `panel_data`-Payload) |
 | Einheit unterstützt | teilweise | ✅ | Dropdown bietet nur kanonisch + `alt_units`; Freitext bleibt möglich → Server entscheidet (`unsupported_unit`) |
-| `require_explicit_unit` beachtet | ❌ | ✅ | Flag wird **nicht** ausgeliefert (bewusst: nur `alt_units` neu im Payload); Server entscheidet |
+| `require_explicit_unit` beachtet | ~~❌~~ ✅ | ✅ | ~~Flag wird **nicht** ausgeliefert (bewusst: nur `alt_units` neu im Payload); Server entscheidet~~ — **überholt (WP3):** das Flag wird über `panel_data` ausgeliefert (`ws_api.py:730`) und clientseitig ausgewertet; siehe `docs/PLAN-OPEN-ISSUES.md` §2 D3 |
 | Duplikat im Batch | ⚠️ exakte Select-Werte | ✅ | Client kennt keine aufgelösten Keys (Alias/Custom) |
 
 **`panel_data` wird additiv erweitert** — drei Felder, kein

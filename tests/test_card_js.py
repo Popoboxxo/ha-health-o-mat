@@ -2619,6 +2619,105 @@ def test_req_hom_125_labs_card_disclaimer_follows_card_language(tmp_path):
     assert "Hinweis" not in out["en"]
 
 
+_NODE_LABS_UNIT_REQUIRED_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+const card = new CardClass();
+card._normalized = null;
+card._config = { entry_id: "entry-1" };
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [{ key: "metabolism", name: "Stoffwechsel", hidden: false }],
+    markers: {
+      hba1c: {
+        category: "metabolism", name: "HbA1c", name_de: "HbA1c", name_en: "HbA1c",
+        unit: "mmol/mol", alt_units: {}, require_explicit_unit: true,
+        value: null, history: [],
+      },
+      mch: {
+        category: "blood_count", name: "MCH", name_de: "MCH", name_en: "MCH",
+        unit: "pg", alt_units: {}, require_explicit_unit: false,
+        value: null, history: [],
+      },
+    },
+  },
+};
+card._draft = { marker: "hba1c", value: "", unit: "", ts: "", reportRef: "" };
+const markers = card._markers();
+process.stdout.write(
+  JSON.stringify({
+    required: card._unitOptions(markers.hba1c, ""),
+    optional: card._unitOptions(markers.mch, ""),
+    form: card._entryForm(),
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_133_labs_card_unit_dropdown_warns_for_required_marker(tmp_path):
+    """[REQ-HOM-133] Karte: Pflicht-Marker warnt im Dropdown und im Placeholder."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_UNIT_REQUIRED_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_unit_required",
+        )
+    )
+
+    assert '<option value="" disabled>Einheit erforderlich</option>' in out["required"]
+    assert "Einheit erforderlich" not in out["optional"]
+    # Vorauswahl bleibt die kanonische (gültige) Einheit.
+    assert '<option value="mmol/mol" selected>mmol/mol</option>' in out["required"]
+    # Einzel-Erfassung: Placeholder des Einheitenfelds warnt ebenfalls.
+    assert 'placeholder="Einheit erforderlich"' in out["form"]
+
+
+def test_req_hom_133_labs_card_reads_require_explicit_unit():
+    """[REQ-HOM-133] Statische Regression: Flag wird in beiden Einheiten-Pfaden gelesen."""
+    source = _labs_card_source()
+
+    body = _js_method_text(source, "_unitOptions")
+    assert "require_explicit_unit" in body
+    assert "ui_panel_lab_unit_required" in body
+    assert "disabled" in body
+
+    placeholder = _js_method_text(source, "_updateUnitPlaceholder")
+    assert "require_explicit_unit" in placeholder
+    assert "ui_panel_lab_unit_required" in placeholder
+
+
 _COMPONENT_DIR = Path(_REPO_ROOT) / "custom_components" / "health_o_mat"
 
 

@@ -96,10 +96,13 @@ const CARD_TEXT = {
   de: {
     ui_card_lab_disclaimer:
       "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
+    // REQ-HOM-133 (#73): Warnung im Einheiten-Dropdown (Pflicht-Marker).
+    ui_panel_lab_unit_required: "Einheit erforderlich",
   },
   en: {
     ui_card_lab_disclaimer:
       "⚠️ Note: not medical advice — reference values, not a diagnosis. Adjust reference ranges in the settings.",
+    ui_panel_lab_unit_required: "Unit required",
   },
 };
 
@@ -734,10 +737,14 @@ class HealthOMatLabsCard extends HTMLElement {
     if (!Object.keys(markers).length) return "";
     const selectedKey = this._selectedMarkerKey();
     const selectedMarker = markers[selectedKey];
+    // REQ-HOM-133 (#73): Bei Pflicht-Markern ist die Einheit kein optionales
+    // Feld — das Placeholder sagt das, bevor der Server ablehnt.
     const unitPlaceholder =
-      selectedMarker && selectedMarker.unit
-        ? `${selectedMarker.unit} (optional)`
-        : "Einheit (optional)";
+      selectedMarker && selectedMarker.require_explicit_unit
+        ? cardText("ui_panel_lab_unit_required")
+        : selectedMarker && selectedMarker.unit
+          ? `${selectedMarker.unit} (optional)`
+          : "Einheit (optional)";
     return `<div class="labs-entry">
       <div class="labs-entry-title">Neuen Wert erfassen</div>
       <div class="labs-form-grid">
@@ -791,6 +798,13 @@ class HealthOMatLabsCard extends HTMLElement {
     const markerEl = this.shadowRoot.querySelector('[data-field="lab-marker"]');
     const unitEl = this.shadowRoot.querySelector('[data-field="lab-unit"]');
     if (!markerEl || !unitEl) return;
+    const key = markerEl.value != null ? String(markerEl.value) : "";
+    const markers = this._markers();
+    const selected = key && markers ? markers[key] : null;
+    if (selected && selected.require_explicit_unit) {
+      unitEl.placeholder = cardText("ui_panel_lab_unit_required");
+      return;
+    }
     const option = markerEl.options ? markerEl.options[markerEl.selectedIndex] : null;
     const unit = option && option.dataset ? option.dataset.unit || "" : "";
     unitEl.placeholder = unit ? `${unit} (optional)` : "Einheit (optional)";
@@ -886,7 +900,16 @@ class HealthOMatLabsCard extends HTMLElement {
           }>${escapeHtml(unit)}</option>`
       )
       .join("");
-    return `${options}<option value="__custom__"${
+    // REQ-HOM-133 (#73): Pflicht-Marker warnen im Dropdown, bevor der Server
+    // `unit_required` meldet. Deaktivierte Hinweiszeile — die kanonische
+    // Einheit bleibt vorausgewählt und damit ein gültiger Wert.
+    const requiredHint =
+      marker && marker.require_explicit_unit
+        ? `<option value="" disabled>${escapeHtml(
+            cardText("ui_panel_lab_unit_required")
+          )}</option>`
+        : "";
+    return `${requiredHint}${options}<option value="__custom__"${
       current === "__custom__" ? " selected" : ""
     }>Andere …</option>`;
   }

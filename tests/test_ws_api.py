@@ -4569,6 +4569,7 @@ def test_req_hom_122_panel_data_includes_labs_block(monkeypatch):
         "inflammation",
         "digestion",
         "drug_levels",
+        "metabolism",
         "other",
     ]
     assert "alt" in data["labs"]["markers"]
@@ -4850,6 +4851,59 @@ def test_req_hom_122_websocket_add_lab_value_requires_explicit_unit(monkeypatch)
     )
 
     assert connection.errors == [(14, "invalid_format", "unit_required")]
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_133_websocket_add_lab_value_blank_unit_required(monkeypatch):
+    """[REQ-HOM-133] Leerstring/Whitespace → `unit_required` (nicht `unsupported_unit`)."""
+    _now(monkeypatch)
+    for blank in ("", "   "):
+        store = _write_store()
+        hass = _write_hass(store, [_entry("e1")])
+        connection = FakeConnection()
+
+        asyncio.run(
+            ws_api.websocket_add_lab_value(
+                hass,
+                connection,
+                {
+                    "id": 16,
+                    "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                    "entry_id": "e1",
+                    "marker": "hba1c",
+                    "value": 42,
+                    "unit": blank,
+                },
+            )
+        )
+
+        assert connection.errors == [(16, "invalid_format", "unit_required")]
+        store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_133_websocket_add_lab_value_hba1c_percent_unsupported(monkeypatch):
+    """[REQ-HOM-133/D3] HbA1c in `%` bleibt `unsupported_unit`."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 17,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "hba1c",
+                "value": 6.5,
+                "unit": "%",
+            },
+        )
+    )
+
+    assert connection.errors == [(17, "invalid_format", "unsupported_unit")]
     store.add_lab_reading.assert_not_awaited()
 
 
@@ -5304,8 +5358,28 @@ def test_req_hom_123_panel_data_labs_marker_exposes_alt_units(monkeypatch):
     assert markers["creatinine"]["alt_units"] == {"mg/dL": 88.4}
     assert markers["alt"]["alt_units"] == {}
     assert markers["vitamin_d"]["alt_units"] == {"nmol/L": 0.4}
-    # Bewusst NICHT im Payload (§6.2).
-    assert "require_explicit_unit" not in markers["urine_protein_creatinine_ratio"]
+    # REQ-HOM-133 (#73): Das Flag wird jetzt ausgeliefert, damit Karte/Panel
+    # VOR dem Serverfehler warnen können (`unit_required`).
+    assert markers["urine_protein_creatinine_ratio"]["require_explicit_unit"] is True
+    assert markers["alt"]["require_explicit_unit"] is False
+
+
+def test_req_hom_133_panel_data_exposes_require_explicit_unit_and_metabolism(monkeypatch):
+    """[REQ-HOM-133] Flag für die UI-Vorwarnung + neue Kategorie/Marker."""
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch)
+
+    labs = ws_api.build_panel_data(hass, "e1", NOW)["labs"]
+
+    assert [category["key"] for category in labs["categories"]][-2:] == [
+        "metabolism",
+        "other",
+    ]
+    assert labs["markers"]["hba1c"]["category"] == "metabolism"
+    assert labs["markers"]["hba1c"]["require_explicit_unit"] is True
+    assert labs["markers"]["mchc"]["require_explicit_unit"] is True
+    assert labs["markers"]["mch"]["require_explicit_unit"] is False
+    # Optional-Marker bleiben ohne Pflicht (Regression zum Bestand).
+    assert labs["markers"]["alt"]["require_explicit_unit"] is False
 
 
 def test_req_hom_123_panel_data_last_report_uses_latest_common_instant(monkeypatch):

@@ -2081,3 +2081,230 @@ def test_req_hom_130_normalize_without_previous_unchanged():
     assert logic.normalize_lab_custom_markers(raw) == [
         {"key": "vitamin_d", "name": "Vitamin D", "category": "other", "unit": "ng/mL"}
     ]
+
+
+# --- REQ-HOM-133 (#73): Katalog-Erweiterung, Einheiten-Härtung, B3 --------
+
+#: Die 29 Marker, die vor #73 existierten — sie dürfen sich nicht verändern.
+_REQ_HOM_133_EXISTING_MARKER_KEYS = {
+    "alt",
+    "ast",
+    "ggt",
+    "bilirubin_total",
+    "total_protein",
+    "creatinine",
+    "egfr",
+    "urea",
+    "urine_protein_creatinine_ratio",
+    "sodium",
+    "potassium",
+    "calcium",
+    "magnesium",
+    "chloride",
+    "cholesterol_total",
+    "ldl",
+    "hdl",
+    "triglycerides",
+    "tsh",
+    "ft4",
+    "ft3",
+    "hemoglobin",
+    "leukocytes",
+    "platelets",
+    "crp",
+    "esr",
+    "lipase",
+    "amylase",
+    "tacrolimus",
+}
+
+_REQ_HOM_133_NEW_MARKER_KEYS = {
+    "mch",
+    "erythrocytes",
+    "hematocrit",
+    "mchc",
+    "albumin",
+    "phosphate",
+    "mcv",
+    "uric_acid",
+    "alkaline_phosphatase",
+    "ciclosporin",
+    "everolimus",
+    "hba1c",
+}
+
+
+def test_req_hom_133_catalog_has_41_markers_and_metabolism_before_other():
+    """[REQ-HOM-133] 29 Bestands-Keys + 12 neue = 41; `metabolism` vor `other`."""
+    from custom_components.health_o_mat import const
+
+    keys = set(const.LAB_MARKERS)
+    assert keys == _REQ_HOM_133_EXISTING_MARKER_KEYS | _REQ_HOM_133_NEW_MARKER_KEYS
+    assert len(const.LAB_MARKERS) == 41
+
+    category_keys = [category["key"] for category in const.LAB_CATEGORIES]
+    assert category_keys[-2:] == ["metabolism", "other"]
+    metabolism = const.LAB_CATEGORIES[-2]
+    assert metabolism["name_de"] == "Stoffwechsel"
+    assert metabolism["name_en"] == "Metabolism"
+
+
+def test_req_hom_133_new_marker_definitions_match_the_issue_table():
+    """[REQ-HOM-133] Kanonische Einheit, Referenz, Kategorie, Pflicht-Flag."""
+    from custom_components.health_o_mat import const
+
+    expected = {
+        "mch": ("pg", 27.0, 33.5, "blood_count", False),
+        "erythrocytes": ("10^12/L", 3.9, 5.2, "blood_count", False),
+        "hematocrit": ("L/L", 0.355, 0.455, "blood_count", True),
+        "mchc": ("g/dL", 31.5, 36.0, "blood_count", True),
+        "albumin": ("g/L", 35, 52, "liver", True),
+        "phosphate": ("mmol/L", 0.87, 1.45, "electrolytes", True),
+        "mcv": ("fl", 80.0, 99.0, "blood_count", False),
+        "uric_acid": ("mg/dL", 2.3, 6.1, "kidney", True),
+        "alkaline_phosphatase": ("U/L", 35, 105, "liver", True),
+        "ciclosporin": ("ng/mL", None, None, "drug_levels", False),
+        "everolimus": ("ng/mL", None, None, "drug_levels", False),
+        "hba1c": ("mmol/mol", 29, 42, "metabolism", True),
+    }
+    for key, (unit, ref_min, ref_max, category, required) in expected.items():
+        marker = const.LAB_MARKERS[key]
+        assert marker["canonical_unit"] == unit, key
+        assert (marker["ref_min"], marker["ref_max"]) == (ref_min, ref_max), key
+        assert marker["category"] == category, key
+        assert marker["require_explicit_unit"] is required, key
+        assert marker["name_de"] and marker["name_en"], key
+
+
+def test_req_hom_133_alt_units_use_reported_to_canonical_factor():
+    """[REQ-HOM-133] `alt_units` hält den Faktor gemeldet → kanonisch."""
+    from custom_components.health_o_mat import const
+
+    alt_units = {key: const.LAB_MARKERS[key]["alt_units"] for key in _REQ_HOM_133_NEW_MARKER_KEYS}
+    assert alt_units["hematocrit"] == {"%": 0.01}
+    assert alt_units["albumin"] == {"g/dL": 10}
+    assert alt_units["phosphate"] == {"mg/dL": 0.3229}
+    assert alt_units["uric_acid"] == {"µmol/L": 0.01681}
+    assert alt_units["alkaline_phosphatase"] == {"µkat/L": 60}
+    # 1:1-Aliase derselben Größe.
+    assert alt_units["erythrocytes"] == {"10⁶/µL": 1}
+    assert alt_units["mcv"] == {"µm³": 1}
+    assert alt_units["ciclosporin"] == {"µg/L": 1}
+    assert alt_units["everolimus"] == {"µg/L": 1}
+    # Keine Alt-Einheit: Wert liegt bereits kanonisch vor.
+    assert alt_units["mch"] == {}
+    assert alt_units["mchc"] == {}
+    assert alt_units["hba1c"] == {}
+
+
+def test_req_hom_133_norm_unit_folds_ascii_micro_and_superscripts():
+    """[REQ-HOM-133] `umol/L` ≡ `µmol/L` ≡ `μmol/L`; `10¹²/L` ≡ `10^12/L`."""
+    from custom_components.health_o_mat import logic
+
+    assert logic._norm_unit("umol/L") == logic._norm_unit("µmol/L")
+    assert logic._norm_unit("µmol/L") == logic._norm_unit("μmol/L")
+    assert logic._norm_unit("10¹²/L") == logic._norm_unit("10^12/L")
+    assert logic._norm_unit("10⁶/µL") == logic._norm_unit("10^6/µL")
+    assert logic._norm_unit("×10⁹/L") == logic._norm_unit("10^9/L")
+    assert logic._norm_unit("Prozent") == logic._norm_unit("%")
+    assert logic._norm_unit("  PROZENT ") == "%"
+
+
+def test_req_hom_133_norm_unit_keeps_enzyme_unit_distinct_from_micro():
+    """[REQ-HOM-133] `U/l` ist Enzymeinheit und wird NIE zu `µ/l`."""
+    from custom_components.health_o_mat import logic
+
+    assert logic._norm_unit("U/l") != logic._norm_unit("µ/l")
+    assert logic._norm_unit("U/L") == logic._norm_unit("u/l")
+    # Auch "IU/L" bleibt unangetastet (kein Mikro-Präfix).
+    assert logic._norm_unit("IU/L") != logic._norm_unit("Iµ/L")
+
+
+@pytest.mark.parametrize(
+    ("marker_key", "reported", "reported_unit", "expected"),
+    [
+        ("hematocrit", 42, "%", 0.42),
+        ("albumin", 4.5, "g/dL", 45.0),
+        ("phosphate", 3.5, "mg/dL", 1.13015),
+        ("uric_acid", 350, "µmol/L", 5.8835),
+        ("alkaline_phosphatase", 1.2, "µkat/L", 72.0),
+        ("erythrocytes", 4.5, "10⁶/µL", 4.5),
+        ("erythrocytes", 4.5, "10^6/µL", 4.5),
+        ("mcv", 90, "µm³", 90.0),
+        ("ciclosporin", 100, "µg/L", 100.0),
+        ("everolimus", 100, "ug/L", 100.0),
+    ],
+)
+def test_req_hom_133_convert_lab_value_alt_units(marker_key, reported, reported_unit, expected):
+    """[REQ-HOM-133] Jede neue Alt-Einheit rechnet in die kanonische Einheit."""
+    from custom_components.health_o_mat import logic
+
+    value, unit = logic.convert_lab_value(logic.LAB_MARKERS[marker_key], reported, reported_unit)
+
+    assert value == pytest.approx(expected, abs=1e-6)
+    assert unit == logic.LAB_MARKERS[marker_key]["canonical_unit"]
+
+
+def test_req_hom_133_hba1c_percent_is_rejected():
+    """[REQ-HOM-133/D3] HbA1c in `%` (DCCT) ist nichtlinear → `unsupported_unit`."""
+    from custom_components.health_o_mat import logic
+
+    with pytest.raises(ValueError, match="unsupported_unit"):
+        logic.convert_lab_value(logic.LAB_MARKERS["hba1c"], 6.5, "%")
+
+
+@pytest.mark.parametrize(
+    "marker_key",
+    ["mchc", "hematocrit", "albumin", "alkaline_phosphatase", "phosphate", "uric_acid", "hba1c"],
+)
+def test_req_hom_133_batch_requires_explicit_unit(marker_key):
+    """[REQ-HOM-133] Leere Einheit bei den sieben Pflicht-Markern → `unit_required`."""
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": marker_key, "value": 1, "unit": "   "}]
+    )
+
+    assert rows == []
+    assert error["code"] == "unit_required"
+    assert error["params"]["row"] == 1
+
+
+def test_req_hom_133_batch_optional_marker_without_unit_uses_canonical():
+    """[REQ-HOM-133] Ohne Pflicht bleibt die leere Einheit `keine Angabe`."""
+    from custom_components.health_o_mat import logic
+
+    rows, error = logic.validate_lab_report_rows([{"marker": "mch", "value": 30}])
+
+    assert error is None
+    assert rows[0]["unit"] == "pg"
+    assert rows[0]["reported_unit"] == "pg"
+    assert rows[0]["value"] == pytest.approx(30.0, abs=1e-6)
+
+
+def test_req_hom_133_custom_marker_may_require_explicit_unit():
+    """[REQ-HOM-133/B3] Custom-Marker dürfen das Flag setzen (Default False)."""
+    from custom_components.health_o_mat import logic
+
+    required = [
+        {
+            "key": "ferritin",
+            "name": "Ferritin",
+            "category": "blood_count",
+            "unit": "ng/mL",
+            "require_explicit_unit": True,
+        }
+    ]
+    key, marker = logic.resolve_lab_marker("ferritin", required)
+    assert key == "ferritin"
+    assert marker["require_explicit_unit"] is True
+
+    rows, error = logic.validate_lab_report_rows(
+        [{"marker": "ferritin", "value": 42, "unit": ""}], required
+    )
+    assert rows == []
+    assert error["code"] == "unit_required"
+
+    default = logic.normalize_lab_custom_markers([{"name": "Vitamin D", "unit": "ng/mL"}])
+    assert "require_explicit_unit" not in default[0]
+    assert logic.effective_lab_markers(default)["vitamin_d"]["require_explicit_unit"] is False

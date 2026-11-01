@@ -987,6 +987,16 @@ def _slugify_lab_marker_name(name: str) -> str:
     return slug or "marker"
 
 
+#: Superscript-Ziffern -> ASCII (Exponenten in Einheiten wie ``10¹²/L``).
+_SUPERSCRIPT_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+
+#: ``10¹²``/``×10⁹`` -> ``10^12``/``10^9`` (VOR ``NFKC``, siehe ``_norm_unit``).
+_SUPERSCRIPT_EXPONENT_RE = re.compile(r"[×xX]?\s*10([⁰¹²³⁴⁵⁶⁷⁸⁹]+)")
+
+#: ASCII ``u`` als Mikro-Präfix — nur vor einer bekannten Mikro-Einheit.
+_MICRO_PREFIX_RE = re.compile(r"(?<![a-z])u(?=(?:mol|kat|g|l)\b)")
+
+
 def _norm_unit(value: Any) -> str:
     """Einheiten-Vergleich case-/whitespace-/kompatibilitäts-insensitiv (HA-frei).
 
@@ -994,9 +1004,24 @@ def _norm_unit(value: Any) -> str:
     insbesondere ``µ`` (U+00B5, Mikro-Zeichen) auf ``μ`` (U+03BC, griechisches My),
     wie es Labor-CSVs aus Fremdsystemen liefern. Betrifft ausschließlich den
     VERGLEICH; gespeichert/angezeigt wird weiterhin die kanonische Einheit.
+
+    REQ-HOM-133 (#73): Zusätzlich toleriert der Vergleich
+
+    * ASCII ``u`` als Mikro-Präfix (``umol/L`` ≡ ``µmol/L`` ≡ ``μmol/L``) —
+      aber NUR vor einer bekannten Mikro-Einheit, damit ``U/l`` (Enzym-Einheit)
+      nicht zu ``µ/l`` wird;
+    * Superscript-Exponenten (``10¹²/L`` ≡ ``10^12/L``, ``×10⁹/L`` ≡
+      ``10^9/L``); die Umformung läuft VOR ``NFKC``, weil NFKC die
+      Superscript-Ziffern zu nackten Ziffern faltet (``10¹²`` → ``1012``);
+    * ``Prozent`` als Schreibweise von ``%``.
     """
-    text = unicodedata.normalize("NFKC", str(value if value is not None else ""))
-    return text.strip().lower()
+    text = str(value if value is not None else "").strip()
+    text = _SUPERSCRIPT_EXPONENT_RE.sub(
+        lambda match: "10^" + match.group(1).translate(_SUPERSCRIPT_DIGITS), text
+    )
+    text = unicodedata.normalize("NFKC", text).strip().lower()
+    text = _MICRO_PREFIX_RE.sub("μ", text)
+    return text.replace("prozent", "%")
 
 
 def _previous_marker_keys(previous: Any) -> dict[str, str]:
@@ -1077,6 +1102,12 @@ def normalize_lab_custom_markers(raw: Any, previous: Any = None) -> list[dict]:
                 }
             except (TypeError, ValueError):
                 pass
+        # REQ-HOM-133/B3: Custom-Marker dürfen die Einheiten-Pflicht selbst
+        # setzen. Default False — bestehende Marker bleiben unverändert (der
+        # Key wird nur bei `True` geschrieben, damit der Bestands-Shape stabil
+        # bleibt).
+        if item.get("require_explicit_unit") is True:
+            entry["require_explicit_unit"] = True
         result.append(entry)
     return result
 
@@ -1106,7 +1137,7 @@ def effective_lab_markers(custom_markers: Any = None) -> dict[str, dict]:
                 if custom.get("alt_unit")
                 else {}
             ),
-            "require_explicit_unit": False,
+            "require_explicit_unit": bool(custom.get("require_explicit_unit")),
             "is_custom": True,
         }
     return markers
