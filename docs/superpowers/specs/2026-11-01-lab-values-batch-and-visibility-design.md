@@ -1,6 +1,7 @@
 # Konzept: Laborwerte — Batch-Erfassung & Sichtbarkeit (Erweiterung zu REQ-HOM-122)
 
-**Status:** Entwurf (2026-11-01) · **Basis:**
+**Status:** Entwurf (2026-11-01) · **Umgesetzt:** **0.16.2** (2026-10-31,
+REQ-HOM-123…126/128/129; Beleg `CHANGELOG.md` §[0.16.2]) · **Basis:**
 `docs/superpowers/specs/2026-10-30-lab-values-design.md` (REQ-HOM-122, umgesetzt in 0.16.x)
 · **Verwandt:** `docs/REQUIREMENTS.md` REQ-HOM-122, `docs/CONCEPT-UI.md`,
 `docs/IDEATION-VISION.md` §4.2
