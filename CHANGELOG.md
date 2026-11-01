@@ -5,6 +5,56 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.18.0] — 2026-11-02
+
+### Added
+
+- **Service responses, opt-in (REQ-HOM-132, #71):** `export_csv`, `import_csv`,
+  `backup`, `restore_backup` and `weekly_report` can return a result to the
+  caller (`supports_response`). The response uses flat keys only; the `errors`
+  list is capped at 20 entries, and failures stay exceptions instead of becoming
+  a quiet response with `errors`.
+- **WebSocket command `health_o_mat/import_csv` (#72):** accepts either
+  `filename` (a file in the import folder) or `content` (UTF-8 CSV text, max.
+  2 MiB); the two are mutually exclusive. The export folder is additionally
+  allowed as a CSV source.
+- **Atomic lab import per report:** one write per dataset plus a rollback across
+  all groups of the report, so a faulty row can no longer leave a half-written
+  report behind.
+- **Canonical dedupe on `(ts, marker_key)`:** store, import and single-add now
+  share the same duplicate rule, independent of the path the value came in
+  through.
+
+### Changed
+
+- **Breaking — the import is admin-only:** both `health_o_mat.import_csv` and
+  the `health_o_mat/import_csv` WS command require an admin user. Calls from a
+  regular user or from a context without a `user_id` no longer import silently
+  but report a permission error. Export, backup, restore and the capture
+  services are unaffected.
+- **Breaking — the blood-pressure warning threshold is inclusive:**
+  `>= 140/90` now warns. Previously the panel stayed quiet at exactly 140/90
+  while the binary sensor already warned; panel/tile and binary sensor agree
+  now. The configurable thresholds themselves are unchanged.
+- **Breaking — a correction row with the same `(ts, marker_key)` is rejected:**
+  a CSV row with an identical timestamp and marker but a different value is
+  `skipped` with reason `duplicate_marker` (previously it could be added on
+  top). To correct a value, void the old entry first, then re-import.
+- **Breaking (script users only) — `scripts/e2e_bootstrap.py` no longer prints
+  secrets:** `--json-out` and stdout contain no passwords or tokens. Only
+  relevant when the script is used outside the E2E chain.
+- **Internal — E2E hardening:** the HA E2E image is pinned to 2026.9.1 and
+  Playwright to 1.47.0; a non-admin bootstrap was added, along with 12
+  admin-gate E2E tests and panel/card smoke tests.
+- **Internal — requirement/spec status reconciled:** REQ/spec status headers
+  were brought back in line with the shipped state.
+
+### Removed
+
+- **Dead code (N-12):** `logic.csv_header_footer` was removed.
+
+[0.18.0]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.17.3...v0.18.0
+
 ## [0.17.3] — 2026-11-02
 
 ### Added

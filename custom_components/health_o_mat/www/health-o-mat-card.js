@@ -52,7 +52,7 @@
 
 const CARD_TAG = "health-o-mat-card";
 const EDITOR_TAG = "health-o-mat-card-editor";
-const CARD_VERSION = "0.17.3";
+const CARD_VERSION = "0.18.0";
 
 /* Eingebaute Fallback-Getraenke (nur wenn weder `quick_drinks` noch
  * `panel_data.quick_drinks` vorliegen). Die `key`s entsprechen den
