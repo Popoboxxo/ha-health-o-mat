@@ -19,6 +19,12 @@ SKIP_DEVICE_SLUG_UNRESOLVED = "device_slug_unresolved"
 SKIP_DEVICE_SLUG_AMBIGUOUS = "device_slug_ambiguous"
 SKIP_TARGET_OCCUPIED = "target_occupied"
 SKIP_INVALID_KEY = "invalid_key"
+# A user renamed the entity id by hand: their choice wins, the entity is not
+# migrated. Reported as a warning, never as a failed pass.
+SKIP_CUSTOM_ENTITY_ID = "custom_entity_id"
+
+# Reasons that must NOT block the pass: the entity keeps its id on purpose.
+NON_BLOCKING_SKIP_REASONS = frozenset({SKIP_CUSTOM_ENTITY_ID})
 
 # ``{entry_id}_button_quick_<index>`` — index is 0-based and canonical: no
 # leading zeros, no sign, no trailing noise (Spec §2.1).
@@ -116,28 +122,57 @@ def _tokens(object_part: str) -> list[str]:
     return [token for token in object_part.split("_") if token]
 
 
-def _common_prefix_sequence(sequences: Sequence[Sequence[str]]) -> list[str]:
-    """Longest common leading token sequence (``[]`` when nothing is common)."""
-    if not sequences:
+def _supported_prefix_sequence(sequences: Sequence[Sequence[str]]) -> list[str] | None:
+    """Longest leading token sequence shared by at least TWO sequences.
+
+    A single outlier must not erase the prefix: one hand-renamed entity id
+    (``sensor.caro_gewicht`` next to ``sensor.health_o_mat_caro_*``) shares no
+    leading token with the rest and would otherwise empty the common prefix of
+    every anchor (Spec §2.3, production bug ``device_slug_ambiguous``).
+
+    Returns ``None`` when two *different* prefixes are equally long and equally
+    supported — that is genuine ambiguity, not a guess.
+    """
+    support: dict[tuple[str, ...], int] = {}
+    for sequence in sequences:
+        for length in range(1, len(sequence) + 1):
+            prefix = tuple(sequence[:length])
+            support[prefix] = support.get(prefix, 0) + 1
+
+    supported = [prefix for prefix, count in support.items() if count >= 2]
+    if not supported:
         return []
-    common = list(sequences[0])
-    for sequence in sequences[1:]:
-        limit = 0
-        for left, right in zip(common, sequence, strict=False):
-            if left != right:
-                break
-            limit += 1
-        common = common[:limit]
-    return common
+    longest = max(len(prefix) for prefix in supported)
+    winners = [prefix for prefix in supported if len(prefix) == longest]
+    if len(winners) > 1:
+        return None
+    return list(winners[0])
 
 
 def _boundary_prefix(candidate_parts: Sequence[str], common_tokens: Sequence[str]) -> str:
-    """Longest leading token prefix of ``common_tokens`` every candidate extends."""
+    """Trim the anchor prefix to the part the candidate ids actually share.
+
+    Shared entity tokens (e.g. ``lab``) are cut off when the candidates are
+    ``…_max_vitamin_d`` but the anchors are ``…_max_lab_crp``. Only candidates
+    that start like the anchor prefix are consulted (a hand-renamed id shares
+    no leading token and must not erase the prefix), and a strict majority of
+    them has to extend the prefix — so one outlier cannot shorten it either.
+    """
+    first = common_tokens[0]
+    relevant = [part for part in candidate_parts if _tokens(part)[:1] == [first]]
+    if not relevant:
+        return "_".join(common_tokens)
     for length in range(len(common_tokens), 0, -1):
         prefix = "_".join(common_tokens[:length])
-        if all(part.startswith(prefix + "_") for part in candidate_parts):
+        extending = sum(1 for part in relevant if part.startswith(prefix + "_"))
+        if extending * 2 > len(relevant):
             return prefix
     return ""
+
+
+def _supporting_anchors(anchor_parts: Sequence[str], slug: str) -> list[str]:
+    """Anchors whose object id starts with ``slug`` (Spec §2.3)."""
+    return [part for part in anchor_parts if part == slug or part.startswith(slug + "_")]
 
 
 def _apply_hint(prefix: str, hint: str) -> str | None:
@@ -166,6 +201,11 @@ def resolve_device_slug(
     are the remaining entities that carry a ``translation_key`` (their
     object-id suffix is English and language independent, Spec §2.3). Object
     parts only — user labels never influence the result.
+
+    Acceptance (Spec §2.3): the prefix is non-empty and supported by at least
+    two anchors. It is NOT required that every registry entity starts with it:
+    a hand-renamed entity id is the user's choice, so the migration leaves it
+    alone (``custom_entity_id``) instead of failing the whole pass.
     """
     if not candidates:
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_UNRESOLVED)
@@ -179,18 +219,23 @@ def resolve_device_slug(
     if len(anchor_parts) < 2:
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_UNRESOLVED)
 
-    candidate_parts = [_object_part(str(candidate["entity_id"])) for candidate in candidates]
-    common = _common_prefix_sequence([_tokens(part) for part in anchor_parts])
-    if not common:
+    common = _supported_prefix_sequence([_tokens(part) for part in anchor_parts])
+    if common is None or not common:
+        # Two equally supported prefixes, or no prefix shared by two anchors.
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_AMBIGUOUS)
 
+    candidate_parts = [_object_part(str(candidate["entity_id"])) for candidate in candidates]
     prefix = _boundary_prefix(candidate_parts, common)
     if not prefix:
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_AMBIGUOUS)
 
-    # Divergence test: the token right after the prefix over ALL anchors.
+    supporting = _supporting_anchors(anchor_parts, prefix)
+    if len(supporting) < 2:
+        return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_AMBIGUOUS)
+
+    # Divergence test: the token right after the prefix over the supporting anchors.
     depth = len(_tokens(prefix))
-    suffixes = {(_tokens(part) + [""])[depth] for part in anchor_parts}
+    suffixes = {(_tokens(part) + [""])[depth] for part in supporting}
     diverges = len(suffixes) > 1
 
     slug: str | None
@@ -211,7 +256,8 @@ def resolve_device_slug(
 
     if not _SAFE_SLUG_RE.fullmatch(slug):
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_AMBIGUOUS)
-    if not all(part.startswith(slug + "_") for part in candidate_parts):
+    if len(_supporting_anchors(anchor_parts, slug)) < 2:
+        # Nothing but the anchors may confirm the boundary (fail-closed).
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_AMBIGUOUS)
     if device_id is not None and any(
         candidate.get("device_id") != device_id for candidate in candidates
@@ -285,6 +331,10 @@ def build_migration_plan(
     for entity, index, key in candidates:
         source = str(entity["entity_id"])
         unique_id = str(entity.get("unique_id") or "")
+        if not _object_part(source).startswith(resolution.slug + "_"):
+            # Hand-renamed entity id: the user's id wins, nothing is rewritten.
+            skipped.append(MigrationSkip(unique_id, source, None, SKIP_CUSTOM_ENTITY_ID))
+            continue
         if index is not None:
             target = f"button.{quick_drink_target(resolution.slug, index)}"
         else:

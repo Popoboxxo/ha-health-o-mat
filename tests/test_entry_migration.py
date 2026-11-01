@@ -514,3 +514,52 @@ def test_req_hom_130_registry_fields_survive_the_rename(monkeypatch):
     assert migrated.area_id == "kitchen"
     assert migrated.hidden_by == "user"
     assert migrated.disabled_by is None
+
+
+def test_req_hom_130_hand_renamed_anchor_does_not_block_migration(monkeypatch):
+    """Production regression (`device_slug_ambiguous`, live instance).
+
+    One translation-key entity whose id the user renamed by hand
+    (``sensor.caro_gewicht``) shares no leading token with the device ids. It
+    must not erase the device prefix and must not fail the pass.
+    """
+    entries = [
+        *_standard_entries(),
+        _RegEntry("sensor.caro_gewicht", f"{ENTRY_ID}_weight", "weight", original_name="Gewicht"),
+    ]
+    registry = _FakeRegistry(entries)
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.config_entries.async_update_entry.assert_called_once()
+    _args, kwargs = hass.config_entries.async_update_entry.call_args
+    assert kwargs["version"] == 3
+    assert registry.async_get(f"button.{SLUG}_quick_drink_1") is not None
+    assert registry.async_get(f"button.{SLUG}_quick_drink_3") is not None
+    assert registry.async_get(f"sensor.{SLUG}_lab_vitamin_d") is not None
+    # The hand-renamed id is left untouched.
+    assert registry.async_get("sensor.caro_gewicht") is not None
+
+
+def test_req_hom_130_custom_entity_id_warns_and_still_bumps_version(monkeypatch, caplog):
+    """A hand-renamed quick drink is a warning, not a failed migration."""
+    entries = _standard_entries()
+    entries[0] = _RegEntry("button.mein_wasser", f"{ENTRY_ID}_button_quick_0")
+    registry = _FakeRegistry(entries)
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    init = _load_init()
+    hass = _make_hass()
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.config_entries.async_update_entry.assert_called_once()
+    assert "button.mein_wasser bleibt unverändert (Grund: custom_entity_id)" in caplog.text
+    # Not a failure summary, not a drift: the pass completed.
+    assert "fehlgeschlagen" not in caplog.text
+    assert "schema_drift" not in caplog.text
+    assert registry.async_get("button.mein_wasser") is not None
+    assert registry.async_get(f"button.{SLUG}_quick_drink_3") is not None
