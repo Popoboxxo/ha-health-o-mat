@@ -37,6 +37,7 @@ from .const import (
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .migration import (
+    MigrationPlan,
     build_migration_plan,
     custom_lab_target,
     parse_custom_lab_key,
@@ -162,12 +163,21 @@ class HealthOMatData:
         self.lifetime_setting_seen: int | None = None
 
 
-async def _async_migrate_entity_ids(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
+async def _async_migrate_entity_ids(
+    hass: HomeAssistant, entry: HealthOMatConfigEntry
+) -> MigrationPlan | None:
     """Rename F-1/F-2 entities to the language-independent scheme (REQ-HOM-130).
 
-    Returns True only when nothing was skipped and no schema drift remains.
-    Fail-closed: the caller keeps the entry version untouched on False, so HA
-    retries the whole pass on the next start.
+    Returns the executed plan when nothing was skipped and no schema drift
+    remains, ``None`` otherwise. Fail-closed: the caller keeps the entry version
+    untouched on ``None``, so HA retries the whole pass on the next start.
+
+    Diagnostics contract: each planned skip is reported exactly ONCE — inside
+    the single failure summary below. The drift check therefore ignores entities
+    that already carry a planned skip (they intentionally stay on their old id),
+    and one summary line carries the whole failure (counts plus pairs). The
+    plan itself is returned instead of a bare ``bool`` so the caller's success
+    line can report the counters.
     """
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, entry.entry_id)
@@ -236,12 +246,17 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry: HealthOMatConfig
             # Race with a parallel registry write: HA would turn this into
             # MIGRATION_ERROR; we treat it as a failed pass with a clear cause.
             _LOGGER.error("Entity-ID-Migration %s abgebrochen: %s", entry.title, err)
-            return False
+            return None
 
     # Drift diagnosis: every F-1/F-2 entity must now sit on its expected id.
+    # Planned skips are excluded: a skipped entity stays on its old id by
+    # design, so reporting it here as well would duplicate the skip (F-1).
+    planned_skips = {skip.unique_id for skip in plan.skipped}
     drift: list[tuple[str, str]] = []
     if plan.device_slug is not None:
         for reg in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if reg.unique_id in planned_skips:
+                continue
             index = parse_quick_drink_index(reg.unique_id, entry.entry_id)
             key = parse_custom_lab_key(reg.unique_id, entry.entry_id, LAB_MARKERS)
             if index is not None:
@@ -252,24 +267,26 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry: HealthOMatConfig
                 continue
             if reg.entity_id != expected:
                 drift.append((reg.entity_id, expected))
-    if drift:
+
+    if plan.skipped or drift:
+        # The ONE summary of the failure path (F-2): counts plus the pair list
+        # (source, unique_id, target, reason) — without it the user only sees
+        # MIGRATION_ERROR / "unavailable" and has no actionable cause.
         _LOGGER.warning(
-            "Entity-ID-Migration %s: schema_drift %d — %s",
+            "Entity-ID-Migration %s fehlgeschlagen: %d übersprungen, %d schema_drift — "
+            "übersprungen (Quelle, unique_id, Ziel, Grund): %s; "
+            "schema_drift (Ist, Soll): %s",
             entry.title,
+            len(plan.skipped),
             len(drift),
+            [
+                (skip.source_entity_id, skip.unique_id, skip.target_entity_id, skip.reason)
+                for skip in plan.skipped
+            ],
             drift,
         )
-
-    for skip in plan.skipped:
-        _LOGGER.warning(
-            "Entity-ID-Migration %s: %s (%s) übersprungen — Ziel %s, Grund %s",
-            entry.title,
-            skip.source_entity_id,
-            skip.unique_id,
-            skip.target_entity_id,
-            skip.reason,
-        )
-    return not plan.skipped and not drift
+        return None
+    return plan
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -282,6 +299,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
 
     All-or-nothing: data, options and version are written in exactly ONE
     `async_update_entry` call, and only when the entity pass fully succeeded.
+
+    Logging contract (F-4): the success path emits exactly ONE INFO line, and
+    it carries the counters (`renamed=N skipped=M`) for support and release
+    verification. INFO (not WARNING) is deliberate — a successful migration is
+    a one-time, expected event, so WARNING would be permanent noise in the
+    default log (WARNING and above). Failures are unaffected: they stay visible
+    at the default level (WARNING summary / ERROR abort in the pass above).
     """
     if entry.version > ENTITY_ID_MIGRATION_VERSION:
         # Defensive: HA only calls the handler for entry.version < flow.VERSION.
@@ -300,21 +324,22 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
         options.setdefault("quick_drinks", [dict(qd) for qd in DEFAULT_QUICK_DRINKS])
         data = {k: v for k, v in data.items() if k != "quick_drinks"}
 
-    if entry.version < ENTITY_ID_MIGRATION_VERSION and not await _async_migrate_entity_ids(
-        hass, entry
-    ):
-        # No async_update_entry: the version stays, HA retries on the next setup
-        # and the v1 data step is not half-written either.
-        return False
-
     if entry.version < ENTITY_ID_MIGRATION_VERSION:
+        plan = await _async_migrate_entity_ids(hass, entry)
+        if plan is None:
+            # No async_update_entry: the version stays, HA retries on the next
+            # setup and the v1 data step is not half-written either.
+            return False
+
         hass.config_entries.async_update_entry(
             entry, data=data, options=options, version=ENTITY_ID_MIGRATION_VERSION
         )
         _LOGGER.info(
-            "Config entry %s: auf Version %s migriert",
+            "Config entry %s: auf Version %s migriert (renamed=%d skipped=%d)",
             entry.title,
             ENTITY_ID_MIGRATION_VERSION,
+            len(plan.renames),
+            len(plan.skipped),
         )
     return True
 

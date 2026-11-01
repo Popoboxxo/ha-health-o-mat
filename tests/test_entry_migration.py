@@ -254,6 +254,20 @@ def test_req_hom_130_bumps_to_version_3_on_success(monkeypatch):
     assert "lab_custom_markers" in kwargs["options"]
 
 
+def test_req_hom_130_success_logs_one_info_line_with_counters(monkeypatch, caplog):
+    """F-4: success stays on INFO (one line) but now carries the counters."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    init = _load_init()
+
+    with caplog.at_level("INFO"):
+        assert asyncio.run(init.async_migrate_entry(_make_hass(), _make_entry())) is True
+
+    infos = [record.getMessage() for record in caplog.records if record.levelname == "INFO"]
+    assert len(infos) == 1
+    assert "(renamed=3 skipped=0)" in infos[0]
+
+
 def test_req_hom_130_downgrade_guard_v4(monkeypatch):
     _install(monkeypatch, _FakeRegistry(_standard_entries()), _FakeDevice("Health-O-Mat Max"))
     init = _load_init()
@@ -277,6 +291,45 @@ def test_req_hom_130_collision_skips_and_keeps_version(monkeypatch, caplog):
     assert "target_occupied" in caplog.text
     # Pair list, not just a count.
     assert f"button.{SLUG}_glas_wasser" in caplog.text
+
+
+def test_req_hom_130_planned_skip_is_reported_exactly_once(monkeypatch, caplog):
+    """F-1: a planned `target_occupied` skip must not resurface as schema_drift."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    init = _load_init()
+    hass = _make_hass(states=[MagicMock(entity_id=f"button.{SLUG}_quick_drink_1")])
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is False
+
+    # Once in the skip pair list — and not a second time as drift.
+    assert caplog.text.count(f"button.{SLUG}_glas_wasser") == 1
+    assert caplog.text.count("target_occupied") == 1
+    assert "1 übersprungen, 0 schema_drift" in caplog.text
+
+
+def test_req_hom_130_failure_logs_one_summary_with_pairs(monkeypatch, caplog):
+    """F-2: the error path gets ONE summary line with count and pair list."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    init = _load_init()
+    hass = _make_hass(states=[MagicMock(entity_id=f"button.{SLUG}_quick_drink_1")])
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is False
+
+    summaries = [
+        record.getMessage() for record in caplog.records if "fehlgeschlagen" in record.getMessage()
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert "1 übersprungen" in summary
+    # (source, unique_id, target, reason) — the whole actionable pair.
+    assert f"button.{SLUG}_glas_wasser" in summary
+    assert f"{ENTRY_ID}_button_quick_0" in summary
+    assert f"button.{SLUG}_quick_drink_1" in summary
+    assert "target_occupied" in summary
 
 
 def test_req_hom_130_collision_retry_after_fix(monkeypatch):
@@ -345,6 +398,8 @@ def test_req_hom_130_schema_drift_warns_and_fails(monkeypatch, caplog):
     assert ok is False
     hass.config_entries.async_update_entry.assert_not_called()
     assert "schema_drift" in caplog.text
+    # Drift is counted, not just named (F-2).
+    assert "3 schema_drift" in caplog.text
 
 
 def test_req_hom_130_second_run_is_noop(monkeypatch):
