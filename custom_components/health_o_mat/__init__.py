@@ -997,28 +997,6 @@ _KIND_LABELS: dict[str, str] = {
     "wellbeing": "Wohlbefinden-Meldungen",
 }
 
-# Laborwerte als viertes Korrektur-Ziel (REQ-HOM-122). `logic.HISTORY_KINDS`
-# führt bewusst nur die drei klassischen Ziele; das Lab-Ziel wird deshalb hier
-# aufgelöst und über dessen bestehende Store-Methoden bedient (ein Aufruf,
-# kein Zweitweg in der API).
-_LAB_STATE_KINDS: tuple[str, ...] = ("lab_values",)
-_LAB_STATE_ALIASES: dict[str, str] = {
-    "lab_value": "lab_values",
-    "lab_values": "lab_values",
-    "lab_readings": "lab_values",
-}
-_LAB_VOID_METHOD = "void_lab_reading"
-_LAB_RESTORE_METHOD = "restore_lab_reading"
-
-
-def _normalize_state_kind(kind: object) -> str | None:
-    """`kind` → kanonisches Korrektur-Ziel inklusive Laborwerten (None = unbekannt)."""
-    if isinstance(kind, str):
-        lab_kind = _LAB_STATE_ALIASES.get(kind.strip().lower())
-        if lab_kind is not None:
-            return lab_kind
-    return logic.normalize_history_kind(kind)
-
 
 async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: bool) -> None:
     """Gemeinsamer Pfad für `void_entry`/`restore_entry` (ein Store-Aufruf je Ziel).
@@ -1027,21 +1005,23 @@ async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: b
     Zielzustand befindliches Ziel wird als `ServiceValidationError` gemeldet
     (kein stiller Erfolg). Schreibwege bleiben die bestehenden `void_*`/
     `restore_*`-Methoden — inklusive Audit-Eintrag und Store-Persistenz.
+
+    Die Ziel-Auflösung liegt vollständig in `logic` (Aliase + Methoden-Tabellen);
+    dieser Pfad hat keinen Labor-Sonderweg mehr.
     """
     entry_id, _info = get_runtime_data(hass, call)
     raw_kind = call.data.get("kind")
-    kind = _normalize_state_kind(raw_kind)
+    kind = logic.normalize_history_kind(raw_kind)
     if kind is None:
-        allowed = (*logic.HISTORY_KINDS, *_LAB_STATE_KINDS)
         raise ServiceValidationError(
-            f"Unbekannter kind '{raw_kind}' — erlaubt: {', '.join(allowed)}"
+            f"Unbekannter kind '{raw_kind}' — erlaubt: {', '.join(logic.HISTORY_KINDS)}"
         )
     item_id = str(call.data.get("id") or "").strip()
     if not item_id:
         raise ServiceValidationError("id fehlt")
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
     methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
-    method = methods.get(kind) or (_LAB_RESTORE_METHOD if restore else _LAB_VOID_METHOD)
+    method = methods[kind]
     changed = await getattr(store, method)(
         entry_id,
         item_id,
@@ -1265,11 +1245,22 @@ def _register_services(hass: HomeAssistant) -> None:
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         kind = logic.normalize_history_kind(call.data.get("kind") or "drinks")
         if kind is None:
+            # Erlaubt-Liste aus der Undo-Tabelle: `lab_values` ist ein gültiges
+            # Verlaufsziel, hat aber kein globales Undo (marker-spezifisch,
+            # siehe `remove_last_lab_value`) — es darf hier nicht angeboten werden.
             raise ServiceValidationError(
                 f"Unbekannter kind '{call.data.get('kind')}' — "
-                f"erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+                f"erlaubt: {', '.join(logic.REMOVE_LAST_METHOD_BY_KIND)}"
             )
-        remove_last = getattr(store, logic.REMOVE_LAST_METHOD_BY_KIND[kind])
+        # Laborwerte haben kein globales "letzter Eintrag" — deshalb kein
+        # KeyError, sondern eine klare Validierungsmeldung.
+        remove_last_name = logic.REMOVE_LAST_METHOD_BY_KIND.get(kind)
+        if remove_last_name is None:
+            raise ServiceValidationError(
+                f"Undo ist für '{kind}' nicht verfügbar — "
+                f"erlaubt: {', '.join(logic.REMOVE_LAST_METHOD_BY_KIND)}"
+            )
+        remove_last = getattr(store, remove_last_name)
         removed = await remove_last(
             entry_id,
             actor=_service_actor(call),
@@ -1514,7 +1505,7 @@ def _register_services(hass: HomeAssistant) -> None:
             {
                 vol.Optional("person"): str,
                 vol.Optional("kind", default="drinks"): vol.In(
-                    ["drinks", "blood_pressure", "wellbeing"]
+                    list(logic.REMOVE_LAST_METHOD_BY_KIND)
                 ),
             }
         ),

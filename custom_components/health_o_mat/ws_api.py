@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import voluptuous as vol
@@ -871,13 +871,36 @@ def parse_entry_ts(value: Any, now: datetime) -> str | None:
 
 # --- Historie / Korrekturen (REQ-HOM-115) -----------------------------------
 
+# `list_history`-Fenster: die drei Bestands-Kinds bleiben ohne `limit`
+# unbegrenzt (kein Bruch für Bestands-Clients), Laborwerte sind mengenmäßig
+# groß und bekommen deshalb einen Default. Jedes explizit gesetzte `limit`
+# über dem Cap wird abgelehnt statt still gekappt (O-4).
+HISTORY_LAB_DEFAULT_LIMIT: int = 200
+HISTORY_LIMIT_MAX: int = 1000
 
-def _history_item(kind: str, item: Mapping[str, Any]) -> dict[str, Any]:
+
+def _history_instant(value: Any) -> datetime | None:
+    """ISO-Zeitstempel → UTC-Instant (``None`` = nicht interpretierbar).
+
+    Verglichen wird auf dem INSTANT, nicht lexikografisch auf dem String:
+    ``…+02:00`` und ``…Z`` beschreiben denselben Moment trotz abweichender
+    Zeichenfolge (Offset-/DST-Falle, RVW-08).
+    """
+    parsed = logic.parse_entry_timestamp(value)
+    return parsed.astimezone(UTC) if parsed is not None else None
+
+
+def _history_item(
+    kind: str, item: Mapping[str, Any], *, include_report_ref: bool = False
+) -> dict[str, Any]:
     """Einen Roh-Eintrag auf den stabilen History-Vertrag abbilden.
 
     Immer enthalten: `id`, `ts`, `created_at`, `voided_at`, `voided_by`,
     `void_reason` — plus die typischen Felder des jeweiligen Ziels. Fehlende
     Felder werden zu `None` (kein KeyError bei Altbeständen).
+
+    `report_ref` (Laborwert) ist personenbezogen sensibel und wird nur auf
+    ausdrückliche Anforderung (`include_report_ref`) mitgeliefert.
     """
     entry: dict[str, Any] = {
         "id": item.get("id"),
@@ -901,39 +924,80 @@ def _history_item(kind: str, item: Mapping[str, Any]) -> dict[str, Any]:
             note=item.get("note"),
             src=item.get("src"),
         )
+    elif kind == logic.HISTORY_KIND_LAB:
+        entry.update(
+            marker_key=item.get("marker_key"),
+            value=item.get("value"),
+            unit=item.get("unit"),
+            reported_value=item.get("reported_value"),
+            reported_unit=item.get("reported_unit"),
+        )
+        if include_report_ref:
+            entry["report_ref"] = item.get("report_ref")
     else:  # wellbeing
         entry.update(key=item.get("key"))
     return entry
 
 
 def build_history(
-    store: Any, entry_id: str, kind: str, include_voided: bool = False
-) -> list[dict[str, Any]]:
-    """Roh-Historie einer Person für ein Ziel, neueste zuerst.
+    store: Any,
+    entry_id: str,
+    kind: str,
+    include_voided: bool = False,
+    *,
+    since: datetime | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+    include_report_ref: bool = False,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Roh-Historie einer Person für ein Ziel, neueste zuerst (+ ``has_more``).
 
     Liest bewusst die ROHLISTE (`store.entry`), nicht die aktive Sicht: nur so
     sind gelöschte Einträge inkl. `voided_at`/`voided_by`/`void_reason`
     nachvollziehbar. `include_voided=False` (Default) filtert sie heraus.
 
-    Sortierung: `ts` absteigend, Tiebreaker `created_at` (ebenfalls absteigend).
-    ISO-Strings werden — wie in den übrigen Sortierpfaden dieses Moduls —
-    lexikografisch verglichen; fehlende Werte sortieren nach hinten.
+    Filter/Sortierung laufen auf dem UTC-Instant (`since` inklusive), damit
+    Offset- und DST-Varianten desselben Moments gleich behandeln; `offset`
+    und `limit` bilden danach ein deterministisches Fenster. `has_more` ist
+    nur bei gesetztem `limit` aussagekräftig (sonst ``False``).
     """
     list_name = logic.HISTORY_LIST_BY_KIND[kind]
     raw = store.entry(entry_id) if store is not None else {}
     items = raw.get(list_name) if isinstance(raw, dict) else None
     if not isinstance(items, list):
-        return []
+        return [], False
     selected = [
         item
         for item in items
         if isinstance(item, Mapping) and (include_voided or not item.get("voided_at"))
     ]
+    if since is not None:
+        since_instant = since.astimezone(UTC)
+        # Inklusiv (`>=`): `since` ist eine Untergrenze, kein exklusiver Cut.
+        # Einträge ohne interpretierbaren Zeitstempel können die Grenze nicht
+        # belegen und fallen im Filter heraus.
+        selected = [
+            item
+            for item in selected
+            if (instant := _history_instant(item.get("ts"))) is not None
+            and instant >= since_instant
+        ]
     selected.sort(
-        key=lambda item: (str(item.get("ts") or ""), str(item.get("created_at") or "")),
+        key=lambda item: (
+            _history_instant(item.get("ts")) or datetime.min.replace(tzinfo=UTC),
+            str(item.get("created_at") or ""),
+        ),
         reverse=True,
     )
-    return [_history_item(kind, item) for item in selected]
+    total = len(selected)
+    window = selected[max(offset, 0) :]
+    if limit is not None:
+        window = window[: max(limit, 0)]
+    has_more = limit is not None and total > max(offset, 0) + limit
+    return (
+        [_history_item(kind, item, include_report_ref=include_report_ref) for item in window],
+        has_more,
+    )
 
 
 # --- WebSocket-Kommandos ----------------------------------------------------
@@ -986,6 +1050,15 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
                 vol.Required("entry_id"): str,
                 vol.Required("kind"): str,
                 vol.Optional("include_voided", default=False): _strict_bool,
+                # Pagination: `limit` ist explizit auf den Cap begrenzt —
+                # Über-Cap-Werte werden als `invalid_format` abgewiesen (kein
+                # stilles Kappen). `limit=None` (fehlend) bleibt "unbegrenzt".
+                vol.Optional("limit"): vol.All(
+                    _strict_int, vol.Range(min=1, max=HISTORY_LIMIT_MAX)
+                ),
+                vol.Optional("offset", default=0): vol.All(_strict_int, vol.Range(min=0)),
+                vol.Optional("since"): str,
+                vol.Optional("include_report_ref", default=False): _strict_bool,
             },
         ),
         # Eintrags-ID bewusst als `item_id`: das Feld `id` ist im
@@ -1238,6 +1311,11 @@ async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict
 
     Lesbar für alle angemeldeten User (wie `panel_data`) — Alltags-Korrekturen
     sind kein Verwaltungsvorgang.
+
+    Fenster: `limit` (fehlend = unbegrenzt, außer Labor mit Default 200),
+    `offset`, `since` (UTC-Instant, inklusiv) und `has_more` im Ergebnis. Die
+    Handler-Prüfung ist bewusst doppelt zum Schema: direkte Handler-Aufrufe
+    (Tests/interne Pfade) umgehen den Transportrand.
     """
     entry_id = msg["entry_id"]
     store = _store(hass)
@@ -1252,14 +1330,61 @@ async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict
             f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(logic.HISTORY_KINDS)})",
         )
         return
+    limit = msg.get("limit")
+    if limit is not None:
+        if (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= HISTORY_LIMIT_MAX
+        ):
+            connection.send_error(
+                msg["id"],
+                ERR_INVALID_FORMAT,
+                f"limit muss zwischen 1 und {HISTORY_LIMIT_MAX} liegen",
+            )
+            return
+    elif kind == logic.HISTORY_KIND_LAB:
+        limit = HISTORY_LAB_DEFAULT_LIMIT
+    offset = msg.get("offset") or 0
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "offset muss >= 0 sein")
+        return
+    since = None
+    raw_since = msg.get("since")
+    if raw_since is not None:
+        # Leerstring = "nicht gesetzt" (Formulare senden gelegentlich ""); jeder
+        # andere Nicht-String ist dagegen ein Formatfehler statt ein stiller
+        # "kein Filter".
+        if not isinstance(raw_since, str):
+            connection.send_error(
+                msg["id"],
+                ERR_INVALID_FORMAT,
+                f"since muss ein ISO-Zeitpunkt (String) sein, "
+                f"erhalten {type(raw_since).__name__} {raw_since!r}",
+            )
+            return
+        if raw_since.strip():
+            since = logic.parse_entry_timestamp(raw_since, now=dt_util.now())
+            if since is None:
+                connection.send_error(
+                    msg["id"],
+                    ERR_INVALID_FORMAT,
+                    f"Ungültiger since-Zeitpunkt: {raw_since!r}",
+                )
+                return
+    entries, has_more = build_history(
+        store,
+        entry_id,
+        kind,
+        include_voided=bool(msg.get("include_voided")),
+        since=since,
+        offset=offset,
+        limit=limit,
+        include_report_ref=bool(msg.get("include_report_ref")),
+    )
     connection.send_result(
         msg["id"],
-        {
-            "kind": kind,
-            "entries": build_history(
-                store, entry_id, kind, include_voided=bool(msg.get("include_voided"))
-            ),
-        },
+        {"kind": kind, "entries": entries, "has_more": has_more},
     )
 
 

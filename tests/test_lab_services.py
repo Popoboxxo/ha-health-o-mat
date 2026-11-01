@@ -381,6 +381,47 @@ def test_req_hom_122_state_services_schema_accepts_lab_values(service):
         schemas[service]({"kind": "tea", "id": "r1"})
 
 
+def test_req_hom_122_void_entry_unknown_kind_lists_lab_values_once():
+    """[Issue #70, RVW-05] Erlaubt-Liste nennt `lab_values` genau einmal.
+
+    Der frühere Labor-Sonderweg (`_LAB_STATE_KINDS`) stand zusätzlich zu
+    `logic.HISTORY_KINDS` in `allowed`; nach der Konsolidierung auf die
+    logic-Tabellen darf der Fehlertext nicht doppeln.
+    """
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["void_entry"](_make_call({"kind": "tea", "id": "x"})))
+
+    assert str(exc.value).count("lab_values") == 1
+
+
+def test_req_hom_122_remove_last_entry_rejects_lab_values_without_keyerror():
+    """[Issue #70] Labor hat kein globales Undo — klare Meldung statt KeyError."""
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError, match="nicht verfügbar"):
+        _run(registered["remove_last_entry"](_make_call({"kind": "lab_values"})))
+
+
+def test_req_hom_122_remove_last_entry_unknown_kind_excludes_lab_values():
+    """[Issue #70, F1] Die Undo-Fehlerliste bietet `lab_values` nicht an."""
+    store = _make_lab_store()
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_entry"](_make_call({"kind": "tea"})))
+
+    message = str(exc.value)
+    assert "lab_values" not in message
+    assert "drinks, blood_pressure, wellbeing" in message
+
+
 def test_req_hom_122_restore_backup_schema_accepts_lab_values_dataset():
     """[REQ-HOM-122] `restore_backup` akzeptiert `lab_values` als Datensatz-Filter."""
     hass = MagicMock()

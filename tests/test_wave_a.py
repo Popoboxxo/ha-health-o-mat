@@ -504,6 +504,11 @@ def test_remove_last_entry_schema_rejects_unknown_kind():
 
     with pytest.raises(vol.Invalid):
         schema({"kind": "blood"})
+    # [Issue #70, F3] Das Schema kommt aus der Undo-Tabelle (`lab_values` ist ein
+    # gültiges Verlaufsziel, aber kein globales Undo).
+    with pytest.raises(vol.Invalid):
+        schema({"kind": "lab_values"})
+    assert schema({"kind": "wellbeing"})["kind"] == "wellbeing"
 
 
 # --- N-2: Retention-Wiring im Setup + CSV-Export inkl. Archiv ---

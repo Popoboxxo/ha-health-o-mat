@@ -212,9 +212,11 @@ def _write_store() -> MagicMock:
     store.void_drink = AsyncMock(return_value=True)
     store.void_reading = AsyncMock(return_value=True)
     store.void_wellbeing = AsyncMock(return_value=True)
+    store.void_lab_reading = AsyncMock(return_value=True)
     store.restore_drink = AsyncMock(return_value=True)
     store.restore_reading = AsyncMock(return_value=True)
     store.restore_wellbeing = AsyncMock(return_value=True)
+    store.restore_lab_reading = AsyncMock(return_value=True)
     return store
 
 
@@ -886,6 +888,57 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
                 "include_voided": "true",
             }
         )
+
+    # list_history: Pagination/Fenster — strikt int, `limit` hart auf den Cap
+    # begrenzt (Über-Cap = Schema-Fehler, kein stilles Kappen), `offset` >= 0.
+    history_schema = schemas[ws_api.COMMAND_LIST_HISTORY]
+    defaults = history_schema(
+        {"id": 1, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "drinks"}
+    )
+    assert defaults["offset"] == 0
+    assert defaults["include_report_ref"] is False
+    assert "limit" not in defaults
+    assert (
+        history_schema(
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": "drinks",
+                "limit": 1000,
+            }
+        )["limit"]
+        == 1000
+    )
+    assert (
+        history_schema(
+            {
+                "id": 1,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": "drinks",
+                "since": "2026-10-14T08:00:00Z",
+            }
+        )["since"]
+        == "2026-10-14T08:00:00Z"
+    )
+    for invalid_extra in (
+        {"limit": 1001},
+        {"limit": 0},
+        {"limit": "10"},
+        {"offset": -1},
+        {"include_report_ref": "true"},
+    ):
+        with pytest.raises(vol.Invalid):
+            history_schema(
+                {
+                    "id": 1,
+                    "type": ws_api.COMMAND_LIST_HISTORY,
+                    "entry_id": "e1",
+                    "kind": "drinks",
+                    **invalid_extra,
+                }
+            )
 
     # void_entry/restore_entry: item_id Pflicht (`id` ist die Message-ID)
     for command in (ws_api.COMMAND_VOID_ENTRY, ws_api.COMMAND_RESTORE_ENTRY):
@@ -3459,6 +3512,436 @@ def test_list_history_unknown_kind_sends_error():
 
     assert connection.errors[0][1] == "invalid_format"
     assert connection.results == []
+
+
+# --- Issue #70: Laborwerte im Verlauf ---------------------------------------
+
+_LAB_HISTORY_KEYS = {
+    "id",
+    "ts",
+    "created_at",
+    "voided_at",
+    "voided_by",
+    "void_reason",
+    "marker_key",
+    "value",
+    "unit",
+    "reported_value",
+    "reported_unit",
+}
+
+
+def _lab_entry(item_id: str, ts: str, **extra) -> dict:
+    """Labor-Rohzeile im Store-Shape (`lab_readings`)."""
+    value = extra.pop("value", 32.0)
+    unit = extra.pop("unit", "U/L")
+    extra.setdefault("reported_value", value)
+    extra.setdefault("reported_unit", unit)
+    extra.setdefault("marker_key", "alt")
+    extra.setdefault("report_ref", None)
+    return _history_entry("lab_values", item_id, ts, value=value, unit=unit, **extra)
+
+
+def _run_list_history(store, **extra):
+    """`list_history` direkt aufrufen und das Ergebnis-Payload zurückgeben."""
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    message = {
+        "id": 10,
+        "type": ws_api.COMMAND_LIST_HISTORY,
+        "entry_id": "e1",
+        "kind": "lab_values",
+        **extra,
+    }
+    asyncio.run(ws_api.websocket_list_history(hass, connection, message))
+    return connection
+
+
+@pytest.mark.parametrize("alias", ["lab_values", "lab_value", "lab_readings"])
+def test_list_history_lab_values_accepts_all_aliases(alias):
+    """[Issue #70] Alle drei Schreibweisen lösen auf `lab_values` auf."""
+    store = _history_store({"lab_readings": [_lab_entry("l1", "2026-10-14T08:00:00Z")]})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 11, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": alias},
+        )
+    )
+
+    assert connection.errors == []
+    payload = connection.results[0][1]
+    assert payload["kind"] == "lab_values"
+    assert [item["id"] for item in payload["entries"]] == ["l1"]
+
+
+def test_list_history_lab_values_shape_sorted_by_instant_without_report_ref():
+    """[Issue #70] Shape + Instant-Sortierung; `report_ref` bleibt standardmäßig weg."""
+    store = _history_store(
+        {
+            "lab_readings": [
+                # 09:00+02:00 = 07:00Z kommt VOR 08:00Z — lexikografisch wäre es
+                # umgekehrt (`09` > `08`); die Sortierung läuft auf dem Instant.
+                _lab_entry("l_offset", "2026-10-14T09:00:00+02:00", report_ref="ref-1"),
+                _lab_entry("l_utc", "2026-10-14T08:00:00Z", marker_key="crp", unit="mg/L"),
+            ]
+        }
+    )
+
+    connection = _run_list_history(store)
+
+    assert connection.errors == []
+    payload = connection.results[0][1]
+    assert [item["id"] for item in payload["entries"]] == ["l_utc", "l_offset"]
+    for item in payload["entries"]:
+        assert set(item) == _LAB_HISTORY_KEYS, "report_ref darf ohne Opt-in fehlen"
+    first = payload["entries"][0]
+    assert (first["marker_key"], first["value"], first["unit"]) == ("crp", 32.0, "mg/L")
+    assert first["reported_value"] == 32.0
+    assert first["reported_unit"] == "mg/L"
+
+
+def test_list_history_lab_values_report_ref_opt_in():
+    """[Issue #70] `include_report_ref=true` liefert `report_ref` je Eintrag."""
+    store = _history_store(
+        {
+            "lab_readings": [
+                _lab_entry("l1", "2026-10-14T08:00:00Z", report_ref="https://example/x.pdf"),
+                _lab_entry("l2", "2026-10-14T09:00:00Z", report_ref=None),
+            ]
+        }
+    )
+
+    connection = _run_list_history(store, include_report_ref=True)
+
+    entries = connection.results[0][1]["entries"]
+    assert [item["report_ref"] for item in entries] == [None, "https://example/x.pdf"]
+
+
+def test_list_history_lab_values_include_voided_filter():
+    """[Issue #70] Default filtert voided; `include_voided=true` enthält sie."""
+    store = _history_store(
+        {
+            "lab_readings": [
+                _lab_entry("active", "2026-10-14T08:00:00Z"),
+                _lab_entry(
+                    "voided",
+                    "2026-10-14T09:00:00Z",
+                    voided_at="2026-10-14T10:00:00Z",
+                    voided_by="user-1",
+                    void_reason="tippfehler",
+                ),
+            ]
+        }
+    )
+
+    default_payload = _run_list_history(store).results[0][1]
+    assert [item["id"] for item in default_payload["entries"]] == ["active"]
+
+    all_payload = _run_list_history(store, include_voided=True).results[0][1]
+    assert [item["id"] for item in all_payload["entries"]] == ["voided", "active"]
+    assert all_payload["entries"][0]["void_reason"] == "tippfehler"
+
+
+def test_list_history_pagination_offset_limit_and_has_more():
+    """[Issue #70] Fenster ist deterministisch; `has_more` nur bei gesetztem `limit`."""
+    readings = [_lab_entry(f"l{index}", f"2026-10-14T0{index}:00:00Z") for index in range(1, 6)]
+    store = _history_store({"lab_readings": readings})
+
+    first_page = _run_list_history(store, limit=2).results[0][1]
+    assert [item["id"] for item in first_page["entries"]] == ["l5", "l4"]
+    assert first_page["has_more"] is True
+
+    second_page = _run_list_history(store, limit=3, offset=2).results[0][1]
+    assert [item["id"] for item in second_page["entries"]] == ["l3", "l2", "l1"]
+    assert second_page["has_more"] is False
+
+    # Bestands-Regression: Getränke bleiben ohne `limit` unbegrenzt.
+    drinks_store = _history_store(
+        {
+            "drinks": [
+                _history_entry("drinks", f"d{index}", f"2026-10-14T0{index}:00:00Z", ml=250)
+                for index in range(1, 6)
+            ]
+        }
+    )
+    hass = _write_hass(drinks_store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 12, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "drinks"},
+        )
+    )
+    drinks_payload = connection.results[0][1]
+    assert len(drinks_payload["entries"]) == 5
+    assert drinks_payload["has_more"] is False
+
+
+def test_list_history_lab_values_default_limit_is_200():
+    """[Issue #70] Labor ohne `limit` → Default 200 (mit `has_more`)."""
+    readings = [_lab_entry(f"l{index}", "2026-10-14T08:00:00Z") for index in range(201)]
+    store = _history_store({"lab_readings": readings})
+
+    payload = _run_list_history(store).results[0][1]
+
+    assert len(payload["entries"]) == ws_api.HISTORY_LAB_DEFAULT_LIMIT == 200
+    assert payload["has_more"] is True
+
+
+@pytest.mark.parametrize("kind", ["lab_values", "drinks", "blood_pressure", "wellbeing"])
+def test_list_history_limit_cap_accepts_1000_and_rejects_1001(kind):
+    """[Issue #70, O-4] Über-Cap wird abgelehnt (kein stilles Kappen)."""
+    store = _history_store({})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {
+                "id": 13,
+                "type": ws_api.COMMAND_LIST_HISTORY,
+                "entry_id": "e1",
+                "kind": kind,
+                "limit": 1000,
+            },
+        )
+    )
+    assert connection.errors == []
+    assert connection.results[0][1]["has_more"] is False
+
+    for invalid_limit in (1001, 0, -1, "10", True):
+        connection = FakeConnection()
+        asyncio.run(
+            ws_api.websocket_list_history(
+                hass,
+                connection,
+                {
+                    "id": 14,
+                    "type": ws_api.COMMAND_LIST_HISTORY,
+                    "entry_id": "e1",
+                    "kind": kind,
+                    "limit": invalid_limit,
+                },
+            )
+        )
+        assert connection.errors[0][1] == "invalid_format"
+        assert connection.results == []
+
+
+def test_list_history_since_compares_utc_instant_not_strings():
+    """[Issue #70] `since` filtert inklusiv auf dem Instant (Offset/DST-sicher)."""
+    store = _history_store(
+        {
+            "lab_readings": [
+                # 09:00+02:00 = 07:00Z — lexikografisch > "08:00:00Z", instant aber davor.
+                _lab_entry("offset_before", "2026-10-14T09:00:00+02:00"),
+                _lab_entry("exactly_at", "2026-10-14T08:00:00Z"),
+                _lab_entry("after", "2026-10-14T08:00:01Z"),
+            ]
+        }
+    )
+
+    payload = _run_list_history(store, since="2026-10-14T08:00:00Z").results[0][1]
+
+    assert [item["id"] for item in payload["entries"]] == ["after", "exactly_at"]
+
+
+def test_list_history_invalid_since_sends_error():
+    """[Issue #70, F4] Kaputter/nicht-stringiger `since` → `invalid_format`."""
+    store = _history_store({"lab_readings": [_lab_entry("l1", "2026-10-14T08:00:00Z")]})
+
+    for invalid_since in ("gestern", 42, True, ["2026-10-14T08:00:00Z"]):
+        connection = _run_list_history(store, since=invalid_since)
+        assert connection.errors[0][1] == "invalid_format"
+        assert connection.results == []
+
+    # Leerstring = "nicht gesetzt" (kein Filter), kein Fehler.
+    empty = _run_list_history(store, since="")
+    assert empty.errors == []
+    assert [item["id"] for item in empty.results[0][1]["entries"]] == ["l1"]
+
+
+def test_list_history_unknown_kind_lists_lab_values_exactly_once():
+    """[Issue #70, RVW-05] `lab_values` steht genau einmal in der erlaubten Liste."""
+    store = _history_store({})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_list_history(
+            hass,
+            connection,
+            {"id": 15, "type": ws_api.COMMAND_LIST_HISTORY, "entry_id": "e1", "kind": "tea"},
+        )
+    )
+
+    message = connection.errors[0][2]
+    assert message.count("lab_values") == 1
+    assert "wellbeing, lab_values" in message
+
+
+def test_void_and_restore_entry_lab_values_delegate_and_refresh(monkeypatch):
+    """[Issue #70] WS-Void/Restore unterstützen `lab_values` (gleicher Tabellenpfad)."""
+    _now(monkeypatch)
+    store = _history_store({})
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+
+    void_connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            void_connection,
+            {
+                "id": 16,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "lab_values",
+                "item_id": "l1",
+            },
+        )
+    )
+    store.void_lab_reading.assert_awaited_once_with("e1", "l1", actor="user-1", audit_limit=1000)
+    assert void_connection.results == [(16, {"ok": True, "kind": "lab_values", "id": "l1"})]
+
+    restore_connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_restore_entry(
+            hass,
+            restore_connection,
+            {
+                "id": 17,
+                "type": ws_api.COMMAND_RESTORE_ENTRY,
+                "entry_id": "e1",
+                "kind": "lab_value",
+                "item_id": "l1",
+            },
+        )
+    )
+    store.restore_lab_reading.assert_awaited_once_with("e1", "l1", actor="user-1", audit_limit=1000)
+    assert restore_connection.results == [(17, {"ok": True, "kind": "lab_values", "id": "l1"})]
+    assert coordinator.updated == [NOW.isoformat(), NOW.isoformat()]
+
+
+class _MutableLabStore:
+    """Minimaler In-Memory-Store für den Void/Restore-Roundtrip (AK 5)."""
+
+    def __init__(self, readings: list[dict]) -> None:
+        self._raw = {"lab_readings": readings}
+
+    def entry(self, entry_id: str) -> dict:
+        return self._raw
+
+    async def void_lab_reading(self, entry_id, reading_id, *, actor=None, audit_limit=0):
+        for reading in self._raw["lab_readings"]:
+            if reading["id"] == reading_id and not reading.get("voided_at"):
+                reading["voided_at"] = NOW.isoformat()
+                return True
+        return False
+
+    async def restore_lab_reading(self, entry_id, reading_id, *, actor=None, audit_limit=0):
+        for reading in self._raw["lab_readings"]:
+            if reading["id"] == reading_id and reading.get("voided_at"):
+                reading["voided_at"] = None
+                return True
+        return False
+
+
+def test_lab_values_void_restore_roundtrip_visible_in_history(monkeypatch):
+    """[Issue #70, AK 5] Voiden blendet aus, Restoren liefert den Eintrag zurück."""
+    _now(monkeypatch)
+    store = _MutableLabStore([_lab_entry("l1", "2026-10-14T08:00:00Z")])
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+
+    def _history(**extra):
+        connection = FakeConnection()
+        asyncio.run(
+            ws_api.websocket_list_history(
+                hass,
+                connection,
+                {
+                    "id": 20,
+                    "type": ws_api.COMMAND_LIST_HISTORY,
+                    "entry_id": "e1",
+                    "kind": "lab_values",
+                    **extra,
+                },
+            )
+        )
+        assert connection.errors == []
+        return connection.results[0][1]["entries"]
+
+    assert [item["id"] for item in _history()] == ["l1"]
+
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            FakeConnection(),
+            {
+                "id": 21,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "lab_values",
+                "item_id": "l1",
+            },
+        )
+    )
+    assert _history() == []
+    voided = _history(include_voided=True)
+    assert [item["id"] for item in voided] == ["l1"]
+    assert voided[0]["voided_at"] == NOW.isoformat()
+
+    asyncio.run(
+        ws_api.websocket_restore_entry(
+            hass,
+            FakeConnection(),
+            {
+                "id": 22,
+                "type": ws_api.COMMAND_RESTORE_ENTRY,
+                "entry_id": "e1",
+                "kind": "lab_values",
+                "item_id": "l1",
+            },
+        )
+    )
+    restored = _history()
+    assert [item["id"] for item in restored] == ["l1"]
+    assert restored[0]["voided_at"] is None
+    assert len(coordinator.updated) == 2
+
+
+def test_void_entry_lab_values_missing_target_sends_not_found():
+    """[Issue #70] Unbekannte/bereits voidete Labor-ID → `not_found`, kein Refresh."""
+    store = _history_store({})
+    store.void_lab_reading = AsyncMock(return_value=False)
+    coordinator = FakeCoordinator()
+    hass = _write_hass(store, [_entry("e1")], {"e1": coordinator})
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            connection,
+            {
+                "id": 18,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "lab_values",
+                "item_id": "nope",
+            },
+        )
+    )
+
+    assert connection.errors[0][1] == "not_found"
+    assert coordinator.updated == []
 
 
 def test_void_entry_calls_store_void_with_actor_and_audit_limit(monkeypatch):

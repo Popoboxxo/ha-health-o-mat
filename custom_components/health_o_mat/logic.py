@@ -915,14 +915,25 @@ def audit_limit_from_options(options: Any) -> int:
     return min(value, MAX_AUDIT_LIMIT)
 
 
+# Laborwerte als eigenes Verlaufsziel (REQ-HOM-122). Bewusst NICHT in
+# `REMOVE_LAST_METHOD_BY_KIND`: ein globales "letzter Laborwert" wäre
+# mehrdeutig — das Undo ist marker-spezifisch (`remove_last_lab_reading`).
+HISTORY_KIND_LAB: str = "lab_values"
+
 # Kanonische Korrektur-Ziele (Store-Listen + Methoden je Ziel).
-HISTORY_KINDS: tuple[str, ...] = ("drinks", "blood_pressure", "wellbeing")
+HISTORY_KINDS: tuple[str, ...] = (
+    "drinks",
+    "blood_pressure",
+    "wellbeing",
+    HISTORY_KIND_LAB,
+)
 
 # Kanonisches Ziel → Store-Listenname (Rohlisten, inkl. voided Einträge).
 HISTORY_LIST_BY_KIND: dict[str, str] = {
     "drinks": "drinks",
     "blood_pressure": "readings",
     "wellbeing": "wellbeing_entries",
+    HISTORY_KIND_LAB: "lab_readings",
 }
 
 # Kanonisches Ziel → Store-Methoden (ein Name, kein Zweitweg in der API).
@@ -930,11 +941,13 @@ VOID_METHOD_BY_KIND: dict[str, str] = {
     "drinks": "void_drink",
     "blood_pressure": "void_reading",
     "wellbeing": "void_wellbeing",
+    HISTORY_KIND_LAB: "void_lab_reading",
 }
 RESTORE_METHOD_BY_KIND: dict[str, str] = {
     "drinks": "restore_drink",
     "blood_pressure": "restore_reading",
     "wellbeing": "restore_wellbeing",
+    HISTORY_KIND_LAB: "restore_lab_reading",
 }
 REMOVE_LAST_METHOD_BY_KIND: dict[str, str] = {
     "drinks": "remove_last_drink",
@@ -951,6 +964,11 @@ _KIND_ALIASES: dict[str, str] = {
     "readings": "blood_pressure",
     "wellbeing": "wellbeing",
     "wellbeing_entries": "wellbeing",
+    # Laborwerte (REQ-HOM-122): `normalize_history_kind` löst ausschließlich
+    # über dieses Dict auf — ohne die Aliase bliebe `kind=lab_values` unbekannt.
+    "lab_value": HISTORY_KIND_LAB,
+    "lab_values": HISTORY_KIND_LAB,
+    "lab_readings": HISTORY_KIND_LAB,
 }
 
 

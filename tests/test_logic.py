@@ -1359,10 +1359,20 @@ def test_normalize_history_kind_aliases_and_unknown():
     assert logic.normalize_history_kind(None) is None
     assert logic.normalize_history_kind("tea") is None
 
+    # [Issue #70] Laborwerte sind ein eigenes Verlaufsziel — alle drei Schreibweisen
+    # lösen über dasselbe kanonische Ziel auf (WS `list_history`/`void_entry`).
+    assert logic.normalize_history_kind("lab_values") == "lab_values"
+    assert logic.normalize_history_kind("lab_value") == "lab_values"
+    assert logic.normalize_history_kind("lab_readings") == "lab_values"
+    assert logic.normalize_history_kind("Lab_Values") == "lab_values"
+
     assert set(logic.HISTORY_KINDS) == set(logic.HISTORY_LIST_BY_KIND)
     assert set(logic.HISTORY_KINDS) == set(logic.VOID_METHOD_BY_KIND)
     assert set(logic.HISTORY_KINDS) == set(logic.RESTORE_METHOD_BY_KIND)
-    assert set(logic.HISTORY_KINDS) == set(logic.REMOVE_LAST_METHOD_BY_KIND)
+    # Bewusste Ausnahme: Labor-Undo ist marker-spezifisch
+    # (`remove_last_lab_reading`) und hat kein globales "letzter Eintrag".
+    assert set(logic.HISTORY_KINDS) - {"lab_values"} == set(logic.REMOVE_LAST_METHOD_BY_KIND)
+    assert logic.HISTORY_KIND_LAB not in logic.REMOVE_LAST_METHOD_BY_KIND
 
 
 # --- REQ-HOM-120: Rückdatierung — Zeitstempel-Helfer ------------------------
