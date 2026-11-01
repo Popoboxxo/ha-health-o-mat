@@ -39,6 +39,7 @@ from .const import (
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .migration import (
+    NON_BLOCKING_SKIP_REASONS,
     MigrationPlan,
     build_migration_plan,
     custom_lab_target,
@@ -174,12 +175,13 @@ async def _async_migrate_entity_ids(
     remains, ``None`` otherwise. Fail-closed: the caller keeps the entry version
     untouched on ``None``, so HA retries the whole pass on the next start.
 
-    Diagnostics contract: each planned skip is reported exactly ONCE — inside
-    the single failure summary below. The drift check therefore ignores entities
-    that already carry a planned skip (they intentionally stay on their old id),
-    and one summary line carries the whole failure (counts plus pairs). The
-    plan itself is returned instead of a bare ``bool`` so the caller's success
-    line can report the counters.
+    Diagnostics contract: each planned skip is reported exactly ONCE — blocking
+    reasons inside the single failure summary below, ``custom_entity_id`` as its
+    own warning (the entity keeps a hand-picked id on purpose). The drift check
+    therefore ignores entities that already carry a planned skip (they
+    intentionally stay on their old id), and one summary line carries the whole
+    failure (counts plus pairs). The plan itself is returned instead of a bare
+    ``bool`` so the caller's success line can report the counters.
     """
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, entry.entry_id)
@@ -270,7 +272,20 @@ async def _async_migrate_entity_ids(
             if reg.entity_id != expected:
                 drift.append((reg.entity_id, expected))
 
-    if plan.skipped or drift:
+    # ``custom_entity_id`` is a user decision, not a failure: the entity keeps
+    # the id the user gave it. It is reported once as a warning and does not
+    # block the pass (otherwise the entry would never migrate).
+    for skip in plan.skipped:
+        if skip.reason in NON_BLOCKING_SKIP_REASONS:
+            _LOGGER.warning(
+                "Entity-ID-Migration %s: %s bleibt unverändert (Grund: %s)",
+                entry.title,
+                skip.source_entity_id,
+                skip.reason,
+            )
+
+    blocking = [skip for skip in plan.skipped if skip.reason not in NON_BLOCKING_SKIP_REASONS]
+    if blocking or drift:
         # The ONE summary of the failure path (F-2): counts plus the pair list
         # (source, unique_id, target, reason) — without it the user only sees
         # MIGRATION_ERROR / "unavailable" and has no actionable cause.
@@ -279,11 +294,11 @@ async def _async_migrate_entity_ids(
             "übersprungen (Quelle, unique_id, Ziel, Grund): %s; "
             "schema_drift (Ist, Soll): %s",
             entry.title,
-            len(plan.skipped),
+            len(blocking),
             len(drift),
             [
                 (skip.source_entity_id, skip.unique_id, skip.target_entity_id, skip.reason)
-                for skip in plan.skipped
+                for skip in blocking
             ],
             drift,
         )

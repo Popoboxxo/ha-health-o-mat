@@ -209,7 +209,64 @@ def test_req_hom_130_resolve_single_anchor_is_unresolved():
     assert resolution == migration.DeviceSlugResolution(None, migration.SKIP_DEVICE_SLUG_UNRESOLVED)
 
 
-def test_req_hom_130_resolve_rejects_candidate_outside_prefix():
+def test_req_hom_130_resolve_tolerates_one_hand_renamed_anchor():
+    """Production bug: one renamed anchor must not empty the shared prefix.
+
+    Real ids from a live instance (``device_slug_ambiguous``): the person's
+    translation-key anchors all start with ``health_o_mat_caro`` except one
+    entity the user renamed to ``sensor.caro_gewicht``.
+    """
+    resolution = migration.resolve_device_slug(
+        [
+            _candidate("button.health_o_mat_caro_glas_wasser"),
+            _candidate("button.health_o_mat_caro_flasche_wasser"),
+        ],
+        [
+            _anchor("sensor.health_o_mat_caro_drinks_today", "today"),
+            _anchor("sensor.health_o_mat_caro_bp_systolic", "bp_systolic"),
+            _anchor("sensor.health_o_mat_caro_daily_goal", "daily_goal"),
+            _anchor("sensor.health_o_mat_caro_wellbeing_score", "wellbeing_score"),
+            _anchor("sensor.caro_gewicht", "weight"),
+        ],
+        hint="health_o_mat_caro",
+        device_id="dev1",
+    )
+    assert resolution == migration.DeviceSlugResolution("health_o_mat_caro", None)
+
+
+def test_req_hom_130_resolve_tolerates_anchor_diverging_after_the_prefix():
+    """``sensor.health_o_mat_gewicht`` shares a prefix but not the device one."""
+    resolution = migration.resolve_device_slug(
+        [_candidate("button.health_o_mat_caro_glas_wasser")],
+        [
+            _anchor("sensor.health_o_mat_caro_drinks_today", "today"),
+            _anchor("sensor.health_o_mat_caro_daily_goal", "daily_goal"),
+            _anchor("sensor.health_o_mat_gewicht", "weight"),
+        ],
+        hint="health_o_mat_caro",
+        device_id="dev1",
+    )
+    assert resolution == migration.DeviceSlugResolution("health_o_mat_caro", None)
+
+
+def test_req_hom_130_resolve_two_equally_supported_prefixes_is_ambiguous():
+    """Genuine ambiguity: two disjoint anchor groups of the same size."""
+    resolution = migration.resolve_device_slug(
+        [_candidate("button.health_o_mat_max_quick_drink_1")],
+        [
+            _anchor("sensor.health_o_mat_max_drinks_today", "today"),
+            _anchor("sensor.health_o_mat_max_daily_goal", "daily_goal"),
+            _anchor("sensor.wohnzimmer_health_o_mat_drinks_today", "today"),
+            _anchor("sensor.wohnzimmer_health_o_mat_daily_goal", "daily_goal"),
+        ],
+        hint=None,
+        device_id="dev1",
+    )
+    assert resolution == migration.DeviceSlugResolution(None, migration.SKIP_DEVICE_SLUG_AMBIGUOUS)
+
+
+def test_req_hom_130_resolve_candidate_outside_prefix_no_longer_blocks():
+    """A hand-renamed candidate is not a reason to fail the whole pass."""
     resolution = migration.resolve_device_slug(
         [
             _candidate("button.health_o_mat_max_quick_drink_1"),
@@ -222,7 +279,7 @@ def test_req_hom_130_resolve_rejects_candidate_outside_prefix():
         hint="health_o_mat_max",
         device_id="dev1",
     )
-    assert resolution == migration.DeviceSlugResolution(None, migration.SKIP_DEVICE_SLUG_AMBIGUOUS)
+    assert resolution == migration.DeviceSlugResolution("health_o_mat_max", None)
 
 
 def test_req_hom_130_resolve_rejects_foreign_device():
@@ -384,6 +441,80 @@ def test_req_hom_130_plan_propagates_device_slug_reasons():
     ambiguous = _plan(_lab_only_entities(), hint="health_o_mat_neu")
     assert {item.reason for item in ambiguous.skipped} == {migration.SKIP_DEVICE_SLUG_AMBIGUOUS}
     assert ambiguous.renames == ()
+
+
+_CARO_SLUG = "health_o_mat_caro"
+
+
+def _caro_entities() -> list[dict]:
+    """Real ids of one person: four quick drinks plus one hand-renamed sensor.
+
+    Mirrors the live failure report (``device_slug_ambiguous``, 4 skipped):
+    the anchor ``sensor.caro_gewicht`` shares no leading token with the rest.
+    """
+    return [
+        _entity(f"button.{_CARO_SLUG}_glas_wasser", f"{ENTRY}_button_quick_0"),
+        _entity(f"button.{_CARO_SLUG}_flasche_wasser", f"{ENTRY}_button_quick_1"),
+        _entity(f"button.{_CARO_SLUG}_tasse_kaffee", f"{ENTRY}_button_quick_2"),
+        _entity(f"button.{_CARO_SLUG}_glas_saft", f"{ENTRY}_button_quick_3"),
+        _entity(f"sensor.{_CARO_SLUG}_drinks_today", f"{ENTRY}_today", translation_key="today"),
+        _entity(
+            f"sensor.{_CARO_SLUG}_bp_systolic",
+            f"{ENTRY}_bp_systolic",
+            translation_key="bp_systolic",
+        ),
+        _entity(
+            f"sensor.{_CARO_SLUG}_daily_goal", f"{ENTRY}_daily_goal", translation_key="daily_goal"
+        ),
+        _entity(
+            f"sensor.{_CARO_SLUG}_wellbeing_score",
+            f"{ENTRY}_wellbeing_score",
+            translation_key="wellbeing_score",
+        ),
+        _entity("sensor.caro_gewicht", f"{ENTRY}_weight", translation_key="weight"),
+    ]
+
+
+def _caro_plan():
+    entities = _caro_entities()
+    return migration.build_migration_plan(
+        ENTRY,
+        entities,
+        device_slug_hint=_CARO_SLUG,
+        device_id="dev1",
+        catalog_keys=CATALOG,
+        occupied_entity_ids={entity["entity_id"] for entity in entities},
+    )
+
+
+def test_req_hom_130_plan_migrates_despite_hand_renamed_anchor():
+    """Production regression: one hand-renamed anchor must not block the pass."""
+    plan = _caro_plan()
+    assert plan.device_slug == _CARO_SLUG
+    assert plan.skipped == ()
+    assert {(item.source_entity_id, item.target_entity_id) for item in plan.renames} == {
+        (f"button.{_CARO_SLUG}_glas_wasser", f"button.{_CARO_SLUG}_quick_drink_1"),
+        (f"button.{_CARO_SLUG}_flasche_wasser", f"button.{_CARO_SLUG}_quick_drink_2"),
+        (f"button.{_CARO_SLUG}_tasse_kaffee", f"button.{_CARO_SLUG}_quick_drink_3"),
+        (f"button.{_CARO_SLUG}_glas_saft", f"button.{_CARO_SLUG}_quick_drink_4"),
+    }
+    assert "sensor.caro_gewicht" not in {item.source_entity_id for item in plan.renames} | {
+        item.source_entity_id for item in plan.skipped
+    }
+
+
+def test_req_hom_130_plan_warns_custom_entity_id_instead_of_failing():
+    """A hand-renamed quick drink stays as it is — warning, not a failed pass."""
+    entities = _mixed_entities()
+    entities[0] = _entity("button.mein_wasser", f"{ENTRY}_button_quick_0")
+    plan = _plan(entities)
+
+    assert plan.device_slug == _SLUG
+    assert [
+        (item.source_entity_id, item.target_entity_id, item.reason) for item in plan.skipped
+    ] == [("button.mein_wasser", None, migration.SKIP_CUSTOM_ENTITY_ID)]
+    assert len(plan.renames) == 2
+    assert migration.SKIP_CUSTOM_ENTITY_ID in migration.NON_BLOCKING_SKIP_REASONS
 
 
 def test_req_hom_130_plan_deterministic_order():
