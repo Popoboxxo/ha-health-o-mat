@@ -7,6 +7,14 @@ the whole plan unit-testable without a Home Assistant installation (Spec §3.1).
 
 Contract (Spec §3.1): target object ids are derived from the ``unique_id`` only —
 never from a display-name slug, never from the system language.
+
+Prefix source (0.17.2): the object-id prefix is derived from the entities that are
+about to be renamed (``_sibling_prefix``), so it belongs to them by construction. A
+diverging device name, a renamed/unfindable device or a foreign ``device_id`` only
+produces a warning; it can never block the pass (0.17.1 production bug). The
+structural anchors (catalog lab sensors first) merely confirm or word-boundary-trim
+that prefix, and the older anchor/hint heuristic stays as the secondary path for
+entries without a usable sibling group.
 """
 
 from __future__ import annotations
@@ -26,6 +34,19 @@ SKIP_CUSTOM_ENTITY_ID = "custom_entity_id"
 # Reasons that must NOT block the pass: the entity keeps its id on purpose.
 NON_BLOCKING_SKIP_REASONS = frozenset({SKIP_CUSTOM_ENTITY_ID})
 
+# Confirmation mismatches: the sibling prefix (derived from the entities that are
+# about to be renamed) disagrees with the device name or the device link. They are
+# reported ONCE as a warning and never block the pass (0.17.1 production bug).
+WARN_HINT_MISMATCH = "hint_mismatch"
+WARN_DEVICE_ID_MISMATCH = "device_id_mismatch"
+
+# A device boundary needs at least two structural entities or two sibling ids:
+# a single id can never prove where the device segment ends.
+_MIN_SUPPORT = 2
+# ``lab_<key>`` translation keys of the catalog markers: their object-id suffix
+# comes from catalog-controlled translation text, so it carries no user text.
+_CATALOG_LAB_KEY_PREFIX = "lab_"
+
 # ``{entry_id}_button_quick_<index>`` — index is 0-based and canonical: no
 # leading zeros, no sign, no trailing noise (Spec §2.1).
 _QUICK_DRINK_UNIQUE_ID_INFIX = "_button_quick_"
@@ -39,10 +60,15 @@ _SAFE_SLUG_RE = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*\Z")
 
 @dataclass(frozen=True)
 class DeviceSlugResolution:
-    """Resolved object-id prefix of the person device, or a skip reason."""
+    """Resolved object-id prefix of the person device, or a skip reason.
+
+    ``warnings`` lists non-blocking confirmation mismatches (device name, device
+    link): they are reported once by the caller and never change the outcome.
+    """
 
     slug: str | None
     reason: str | None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,11 +92,16 @@ class MigrationSkip:
 
 @dataclass(frozen=True)
 class MigrationPlan:
-    """Deterministic, side-effect-free result of one planning pass."""
+    """Deterministic, side-effect-free result of one planning pass.
+
+    ``warnings`` carries non-blocking confirmation mismatches of the resolved
+    prefix; the caller reports them ONCE and continues.
+    """
 
     device_slug: str | None
     renames: tuple[MigrationRename, ...]
     skipped: tuple[MigrationSkip, ...]
+    warnings: tuple[str, ...] = ()
 
 
 def quick_drink_target(device_slug: str, index: int) -> str:
@@ -188,12 +219,164 @@ def _apply_hint(prefix: str, hint: str) -> str | None:
     return None
 
 
+def _common_token_prefix(sequences: Sequence[Sequence[str]]) -> list[str]:
+    """Longest leading token sequence shared by EVERY sequence."""
+    if not sequences:
+        return []
+    common: list[str] = []
+    for index, token in enumerate(sequences[0]):
+        if all(len(sequence) > index and sequence[index] == token for sequence in sequences[1:]):
+            common.append(token)
+        else:
+            break
+    return common
+
+
+def _sibling_prefix(entity_ids: Sequence[str]) -> str | None:
+    """Object-id prefix shared by the ids that are about to be renamed.
+
+    The prefix comes from the migration candidates themselves, so it belongs to
+    the entities being renamed *by construction* — no device name, no hint and no
+    foreign ``device_id`` can move or block it (0.17.1 production bug: a renamed
+    device or a diverging hint left all four buttons on
+    ``device_slug_ambiguous``).
+
+    A completely hand-renamed id (``button.mein_wasser``) forms its own
+    first-token group and can never erase the prefix of the majority group; such
+    an id is reported as ``custom_entity_id`` later. ``None`` means: no group of
+    two ids shares a non-empty prefix, or two groups are equally large — both are
+    genuine ambiguity, never a guess.
+    """
+    groups: dict[str, list[list[str]]] = {}
+    for entity_id in entity_ids:
+        tokens = _tokens(_object_part(entity_id))
+        if tokens:
+            groups.setdefault(tokens[0], []).append(tokens)
+
+    supported = [members for members in groups.values() if len(members) >= 2]
+    if not supported:
+        return None
+    largest = max(len(members) for members in supported)
+    winners = [members for members in supported if len(members) == largest]
+    if len(winners) != 1:
+        return None
+    members = winners[0]
+
+    common = _common_token_prefix(members)
+    # A prefix that swallows a whole id is an entity name, not a device segment.
+    while common and any(len(tokens) <= len(common) for tokens in members):
+        common.pop()
+    if not common:
+        return None
+    prefix = "_".join(common)
+    if not _SAFE_SLUG_RE.fullmatch(prefix):
+        return None
+    return prefix
+
+
+def _is_catalog_lab_key(translation_key: object, catalog_keys: Collection[str]) -> bool:
+    """True for the ``lab_<key>`` translation key of a CATALOG lab marker."""
+    return (
+        isinstance(translation_key, str)
+        and translation_key.startswith(_CATALOG_LAB_KEY_PREFIX)
+        and translation_key[len(_CATALOG_LAB_KEY_PREFIX) :] in catalog_keys
+    )
+
+
+def _structural_parts(
+    anchors: Sequence[Mapping[str, object]], catalog_keys: Collection[str]
+) -> tuple[list[str], list[str]]:
+    """Object parts of the entry's structural entities.
+
+    Returns ``(catalog lab sensors, all translation-key entities)``. The catalog
+    lab sensors are the primary structural source: their object-id suffix is the
+    catalog key, so it can never contain user text.
+    """
+    catalog: list[str] = []
+    every: list[str] = []
+    for anchor in anchors:
+        translation_key = anchor.get("translation_key")
+        if translation_key is None:
+            continue
+        part = _object_part(str(anchor["entity_id"]))
+        every.append(part)
+        if _is_catalog_lab_key(translation_key, catalog_keys):
+            catalog.append(part)
+    return catalog, every
+
+
+def _trimmed_prefix(tokens: Sequence[str], parts: Sequence[str]) -> str | None:
+    """Longest proper prefix of ``tokens`` that at least two structural ids share.
+
+    Four buttons labelled ``Glas Wasser``/``Glas Saft`` share the label token, so
+    the raw sibling prefix ends in user text; the structural entities prove where
+    the device segment really ends. Only called when the raw prefix is NOT
+    confirmed, so trimming can never shorten an already proven boundary.
+    """
+    for length in range(len(tokens) - 1, 0, -1):
+        prefix = "_".join(tokens[:length])
+        if len(_supporting_anchors(parts, prefix)) >= _MIN_SUPPORT:
+            return prefix
+    return None
+
+
+def _sibling_resolution(
+    slug: str,
+    candidates: Sequence[Mapping[str, object]],
+    *,
+    hint: str | None,
+    device_id: str | None,
+) -> DeviceSlugResolution:
+    """Accept a sibling-derived slug; diverging hint/device link only warn."""
+    warnings: list[str] = []
+    if hint is not None and _apply_hint(slug, hint) is None:
+        warnings.append(WARN_HINT_MISMATCH)
+    if device_id is not None and any(
+        candidate.get("device_id") != device_id for candidate in candidates
+    ):
+        warnings.append(WARN_DEVICE_ID_MISMATCH)
+    return DeviceSlugResolution(slug, None, tuple(warnings))
+
+
+def _resolve_sibling_slug(
+    candidates: Sequence[Mapping[str, object]],
+    catalog_parts: Sequence[str],
+    anchor_parts: Sequence[str],
+    *,
+    hint: str | None,
+    device_id: str | None,
+) -> DeviceSlugResolution | None:
+    """Primary path: prefix from the candidates, confirmed by structural ids.
+
+    ``None`` means "not derivable this way" and hands over to the anchor path —
+    never a failure on its own, so a missing/renamed device or a single outlier
+    cannot block the pass.
+    """
+    sibling = _sibling_prefix([str(candidate["entity_id"]) for candidate in candidates])
+    if sibling is None:
+        return None
+    sources = [parts for parts in (catalog_parts, anchor_parts) if len(parts) >= _MIN_SUPPORT]
+    for parts in sources:
+        if len(_supporting_anchors(parts, sibling)) >= _MIN_SUPPORT:
+            return _sibling_resolution(sibling, candidates, hint=hint, device_id=device_id)
+    # Word-boundary trimming needs suffix evidence that cannot contain user text:
+    # only the catalog lab sensors qualify (their suffix is a catalog key). The
+    # fallback over all translation-key entities is used for confirmation only,
+    # so an already-migrated sibling group (`…_quick_drink_<n>`) is never trimmed
+    # into an arbitrary device boundary.
+    trimmed = _trimmed_prefix(_tokens(sibling), catalog_parts)
+    if trimmed is not None:
+        return _sibling_resolution(trimmed, candidates, hint=hint, device_id=device_id)
+    return None
+
+
 def resolve_device_slug(
     candidates: Sequence[Mapping[str, object]],
     anchors: Sequence[Mapping[str, object]],
     *,
     hint: str | None,
     device_id: str | None,
+    catalog_keys: Collection[str] = (),
 ) -> DeviceSlugResolution:
     """Resolve the object-id prefix currently used for this person's device.
 
@@ -202,19 +385,29 @@ def resolve_device_slug(
     object-id suffix is English and language independent, Spec §2.3). Object
     parts only — user labels never influence the result.
 
-    Acceptance (Spec §2.3): the prefix is non-empty and supported by at least
-    two anchors. It is NOT required that every registry entity starts with it:
-    a hand-renamed entity id is the user's choice, so the migration leaves it
-    alone (``custom_entity_id``) instead of failing the whole pass.
+    Primary source is the sibling prefix of the candidates (``_sibling_prefix``):
+    it is derived from the entities that are going to be renamed, so hint, device
+    name and ``device_id`` can no longer block the pass — they are at most
+    warnings. The structural anchors only confirm or word-boundary-trim that
+    prefix; the anchor/hint heuristic stays as the secondary path for entries
+    without usable siblings.
+
+    Acceptance (Spec §2.3): the prefix is non-empty, slug-safe and supported by
+    at least two structural ids (or two sibling ids plus one confirming source).
+    It is NOT required that every registry entity starts with it: a hand-renamed
+    entity id is the user's choice and is skipped as ``custom_entity_id``.
     """
     if not candidates:
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_UNRESOLVED)
 
-    anchor_parts = [
-        _object_part(str(anchor["entity_id"]))
-        for anchor in anchors
-        if anchor.get("translation_key") is not None
-    ]
+    catalog_parts, anchor_parts = _structural_parts(anchors, catalog_keys)
+
+    sibling = _resolve_sibling_slug(
+        candidates, catalog_parts, anchor_parts, hint=hint, device_id=device_id
+    )
+    if sibling is not None:
+        return sibling
+
     # A single anchor cannot prove where the device segment ends.
     if len(anchor_parts) < 2:
         return DeviceSlugResolution(None, SKIP_DEVICE_SLUG_UNRESOLVED)
@@ -310,6 +503,7 @@ def build_migration_plan(
         ],
         hint=device_slug_hint,
         device_id=device_id,
+        catalog_keys=catalog_keys,
     )
 
     renames: list[MigrationRename] = []
@@ -353,4 +547,4 @@ def build_migration_plan(
             continue
         renames.append(MigrationRename(unique_id, source, target))
 
-    return MigrationPlan(resolution.slug, tuple(renames), tuple(skipped))
+    return MigrationPlan(resolution.slug, tuple(renames), tuple(skipped), resolution.warnings)
