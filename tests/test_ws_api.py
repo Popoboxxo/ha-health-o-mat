@@ -734,7 +734,7 @@ def test_panel_data_without_store_or_readings(monkeypatch):
 
 
 def test_panel_data_warning_respects_thresholds(monkeypatch):
-    """Warnung nur bei Überschreiten der (Runtime-)Schwellen."""
+    """Warnung ab Erreichen der (Runtime-)Schwellen — Grenze inklusive (O-5 = A)."""
     data = {
         "e1": {
             "drinks": [],
@@ -746,10 +746,26 @@ def test_panel_data_warning_respects_thresholds(monkeypatch):
 
     payload = ws_api.build_panel_data(hass, "e1", NOW)
     assert payload is not None
-    assert payload["bp"]["warning"] is False  # exakt auf der Schwelle ≠ oberhalb
+    # Exakt auf der Schwelle zählt bereits als Warnung (Hypertonie "ab 140/90")
+    # — identisch zum Binary Sensor, der ebenfalls `>=` prüft.
+    assert payload["bp"]["warning"] is True
 
     data["e1"]["readings"] = [{"ts": "2026-10-15T09:00:00", "sys": 141, "dia": 90, "pulse": 60}]
     assert ws_api.build_panel_data(hass, "e1", NOW)["bp"]["warning"] is True
+
+
+def test_panel_data_warning_below_threshold(monkeypatch):
+    """Knapp unter der Schwelle (139/89) warnt das Panel nicht."""
+    data = {
+        "e1": {
+            "drinks": [],
+            "readings": [{"ts": "2026-10-15T09:00:00", "sys": 139, "dia": 89, "pulse": 60}],
+        }
+    }
+    entry = _entry(sys_threshold=140, dia_threshold=90)
+    hass = _panel_hass(data, entry, [], monkeypatch)
+
+    assert ws_api.build_panel_data(hass, "e1", NOW)["bp"]["warning"] is False
 
 
 def test_panel_data_caps_bp_entries(monkeypatch):
@@ -5625,3 +5641,26 @@ def test_import_csv_ws_reports_import_errors_structured(monkeypatch):
     assert connection.results == []
     assert connection.errors[0][1] == "import_failed"
     assert "Import-Verzeichnis" in connection.errors[0][2]
+
+
+def test_e2e_admin_gate_catalog_matches_admin_only_commands():
+    """Die E2E-Parametrisierung liest ADMIN_ONLY_COMMANDS per AST aus ws_api.py.
+
+    Der E2E-Runner importiert die Integration nicht (kein HA-Paket im Image),
+    sondern parst die Quellen (`tests_e2e/ws_api_catalog.py`). Dieser Test hält
+    den Parser an das echte Modul gebunden — sonst könnte die Gate-Suite still
+    eine leere oder veraltete Kommandoliste prüfen.
+    """
+    catalog_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "tests_e2e", "ws_api_catalog.py")
+    )
+    spec = importlib.util.spec_from_file_location("_hom_ws_api_catalog", catalog_path)
+    catalog = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(catalog)
+
+    parsed = catalog.admin_only_commands()
+
+    assert set(parsed.values()) == set(ws_api.ADMIN_ONLY_COMMANDS)
+    assert len(parsed) == len(ws_api.ADMIN_ONLY_COMMANDS)
+    for constant_name, command in parsed.items():
+        assert getattr(ws_api, constant_name) == command

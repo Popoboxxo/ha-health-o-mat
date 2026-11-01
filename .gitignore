@@ -19,6 +19,11 @@ docker/ha_config_e2e/.HA_VERSION
 docker/ha_config_e2e/.ha_run.lock
 docker/ha_config_e2e/home-assistant.log*
 
+# Bootstrap state of scripts/e2e_bootstrap.py --json-out (token/password are
+# stripped before writing, but the file is still runtime state, not source).
+e2e-state.json
+.e2e-state*
+
 # --- agent-meta managed (do not edit) ---
 *.sync-backup-*
 .agents/hooks/

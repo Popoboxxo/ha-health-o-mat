@@ -555,20 +555,27 @@ def _bp_block(entry: Any, readings: list[dict], now: datetime) -> dict[str, Any]
 
 
 def _above_threshold(entry: Any, systolic: Any, diastolic: Any) -> bool:
-    """True, wenn die übergebene (letzte) Messung oberhalb einer Schwelle liegt."""
+    """True if the given (latest) reading reaches or exceeds a threshold."""
     if systolic is None and diastolic is None:
         return False
     sys_threshold = _runtime_int(entry, "sys_threshold", DEFAULT_SYS_THRESHOLD)
     dia_threshold = _runtime_int(entry, "dia_threshold", DEFAULT_DIA_THRESHOLD)
-    return _is_above(systolic, sys_threshold) or _is_above(diastolic, dia_threshold)
+    return _at_or_above(systolic, sys_threshold) or _at_or_above(diastolic, dia_threshold)
 
 
-def _is_above(value: Any, threshold: int) -> bool:
-    """Defensiver `>`-Vergleich (None/ungültig → False)."""
+def _at_or_above(value: Any, threshold: int) -> bool:
+    """Defensive `>=` comparison (None/invalid → False).
+
+    Deliberate behaviour change (O-5 = A): the panel/card warning now uses the
+    same boundary as the binary sensor (`binary_sensor.py`, `>=`). The
+    hypertension guideline reads the threshold as "from 140/90 mmHg on", so
+    exactly 140/90 already counts as elevated. The previous `>` comparison
+    made panel and binary sensor disagree on the boundary itself.
+    """
     if value is None:
         return False
     try:
-        return int(value) > int(threshold)
+        return int(value) >= int(threshold)
     except (TypeError, ValueError):
         return False
 

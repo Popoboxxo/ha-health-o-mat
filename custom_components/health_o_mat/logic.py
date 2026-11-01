@@ -334,16 +334,6 @@ def csv_filename(kind: str, person: str, now: datetime) -> str:
     return f"health_o_mat_{kind}_{safe_person}_{stamp}.csv"
 
 
-def csv_header_footer(rows_count: int, person: str, kind: str, now: datetime) -> tuple[str, str]:
-    """Kopf- und Fußzeile des Exports."""
-    header = (
-        f"# HA Health-O-Mat Export — {kind} — Person: {person}\n"
-        f"# Erstellt: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-    footer = f"# Datensaetze: {rows_count}"
-    return header, footer
-
-
 # --- WHO-Blutdruck-Klassifikation (REQ-HOM-001) ---
 #
 # Schwellen in mmHg. Beide Achsen werden separat eingestuft; die Gesamt-
