@@ -1,7 +1,9 @@
 # Spec: Entity-ID-Migration auf sprachunabhängige `object_id`s (MINOR 0.17.0)
 
 - **Status:** APPROVED (2026-11-02) — Review Runde 2 abgeschlossen
-- **Datum:** 2026-11-02
+- **Datum:** 2026-11-02 · **Angepasst:** 2026-11-02 (§2.3, §3.1–§3.5, §5.3,
+  §6.1–§6.2, §7 und §8.2 an den gefixten `device_slug`-Resolver; produktive
+  Regression Caro/Daniel)
 - **Basis:** `main` @ `d86b247` (manifest `0.16.2`), ConfigFlow `VERSION = 2`
 - **Grundlage:** `docs/reviews/entity-id-stability-audit.md` (im Folgenden „Audit")
 - **Produktentscheidung (verbindlich):** Variante **B** aus Audit §5 — der Bestand wird
@@ -169,7 +171,7 @@ migriert (`skip`, Grund `invalid_key`). Eine stille Umformung des Keys ist verbo
 weil sie die `unique_id` nicht ändern darf und ein abweichendes ID-Suffix erzeugen
 würde.
 
-### 2.3 `device_slug`-Ermittlung (sound, fail-closed)
+### 2.3 `device_slug`-Ermittlung (sound, fail-closed bei echter Mehrdeutigkeit)
 
 `{device_slug}` ist das **aktuell für die Entity-Registrierung verwendete object-id-Präfix**
 des Personen-Devices — nicht zwingend `slugify(device.name)`: HA >= 2026.9 kann über
@@ -190,16 +192,24 @@ Device-Name kann nach der Erstregistrierung geändert worden sein.
 
 **Präfix-Ermittlung auf Token-Ebene:**
 
-- Objekt-Teil jedes Ankers an `_` zerlegen; `C` = längste gemeinsame führende
-  Token-Folge (z. B. `["health", "o", "mat", "max"]`).
-- `P` = längste führende Token-Folge von `C`, die bei **allen Kandidaten** als
-  Boundary-Präfix vorkommt (`candidate.startswith(P + "_")`). Damit werden gemeinsame
-  Entity-Namespaces abgeschnitten: Lab-only (`C = …_max_lab`, Kandidaten-IDs aber
-  `…_max_<name>`) ergibt `P = …_max`. Bleibt `P` leer, obwohl Anker existieren →
-  `device_slug_ambiguous` (Kandidatenmenge und Anker-Präfix passen nicht zusammen).
-- **Divergenz-Test:** vergleiche das Token direkt nach `P` über alle Translation-Anker.
-  Für den Test sind mindestens **zwei** Anker nötig; ein einzelner Anker →
-  `device_slug_unresolved`.
+- Objekt-Teil jedes Ankers an `_` zerlegen. `C` = **längste führende Token-Folge, die
+  mindestens zwei Anker teilen** (z. B. `["health", "o", "mat", "max"]`). Maßgeblich ist
+  die Mehrfach-Stützung, nicht „alle": ein einzelner Ausreißer (hand-renamed Entity wie
+  `sensor.caro_gewicht`, die kein führendes Token mit den übrigen Ankern teilt) kann `C`
+  damit nicht leeren. Zwei verschiedene, **gleich lange und gleich stark gestützte**
+  Präfixe → **`device_slug_ambiguous`** (echte Mehrdeutigkeit, kein Raten).
+- `P` = längste führende Token-Folge von `C`, die die **Mehrheit der relevanten
+  Kandidaten** als Boundary-Präfix fortsetzt (`candidate.startswith(P + "_")`).
+  Relevant sind nur Kandidaten mit demselben ersten Token wie `C`; hand-renamed
+  Kandidaten (anderes oder kein führendes Token) fließen nicht in die Mehrheit ein.
+  Damit werden gemeinsame Entity-Namespaces abgeschnitten: Lab-only (`C = …_max_lab`,
+  Kandidaten-IDs aber `…_max_<name>`) ergibt `P = …_max`. Bleibt `P` leer, obwohl Anker
+  existieren → `device_slug_ambiguous` (Kandidatenmenge und Anker-Präfix passen nicht
+  zusammen).
+- **Divergenz-Test:** vergleiche das Token direkt nach `P` **ausschließlich über die
+  stützenden Anker** (Anker, deren Objekt-Teil `P` ist oder mit `P + "_"` beginnt).
+  Für den Test sind mindestens **zwei** Anker nötig; weniger als zwei Translation-Anker
+  → `device_slug_unresolved`.
   - **divergiert** (`drinks_today` vs `daily_goal_progress`): `P` ist die Gerätegrenze.
   - **nicht divergiert** (`lab_crp` vs `lab_creatinine` → beide `lab`): `P` ist nicht
     als Gerätegrenze belegt. Ohne Hint → **`device_slug_unresolved`**; mit Hint
@@ -211,18 +221,26 @@ Device-Name kann nach der Erstregistrierung geändert worden sein.
   - `P.endswith("_" + H)` → verwende `P` (Area-Segment vor dem Device-Segment bleibt
     Teil der IDs).
   - sonst → **`device_slug_ambiguous`**.
-- **Akzeptanz:** Ergebnis nicht leer, matcht `^[a-z0-9_]+$`, **jede** Kandidaten-Entity
-  beginnt mit `result + "_"`, und jede Kandidaten-Entity gehört zur selben `device_id`
-  wie der Device-Anker (falls vorhanden). Sonst `device_slug_ambiguous`.
+- **Akzeptanz:** Ergebnis nicht leer, matcht `^[a-z0-9_]+$`, und wird von **mindestens
+  zwei Ankern gestützt** (bzw. vom Hint, wenn dieser die Boundary belegt); alle
+  Kandidaten gehören zur selben `device_id` wie der Device-Anker (falls vorhanden).
+  Es ist **nicht** mehr gefordert, dass **alle** Registry-Entities mit dem Präfix
+  beginnen: ein Kandidat außerhalb des Präfixes ist eine Nutzerentscheidung und wird mit
+  dem **nicht blockierenden** Grund `custom_entity_id` übersprungen (§3.1). Bleibt eine
+  der Bedingungen verletzt → `device_slug_ambiguous`.
 
 **Ergebnis:** akzeptierter Präfix. Sonst:
 
-- keine verwendbaren Translation-Anker oder fehlende Divergenz ohne Hint →
-  **`device_slug_unresolved`**;
-- leeres `P`, Widerspruch zwischen Hint, Anker-Präfix und/oder Gerätezuordnung →
+- keine Kandidaten, keine verwendbaren Translation-Anker (weniger als zwei) oder
+  fehlende Divergenz ohne Hint → **`device_slug_unresolved`**;
+- leeres `C`/`P` (kein von mindestens zwei Ankern geteilter Präfix), zwei gleichwertige
+  Anker-Cluster, Widerspruch zwischen Hint und Anker-Präfix oder fremde `device_id` →
   **`device_slug_ambiguous`**.
 
-Beide Gründe sind Skip-Gründe; die Version bleibt stehen (fail-closed).
+Beide Gründe sind **blockierende** Skip-Gründe; die Version bleibt stehen (fail-closed).
+Davon getrennt ist `custom_entity_id` (Kandidat außerhalb des Präfixes) eine
+**Warnung ohne Fehlschlag**: Die Version wird gesetzt, der Grund steht in
+`NON_BLOCKING_SKIP_REASONS` und ist vom Drift-Check ausgenommen (§3.1, §3.2, §3.3).
 
 Damit ist der frühere, unsounde „gemeinsamer Präfix über alle IDs"-Fallback ersetzt:
 Bei vier Labels „Glas Wasser"/„Glas Saft"/„Glas Tee"/„Glas Kaffee" wäre der naive Präfix
@@ -232,6 +250,19 @@ fließen nicht mehr ein — das Gegenbeispiel ist als Unit-Test festgehalten (§
 Der Lab-only-Fall (nur `lab_<marker>` + `lab_warning_<kategorie>` als Anker) ist
 dadurch ebenfalls abgedeckt: mit Hint wird der Hint akzeptiert, ohne Hint
 `device_slug_unresolved` — nie ein geratenes `…_lab`.
+
+**Regression (produktiv, 2026-11-02):** Auf der produktiven Instanz hatte ein Nutzer
+eine Entity der Person „Caro" manuell in `sensor.caro_gewicht` umbenannt. Nach der
+alten Regel (gemeinsamer Präfix über **alle** Anker, Akzeptanz über **jede**
+Registry-Entity) teilte dieser Ausreißer kein führendes Token mit den übrigen Ankern;
+`C` und damit `P` blieben leer, und alle Quick-Drink-Buttons beider betroffener Entries
+(„Caro" und „Daniel") liefen in `device_slug_ambiguous` mit Ziel `None` — beide Entries
+blieben auf Version 2, obwohl nur eine einzige Entity betroffen war. Nach dem Fix
+stützen mindestens zwei Anker `C` (der Ausreißer zählt nicht), `P` wird über die
+Mehrheit der relevanten Kandidaten getrimmt, Divergenz und Akzeptanz prüfen nur
+stützende Anker, und die hand-renamed Entity erhält die Warnung `custom_entity_id`;
+beide Entries migrieren auf Version 3. Die Regression ist in §6.1/§6.2 als Unit- und
+Registry-Test festgehalten.
 
 `device_slug` wird **nur zur Migrationszeit** berechnet. Neu registrierte Entities
 brauchen ihn nicht: HA präfixt bei `has_entity_name = True` weiterhin selbst den
@@ -301,6 +332,12 @@ SKIP_DEVICE_SLUG_UNRESOLVED = "device_slug_unresolved"
 SKIP_DEVICE_SLUG_AMBIGUOUS = "device_slug_ambiguous"
 SKIP_TARGET_OCCUPIED = "target_occupied"
 SKIP_INVALID_KEY = "invalid_key"
+# Nutzer hat die entity_id selbst gewählt (Kandidat außerhalb des Anker-Präfixes):
+# seine Entscheidung gewinnt, kein Fehlschlag.
+SKIP_CUSTOM_ENTITY_ID = "custom_entity_id"
+
+# Gründe, die den Pass NICHT blockieren: die Version wird trotzdem gesetzt.
+NON_BLOCKING_SKIP_REASONS = frozenset({SKIP_CUSTOM_ENTITY_ID})
 
 @dataclass(frozen=True)
 class DeviceSlugResolution:
@@ -318,7 +355,7 @@ class MigrationSkip:
     unique_id: str
     source_entity_id: str
     target_entity_id: str | None
-    reason: str
+    reason: str          # SKIP_*-Grund; in NON_BLOCKING_SKIP_REASONS = kein Fehlschlag
 
 @dataclass(frozen=True)
 class MigrationPlan:
@@ -372,24 +409,32 @@ Regeln von `build_migration_plan`:
    `slug is None` → jeder Kandidat wird `skipped` mit `resolution.reason`
    (`device_slug_unresolved` oder `device_slug_ambiguous`). `MigrationPlan.device_slug`
    trägt den aufgelösten Präfix (oder `None`).
-4. Ziel bilden; ist `target == source` → **kein Rename und kein Skip** (idempotenter
+4. **Filter vor der Zielberechnung:** Ein Kandidat, dessen Objekt-Teil nicht mit
+   `slug + "_"` beginnt (vom Nutzer manuell umbenannt), wird mit **`custom_entity_id`**
+   übersprungen — kein Ziel, kein Rename, kein Fehlschlag. Der Grund steht in
+   `NON_BLOCKING_SKIP_REASONS`; er blockiert weder die Versionierung (§3.3) noch den
+   Drift-Check (§3.2).
+5. Ungültiger Custom-Key (§2.2) → `skipped` mit `invalid_key` (vor der
+   Zielberechnung, damit kein unsicheres Ziel entsteht).
+6. Ziel bilden; ist `target == source` → **kein Rename und kein Skip** (idempotenter
    Wiederholungslauf).
-5. Ist das Ziel in `occupied_entity_ids` → `skipped` mit `target_occupied`.
+7. Ist das Ziel in `occupied_entity_ids` → `skipped` mit `target_occupied`.
    Ein eigener `target_duplicate`-Fall existiert nicht: `quick_drink_target` ist über
    den Index und `custom_lab_target` über den (eindeutigen) `key` injektiv, zwei
    Kandidaten können also nie dasselbe Ziel erzeugen. Jede Zielkollision ist per
    Definition `target_occupied`.
-6. Ungültiger Custom-Key (§2.2) → `skipped` mit `invalid_key`.
-7. Sonst `MigrationRename`.
+8. Sonst `MigrationRename`.
 
 ### 3.2 HA-Anbindung in `__init__.py`
 
 ```python
 # Imports: from homeassistant.helpers import device_registry as dr,
 #          entity_registry as er; from homeassistant.util import slugify
-#          DOMAIN aus .const; build_migration_plan/parse_custom_lab_key aus .migration
+#          DOMAIN aus .const; build_migration_plan/parse_custom_lab_key/
+#          quick_drink_target/custom_lab_target/NON_BLOCKING_SKIP_REASONS
+#          (und MigrationPlan für die Typangabe) aus .migration
 
-async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
+async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> MigrationPlan | None:
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, entry.entry_id)
 
@@ -459,13 +504,18 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
             # Race mit einem parallelen Registry-Write: HA würde die Exception
             # in MIGRATION_ERROR wandeln; wir werten sie als fehlgeschlagenen Pass.
             _LOGGER.error("Entity-ID-Migration %s abgebrochen: %s", entry.title, err)
-            return False
+            return None
 
     # Drift-Diagnose: nach dem Pass prüfen, welche F-1/F-2-Entities nicht am
-    # erwarteten Zielschema stehen (statt still zu ignorieren).
+    # erwarteten Zielschema stehen (statt still zu ignorieren). Geplante Skips
+    # sind ausgenommen: sie bleiben absichtlich auf ihrer alten ID und würden
+    # sonst doppelt gemeldet.
+    planned_skips = {skip.unique_id for skip in plan.skipped}
     drift: list[tuple[str, str]] = []
     if plan.device_slug is not None:
         for reg in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if reg.unique_id in planned_skips:
+                continue
             index = parse_quick_drink_index(reg.unique_id, entry.entry_id)
             key = parse_custom_lab_key(reg.unique_id, entry.entry_id, LAB_MARKERS)
             if index is not None:
@@ -476,24 +526,38 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
                 continue
             if reg.entity_id != expected:
                 drift.append((reg.entity_id, expected))
-    if drift:
+
+    # custom_entity_id ist eine Nutzerentscheidung, kein Fehlschlag: eigene
+    # Warnung, genau einmal, ohne Blockade.
+    for skip in plan.skipped:
+        if skip.reason in NON_BLOCKING_SKIP_REASONS:
+            _LOGGER.warning(
+                "Entity-ID-Migration %s: %s bleibt unverändert (Grund: %s)",
+                entry.title,
+                skip.source_entity_id,
+                skip.reason,
+            )
+
+    blocking = [
+        skip for skip in plan.skipped if skip.reason not in NON_BLOCKING_SKIP_REASONS
+    ]
+    if blocking or drift:
+        # Die EINE Zusammenfassung des Fehlerpfads: Zählung plus Paarliste.
         _LOGGER.warning(
-            "Entity-ID-Migration %s: schema_drift %d — %s",
+            "Entity-ID-Migration %s fehlgeschlagen: %d übersprungen, %d schema_drift — "
+            "übersprungen (Quelle, unique_id, Ziel, Grund): %s; "
+            "schema_drift (Ist, Soll): %s",
             entry.title,
+            len(blocking),
             len(drift),
+            [
+                (skip.source_entity_id, skip.unique_id, skip.target_entity_id, skip.reason)
+                for skip in blocking
+            ],
             drift,
         )
-
-    for skip in plan.skipped:
-        _LOGGER.warning(
-            "Entity-ID-Migration %s: %s (%s) übersprungen — Ziel %s, Grund %s",
-            entry.title,
-            skip.source_entity_id,
-            skip.unique_id,
-            skip.target_entity_id,
-            skip.reason,
-        )
-    return not plan.skipped and not drift
+        return None
+    return plan
 ```
 
 - **B-1 (Coroutine):** `er.async_migrate_entries` ist in HA 2026.8.0
@@ -508,7 +572,8 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
 - Neue Imports in `__init__.py`: `LAB_MARKERS` aus `.const`, `entity_registry as er`
   und `device_registry as dr` aus `homeassistant.helpers`, `slugify` aus
   `homeassistant.util`, `build_migration_plan`/`parse_custom_lab_key`/
-  `quick_drink_target`/`custom_lab_target` aus `.migration`.
+  `quick_drink_target`/`custom_lab_target`/`NON_BLOCKING_SKIP_REASONS` (und
+  `MigrationPlan` für die Typangabe) aus `.migration`.
 - **Device-Anker:** bevorzugt
   `dr.async_get_device_by_identifier((DOMAIN, entry.entry_id), entry.entry_id)`
   (HA 2026.9.1; die Verankerung aus `entity.py:26-31`), Fallback ist die erste
@@ -520,7 +585,7 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
   nur das Restrisiko einer Kollision mit einem nicht (mehr) registrierten State.
 - **Exception-Vertrag:** Ein `ValueError` aus `async_migrate_entries` (Race mit einem
   parallelen Registry-Write, intern `async_update_entity`) wird abgefangen, geloggt und
-  als `False` zurückgegeben. Ohne Catch würde HA daraus `MIGRATION_ERROR` machen
+  als `None` zurückgegeben. Ohne Catch würde HA daraus `MIGRATION_ERROR` machen
   (Setup-Abbruch, Version bleibt); mit Catch bleibt das Verhalten identisch, aber mit
   klarer Ursache im Log.
 - Die Warnung nennt das Paar (Quelle, `unique_id`, Ziel, Grund) als Liste — nicht nur
@@ -528,11 +593,18 @@ async def _async_migrate_entity_ids(hass: HomeAssistant, entry) -> bool:
 - `stale_marker_key` ist eine **Warnung, kein Skip**: Die Registry-Entity existiert,
   die Umbenennung ist safe; fehlt der Key in den Options, wird das protokolliert
   (Ursache für spätere Key-Drift, §3.5).
+- **`custom_entity_id` ist nicht blockierend:** Ein Kandidat, dessen `entity_id` der
+  Nutzer selbst vergeben hat (Objekt-Teil außerhalb des Anker-Präfixes), bleibt
+  unverändert. Die Warnung nennt Quelle und Grund genau einmal; der Grund steht in
+  `NON_BLOCKING_SKIP_REASONS`, ist aus dem Drift-Check ausgenommen und verhindert die
+  Versionserhöhung **nicht**. Andernfalls bliebe ein Entry mit einer einzigen
+  hand-renamed Entity dauerhaft auf der alten Version (produktive Regression §2.3).
 - **Drift-Diagnose:** Nach dem Pass wird die Registry erneut gelesen; jede F-1/F-2-
-  Entity muss auf ihrer erwarteten Ziel-ID stehen. Abweichungen werden als
-  `schema_drift <n>` mit Paarliste gewarnt und lassen den Pass **fehlschlagen**
-  (Version bleibt) — so kann ein vergessenes `await` oder ein stiller Registry-Fehler
-  nicht als Erfolg durchgehen.
+  Entity **ohne geplanten Skip** muss auf ihrer erwarteten Ziel-ID stehen. Abweichungen
+  werden als `schema_drift <n>` mit Paarliste gewarnt und lassen den Pass
+  **fehlschlagen** (Version bleibt) — so kann ein vergessenes `await` oder ein stiller
+  Registry-Fehler nicht als Erfolg durchgehen. Geplante Skips sind ausgenommen, damit
+  eine absichtlich unveränderte Entity nicht zusätzlich als Drift gemeldet wird.
 
 ### 3.3 `async_migrate_entry` (atomar, idempotent, Downgrade-Guard)
 
@@ -555,17 +627,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
         options.setdefault("quick_drinks", [dict(qd) for qd in DEFAULT_QUICK_DRINKS])
         data = {k: v for k, v in data.items() if k != "quick_drinks"}
 
-    if entry.version < 3 and not await _async_migrate_entity_ids(hass, entry):
-        # Kein async_update_entry: Version bleibt stehen, HA versucht es beim
-        # nächsten Setup erneut. v1-Datenmigration wird ebenfalls nicht
-        # teilgeschrieben (alles-oder-nichts).
-        return False
-
     if entry.version < 3:
+        plan = await _async_migrate_entity_ids(hass, entry)
+        if plan is None:
+            # Kein async_update_entry: Version bleibt stehen, HA versucht es beim
+            # nächsten Setup erneut. v1-Datenmigration wird ebenfalls nicht
+            # teilgeschrieben (alles-oder-nichts).
+            return False
+
         hass.config_entries.async_update_entry(
             entry, data=data, options=options, version=3
         )
-        _LOGGER.info("Config entry %s: auf Version 3 migriert", entry.title)
+        _LOGGER.info(
+            "Config entry %s: auf Version 3 migriert (renamed=%d skipped=%d)",
+            entry.title,
+            len(plan.renames),
+            len(plan.skipped),
+        )
     return True
 ```
 
@@ -576,8 +654,8 @@ Verträge:
 | **Version** | `HealthOMatConfigFlow.VERSION = 3` (`config_flow.py:250`). Neue Entries starten auf 3. |
 | **Stufen** | `entry.version == 1` → Datenmigration; `entry.version < 3` → Entity-IDs. Beide Stufen können in einem Lauf greifen. |
 | **Atomar** | Genau **ein** `async_update_entry` mit `data`, `options`, `version` (go-gauge-Punkt 3). Keine direkte `entry.version`-Zuweisung. |
-| **Erfolgskriterium** | `plan.skipped` leer. Erst dann wird die Version erhöht. |
-| **Fehler** | `return False` → HA bricht das Setup dieses Entry ab („Migration failed"). Bewusst fail-closed, damit kein halb migrierter Zustand als Erfolg gilt. Behebung: kollidierende Entity umbenennen/entfernen bzw. bei `device_slug_ambiguous` Gerätenamen/Area bereinigen, HA neu starten. |
+| **Erfolgskriterium** | Kein **blockierender** Skip (alle Gründe außer denen in `NON_BLOCKING_SKIP_REASONS`) und kein `schema_drift`. `custom_entity_id` blockiert **nicht**: der Kandidat behält seine hand-vergebene ID, die Version wird trotzdem erhöht. |
+| **Fehler** | `return False` nur bei blockierenden Gründen bzw. Drift → HA bricht das Setup dieses Entry ab („Migration failed"). Bewusst fail-closed, damit kein halb migrierter Zustand als Erfolg gilt. Behebung: kollidierende Entity umbenennen/entfernen bzw. bei `device_slug_ambiguous` Gerätenamen/Area bereinigen, HA neu starten. Hand-renamed Entities (`custom_entity_id`) sind **kein** Fehlerfall. |
 | **Idempotenz** | Zweiter Lauf: `entry.version == 3` → keine Registry-Aufrufe, kein `async_update_entry`. Teil-Migration (einige Renames angewendet, dann Skip): bereits umbenannte Entities haben `target == source` → kein erneuter Rename; nur der offene Rest wird wiederholt. |
 | **Downgrade** | `entry.version > 3` → Log + `False`, keine Änderung. Im Handler defensiv (HA prüft die Version vorher); bleibt für direkte Aufrufe/Tests. |
 | **HA < 2026.9** | Migration ist versionsunabhängig: `er.async_migrate_entries` existiert, Ziele stammen aus `unique_id`/Registry, nicht aus Translationen. Der `suggested_object_id`-Override fällt ohne `default_language_platform_translations` auf `super()` zurück; HA < 2026.9 erzeugte ohnehin englische IDs (`hacs.json` verlangt `2026.8.0`). |
@@ -591,8 +669,9 @@ injektiv (Index bzw. `key`), jede Kollision ist `target_occupied`. Dann:
 
 1. Die betroffene Entity wird **nicht** umbenannt (kein `ValueError`, kein Abbruch des
    Passes).
-2. `_async_migrate_entity_ids` liefert `False`; `async_migrate_entry` liefert `False`,
-   **ohne** Version/Daten zu schreiben.
+2. `_async_migrate_entity_ids` liefert `None` (blockierender Skip/Drift);
+   `async_migrate_entry` liefert `False`, **ohne** Version/Daten zu schreiben.
+   `custom_entity_id` zählt hier **nicht** als Blockade.
 3. HA lädt den Entry nicht; das Log nennt Quelle, `unique_id`, Ziel und Grund.
 4. Beim nächsten Start läuft die Migration erneut. Sind die bereits umbenannten
    Entities unverändert (`target == source`), wird nur der kollidierende Rest erneut
@@ -613,11 +692,12 @@ vergeben oder den Pass dauerhaft zu blockieren.
 | Custom-Key enthält Großbuchstaben/Leerzeichen/Sonderzeichen | `invalid_key` → Skip, Version bleibt (§2.2). |
 | Custom-Key ist ein Katalog-Key | `parse_custom_lab_key` liefert `None` → Katalog-Entity wird nicht angefasst (sie ist bereits am Ziel). |
 | Zwei Entries erzeugen denselben `device_slug` (Anzeigenamen kollidieren nach Slugify) | Zweiter Entry läuft in `target_occupied` → Skip + Warnung; Nutzer muss einen Anzeigenamen/eine ID entflechten. Bewusst kein automatisches Suffix (wäre nicht deterministisch wiederholbar). |
-| Entity wurde vom Nutzer manuell umbenannt | Migration setzt die kanonische Ziel-ID (Uniformität, Entscheidung B) — der manuelle Name geht verloren. Im Release-Hinweis genannt. |
+| Entity wurde vom Nutzer manuell umbenannt (**Kandidat**) | `custom_entity_id` → Warnung, **kein** Fehlschlag: die hand-vergebene ID bleibt unverändert, die Version wird trotzdem gesetzt (in `NON_BLOCKING_SKIP_REASONS`, vom Drift-Check ausgenommen). |
+| Manuell umbenannter **Anker** (`translation_key`-Entity, z. B. `sensor.caro_gewicht`) | Teilt kein führendes Token mit den übrigen Ankern → zählt nicht für `C`/Akzeptanz, leert den Präfix aber nicht (mindestens zwei Anker stützen ihn). Kein Skip, kein Fehlschlag; produktive Regression §2.3. |
 | Entity ist deaktiviert (`disabled_by`) | Migration ignoriert das Flag; Rename ist auch für deaktivierte Entities erlaubt und gewünscht. |
-| Device-Anker fehlt, Anzeigename der Person wurde geändert, oder `entity_id_parts` enthält ein Area-Segment, das nicht zum Hint passt | `device_slug_ambiguous` → Skip, Version bleibt; fail-closed statt Raten. `device_slug` ist das aktuell verwendete Präfix inkl. Area-Segment (§2.3). |
+| Device-Anker fehlt, Anzeigename der Person wurde geändert, oder `entity_id_parts` enthält ein Area-Segment, das nicht zum Hint passt | `device_slug_ambiguous` → Skip, Version bleibt; fail-closed statt Raten. `device_slug` ist das aktuell verwendete Präfix inkl. Area-Segment (§2.3). Hand-renamed **Kandidaten** lösen diesen Fall nicht mehr aus (`custom_entity_id`). |
 | Custom-Key existiert in der Registry, fehlt aber in `entry.options["lab_custom_markers"]` | Warnung `stale_marker_key`, Rename läuft weiter (Registry ist maßgeblich); Hinweis auf künftigen Key-Drift. |
-| Race: `ValueError` aus `async_migrate_entries` | Wird abgefangen, geloggt, `False` → Version bleibt; HA markiert `MIGRATION_ERROR`, Neustart wiederholt. |
+| Race: `ValueError` aus `async_migrate_entries` | Wird abgefangen, geloggt, `None` → Version bleibt; `async_migrate_entry` liefert `False`, HA markiert `MIGRATION_ERROR`, Neustart wiederholt. |
 | Recorder/Statistik | `er.async_migrate_entries` feuert `entity_registry_updated` (Aktion `update`); HA-Recorder schreibt `states_meta` und `statistics_meta` um — **nicht** die historischen `states`-Zeilen. Verifikation auf der Testinstanz (§6.3). |
 
 ---
@@ -758,6 +838,9 @@ Mindestinhalt der Migrations-Notes:
 4. **Migrationsmechanik** — passiert automatisch beim ersten Start nach dem Update;
    bei einer ID-Kollision wird der Config-Entry nicht geladen und das Log nennt die
    Paare; Auflösung: kollidierende Entity umbenennen/entfernen, neu starten.
+   Hand-vergebene Entity-IDs (vom Nutzer manuell umbenannt) bleiben unverändert und
+   werden nur als `custom_entity_id`-Warnung protokolliert — sie blockieren die
+   Migration nicht.
 5. **`MIGRATION_ERROR` ist nicht wiederherstellbar (MINOR-Konsequenz):** Der Entry
    hat dann `state.recoverable = False`; Reload und Unload sind gesperrt, **nur ein
    vollständiger HA-Neustart** wiederholt die Migration. Das muss in den Notes stehen,
@@ -824,11 +907,18 @@ Mindestinhalt der Migrations-Notes:
 | **`test_resolve_device_slug_lab_only_with_hint_uses_hint`** | Nur Labs-Anker (`…_lab_crp`, `…_lab_creatinine`), Hint `health_o_mat_max` → `health_o_mat_max` (Hint gewinnt, Boundary-Präfix) |
 | **`test_resolve_device_slug_lab_only_without_hint_is_unresolved`** | Nur Labs-Anker, Hint `None` → `device_slug_unresolved` (Suffix-Token `lab` divergiert nicht) |
 | `test_resolve_device_slug_single_anchor_is_unresolved` | nur ein Translation-Anker → `device_slug_unresolved` |
-| `test_resolve_device_slug_rejects_candidate_without_prefix` | Kandidat außerhalb des Anker-Präfixes → `device_slug_ambiguous` |
+| `test_resolve_device_slug_candidate_outside_prefix_no_longer_blocks` | Kandidat außerhalb des Anker-Präfixes ändert die Auflösung nicht (kein `device_slug_ambiguous`) |
+| **`test_resolve_device_slug_tolerates_one_hand_renamed_anchor` (Produktiv-Regression)** | Ausreißer-Anker `sensor.caro_gewicht` neben regulären Ankern → `C` bleibt gestützt, Präfix wird aufgelöst |
+| `test_resolve_device_slug_tolerates_anchor_diverging_after_the_prefix` | Anker mit gemeinsamem Präfix, aber abweichendem Token danach → Präfix bleibt gültig |
+| `test_resolve_device_slug_two_equally_supported_prefixes_is_ambiguous` | Zwei gleich lange, gleich stark gestützte Anker-Präfixe → `device_slug_ambiguous` |
+| `test_resolve_device_slug_rejects_foreign_device` | Kandidat mit fremder `device_id` → `device_slug_ambiguous` |
+| `test_resolve_device_slug_without_candidates_is_unresolved` | Keine Kandidaten → `device_slug_unresolved` |
 | `test_plan_renames_only_f1_f2` | Katalog-, Wellbeing-, BP-Entities bleiben unangetastet |
 | `test_plan_is_noop_at_target` | Quelle bereits `…_quick_drink_1` → weder Rename noch Skip |
 | `test_plan_skips_occupied_target` | Ziel in `occupied_entity_ids` → Skip `target_occupied` (einziger Kollisionsgrund; Ziele sind injektiv) |
 | `test_plan_skips_invalid_custom_key` | Key mit Leerzeichen → Skip `invalid_key` |
+| **`test_plan_warns_custom_entity_id_instead_of_failing` (Filter-Schritt)** | Hand-renamed Kandidat → Skip `custom_entity_id`, kein Ziel, kein Fehlschlag |
+| **`test_plan_migrates_despite_hand_renamed_anchor` (Produktiv-Regression)** | Ausreißer-Anker blockiert den Plan nicht; alle übrigen Ziele werden gebildet |
 | `test_plan_propagates_device_slug_reasons` | `unresolved` bzw. `ambiguous` aus dem Resolver wird als Skip-Grund übernommen |
 | `test_plan_deterministic_order` | gleiche Eingabe → gleiche Plan-Reihenfolge |
 
@@ -872,7 +962,9 @@ zu erweitern, sobald `__init__.py` diese Submodule importiert.
 | `test_collision_retry_after_fix` | erster Lauf: A umbenannt, B Skip → Version bleibt; zweiter Lauf nach Freigabe: A no-op, B umbenannt, Version 3 |
 | `test_value_error_fails_closed` | `async_migrate_entries` wirft `ValueError` → `False`, keine Version, Log-Eintrag (kein ungefangener `MIGRATION_ERROR`-Traceback) |
 | `test_stale_marker_key_warns_but_renames` | Custom-Key fehlt in den Options → Warnung `stale_marker_key`, Rename bleibt im Plan |
-| **`test_schema_drift_warns_and_fails`** | Nach dem Pass steht eine F-1/F-2-Entity nicht auf der Ziel-ID → Warnung `schema_drift` und `False` (Version bleibt) |
+| **`test_hand_renamed_anchor_does_not_block_migration` (Produktiv-Regression)** | Anker `sensor.caro_gewicht` in der Registry → `async_migrate_entry` liefert `True`, Version 3, alle Ziele gesetzt, die hand-renamed ID bleibt unverändert |
+| **`test_custom_entity_id_warns_and_still_bumps_version`** | Kandidat hand-renamed → Warnung `custom_entity_id`, **keine** Meldung `fehlgeschlagen`/`schema_drift`, genau ein `async_update_entry` mit `version=3` |
+| **`test_schema_drift_warns_and_fails`** | Nach dem Pass steht eine F-1/F-2-Entity **ohne geplanten Skip** nicht auf der Ziel-ID → Warnung `schema_drift` und `None`/`False` (Version bleibt); geplante Skips lösen keine Drift aus |
 | `test_second_run_is_noop` | `entry.version == 3` → `async_migrate_entries`/`async_update_entry` nicht aufgerufen |
 | `test_downgrade_guard_v4` | `version == 4` → `False`, keine Änderung |
 | `test_v1_entry_is_migrated_to_v3_in_one_update` | `quick_drinks` data→options **und** Entity-Renames, ein `async_update_entry` mit `version=3` |
@@ -1058,6 +1150,10 @@ werden beim Bootstrap ggf. neu angelegt (dann direkt mit `VERSION = 3`) — beid
 7. Registry-Felder `entity_category`, `labels`, `aliases`, `area_id`, `hidden_by` und
    `disabled_by` sind vor/nach der Migration identisch (nur `new_entity_id` wird
    gesetzt).
+8. Ein hand-renamed **Kandidat** blockiert die Migration nicht: er bleibt unverändert
+   (`custom_entity_id`, Warnung) und die Version wird gesetzt. Ein hand-renamed
+   **Anker** leert das Anker-Präfix nicht, solange mindestens zwei Anker es stützen
+   (Produktiv-Regression Caro/Daniel, §2.3).
 
 ---
 
@@ -1067,15 +1163,15 @@ werden beim Bootstrap ggf. neu angelegt (dann direkt mit `VERSION = 3`) — beid
 |---|---|---|---|
 | R-1 | Nutzer-Automationen/Skripte/Dashboards referenzieren alte IDs | Brüche nach dem Update, obwohl nur ein MINOR-Sprung erscheint | MINOR `0.17.0` mit **prominenter** 💥-Migrations-Notiz (§5.3/§5.4): Alt→Neu-Tabelle, Anpassungsliste, Beispiele im Repo aktualisiert; keine Auto-Reparatur möglich |
 | R-2 | `suggested_object_id` nutzt internes HA-API (`platform_data`, `_name_internal`) | stiller Bruch nach HA-Refactor: Neuregistrierungen wieder lokalisiert | A-4-Regressionstest gegen die Dev-Instanz; Migration selbst ist davon unabhängig (keine Translation-Ableitung) |
-| R-3 | Kollision (manuelle Renames, zwei Entries mit gleichem Präfix) oder nicht auflösbarer `device_slug` | Entry wird nicht geladen (fail-closed, `MIGRATION_ERROR`) | Skip + Warnung mit Paarliste (`target_occupied`, `device_slug_ambiguous`/`_unresolved`), Version bleibt, Retry; Negativprobe §6.3; Release-Hinweis zur Auflösung |
+| R-3 | Ziel belegt (`target_occupied`) oder nicht auflösbarer `device_slug` | Entry wird nicht geladen (fail-closed, `MIGRATION_ERROR`) | Skip + Warnung mit Paarliste (`target_occupied`, `device_slug_ambiguous`/`_unresolved`), Version bleibt, Retry; Negativprobe §6.3; Release-Hinweis zur Auflösung. `custom_entity_id` blockiert **nicht** (§3.1/§3.3) |
 | R-4 | Mehrere Entries laufen gleichzeitig durch die Migration | falsche Präfixe/Kollisionen | Plan wird pro Entry aus dessen eigenen Entities gebildet; Kollisionsprüfung global über Registry+States; Multi-Entry-Test §6.3 |
 | R-5 | Custom-Marker-Key-Drift (Fremd-Client ohne `key`, Löschen eines Duplikats, Katalog-Wachstum) | `unique_id`-Wechsel → neue Entity, alte verwaist | A-2 (Key-Erhalt per Namens-Match); Katalog-Wachstum bleibt Restrisiko (R-6) |
 | R-6 | Künftiger Katalog-Marker kollidiert mit bestehendem Custom-Key | `normalize` suffixiert den Custom-Key → `unique_id` ändert sich (Alt-Entity verwaist) | vorbestehendes Verhalten, nicht durch diese Migration verursacht; im Plan als bekannte Grenze dokumentieren (kein Fix in diesem Scope) |
 | R-7 | Recorder schreibt `states_meta`/`statistics_meta` nicht wie erwartet um | Statistik/Verlauf unter alter ID nicht mehr auffindbar | Live-Verifikation §6.3 (Statistik unter neuer `statistic_id`); HA-Core behandelt `entity_registry_updated`; falls nicht, Folge-Issue + manuelle Statistik-Migration |
-| R-8 | Nutzer hat Entity manuell umbenannt | Migration überschreibt den Wunschnamen | bewusste Uniformitätsentscheidung; im Release-Hinweis genannt |
+| R-8 | Nutzer hat eine Entity manuell umbenannt | **Kandidat:** bleibt unverändert (`custom_entity_id`, Warnung, kein Fehlschlag); **Anker:** wird toleriert, solange mindestens zwei Anker den Präfix stützen | Nutzerentscheidung gewinnt; kein Breaking-Risiko. Release-Hinweis: hand-vergebene IDs bleiben, die Migration erzwingt keine Uniformität |
 | R-9 | HA < 2026.9 | Override-Fallback, andere ID-Generierung | Migration ist versionsunabhängig; `hacs.json` verlangt `2026.8.0`; Unit-Tests decken fehlenden Hint/Anker ab |
 | R-10 | Pre-Pinning-Installationen mit lokalisierten **Katalog**-IDs (falls vorhanden) | bleiben lokalisiert, weil nicht `unique_id`-ableitbar | bewusst außerhalb des Scopes (§1.4); offener Punkt O-2 |
-| R-11 | `device_slug` nicht eindeutig (umbenannter Device-Name, Area-Segment in `entity_id_parts`, manuell umbenannte Anker) oder **kein Hint + geteilte englische Ankersegmente** (Lab-only: `lab_crp`/`lab_creatinine`, Suffix-Token `lab` divergiert nicht) | Migration blockiert (fail-closed, `MIGRATION_ERROR`) | `device_slug_ambiguous`/`_unresolved` mit Paarliste; Lab-only-mit-Hint wird akzeptiert, Lab-only-ohne-Hint bewusst nicht geraten; Unit-Gegenbeispiel (Nutzerlabels) + Lab-only-/Area-Tests (§6.1); A-4; Nutzer kann Gerätenamen/Area bereinigen und neu starten |
+| R-11 | `device_slug` nicht eindeutig (umbenannter Device-Name, Area-Segment in `entity_id_parts`, zwei gleichwertige Anker-Cluster) oder **kein Hint + geteilte englische Ankersegmente** (Lab-only: `lab_crp`/`lab_creatinine`, Suffix-Token `lab` divergiert nicht) | Migration blockiert (fail-closed, `MIGRATION_ERROR`) | `device_slug_ambiguous`/`_unresolved` mit Paarliste; ein einzelner hand-renamed Anker wird toleriert (Mehrfach-Stützung), hand-renamed Kandidaten sind `custom_entity_id` und blockieren nie; Lab-only-mit-Hint wird akzeptiert, Lab-only-ohne-Hint bewusst nicht geraten; Unit-Gegenbeispiel (Nutzerlabels) + Lab-only-/Area-/Regressionstests (§6.1/§6.2); A-4; Nutzer kann Gerätenamen/Area bereinigen und neu starten |
 | R-12 | `async_migrate_entries` nicht awaited (Coroutine) oder Race-`ValueError` | Renames laufen nie / `MIGRATION_ERROR` | B-1 `await` + expliziter Await-Test mit `AsyncMock` (§6.2); `ValueError` wird geloggt und fail-closed behandelt |
 
 ---
@@ -1113,7 +1209,9 @@ Diagnostics, `unique_id`s.
 > Custom-Marker `{device_slug}_lab_<key>`. Der Bestand wird über einen
 > `async_migrate_entry`-Pass (`VERSION 2 → 3`) migriert; `unique_id`, `original_name`,
 > `device_id`, Store und Verlauf bleiben unverändert. Kollisionen führen zu einem
-> sichtbaren, wiederholbaren Fehlschlag (Version bleibt, Warnung mit Paarliste).
+> sichtbaren, wiederholbaren Fehlschlag (Version bleibt, Warnung mit Paarliste);
+> hand-renamed Kandidaten (`custom_entity_id`) bleiben unverändert — Warnung, **kein**
+> Fehlschlag.
 > Zusätzlich: Kategorie-Validierung (A-1), Key-Erhalt (A-2), Drift-Test
 > `WELLBEING_STATES` (A-3), E2E-Regression für englische IDs (A-4).
 >
@@ -1125,7 +1223,9 @@ Diagnostics, `unique_id`s.
 >    unverändert.
 > 4. Zweiter Start ändert nichts (Idempotenz); Kollision oder nicht eindeutiger
 >    `device_slug` → Version bleibt, Warnung mit Paarliste, Retry beim nächsten Start,
->    Entry wird nicht halb migriert geladen.
+>    Entry wird nicht halb migriert geladen. Ein hand-renamed Kandidat
+>    (`custom_entity_id`) sowie ein einzelner hand-renamed Anker blockieren die
+>    Migration nicht.
 > 5. `LAB_CATEGORIES`-Fremdwerte fallen auf `other`; keylose Marker erben bei
 >    Namensgleichheit den bestehenden `key`.
 > 6. `pytest -q`, `ruff`, `pytest tests_e2e/` grün; Live-Migration auf `ha-test`
