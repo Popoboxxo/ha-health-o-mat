@@ -5,6 +5,30 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.17.1] — 2026-11-02
+
+### Fixed
+
+- **Quick-drink migration no longer fails on hand-renamed entities:** a single
+  manually renamed entity (for example `sensor.caro_gewicht`) no longer collapses the
+  shared device-anchor prefix. The prefix is now derived from tokens supported by at
+  least two anchors and trimmed over the majority of the candidates, so a person whose
+  entry stayed on `config entry v2` after `device_slug_ambiguous` migrates on the next
+  start. All quick-drink buttons are migrated again instead of being skipped.
+- **`custom_entity_id` is a warning, not a failure:** an entity whose id was renamed by
+  hand keeps its id on purpose. It is reported in the migration summary as a warning and
+  no longer blocks the pass (`recoverable` stays `True`, no `MIGRATION_ERROR`).
+- **Diagnostics report orphaned lab entities:** the diagnostics download now compares the
+  expected lab-marker `unique_id`s against the entity registry and lists entities that are
+  no longer created (`lab_entity_orphans`, count plus items). The report is masked — the
+  person and custom marker keys are redacted, values are never included.
+- **Long-term statistics are cleared when a person is removed:** `async_remove_entry`
+  removes the entry's entities' long-term statistics through the recorder API, so
+  statistics of a deleted person no longer linger. When the recorder is not available the
+  cleanup is skipped silently.
+
+[0.17.1]: https://github.com/Popoboxxo/ha-health-o-mat/compare/v0.17.0...v0.17.1
+
 ## [0.17.0] — 2026-11-02
 
 ### 💥 Breaking changes — entity ids of quick-drink buttons and custom lab markers
