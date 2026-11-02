@@ -420,6 +420,9 @@
     "text": {
       "freetext": {
         "name": "Getränk buchen (Freitext)"
+      },
+      "measurement_note": {
+        "name": "Mess-Notiz"
       }
     },
     "number": {

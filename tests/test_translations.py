@@ -614,3 +614,13 @@ def test_req_hom_130_wellbeing_report_buttons_cover_every_state() -> None:
         )
         for key in sorted(expected):
             assert button[key]["name"].strip(), f"{path}: {key}.name is empty"
+
+
+def test_req_hom_010_measurement_note_translation_present() -> None:
+    """[REQ-HOM-010] `entity.text.measurement_note.name` in Master + de/en."""
+    names = {"master": _load(_MASTER)["entity"]["text"]["measurement_note"]["name"]}
+    for lang, path in _TRANSLATIONS.items():
+        names[lang] = _load(path)["entity"]["text"]["measurement_note"]["name"]
+
+    assert all(value.strip() for value in names.values()), names
+    assert names["de"] != names["master"], "deutscher Anzeigename muss abweichen"

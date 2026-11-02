@@ -201,6 +201,7 @@ viele Sprachen (u. a. Deutsch) Entity-IDs in der Systemsprache erzeugt
 | button | `report_very_bad` … `report_excellent` | Melden: … / Report: … | Wohlbefinden (zehn Stufen) |
 | select | `wellbeing` | Wohlbefinden / Wellbeing | Optionen werden ebenfalls übersetzt |
 | text | `log_drink_free_text` | Getränk buchen (Freitext) | „Kaffee 300ml" → Enter = buchen |
+| text | `measurement_note` | Mess-Notiz / Measurement note | Notiz zur **nächsten** Blutdruckmessung (`unique_id` `text_measurement_note`) — wird beim Speichern übernommen und danach geleert |
 | number | `daily_goal`, `custom_drink_amount`, `systolic/diastolic_warning_threshold`, `new_reading_*`, `wellbeing_input` | Tagesziel (mL), Eigenmenge (mL), Warnschwellen, BP-Eingabe, Wohlbefinden-Zahl | Runtime-Einstellungen und Scores |
 
 Beispiel-Entity-IDs: `sensor.health_o_mat_caro_creatinine`,
@@ -341,8 +342,9 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   für Blutdruck und Wohlbefinden stehen Undo/Verlauf im Panel bzw. in der Karte
   bereit.
 - `button.…_save_measurement` — übernimmt die drei Number-Eingaben
-  (`new_reading_systolic/diastolic/pulse`) als neue Blutdruckmessung und leert
-  die Eingabefelder.
+  (`new_reading_systolic/diastolic/pulse`) als neue Blutdruckmessung, hängt die
+  Mess-Notiz (`text.…_measurement_note`) an die Messung und leert die
+  Eingabefelder.
 - `button.…_report_very_bad` … `report_excellent` — Wohlbefinden-Meldung: setzt
   den Select auf den Status und den Zeitstempel-Sensor (zehn Stufen).
 
@@ -374,6 +376,20 @@ das Emoji. Ungültige Pfade/Endungen werden serverseitig verworfen.
   `amount_ml`) und wird beim nächsten Setzen überschrieben. Nicht erkennbare
   Eingaben erzeugen einen Entity-Fehler mit Lösungsbeispielen, statt
   stillschweigend etwas zu buchen.
+
+**Text: Mess-Notiz**
+
+- `text.…_measurement_note` — Notiz zur **nächsten** Blutdruckmessung
+  (max. 255 Zeichen). Der Wert liegt im bereits persistierten Eingabe-Dict der
+  Person und überlebt damit einen Neustart. Beim Speichern gilt die Rangfolge
+  **explizit übergebene Notiz > angefangene Notiz dieser Entity**: Service
+  `add_blood_pressure` und WS-Kommando `health_o_mat/save_measurement` lösen
+  das identisch auf (`resolve_reading_note`), der `save_measurement`-Button
+  übergibt die angefangene Notiz explizit. Die Notiz wird an die Messung
+  gehängt, das Feld danach geleert.
+  Die Notiz erscheint in `sensor.…_blood_pressure_history` (`history_json`) und
+  in der Blutdruck-CSV in der Spalte `notiz`. Die Entity existiert nur bei
+  aktivem Bereich **Blutdruck**; Wohlbefinden hat bewusst keinen Notiz-Parameter.
 
 **Numbers (Laufzeit-Einstellungen)**
 

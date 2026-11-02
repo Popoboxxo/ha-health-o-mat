@@ -7,7 +7,9 @@ import importlib.util
 import os
 import sys
 import types
-from unittest.mock import MagicMock
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -31,6 +33,9 @@ def _load(name: str):
 
 
 button_module = _load("button")
+store_module = _load("store")
+sensor_module = _load("sensor")
+exporter_module = _load("exporter")
 
 _ENTRY_ID = "test-entry-1"
 _DRINK_BUTTON_KEYS = {
@@ -129,3 +134,76 @@ def test_req_hom_130_quick_drink_suggested_object_id_is_one_based():
     assert button.suggested_object_id == "quick_drink_3"
     # The display name stays the user label — no literal name in the id.
     assert button.name == "Tasse Kaffee"
+
+
+# --- REQ-HOM-010: Button übergibt die angefangene Mess-Notiz ---
+
+
+def _run(coro):
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def _call(data: dict | None = None) -> MagicMock:
+    call = MagicMock()
+    call.data = data or {}
+    return call
+
+
+def _real_store():
+    """Echte `HealthOMatStore`-Instanz mit gemocktem HA-Store-Backend."""
+    store = store_module.HealthOMatStore(MagicMock())
+    store._store = MagicMock()
+    store._store.async_load = AsyncMock(return_value=None)
+    store._store.async_save = AsyncMock(return_value=None)
+    _run(store.async_load())
+    return store
+
+
+def _press_save_reading(store, entry=None):
+    entry = entry or _make_entry()
+    button = button_module.SaveReadingButton(MagicMock(), entry, store)
+    button.hass = MagicMock()
+    _run(button.async_press())
+    return entry
+
+
+def _prime_bp_inputs(store) -> None:
+    _run(store.set_inputs(_ENTRY_ID, "sys", 120))
+    _run(store.set_inputs(_ENTRY_ID, "dia", 80))
+    _run(store.set_pending_note(_ENTRY_ID, "morgens"))
+
+
+def test_save_reading_consumes_pending_note_and_clears_it():
+    """[REQ-HOM-010] Button schreibt die Notiz in die Messung und leert das Feld."""
+    store = _real_store()
+    _prime_bp_inputs(store)
+
+    _press_save_reading(store)
+
+    reading = store.entry(_ENTRY_ID)["readings"][0]
+    assert reading["note"] == "morgens"
+    assert store.pending_note(_ENTRY_ID) == ""
+
+
+def test_save_reading_note_visible_in_history_json_and_csv(tmp_path, monkeypatch):
+    """[REQ-HOM-010] Die Notiz steht in `history_json` und im BP-CSV."""
+    store = _real_store()
+    _prime_bp_inputs(store)
+    entry = _press_save_reading(store)
+
+    history = sensor_module.BloodPressureHistorySensor(MagicMock(), entry, store)
+    assert "morgens" in history.extra_state_attributes["history_json"]
+
+    monkeypatch.setattr(
+        exporter_module, "dt_util", SimpleNamespace(now=lambda: datetime(2026, 11, 2, 12, 0))
+    )
+    hass = MagicMock()
+    hass.config.path = MagicMock(return_value=str(tmp_path))
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    hass.services.async_call = AsyncMock()
+    _run(exporter_module.async_export_csv(hass, store, _call({"dataset": "blood_pressure"})))
+
+    csv_text = next(tmp_path.glob("health_o_mat_bloodpressure_*.csv")).read_text(
+        encoding="utf-8-sig"
+    )
+    assert "morgens" in csv_text

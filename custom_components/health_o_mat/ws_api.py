@@ -55,7 +55,7 @@ from .entity import effective_person, signal_refresh
 from .frontend import shared_data
 from .importer import list_import_files as _list_import_files
 from .panel import OPTION_ENABLE_SIDEBAR_PANEL
-from .store import lab_reading_chrono_key
+from .store import HealthOMatStore, lab_reading_chrono_key
 from .ui_store import HealthOMatUiStore
 
 try:  # HA-Kernkomponente; Import bleibt tolerant, damit das Paket auch ohne
@@ -1503,6 +1503,20 @@ async def websocket_restore_entry(
     await _set_entry_voided(hass, connection, msg, restore=True)
 
 
+def resolve_reading_note(store: HealthOMatStore, entry_id: str, note: str | None) -> str:
+    """Notiz einer zu speichernden Messung auflösen (REQ-HOM-010).
+
+    Eine explizit übergebene Notiz gewinnt immer; fehlt sie (``None``/leer),
+    wird die angefangene Notiz der Person aus der Text-Entity
+    ``measurement_note`` übernommen. Gemeinsamer Helfer für den Service
+    ``add_blood_pressure`` und das WS-Kommando ``save_measurement``, damit
+    beide Pfade identisch reagieren. Er liegt hier, weil ``__init__`` dieses
+    Modul bereits importiert (kein Zyklus). Das Leeren der angefangenen Notiz
+    bleibt zentral in ``HealthOMatStore.add_reading``.
+    """
+    return note or store.pending_note(entry_id)
+
+
 async def websocket_save_measurement(
     hass: HomeAssistant, connection: Any, msg: dict[str, Any]
 ) -> None:
@@ -1536,7 +1550,7 @@ async def websocket_save_measurement(
         sys_value,
         dia_value,
         int(pulse) if pulse is not None else None,
-        msg.get("note") or "",
+        resolve_reading_note(store, entry_id, msg.get("note")),
         "panel",
         created_ts_iso=now.isoformat(),
         actor=user_id_of(connection),

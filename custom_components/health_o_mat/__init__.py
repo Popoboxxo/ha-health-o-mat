@@ -64,7 +64,7 @@ from .reminders import (
 )
 from .statistics import async_migrate_legacy_volume_statistics
 from .store import HealthOMatStore, async_load_archive_store
-from .ws_api import async_register_ws_api
+from .ws_api import async_register_ws_api, resolve_reading_note
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1213,7 +1213,7 @@ def _register_services(hass: HomeAssistant) -> None:
             int(call.data["systolic"]),
             int(call.data["diastolic"]),
             int(pulse) if pulse else None,
-            call.data.get("note") or "",
+            resolve_reading_note(store, entry_id, call.data.get("note")),
             "service",
             created_ts_iso=now.isoformat(),
             actor=_service_actor(call),

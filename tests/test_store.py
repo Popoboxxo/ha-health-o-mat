@@ -2650,3 +2650,78 @@ def test_req_hom_123_add_lab_readings_bulk_rolls_back_all_groups_on_save_error(
 
     assert store.entry("e1")["lab_readings"] == [existing]
     assert [event["id"] for event in store.entry("e1")["audit_log"]] == ["audit-1"]
+
+
+# ============================================================================
+# REQ-HOM-010: angefangene Mess-Notiz (persistiert in inputs["note"])
+# ============================================================================
+
+
+def test_pending_note_roundtrip(mock_store_fixture):
+    """[REQ-HOM-010] Leer → ""; gesetzter Wert wird getrimmt zurückgelesen."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    assert store.pending_note("e1") == ""
+
+    _async_test(store.set_pending_note("e1", "  morgens  "))
+
+    assert store.pending_note("e1") == "morgens"
+    assert store.inputs("e1")["note"] == "morgens"
+
+
+def test_set_pending_note_empty_removes_key(mock_store_fixture):
+    """[REQ-HOM-010] None/Whitespace entfernt den Schlüssel statt "" zu speichern."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+
+    _async_test(store.set_pending_note("e1", "morgens"))
+    _async_test(store.set_pending_note("e1", None))
+    assert "note" not in store.inputs("e1")
+
+    _async_test(store.set_pending_note("e1", "morgens"))
+    _async_test(store.set_pending_note("e1", "   "))
+    assert "note" not in store.inputs("e1")
+
+
+def test_add_reading_clears_pending_note(mock_store_fixture):
+    """[REQ-HOM-010] Jede gespeicherte Messung konsumiert die angefangene Notiz."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_pending_note("e1", "morgens"))
+
+    _async_test(store.add_reading("e1", "2026-11-02T08:00:00", 120, 80, 70, "morgens"))
+
+    assert store.entry("e1")["readings"][0]["note"] == "morgens"
+    assert store.pending_note("e1") == ""
+    assert "note" not in store.inputs("e1")
+
+
+def test_add_reading_consume_pending_false_keeps_draft(mock_store_fixture):
+    """[REQ-HOM-010] consume_pending=False lässt den Notiz-Entwurf unangetastet."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_pending_note("e1", "angefangen"))
+
+    _async_test(
+        store.add_reading(
+            "e1", "2026-11-02T08:00:00", 120, 80, 70, "csv-notiz", consume_pending=False
+        )
+    )
+
+    assert store.entry("e1")["readings"][0]["note"] == "csv-notiz"
+    assert store.pending_note("e1") == "angefangen"
+    assert store.inputs("e1")["note"] == "angefangen"
+
+
+def test_add_reading_preserves_other_inputs(mock_store_fixture):
+    """[REQ-HOM-010] Das Leeren trifft nur die Notiz, nicht sys/dia."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_inputs("e1", "sys", 120))
+    _async_test(store.set_inputs("e1", "dia", 80))
+    _async_test(store.set_pending_note("e1", "morgens"))
+
+    _async_test(store.add_reading("e1", "2026-11-02T08:00:00", 120, 80, 70, "morgens"))
+
+    assert store.inputs("e1") == {"sys": 120, "dia": 80}
