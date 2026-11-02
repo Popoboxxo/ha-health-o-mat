@@ -611,6 +611,14 @@ if not _USING_REAL_HA:
             Entity=Entity,
             UNDEFINED=_UNDEFINED,
         ),
+        "homeassistant.helpers.issue_registry": _module(
+            "homeassistant.helpers.issue_registry",
+            async_create_issue=MagicMock(),
+            async_delete_issue=MagicMock(),
+            IssueSeverity=types.SimpleNamespace(
+                WARNING="warning", ERROR="error", CRITICAL="critical"
+            ),
+        ),
         "homeassistant.helpers.storage": _module(
             "homeassistant.helpers.storage",
             Store=MagicMock(),

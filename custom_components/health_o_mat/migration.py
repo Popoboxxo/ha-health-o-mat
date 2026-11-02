@@ -34,6 +34,11 @@ SKIP_CUSTOM_ENTITY_ID = "custom_entity_id"
 # Reasons that must NOT block the pass: the entity keeps its id on purpose.
 NON_BLOCKING_SKIP_REASONS = frozenset({SKIP_CUSTOM_ENTITY_ID})
 
+# Not produced by planning: the caller adds it when the registry rename aborts
+# (race with a concurrent registry write). It only appears in the Repair issue
+# data, never in a plan — kept here so every reason lives in one module.
+MIGRATION_ABORTED_REASON = "aborted"
+
 # Confirmation mismatches: the sibling prefix (derived from the entities that are
 # about to be renamed) disagrees with the device name or the device link. They are
 # reported ONCE as a warning and never block the pass (0.17.1 production bug).

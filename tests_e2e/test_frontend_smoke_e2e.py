@@ -9,7 +9,8 @@ This module is the cheapest possible net for exactly that class of defect:
 
 * both components are loaded in a REAL browser against a REAL Home Assistant,
 * `pageerror` (uncaught exception) and `console.error` are collected from the
-  moment the component's page is opened,
+  moment the component's page is opened — minus HA's own CSS pseudo-class
+  deprecation notice, see `_HA_OWN_DEPRECATION_PREFIXES`,
 * one stable DOM anchor per component has to be visible.
 
 Deliberately NOT a screenshot/visual comparison: pixel diffs against HA's
@@ -55,17 +56,41 @@ OVERVIEW_TILE = ".tile[data-action='open']"
 # assertion on timing — just the observation window.
 SETTLE_MS = 500
 
+# Home Assistant's OWN frontend ships CSS with the deprecated custom state
+# pseudo-class syntax (`:--disabled`, `:--checked`, …) and the browser reports
+# each use as a `console.error`. That noise is emitted by HA's bundle, not by
+# ours — the contract verified here is "our components throw nothing", and a
+# deprecation inside HA's frontend is not a defect in our code.
+#
+# Deliberately narrow: only this one exact message family is dropped. Every
+# other `console.error` and EVERY `pageerror` (uncaught exception) still fails
+# the test, so a real regression cannot hide behind this.
+#
+# Revisit when HA raises the deprecation to a hard error: the message then
+# disappears (or turns into a genuine error), and a leftover allowlist entry
+# would silently mask the very message it was written for.
+_HA_OWN_DEPRECATION_PREFIXES = ("Custom state pseudo classes have been changed",)
+
+
+def _is_known_ha_own_deprecation(text: str) -> bool:
+    """True for HA's own CSS pseudo-class deprecation notice (see constant above)."""
+    return text.startswith(_HA_OWN_DEPRECATION_PREFIXES)
+
 
 def _collect_js_errors(page) -> list[str]:
     """Record uncaught exceptions and `console.error` messages of `page`."""
     errors: list[str] = []
 
     def _on_pageerror(exception) -> None:
+        # Never filtered: an uncaught exception is always a defect.
         errors.append(f"pageerror: {exception}")
 
     def _on_console(message) -> None:
-        if message.type == "error":
-            errors.append(f"console.error: {message.text}")
+        if message.type != "error":
+            return
+        if _is_known_ha_own_deprecation(message.text):
+            return
+        errors.append(f"console.error: {message.text}")
 
     page.on("pageerror", _on_pageerror)
     page.on("console", _on_console)

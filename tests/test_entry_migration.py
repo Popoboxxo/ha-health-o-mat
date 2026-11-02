@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import homeassistant.helpers.device_registry as dr
 import homeassistant.helpers.entity_registry as er
+import homeassistant.helpers.issue_registry as ir
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -109,6 +110,7 @@ def _make_hass(*, states: list | None = None) -> MagicMock:
     hass = MagicMock()
     hass.states.async_all = MagicMock(return_value=list(states or []))
     hass.config_entries.async_update_entry = MagicMock()
+    hass.services.async_call = AsyncMock()
     return hass
 
 
@@ -150,6 +152,15 @@ def _install(monkeypatch, registry: _FakeRegistry, device: _FakeDevice | None):
     monkeypatch.setattr(er, "async_get", lambda hass: registry)
     monkeypatch.setattr(dr, "async_get", lambda hass: _FakeDeviceRegistry(device))
     return migrate
+
+
+def _install_issues(monkeypatch):
+    """Wire the fake repair registry; return (create, delete) mocks."""
+    create = MagicMock()
+    delete = MagicMock()
+    monkeypatch.setattr(ir, "async_create_issue", create)
+    monkeypatch.setattr(ir, "async_delete_issue", delete)
+    return create, delete
 
 
 def _standard_entries() -> list[_RegEntry]:
@@ -646,3 +657,127 @@ def test_req_hom_130_foreign_device_id_only_warns(monkeypatch, caplog):
     assert registry.async_get(f"button.{CARO_SLUG}_quick_drink_1") is not None
     assert caplog.text.count("device_id_mismatch") == 1
     assert "fehlgeschlagen" not in caplog.text
+
+
+# --- Spec §9 O-1: Repair issue and success notification ----------------------
+
+
+def test_req_hom_130_blocked_pass_creates_one_repair_issue(monkeypatch):
+    """A blocked pass surfaces one Repair issue, a retry reuses its id."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    create, delete = _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass(states=[MagicMock(entity_id=f"button.{SLUG}_quick_drink_1")])
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is False
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is False
+
+    # Same issue id on every retry: HA replaces, it never doubles.
+    assert create.call_count == 2
+    assert {call.args[2] for call in create.call_args_list} == {f"migration_blocked_{ENTRY_ID}"}
+    args, kwargs = create.call_args
+    assert args[0] is hass
+    assert args[1] == "health_o_mat"
+    assert kwargs["is_fixable"] is False
+    assert kwargs["severity"] is ir.IssueSeverity.WARNING
+    assert kwargs["translation_key"] == "migration_blocked"
+    assert kwargs["translation_placeholders"] == {
+        "entry_title": "Health-O-Mat · Max",
+        "blocked_count": "1",
+    }
+    assert kwargs["data"] == {
+        "entry_id": ENTRY_ID,
+        "blocked_count": 1,
+        "drift_count": 0,
+        "blocked_1": (
+            f"button.{SLUG}_glas_wasser -> button.{SLUG}_quick_drink_1 "
+            f"[{ENTRY_ID}_button_quick_0] (target_occupied)"
+        ),
+    }
+    delete.assert_not_called()
+
+
+def test_req_hom_130_clean_pass_creates_no_issue_and_deletes_it(monkeypatch):
+    """A clean pass creates no issue and clears a leftover one (idempotent)."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    create, delete = _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    create.assert_not_called()
+    delete.assert_called_once_with(hass, "health_o_mat", f"migration_blocked_{ENTRY_ID}")
+
+
+def test_req_hom_130_success_notifies_once_in_german(monkeypatch):
+    """A successful rename notifies exactly once with a stable id."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.services.async_call.assert_awaited_once()
+    args, kwargs = hass.services.async_call.call_args
+    assert args[0] == "persistent_notification"
+    assert args[1] == "create"
+    payload = args[2]
+    assert payload["notification_id"] == f"entity_id_migration_{ENTRY_ID}"
+    assert "3 Entity-IDs geändert" in payload["message"]
+    assert "Automationen, Dashboards und Skripte" in payload["message"]
+    assert kwargs["blocking"] is False
+
+
+def test_req_hom_130_value_error_issue_reports_aborted_reason(monkeypatch):
+    """An aborted rename still yields a Repair issue, reason `aborted`."""
+    registry = _FakeRegistry(_standard_entries())
+    migrate = _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    migrate.side_effect = ValueError("Entity id already exists")
+    create, delete = _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is False
+
+    assert init.MIGRATION_ABORTED_REASON == "aborted"
+    data = create.call_args.kwargs["data"]
+    assert data["blocked_count"] == 3
+    assert data["drift_count"] == 0
+    assert all(f"({init.MIGRATION_ABORTED_REASON})" in data[f"blocked_{i}"] for i in (1, 2, 3))
+    delete.assert_not_called()
+
+
+def test_req_hom_130_notification_failure_keeps_success(monkeypatch, caplog):
+    """A failing notification service must not turn success into a setup error."""
+    registry = _FakeRegistry(_standard_entries())
+    _install(monkeypatch, registry, _FakeDevice("Health-O-Mat Max"))
+    _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass()
+    hass.services.async_call = AsyncMock(side_effect=RuntimeError("service registry down"))
+
+    with caplog.at_level("WARNING"):
+        ok = asyncio.run(init.async_migrate_entry(hass, _make_entry()))
+
+    assert ok is True
+    hass.config_entries.async_update_entry.assert_called_once()
+    assert "Erfolgs-Notification fehlgeschlagen" in caplog.text
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_req_hom_130_no_notification_without_renames(monkeypatch):
+    """Nothing renamed -> no success notification (no noise on a no-op pass)."""
+    _install(monkeypatch, _FakeRegistry([]), _FakeDevice("Health-O-Mat Max"))
+    _install_issues(monkeypatch)
+    init = _load_init()
+    hass = _make_hass()
+
+    assert asyncio.run(init.async_migrate_entry(hass, _make_entry())) is True
+
+    hass.config_entries.async_update_entry.assert_called_once()
+    hass.services.async_call.assert_not_awaited()

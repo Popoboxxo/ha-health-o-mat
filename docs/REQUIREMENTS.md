@@ -1640,10 +1640,12 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s
 - **Priorität:** P1 · **Aufwand:** L
-- **Status: Umgesetzt** (Branch `feat/entity-id-migration`, 2026-11-02) —
-  Migration und Pinning sind implementiert und belegt; die Härtungen A-1…A-4
-  stehen in **REQ-HOM-131**. **Releases `0.17.0`, `0.17.1` und `0.17.2`
-  veröffentlicht** (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
+- **Status: Überwiegend umgesetzt (teilweise)** (Branch `feat/entity-id-migration`,
+  2026-11-02) — Migration, Pinning, Repair-Issue und Erfolgs-Notification sind
+  implementiert und belegt; offen ist allein der echte HACS-Install-/Update-Pfad
+  (der Update-Pfad 0.16.2 → 0.19.0 ist **simuliert** belegt, siehe unten). Die
+  Härtungen A-1…A-4 stehen in **REQ-HOM-131**. **Releases `0.17.0`, `0.17.1`
+  und `0.17.2` veröffentlicht** (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
   danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`).
 - **Spec:** `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   (§1 Ziel/Nicht-Ziele, §2 Ziel-Schemata, §3 Migration `VERSION 2 → 3`,
@@ -1764,13 +1766,43 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`,
     `CHANGELOG.md` §[0.18.0]/§[0.19.0]); Release-Commit `19c61f0`
     (`chore(release): 0.17.0`) gemergt.
-  - [ ] **HACS-Update-Test** (v0.16.2 → v0.17.0 auf der Dev-Instanz) — HACS
-    liefert nur freigegebene Releases aus, der Test läuft daher erst **nach**
-    dem Release-Dreiklang (Workflow-Schritt 7).
-  - [ ] **Folge-REQ aus Spec §9 O-1:** Repair-Issue
-    (`ir.async_create_issue`) für den Kollisions-/`device_slug_ambiguous`-Fall
-    und `persistent_notification` nach erfolgreicher Migration — in 0.17.0
-    bewusst log-only.
+  - [ ] **HACS-Update-Test** — **teilweise**: Der **Update-Pfad 0.16.2 →
+    0.19.0** ist auf dem **Compose-Stack (Port 8124)** **simuliert** belegt:
+    Entry-Version **2 → 3**, **4 Quick-Drink-Renames**, **82 alte
+    `unique_id`s erhalten** (95 Entities danach, +13 gegenüber 0.19.0),
+    Getränke **750 ml** / BD **124/82/64** / Wohlbefinden **7** / Labor-CRP
+    **3,2 mg/L** unverändert und lesbar, **eine** Erfolgs-Notification
+    (`entity_id_migration_<entry_id>`), **kein** Repair-Issue, **kein**
+    `Migration handler not found`, zweiter Neustart idempotent. **Die
+    HACS-Mechanik selbst ist damit nicht geprüft** — das gepinnte E2E-Image
+    enthält kein HACS, die Integration ist read-only bind-gemountet, und HACS
+    verlangt einen interaktiven GitHub-Device-Flow. Der echte
+    HACS-Install-/Update-Pfad bleibt offen.
+    *Beleg:* Welle-1-Lauf auf dem Compose-Stack (Port 8124); das Laufprotokoll
+    liegt nicht im Repo.
+  - [x] **Folge-REQ aus Spec §9 O-1 — umgesetzt:** Repair-Issue
+    (`ir.async_create_issue`, `translation_key="migration_blocked"`, stabile ID
+    `migration_blocked_<entry_id>`, skalares `data` mit `entry_id`,
+    `blocked_count`, `drift_count` und nummerierten Paar-Strings) für den
+    Kollisions-/`device_slug_ambiguous`-/`device_slug_unresolved`-/`aborted`-Fall;
+    `persistent_notification` genau einmal nach erfolgreicher Migration mit
+    stabiler `entity_id_migration_<entry_id>` (nur bei echten Renames, nie
+    setup-kritisch); `async_remove_entry` löscht ein zurückgebliebenes Issue.
+    *Beleg:* `custom_components/health_o_mat/__init__.py`
+    (`_migration_blocked_issue_id`, `_async_create_migration_blocked_issue`,
+    `_delete_migration_blocked_issue`, `_async_notify_entity_ids_changed`,
+    `async_remove_entry`), `custom_components/health_o_mat/migration.py`
+    (`SKIP_*`/`MIGRATION_ABORTED_REASON`, `MigrationSkip`),
+    `strings.json`/`translations/de.json`/`translations/en.json`
+    (`issues.migration_blocked`), `tests/test_entry_migration.py`
+    (`::test_req_hom_130_blocked_pass_creates_one_repair_issue`,
+    `::test_req_hom_130_clean_pass_creates_no_issue_and_deletes_it`,
+    `::test_req_hom_130_success_notifies_once_in_german`,
+    `::test_req_hom_130_notification_failure_keeps_success`,
+    `::test_req_hom_130_no_notification_without_renames`),
+    `tests/test_remove_entry.py`
+    (`::test_remove_entry_deletes_blocked_migration_issue`,
+    `::test_remove_entry_deletes_issue_even_with_entities`).
 - **Belege:** Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   (Ziel-Schemata, Migrationsverträge, Teststrategie §6.1–§6.4) und Audit
   `docs/reviews/entity-id-stability-audit.md` (F-1/F-2, §5 Variante B).
@@ -1792,10 +1824,10 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   blieb auf Version 2**; nach Kollisionsauflösung + Neustart **alle 4
   migriert, Version 3**; zweiter Neustart **idempotent** (Registry und
   Config-Entries byte-identisch); Custom-Marker `…_lab_vitamin_d` migriert;
-  Cleanup **bit-identisch** zum Snapshot. Offen bleiben nur der
-  HACS-Update-Test und das Folge-REQ aus Spec §9 O-1
-  (Repair-Issue + Erfolgs-Notification); die Releases `0.17.0`–`0.17.2` sind
-  veröffentlicht.
+  Cleanup **bit-identisch** zum Snapshot. Das Folge-REQ aus Spec §9 O-1
+  (Repair-Issue + Erfolgs-Notification) ist **umgesetzt**; offen bleibt allein
+  der **echte HACS-Install-/Update-Pfad** (der Update-Pfad ist simuliert
+  belegt); die Releases `0.17.0`–`0.17.2` sind veröffentlicht.
 
 #### REQ-HOM-131 — Härtungen zur Entity-ID-Migration (A-1…A-4)
 - **Priorität:** P1 · **Aufwand:** M
@@ -1974,6 +2006,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 | Datum | Änderung |
 |---|---|
+| 2026-11-02 | **Welle 1 — REQ-HOM-130-Restpunkte umgesetzt (Branch `feat/130-migration-repairs`, Commit `4d32166`, PR #75):** Repair-Issue im blockierten Migrationsfall (stabile ID `migration_blocked_<entry_id>`, `is_fixable=False`, skalares `data` mit Paarliste, `translation_key="migration_blocked"`, Löschung bei sauberem Pass und in `async_remove_entry`), genau eine Erfolgs-Notification nach echten Renames (`entity_id_migration_<entry_id>`, nie setup-kritisch), Übersetzungen in `strings.json`/`translations/de.json`/`translations/en.json`. **Update-Pfad 0.16.2 → 0.19.0** auf dem Compose-Stack (Port 8124) **simuliert** belegt: Entry v2→v3, 4 Quick-Drink-Renames, 82 alte `unique_id`s erhalten (95 Entities danach, +13 gegenüber 0.19.0), Getränke 750 ml / BD 124/82/64 / Wohlbefinden 7 / Labor-CRP 3,2 mg/L unverändert lesbar, eine Notification, kein Repair-Issue, kein `Migration handler not found`, zweiter Neustart idempotent. **Nicht belegt:** die HACS-Mechanik selbst (kein HACS im gepinnten E2E-Image, Integration read-only bind-gemountet, HACS braucht interaktiven GitHub-Device-Flow) — REQ-HOM-130 bleibt deshalb **teilweise**. **Belege:** `tests/test_entry_migration.py`, `tests/test_remove_entry.py`; `pytest -q` → **1719 passed**, `ruff check .` + `ruff format --check .` clean. Kein Release/Tag. |
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
 | 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore war seinerzeit offen** (inzwischen durch REQ-HOM-116 erledigt) |
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |

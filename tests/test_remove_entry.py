@@ -21,7 +21,7 @@ import os
 import sys
 import types
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -175,3 +175,31 @@ def test_remove_entry_is_noop_without_registry(monkeypatch):
     _run_remove()
 
     instance.async_clear_statistics.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec §9 O-1 — Repair-Issue einer blockierten Migration mit aufräumen
+# ---------------------------------------------------------------------------
+
+
+def test_remove_entry_deletes_blocked_migration_issue(monkeypatch):
+    """Ein gelöschter Entry hinterlässt kein Repair-Issue (sonst ewiger Hinweis)."""
+    _install_registry(monkeypatch, [])
+    delete = MagicMock(name="async_delete_issue")
+    monkeypatch.setattr(hom_init.ir, "async_delete_issue", delete)
+
+    _run_remove()
+
+    delete.assert_called_once_with(ANY, "health_o_mat", f"migration_blocked_{ENTRY_ID}")
+
+
+def test_remove_entry_deletes_issue_even_with_entities(monkeypatch):
+    """Die Issue-Löschung läuft unabhängig vom Statistik-Cleanup."""
+    _install_registry(monkeypatch, ["sensor.health_o_mat_max_drinks_today"])
+    _install_instance_recorder(monkeypatch)
+    delete = MagicMock(name="async_delete_issue")
+    monkeypatch.setattr(hom_init.ir, "async_delete_issue", delete)
+
+    _run_remove()
+
+    delete.assert_called_once()

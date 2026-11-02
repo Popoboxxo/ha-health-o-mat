@@ -6,6 +6,7 @@ import inspect
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, NamedTuple
 
@@ -17,6 +18,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
@@ -40,8 +42,10 @@ from .const import (
 from .entity import effective_person, signal_refresh
 from .frontend import async_setup_frontend, async_unregister_frontend
 from .migration import (
+    MIGRATION_ABORTED_REASON,
     NON_BLOCKING_SKIP_REASONS,
     MigrationPlan,
+    MigrationSkip,
     build_migration_plan,
     custom_lab_target,
     parse_custom_lab_key,
@@ -167,14 +171,113 @@ class HealthOMatData:
         self.lifetime_setting_seen: int | None = None
 
 
+@dataclass(frozen=True)
+class EntityIdMigrationResult:
+    """Outcome of one entity-ID migration pass (REQ-HOM-130, Spec §9 O-1).
+
+    ``plan`` is the executed plan when the pass fully succeeded, ``None`` when
+    it was blocked. ``blocked`` then carries the pairs that kept the entry on
+    its old version (``reason`` is a ``SKIP_*`` constant or
+    ``MIGRATION_ABORTED_REASON``), and ``drift`` the ``(actual, expected)``
+    pairs still sitting on the wrong id. Both feed the Repair issue so the
+    blocked entry is visible outside the log.
+    """
+
+    plan: MigrationPlan | None
+    blocked: tuple[MigrationSkip, ...] = ()
+    drift: tuple[tuple[str, str], ...] = ()
+
+
+def _migration_blocked_issue_id(entry: HealthOMatConfigEntry) -> str:
+    """Stable Repair-issue id per config entry (a retry reuses it, never doubles)."""
+    return f"migration_blocked_{entry.entry_id}"
+
+
+def _delete_migration_blocked_issue(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> None:
+    """Remove the blocked-migration Repair issue (idempotent: no error if absent)."""
+    ir.async_delete_issue(hass, DOMAIN, _migration_blocked_issue_id(entry))
+
+
+def _format_blocked_pair(skip: MigrationSkip) -> str:
+    """One blocked pair as a flat string (Repair ``data`` must stay scalar)."""
+    target = skip.target_entity_id or "-"
+    return f"{skip.source_entity_id} -> {target} [{skip.unique_id}] ({skip.reason})"
+
+
+def _async_create_migration_blocked_issue(
+    hass: HomeAssistant, entry: HealthOMatConfigEntry, result: EntityIdMigrationResult
+) -> None:
+    """Surface a blocked entity-ID migration as a HA Repair issue (Spec §9 O-1).
+
+    The issue is not fixable and only informative: the version stays on the old
+    value, so HA retries the migration on the next setup. ``data`` is scalar-only
+    by HA's contract (``dict[str, str | int | float | None]``), so the affected
+    pairs are flattened to numbered strings; the description carries only the
+    entry title and the number of affected entity ids — no health data.
+    """
+    data: dict[str, str | int] = {
+        "entry_id": entry.entry_id,
+        "blocked_count": len(result.blocked),
+        "drift_count": len(result.drift),
+    }
+    for index, skip in enumerate(result.blocked, start=1):
+        data[f"blocked_{index}"] = _format_blocked_pair(skip)
+    for index, (actual, expected) in enumerate(result.drift, start=1):
+        data[f"drift_{index}"] = f"{actual} -> {expected}"
+
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _migration_blocked_issue_id(entry),
+        is_fixable=False,
+        is_persistent=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="migration_blocked",
+        translation_placeholders={
+            "entry_title": entry.title,
+            "blocked_count": str(len(result.blocked) + len(result.drift)),
+        },
+        data=data,
+    )
+
+
+async def _async_notify_entity_ids_changed(
+    hass: HomeAssistant, entry: HealthOMatConfigEntry, plan: MigrationPlan
+) -> None:
+    """Tell the user once that entity ids changed (Spec §9 O-1).
+
+    Never setup-critical: a missing/failing ``persistent_notification`` must
+    not turn an already written migration into a setup error.
+    """
+    try:
+        await hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": "HA Health-O-Mat — Entity-IDs geändert",
+                "message": (
+                    f"Für {entry.title} wurden {len(plan.renames)} Entity-IDs geändert. "
+                    "Bitte Automationen, Dashboards und Skripte prüfen."
+                ),
+                # Stable per entry: a retried setup replaces instead of stacking.
+                "notification_id": f"entity_id_migration_{entry.entry_id}",
+            },
+            blocking=False,
+        )
+    except Exception:  # noqa: BLE001 - die Migration ist nie setup-kritisch
+        _LOGGER.warning("Entity-ID-Migration %s: Erfolgs-Notification fehlgeschlagen", entry.title)
+
+
 async def _async_migrate_entity_ids(
     hass: HomeAssistant, entry: HealthOMatConfigEntry
-) -> MigrationPlan | None:
+) -> EntityIdMigrationResult:
     """Rename F-1/F-2 entities to the language-independent scheme (REQ-HOM-130).
 
     Returns the executed plan when nothing was skipped and no schema drift
-    remains, ``None`` otherwise. Fail-closed: the caller keeps the entry version
-    untouched on ``None``, so HA retries the whole pass on the next start.
+    remains, otherwise a result whose ``plan`` is ``None`` and whose ``blocked``
+    / ``drift`` pairs explain the failure. Fail-closed: the caller keeps the
+    entry version untouched on a ``None`` plan, so HA retries the whole pass on
+    the next start.
 
     Diagnostics contract: each planned skip is reported exactly ONCE — blocking
     reasons inside the single failure summary below, ``custom_entity_id`` as its
@@ -239,6 +342,7 @@ async def _async_migrate_entity_ids(
             )
 
     mapping = {item.source_entity_id: item.target_entity_id for item in plan.renames}
+    blocking = [skip for skip in plan.skipped if skip.reason not in NON_BLOCKING_SKIP_REASONS]
     if mapping:
         try:
             # Coroutine since HA 2026.8 — must be awaited (B-1).
@@ -253,7 +357,16 @@ async def _async_migrate_entity_ids(
             # Race with a parallel registry write: HA would turn this into
             # MIGRATION_ERROR; we treat it as a failed pass with a clear cause.
             _LOGGER.error("Entity-ID-Migration %s abgebrochen: %s", entry.title, err)
-            return None
+            aborted = tuple(
+                MigrationSkip(
+                    rename.unique_id,
+                    rename.source_entity_id,
+                    rename.target_entity_id,
+                    MIGRATION_ABORTED_REASON,
+                )
+                for rename in plan.renames
+            )
+            return EntityIdMigrationResult(None, tuple(blocking) + aborted)
 
     # Drift diagnosis: every F-1/F-2 entity must now sit on its expected id.
     # Planned skips are excluded: a skipped entity stays on its old id by
@@ -287,7 +400,6 @@ async def _async_migrate_entity_ids(
                 skip.reason,
             )
 
-    blocking = [skip for skip in plan.skipped if skip.reason not in NON_BLOCKING_SKIP_REASONS]
     if blocking or drift:
         # The ONE summary of the failure path (F-2): counts plus the pair list
         # (source, unique_id, target, reason) — without it the user only sees
@@ -305,7 +417,7 @@ async def _async_migrate_entity_ids(
             ],
             drift,
         )
-        return None
+        return EntityIdMigrationResult(None, tuple(blocking), tuple(drift))
 
     if plan.warnings:
         # The prefix was derived from the entities that are being renamed, so a
@@ -318,7 +430,7 @@ async def _async_migrate_entity_ids(
             plan.device_slug,
             ", ".join(plan.warnings),
         )
-    return plan
+    return EntityIdMigrationResult(plan, tuple(blocking), tuple(drift))
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) -> bool:
@@ -357,15 +469,20 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
         data = {k: v for k, v in data.items() if k != "quick_drinks"}
 
     if entry.version < ENTITY_ID_MIGRATION_VERSION:
-        plan = await _async_migrate_entity_ids(hass, entry)
-        if plan is None:
+        result = await _async_migrate_entity_ids(hass, entry)
+        if result.plan is None:
             # No async_update_entry: the version stays, HA retries on the next
-            # setup and the v1 data step is not half-written either.
+            # setup and the v1 data step is not half-written either. The Repair
+            # issue makes the blocked entry visible outside the log (O-1).
+            _async_create_migration_blocked_issue(hass, entry, result)
             return False
 
+        plan = result.plan
         hass.config_entries.async_update_entry(
             entry, data=data, options=options, version=ENTITY_ID_MIGRATION_VERSION
         )
+        # Idempotent: no error when a previous attempt never created the issue.
+        _delete_migration_blocked_issue(hass, entry)
         _LOGGER.info(
             "Config entry %s: auf Version %s migriert (renamed=%d skipped=%d)",
             entry.title,
@@ -373,6 +490,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry)
             len(plan.renames),
             len(plan.skipped),
         )
+        if plan.renames:
+            await _async_notify_entity_ids_changed(hass, entry, plan)
     return True
 
 
@@ -726,7 +845,12 @@ async def async_remove_entry(hass: HomeAssistant, entry: HealthOMatConfigEntry) 
     ohne Recorder (nicht eingerichtet/deaktiviert) oder ohne die API in der
     installierten HA-Version wird still übersprungen (debug-Log). Das Entfernen
     der Integration darf NIE an diesem Cleanup scheitern.
+
+    Ebenfalls hier: das Repair-Issue einer blockierten Entity-ID-Migration
+    entfernen — sonst zeigt die Repairs-UI dauerhaft einen Hinweis auf einen
+    Config-Entry, den es nicht mehr gibt.
     """
+    _delete_migration_blocked_issue(hass, entry)
     entity_ids = _entry_entity_ids(hass, entry)
     if not entity_ids:
         _LOGGER.debug(
