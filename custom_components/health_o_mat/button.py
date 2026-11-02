@@ -148,13 +148,14 @@ class SaveReadingButton(HealthOMatButton):
         pulse_v = inputs.get("pulse")
         if not sys_v or not dia_v:
             raise HomeAssistantError("Erst Systolisch und Diastolisch eintragen")
+        note = self._store.pending_note(self._entry.entry_id)
         await self._store.add_reading(
             self._entry.entry_id,
             dt_util.now().isoformat(),
             int(sys_v),
             int(dia_v),
             int(pulse_v) if pulse_v else None,
-            "",
+            note,
             "button",
             audit_limit=logic.audit_limit_from_options(self._entry.options),
         )

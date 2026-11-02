@@ -16,8 +16,14 @@ from .entity import HealthOMatEntity, signal_refresh
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     coord = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     store = hass.data[DOMAIN]["shared"]["store"]
-    if areas.active_areas(entry.options)[areas.AREA_DRINK]:
-        async_add_entities([FreeTextDrinkEntity(coord, entry, store)])
+    active = areas.active_areas(entry.options)
+
+    entities: list = []
+    if active[areas.AREA_DRINK]:
+        entities.append(FreeTextDrinkEntity(coord, entry, store))
+    if active[areas.AREA_BP]:
+        entities.append(MeasurementNoteEntity(coord, entry, store))
+    async_add_entities(entities)
 
 
 class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
@@ -74,3 +80,31 @@ class FreeTextDrinkEntity(HealthOMatEntity, TextEntity):
             "last_input": self._last_parsed.get("input"),
             "_json": json.dumps(self._last_parsed, ensure_ascii=False),
         }
+
+
+class MeasurementNoteEntity(HealthOMatEntity, TextEntity):
+    """Angefangene Notiz zur nächsten Blutdruck-Messung (REQ-HOM-010).
+
+    Der Wert liegt im bereits persistierten ``store.inputs``-Dict der Person
+    (Store-Schema v2) — dadurch überlebt eine angefangene Notiz einen Neustart.
+    Geleert wird zentral in ``HealthOMatStore.add_reading``.
+    """
+
+    _attr_translation_key = "measurement_note"
+    _attr_icon = "mdi:note-text-outline"
+    _attr_native_max = 255
+    _attr_mode = "text"
+
+    def __init__(self, coordinator, entry, store) -> None:
+        super().__init__(coordinator, entry, "text_measurement_note")
+        self._store = store
+
+    @property
+    def native_value(self) -> str:
+        return self._store.pending_note(self._entry.entry_id)
+
+    async def async_set_value(self, value: str) -> None:
+        await self._store.set_pending_note(self._entry.entry_id, value)
+        # Only this entity's own state changed (native_value reads the store);
+        # CoordinatorEntity.should_poll is False, so push it explicitly.
+        self.async_write_ha_state()

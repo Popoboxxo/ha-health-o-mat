@@ -1524,3 +1524,50 @@ def test_weekly_report_response_is_none_unless_requested(monkeypatch):
     assert result["delivered"] == 1
     assert result["failed"] == 0
     assert result["reports"][0]["person"] == "Max"
+
+
+def test_req_hom_010_add_blood_pressure_service_clears_pending_note(monkeypatch):
+    """[REQ-HOM-010] Service speichert die Notiz und leert das Eingabefeld."""
+    init, store, hass = _services_hass(monkeypatch)
+    _run(store.set_pending_note("e1", "morgens"))
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(func(_call({"systolic": 120, "diastolic": 80, "note": "morgens"})))
+
+    assert store.entry("e1")["readings"][0]["note"] == "morgens"
+    assert store.pending_note("e1") == ""
+
+
+def test_req_hom_010_add_blood_pressure_service_uses_pending_note(monkeypatch):
+    """[REQ-HOM-010] Ohne Service-Notiz fließt die angefangene Notiz mit."""
+    init, store, hass = _services_hass(monkeypatch)
+    _run(store.set_pending_note("e1", "morgens"))
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(func(_call({"systolic": 120, "diastolic": 80})))
+
+    assert store.entry("e1")["readings"][0]["note"] == "morgens"
+    assert store.pending_note("e1") == ""
+
+
+def test_req_hom_010_add_blood_pressure_service_explicit_note_wins(monkeypatch):
+    """[REQ-HOM-010] Explizite Service-Notiz schlägt die angefangene Notiz."""
+    init, store, hass = _services_hass(monkeypatch)
+    _run(store.set_pending_note("e1", "morgens"))
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(func(_call({"systolic": 120, "diastolic": 80, "note": "abends"})))
+
+    assert store.entry("e1")["readings"][0]["note"] == "abends"
+    assert store.pending_note("e1") == ""
+
+
+def test_req_hom_010_add_blood_pressure_service_without_any_note(monkeypatch):
+    """[REQ-HOM-010] Keine angefangene und keine explizite Notiz → leer."""
+    init, store, hass = _services_hass(monkeypatch)
+    _schema, func = hass.services.registered["add_blood_pressure"]
+
+    _run(func(_call({"systolic": 120, "diastolic": 80})))
+
+    assert store.entry("e1")["readings"][0]["note"] == ""
+    assert store.pending_note("e1") == ""

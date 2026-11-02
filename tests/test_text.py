@@ -98,13 +98,13 @@ def _text_setup(options: dict) -> set[str]:
 
 
 def test_text_setup_old_entry_without_options_has_drink_area():
-    """[REQ-HOM-009] Alt-Entry ohne areas-Option = Getränke-Bereich aktiv."""
-    assert _text_setup({}) == {_FREETEXT_ID}
+    """[REQ-HOM-009] Alt-Entry ohne areas-Option = Getränke + BP aktiv."""
+    assert _text_setup({}) == {_FREETEXT_ID, _NOTE_ID}
 
 
-def test_text_setup_drink_disabled_creates_no_entity():
-    """[REQ-HOM-009] drink AUS → kein Freitext-Entity."""
-    assert _text_setup({"areas": {"drink": False}}) == set()
+def test_text_setup_drink_disabled_creates_no_freetext_entity():
+    """[REQ-HOM-009] drink AUS → kein Freitext-Entity (BP bleibt aktiv)."""
+    assert _text_setup({"areas": {"drink": False}}) == {_NOTE_ID}
 
 
 def test_text_setup_only_drink_when_bp_and_wellbeing_disabled():
@@ -118,6 +118,98 @@ def test_text_unique_ids_stable_across_area_toggle():
     off_ids = _text_setup({"areas": {"drink": False}})
     on_again_ids = _text_setup({"areas": {"drink": True}})
 
-    assert on_ids == {_FREETEXT_ID}
-    assert off_ids == set()
+    assert on_ids == {_FREETEXT_ID, _NOTE_ID}
+    assert off_ids == {_NOTE_ID}
     assert on_again_ids == on_ids
+
+
+# --- REQ-HOM-010: Mess-Notiz-Entity (Blutdruck-Bereich) ---
+
+_NOTE_ID = "test-entry-1_text_measurement_note"
+
+
+def _note_entity(options: dict | None = None):
+    entry = MagicMock()
+    entry.entry_id = "e1"
+    entry.options = options or {}
+    store = MagicMock()
+    store.pending_note.return_value = ""
+    store.set_pending_note = AsyncMock()
+    entity = text_module.MeasurementNoteEntity(MagicMock(), entry, store)
+    entity.hass = MagicMock()
+    # Fake Entity has no async_write_ha_state; stub it so the entity can push
+    # its own state (should_poll is False) and tests can assert on the push.
+    entity.async_write_ha_state = MagicMock()
+    return entity, store
+
+
+def test_measurement_note_entity_created_when_bp_active():
+    """[REQ-HOM-010] BP aktiv → Freitext + Mess-Notiz."""
+    assert _text_setup({}) == {_FREETEXT_ID, _NOTE_ID}
+
+
+def test_measurement_note_entity_absent_when_bp_disabled():
+    """[REQ-HOM-010] bp AUS → nur Freitext-Entity."""
+    assert _text_setup({"areas": {"bp": False}}) == {_FREETEXT_ID}
+
+
+def test_measurement_note_unique_id_is_stable():
+    """[REQ-HOM-010] De-/Reaktivieren von bp erzeugt dieselbe unique_id."""
+    on_ids = _text_setup({})
+    off_ids = _text_setup({"areas": {"bp": False}})
+    on_again_ids = _text_setup({"areas": {"bp": True}})
+
+    assert _NOTE_ID in on_ids
+    assert _NOTE_ID not in off_ids
+    assert on_again_ids == on_ids
+
+
+def test_measurement_note_native_value_reads_store():
+    """[REQ-HOM-010] Der Wert kommt aus dem persistierten Eingabe-Dict."""
+    entity, store = _note_entity()
+    store.pending_note.return_value = "morgens"
+
+    assert entity.native_value == "morgens"
+    store.pending_note.assert_called_once_with("e1")
+
+
+def test_measurement_note_async_set_value_writes_store():
+    """[REQ-HOM-010] Setzen schreibt in den Store (persistiert, neustartfest)."""
+    entity, store = _note_entity()
+
+    _run(entity.async_set_value("abends"))
+
+    store.set_pending_note.assert_awaited_once_with("e1", "abends")
+
+
+def test_measurement_note_async_set_value_writes_state_immediately():
+    """[REQ-HOM-010] Setzen macht den neuen Wert sofort zum Entity-State.
+
+    Regression (E2E): der Store hielt die Notiz, die Entity blieb auf "" —
+    CoordinatorEntity.should_poll ist False, HA pusht den State also nicht
+    selbst; ohne async_write_ha_state() fehlt das unmittelbare Feedback.
+    """
+    entity, store = _note_entity()
+    pending = {"value": ""}
+    store.pending_note.side_effect = lambda _entry_id: pending["value"]
+
+    async def _set(_entry_id: str, value: str | None) -> None:
+        pending["value"] = value or ""
+
+    store.set_pending_note.side_effect = _set
+
+    _run(entity.async_set_value("abends"))
+
+    assert entity.native_value == "abends"
+    entity.async_write_ha_state.assert_called_once_with()
+
+
+def test_measurement_note_has_translation_key_and_no_name_literal():
+    """[REQ-HOM-010] Kein Namens-Literal; Anzeigename kommt aus translations."""
+    entity, _ = _note_entity()
+    cls = text_module.MeasurementNoteEntity
+
+    assert entity.translation_key == "measurement_note"
+    assert entity.has_entity_name is True
+    assert "_attr_name" not in cls.__dict__
+    assert "name" not in cls.__dict__

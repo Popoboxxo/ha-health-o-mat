@@ -420,6 +420,9 @@
     "text": {
       "freetext": {
         "name": "Log drink (free text)"
+      },
+      "measurement_note": {
+        "name": "Measurement note"
       }
     },
     "number": {

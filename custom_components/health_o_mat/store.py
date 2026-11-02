@@ -599,6 +599,10 @@ class HealthOMatStore:
             "void_reason": None,
         }
         self.entry(entry_id)["readings"].append(reading)
+        # Zentraler Choke-Point: jede gespeicherte Messung konsumiert die
+        # angefangene Notiz. Service, WS, Button und CSV-Import rufen alle
+        # hier auf — kein dupliziertes Leeren in den einzelnen Handlern.
+        self.inputs(entry_id).pop("note", None)
         self._append_audit(
             entry_id,
             "reading_added",
@@ -1121,6 +1125,28 @@ class HealthOMatStore:
     async def clear_inputs(self, entry_id: str) -> None:
         """Alle BP-Eingaben leeren (nach save_measurement)."""
         self.entry(entry_id)["inputs"] = {}
+        await self._async_save()
+
+    def pending_note(self, entry_id: str) -> str:
+        """Angefangene Mess-Notiz aus dem persistierten Eingabe-Dict.
+
+        Wiederverwendung von ``inputs`` (Store-Schema v2, REQ-HOM-104) statt
+        eines neuen Feldes — dadurch kein Schema-Bump und kein Migrator.
+        Fehlender/``None``-Wert liest sich als leerer String.
+        """
+        return self.inputs(entry_id).get("note") or ""
+
+    async def set_pending_note(self, entry_id: str, value: str | None) -> None:
+        """Angefangene Mess-Notiz setzen (leer/``None`` entfernt den Schlüssel).
+
+        Der Schlüssel wird bei leerem Wert entfernt, damit ``inputs`` nur
+        tatsächlich gesetzte Felder enthält (konsistent zu ``set_inputs``).
+        """
+        text = (value or "").strip()
+        if text:
+            self.inputs(entry_id)["note"] = text
+        else:
+            self.inputs(entry_id).pop("note", None)
         await self._async_save()
 
     # ------------------------------------------------------------------

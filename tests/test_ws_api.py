@@ -1441,6 +1441,98 @@ def test_save_measurement_pulse_optional(monkeypatch):
     assert store.add_reading.await_args.args[4] is None
 
 
+def test_req_hom_010_save_measurement_clears_pending_note(monkeypatch):
+    """[REQ-HOM-010] WS-Speichern übernimmt die explizite Notiz und leert das Feld."""
+    _now(monkeypatch)
+    store = _real_store()
+    asyncio.run(store.set_pending_note("e1", "morgens"))
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 3,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+                "note": "abends",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.entry("e1")["readings"][0]["note"] == "abends"
+    assert store.pending_note("e1") == ""
+
+
+def test_req_hom_010_save_measurement_uses_pending_note(monkeypatch):
+    """[REQ-HOM-010] Ohne WS-Notiz fließt die angefangene Notiz mit."""
+    _now(monkeypatch)
+    store = _real_store()
+    asyncio.run(store.set_pending_note("e1", "morgens"))
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 4,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.entry("e1")["readings"][0]["note"] == "morgens"
+    assert store.pending_note("e1") == ""
+
+
+def test_req_hom_010_save_measurement_without_any_note(monkeypatch):
+    """[REQ-HOM-010] Keine angefangene und keine WS-Notiz → `note` bleibt leer."""
+    _now(monkeypatch)
+    store = _real_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 5,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert store.entry("e1")["readings"][0]["note"] == ""
+    assert store.pending_note("e1") == ""
+
+
+def test_resolve_reading_note_prefers_explicit_note():
+    """[REQ-HOM-010] Gemeinsamer Helfer: explizit vor angefangen, sonst leer."""
+    store = _real_store()
+    asyncio.run(store.set_pending_note("e1", "morgens"))
+
+    assert ws_api.resolve_reading_note(store, "e1", "abends") == "abends"
+    assert ws_api.resolve_reading_note(store, "e1", None) == "morgens"
+    assert ws_api.resolve_reading_note(store, "e1", "") == "morgens"
+    assert ws_api.resolve_reading_note(store, "e2", None) == ""
+
+
 @pytest.mark.parametrize(
     "sys_value,dia_value",
     [(10, 80), (300, 80), (120, 10), (120, 999)],
