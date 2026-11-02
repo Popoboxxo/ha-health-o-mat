@@ -1,6 +1,6 @@
 # Backlog-Umsetzungsplan — 0.19.1 / 0.20.0 / 0.21.0
 
-**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Wellen 2–5 geplant · **Datum:** 2026-11-02
+**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Welle 2 umgesetzt (offen: Merge/Release 0.20.0), Wellen 3–5 geplant · **Datum:** 2026-11-02
 **Basis:** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean
 **Vorgänger:** `docs/PLAN-OPEN-ISSUES.md` — abgeschlossen (alle drei Releases veröffentlicht)
 **Quellen:** GitHub (`gh issue list`/`gh pr list` = 0 offen, Stand 2026-11-02), `docs/REQUIREMENTS.md`, `docs/REVIEW-2026-10-14.md`, `docs/CONCEPT-UI.md`, `docs/IDEATION-UI-PRO.md`, `docs/IDEATION-VISION.md`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
@@ -16,7 +16,7 @@
 - **GitHub-Backlog leer heißt nicht dokumentierter Backlog leer.** `gh issue list` und `gh pr list` melden am 2026-11-02 jeweils 0 offene Einträge. Insgesamt sind 10 Issues geschlossen: #28, #29, #30, #31, #32, #33, #70, #71, #72, #73.
 - **Der Vorgängerplan ist abgearbeitet:** `docs/PLAN-OPEN-ISSUES.md` führte 0.17.3, 0.18.0 und 0.19.0; alle drei Releases sind veröffentlicht, `manifest.version` steht auf 0.19.0.
 - **Was der Vorgängerplan bewusst zurückgelassen hat:** B1 (REQ-HOM-127), B5, B6/B7 und B9 aus `docs/PLAN-OPEN-ISSUES.md:444-451`. B2, B3, B4, B8 und B10 sind dagegen erledigt.
-- **Was zusätzlich offen ist:** die Restpunkte von REQ-HOM-130 (HACS-Update-Test, Repair-Issue, Erfolgs-Notification), REQ-HOM-006 AK 1 (Blueprint-E2E) und REQ-HOM-010 (Text-Entity `measurement_note`).
+- **Was zusätzlich offen ist:** die Restpunkte von REQ-HOM-130 (HACS-Update-Test, Repair-Issue, Erfolgs-Notification) und REQ-HOM-006 AK 1 (Blueprint-E2E). REQ-HOM-010 (Text-Entity `measurement_note`) war bei Planaufstellung offen und ist inzwischen in Welle 2 umgesetzt (offen nur Merge/Release 0.20.0).
 - **Was den Blick verstellt:** Die Dokumentation nennt an mehreren Stellen Release-Stände und Erledigungsgrade, die seit 0.14.0 bis 0.19.0 überholt sind. Solange das so bleibt, ist jede Priorisierung auf falschem Status gebaut — deshalb steht Welle 0 vor allem anderen.
 
 ---
@@ -29,7 +29,7 @@
 |---|---|---|---|
 | REQ-HOM-127 | Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen; eigener Plan fehlt | P2 | `docs/REQUIREMENTS.md:1516-1538` |
 | REQ-HOM-006 | Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht" | P2 | `docs/REQUIREMENTS.md:174-184` |
-| REQ-HOM-010 | Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`) | P3 | `docs/REQUIREMENTS.md:327-335` |
+| REQ-HOM-010 | ~~Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`)~~ — **in Welle 2 umgesetzt** (Entity, zentrales Leeren, History-/CSV-Beleg); offen nur Merge/Release 0.20.0 | P3 | `docs/REQUIREMENTS.md:325-364` |
 | REQ-HOM-130 Rest | HACS-Update-Test v0.16.2 nach v0.17.x; Repair-Issue und Erfolgs-Notification (Spec §9 O-1) | P1 | `docs/REQUIREMENTS.md:1766-1772`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md:1246-1254` |
 | B5 | HbA1c in `%` (DCCT) — bewusst `unsupported_unit`, eigenes Issue vorgesehen | — | `docs/PLAN-OPEN-ISSUES.md:448` |
 | B6/B7 | zurückgestellt, ohne Inhalt benannt — Konkretisierung nötig | — | `docs/PLAN-OPEN-ISSUES.md:449` |
@@ -156,6 +156,8 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 ### Welle 2 — REQ-HOM-010 Mess-Notiz (0.20.0)
 
 **Ziel:** Die Text-Entity `measurement_note` ergänzt die BP- und Wohlbefinden-Erfassung, ohne Bestandsdaten zu brechen.
+
+**Stand Welle 2:** umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`) — Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, max. 255 Zeichen, Gate `AREA_BP`), angefangene Notiz im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Bump/Migrator), Leerung zentral in `HealthOMatStore.add_reading`, `SaveReadingButton` reicht die Notiz mit, nach dem Validator-Befund fließt die angefangene Notiz auch über Service `add_blood_pressure` und WS `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene), Note in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (additiv). Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, per Unit-Regressionstest gepinnt. **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean, `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)). **Scope:** nur Blutdruck — `set_wellbeing` hat keinen `note`-Parameter, Wohlbefinden ist bewusst nicht abgedeckt (das ursprüngliche Welle-Ziel nannte Wohlbefinden; die Anforderung selbst nur `save_measurement`). **Offen:** Merge und Release 0.20.0 (Welle 3 gehört ebenfalls zu 0.20.0).
 
 **Scope/Dateien:** `text.py` (neue Entity), `const.py` (Key), `store.py`/`logic.py` (Persistenz und History), `sensor.py`/`binary_sensor.py` nur falls nötig, `strings.json`, `translations/de.json`, `translations/en.json`, `README.md`, `tests/test_text.py`, `tests/test_store.py`, `tests/test_import_backup.py`.
 
