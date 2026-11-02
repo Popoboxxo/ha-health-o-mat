@@ -1100,5 +1100,11 @@
     "ui_panel_lab_report_discard": "Discard this report",
     "ui_panel_lab_report_discard_confirm": "Discard this report with {count} values?",
     "ui_panel_val_lab_value": "Please enter a marker and a numeric value."
+  },
+  "issues": {
+    "migration_blocked": {
+      "title": "HA Health-O-Mat: entity ID migration blocked",
+      "description": "The config entry \"{entry_title}\" is blocked: its entity ID migration could not be completed. Some IDs may already have changed, the remaining ones were not applied ({blocked_count} affected). Fix the cause (for example a conflicting entity ID) and restart Home Assistant — the migration then runs again. Details are in the log."
+    }
   }
 }

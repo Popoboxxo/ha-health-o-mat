@@ -1,6 +1,6 @@
 # Backlog-Umsetzungsplan — 0.19.1 / 0.20.0 / 0.21.0
 
-**Status:** geplant (Umsetzung nicht begonnen) · **Datum:** 2026-11-02
+**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Wellen 2–5 geplant · **Datum:** 2026-11-02
 **Basis:** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean
 **Vorgänger:** `docs/PLAN-OPEN-ISSUES.md` — abgeschlossen (alle drei Releases veröffentlicht)
 **Quellen:** GitHub (`gh issue list`/`gh pr list` = 0 offen, Stand 2026-11-02), `docs/REQUIREMENTS.md`, `docs/REVIEW-2026-10-14.md`, `docs/CONCEPT-UI.md`, `docs/IDEATION-UI-PRO.md`, `docs/IDEATION-VISION.md`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
@@ -123,6 +123,8 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 ### Welle 1 — REQ-HOM-130 Restpunkte (0.19.1)
 
 **Ziel:** Die Migration meldet sich (Repair-Issue bei Skip, Erfolgs-Notification) und der HACS-Update-Pfad ist belegt.
+
+**Stand Welle 1:** umgesetzt (uncommitted) — Repair-Issue (`migration_blocked_<entry_id>`, skalares `data`, Löschung bei sauberem Pass und in `async_remove_entry`), einmalige Erfolgs-Notification (`entity_id_migration_<entry_id>`) und Übersetzungen de/en (Belege: `custom_components/health_o_mat/__init__.py`, `migration.py`, `strings.json`, `translations/{de,en}.json`, `tests/test_entry_migration.py`, `tests/test_remove_entry.py`; **1719 passed**, ruff clean); Update-Pfad 0.16.2 → 0.19.0 auf dem Compose-Stack (8124) **simuliert** belegt (Entry v2→v3, 4 Quick-Drink-Renames, 82 alte `unique_id`s erhalten, 95 Entities, Daten unverändert, eine Notification, kein Repair-Issue, kein `Migration handler not found`, zweiter Neustart idempotent) — die **HACS-Mechanik selbst ist nicht geprüft** (kein HACS im E2E-Image, Bind-Mount read-only, interaktiver Device-Flow).
 
 **Scope/Dateien:** `custom_components/health_o_mat/__init__.py` (`async_migrate_entry`, `:324`), ggf. neues `custom_components/health_o_mat/repairs.py`, `strings.json`, `translations/de.json`, `translations/en.json`, `tests/test_entity_id_migration.py`, `tests/test_entry_migration.py`; HACS-Test auf dem Compose-Stack (Port 8124), **nicht** auf der geteilten Instanz.
 
