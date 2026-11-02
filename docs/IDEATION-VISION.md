@@ -1,5 +1,15 @@
 # Vision 2026–2029 — HA Health-O-Mat
 
+> **Nachtrag 2026-11-02 (Stand 0.19.0):** Die Vision bleibt unverändert; nur der
+> Umsetzungsstand der Horizonte in §7 ist weiter als beim Entwurf vom
+> 2026-10-25 (Zeilenangaben: Originalfassung ohne diesen Block).
+> **`:184`** — der „Now“-Horizont 0.14 ist erreicht: **0.14.0**
+> veröffentlicht am 2026-10-26 (`docs/REQUIREMENTS.md:966-969`).
+> **`:193`** — der „Next“-Horizont 0.15–0.17 ist erreicht (0.15.0 bis 0.17.2
+> veröffentlicht: `CHANGELOG.md:375,252,140`); darüber hinaus sind **0.18.0** und
+> **0.19.0** am 2026-11-02 erschienen (`CHANGELOG.md:8,53`), aktueller Stand ist
+> **0.19.0** (`manifest.json:22`).
+
 **Status:** Entwurf (2026-10-25) · **Zielgruppe:** Maintainer + Community ·
 **Horizont:** 2–3 Jahre · **Verwandt:** `docs/REQUIREMENTS.md`,
 `docs/PLAN-UX-P1.md`, `docs/IDEATION-UI-PRO.md`
