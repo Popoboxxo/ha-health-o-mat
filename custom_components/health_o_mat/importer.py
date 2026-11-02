@@ -801,6 +801,9 @@ async def async_import_csv(
             reading["src"],
             actor=actor,
             audit_limit=audit_limit,
+            # Import-Notiz stammt aus der Datei, nicht aus einem Entwurf:
+            # der angefangene Nutzer-Entwurf bleibt unangetastet.
+            consume_pending=False,
         )
     # Autoritative Zähler (#WP1-02): die vom Store tatsächlich geschriebenen
     # IDs zählen — nicht die geplante Zeilenzahl. Was der Store als Duplikat

@@ -584,7 +584,19 @@ class HealthOMatStore:
         created_ts_iso: str | None = None,
         actor: str | None = None,
         audit_limit: int = DEFAULT_AUDIT_LIMIT,
+        *,
+        consume_pending: bool = True,
     ) -> None:
+        """Blutdruckmessung speichern.
+
+        ``consume_pending`` steuert, ob die angefangene Notiz
+        (``inputs["note"]``) verbraucht wird. Der Default ``True`` gilt für
+        jeden interaktiven Aufrufer (Service, WS-API, Button), bei dem die
+        Messung den Entwurf bewusst übernimmt. Der CSV-Import setzt ``False``:
+        er schreibt die Notiz aus der Datei und darf einen unabhängigen,
+        noch nicht abgesendeten Entwurf des Nutzers nicht stillschweigend
+        verwerfen.
+        """
         reading: dict = {
             "id": str(uuid.uuid4()),
             "ts": ts_iso,
@@ -599,10 +611,13 @@ class HealthOMatStore:
             "void_reason": None,
         }
         self.entry(entry_id)["readings"].append(reading)
-        # Zentraler Choke-Point: jede gespeicherte Messung konsumiert die
-        # angefangene Notiz. Service, WS, Button und CSV-Import rufen alle
-        # hier auf — kein dupliziertes Leeren in den einzelnen Handlern.
-        self.inputs(entry_id).pop("note", None)
+        # Zentraler Choke-Point: eine interaktiv gespeicherte Messung
+        # konsumiert die angefangene Notiz. Service, WS und Button rufen alle
+        # hier auf — kein dupliziertes Leeren in den einzelnen Handlern. Der
+        # Import schaltet das über ``consume_pending=False`` ab, weil sein
+        # Notizwert aus der Datei kommt, nicht aus dem Nutzer-Entwurf.
+        if consume_pending:
+            self.inputs(entry_id).pop("note", None)
         self._append_audit(
             entry_id,
             "reading_added",

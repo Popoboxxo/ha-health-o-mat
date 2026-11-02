@@ -2697,6 +2697,23 @@ def test_add_reading_clears_pending_note(mock_store_fixture):
     assert "note" not in store.inputs("e1")
 
 
+def test_add_reading_consume_pending_false_keeps_draft(mock_store_fixture):
+    """[REQ-HOM-010] consume_pending=False lässt den Notiz-Entwurf unangetastet."""
+    store, _ = mock_store_fixture
+    _async_test(store.async_load())
+    _async_test(store.set_pending_note("e1", "angefangen"))
+
+    _async_test(
+        store.add_reading(
+            "e1", "2026-11-02T08:00:00", 120, 80, 70, "csv-notiz", consume_pending=False
+        )
+    )
+
+    assert store.entry("e1")["readings"][0]["note"] == "csv-notiz"
+    assert store.pending_note("e1") == "angefangen"
+    assert store.inputs("e1")["note"] == "angefangen"
+
+
 def test_add_reading_preserves_other_inputs(mock_store_fixture):
     """[REQ-HOM-010] Das Leeren trifft nur die Notiz, nicht sys/dia."""
     store, _ = mock_store_fixture

@@ -684,6 +684,29 @@ def test_async_import_csv_skips_voided_duplicates(tmp_path):
     assert all(drink["voided_at"] for drink in store.entry("e1")["drinks"])
 
 
+def test_async_import_csv_keeps_pending_note_draft(tmp_path):
+    """[REQ-HOM-010] Import schreibt die CSV-Notiz, verwirft aber keinen Entwurf."""
+    folder = _import_dir(tmp_path)
+    text = (
+        "zeitstempel;person;systolisch;diastolisch;puls;notiz\n"
+        "2026-10-14T08:00:00;Max;120;80;60;csv-notiz\n"
+    )
+    (folder / "bp.csv").write_text(text, encoding="utf-8")
+    store = _fresh_store()
+    _run(store.set_pending_note("e1", "angefangen"))
+    hass = _import_hass(tmp_path)
+
+    result = _run(
+        importer.async_import_csv(
+            hass, store, "e1", _call({"filename": "bp.csv", "dataset": "blood_pressure"})
+        )
+    )
+
+    assert result["imported"] == 1
+    assert store.entry("e1")["readings"][0]["note"] == "csv-notiz"
+    assert store.pending_note("e1") == "angefangen"
+
+
 def test_backup_contains_voided_entries_and_audit(tmp_path, monkeypatch):
     """[M2a] Backup bleibt roh: voided Einträge + Audit-Log sind enthalten."""
     store = _fresh_store()
