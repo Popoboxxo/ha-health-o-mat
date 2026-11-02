@@ -1,7 +1,8 @@
 # Umsetzungsplan offene Issues — 0.17.3 / 0.18.0 / 0.19.0
 
-**Status:** geplant (Umsetzung nicht begonnen) · **Datum:** 2026-11-01
-**Basis:** `manifest.version = 0.17.2` (`manifest.json:22`), `main` sauber (`ad78b5a`)
+**Status:** abgeschlossen (alle drei Releases **0.17.3 / 0.18.0 / 0.19.0** am 2026-11-02 veröffentlicht) · **Datum:** 2026-11-01
+**Basis:** `manifest.version = 0.19.0` (`manifest.json:22`), Tag `v0.19.0`, `main` @ `2f78dfc`
+**Offen aus §7:** nur B1, B5, B6/B7 und B9 — B2/B3/B4/B8/B10 sind umgesetzt (0.18.0/0.19.0).
 **Bezug:** Issues #28, #31, #33, #70, #71, #72, #73 · REQ-HOM-122…131
 **Instanzen:** `ha-test` (HA 2026.9.1, `de`, manuelle Abnahme) · Compose-E2E Port 8124
 **Vorgänger:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`

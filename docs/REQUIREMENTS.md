@@ -1,6 +1,6 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-11-02 (Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s — **REQ-HOM-130 umgesetzt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md`, Branch `feat/entity-id-migration`, **Releases `0.17.0`/`0.17.1`/`0.17.2` veröffentlicht**; **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen; zuvor 2026-11-01 Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126/128/129 umgesetzt** — Batch-Erfassung (123), Admin-Umrechnungen (124), Panel-Disclaimer (125), Beispiel-Dashboard (126), Batch-Undo (128) und Labor-Retention (129), Branch `feat/lab-batch-visibility`, **Release 0.16.2 veröffentlicht**; **REQ-HOM-127** bleibt offen (Fehlervertrag/Umbau, eigener Plan); zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Entity-ID-Migration `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` + Audit `docs/reviews/entity-id-stability-audit.md`
+**Stand:** 2026-11-02 · **Release-Stand `0.19.0`** (Releases `0.18.0` und `0.19.0` veröffentlicht; `manifest.json:22` = `0.19.0`, `CHANGELOG.md` §[0.18.0]/§[0.19.0]) · (Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s — **REQ-HOM-130 umgesetzt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md`, Branch `feat/entity-id-migration`, **Releases `0.17.0`/`0.17.1`/`0.17.2` veröffentlicht**; **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen; zuvor 2026-11-01 Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126/128/129 umgesetzt** — Batch-Erfassung (123), Admin-Umrechnungen (124), Panel-Disclaimer (125), Beispiel-Dashboard (126), Batch-Undo (128) und Labor-Retention (129), Branch `feat/lab-batch-visibility`, **Release 0.16.2 veröffentlicht**; **REQ-HOM-127** bleibt offen (Fehlervertrag/Umbau, eigener Plan); zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Entity-ID-Migration `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` + Audit `docs/reviews/entity-id-stability-audit.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -33,13 +33,13 @@ einheitliche `object_id`s — ConfigFlow `VERSION 2 → 3`, Härtungen A-1…A-4
 `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` (APPROVED
 2026-11-02), Audit `docs/reviews/entity-id-stability-audit.md`, Branch
 `feat/entity-id-migration`) — **Releases `0.17.0`, `0.17.1` und `0.17.2`
-veröffentlicht** (`manifest.json:22` = `0.17.2`; `docs/RELEASE-NOTES-0.17.1.md`,
+veröffentlicht** (`docs/RELEASE-NOTES-0.17.1.md`,
 `docs/RELEASE-NOTES-0.17.2.md`) ·
 **REQ-HOM-131 umgesetzt** (Härtungen A-1…A-4 der Migration, siehe eigener
 Eintrag) ·
 **REQ-HOM-132 umgesetzt** (Optionale Service-Antworten, CSV-Upload und
 atomarer Import, Branch `feat/71-72-service-responses-and-import-upload`,
-noch kein Release/Tag) ·
+**mit `0.18.0` veröffentlicht** — `CHANGELOG.md` §[0.18.0]) ·
 Belege (REQ-HOM-130): **1566 Unit-Tests** (`pytest -q`; CI-äquivalent 1565 passed,
 1 skipped), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/`
 → **25 Tests** (24 bestehende + `test_entity_ids_e2e.py`); **Live-Migration auf
@@ -208,9 +208,9 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 - **Notiz (über REQ-HOM-007 hinaus):** Zusätzlich existiert ein
   **`health_o_mat.backup`-Service** (JSON-Voll-Export aller Personen/Datensätze/
   Zeiträume, versioniertes Dokument `format`/`version`) nach
-  `/config/health_o_mat_export/` (`backup.py`). **Restore ist weiterhin offen** —
-  das Backup-Dokument ist auf einen späteren Restore vorbereitet, kann aber noch
-  nicht automatisch zurückgespielt werden.
+  `/config/health_o_mat_export/` (`backup.py`). **Restore ist implementiert** —
+  siehe **REQ-HOM-116** (dort `:966-1029`): Merge/Replace, Teil-Restore, Dry-Run
+  und Pre-Restore-Backup; mit `0.14.0` veröffentlicht.
 
 ### REQ-HOM-008 — Wochenbericht-Service
 - **Priorität:** P3 · **Aufwand:** M
@@ -362,17 +362,17 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   lifetime_start_ml). ConfigFlow.VERSION 1→2 mit `async_migrate_entry` verlagert
   bestehende Werte bei Update (kein Datenverlust).
 - **Akzeptanzkriterien:**
-  - [ ] Quick-Drink ändern ohne Neu-Anlegen der Integration
-  - [ ] Migration Unit-getestet (v0.4.0-Alt-Entry → Options gefüllt, data bereinigt)
-  - [ ] `options.person` überschreibt Device-/Store-Anzeige ohne `entry.data`-Änderung
-  - [ ] E2E: Update mit Alt-Bestand, Button-Änderung wirksam nach Reload
+  - [x] Quick-Drink ändern ohne Neu-Anlegen der Integration — Options-Flow „Getränke" (`config_flow.py:302-306,350-352,493`); Migration v1→v2 (`__init__.py:324-357`).
+  - [x] Migration Unit-getestet (v0.4.0-Alt-Entry → Options gefüllt, data bereinigt) — `tests/test_wave_a.py:218-241` (v1→v3: `quick_drinks` aus `data` entfernt, nach `options` verschoben).
+  - [x] `options.person` überschreibt Device-/Store-Anzeige ohne `entry.data`-Änderung — umgesetzt als `options.person_display` (`entity.py:61-67`, Formularfeld `config_flow.py:421-425`); `entry.data.person` bleibt der stabile Anker.
+  - [ ] E2E: Update mit Alt-Bestand, Button-Änderung wirksam nach Reload — **offen**: Unit-Migration belegt, ein E2E-Lauf mit Alt-Entry/Button-Änderung ist nicht vorhanden (`tests_e2e/` enthält keinen solchen Fall).
 
 #### REQ-HOM-102 — Store-Migrationspfad (Fix F3)
 - **Priorität:** P1 · **Aufwand:** S
 - **Anforderung:** `minor_version` + Migrationsfunktionen je Stufe, idempotent.
 - **Akzeptanzkriterien:**
-  - [ ] Alt-JSON v1 lädt unverändert; Migrationstests für jede Stufe
-  - [ ] Vorbereitung für kommende Schemafelder (siehe 104, 109)
+  - [x] Alt-JSON v1 lädt unverändert; Migrationstests für jede Stufe — `store.py:170-231` (`_MIGRATIONS`, `migrate_store_data`), `tests/test_wave_a.py:111-142` (v1→aktuell + idempotent), `tests/test_store.py:925-951` (v2→v3), `tests/test_store.py:1140` (v3→v4), `tests/test_store.py:1846-1872` (v4→v5).
+  - [x] Vorbereitung für kommende Schemafelder (siehe 104, 109) — v1→v2 ergänzt `inputs` (104), v2→v3 `archived_counts` (109); beide Stufen in `_MIGRATIONS` (`store.py:204-209`).
 
 #### REQ-HOM-103 — Store-Reparaturpfad (Risiko aus F3)
 - **Priorität:** P1 · **Aufwand:** S
@@ -399,22 +399,22 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 - **Anforderung:** `async_get_config_entry_diagnostics`: Versionen, Entity-IDs, Options,
   Zähler — KEINE Gesundheitswerte, keine Personennamen (maskiert), keine Rohzeitstempel.
 - **Akzeptanzkriterien:**
-  - [ ] Redact-Unit-Test; E2E: Download liefert valides JSON
+  - [ ] Redact-Unit-Test; E2E: Download liefert valides JSON — **teilweise**: Unit-Tests vollständig (`tests/test_diagnostics.py:101-711`, `diagnostics.py:108-140`); ein E2E-Download ist in `tests_e2e/` nicht vorhanden → bleibt offen.
 
 #### REQ-HOM-106 — ruff-Linting in CI (Fix F8)
 - **Priorität:** P2 · **Aufwand:** S
 - **Akzeptanzkriterien:**
-  - [ ] `pyproject.toml` ruff-Konfig; CI-Job `lint`; Codebase ruff-clean (Aufräum-Commit)
+  - [x] `pyproject.toml` ruff-Konfig; CI-Job `lint`; Codebase ruff-clean (Aufräum-Commit) — `pyproject.toml:5-38`, `.github/workflows/validate.yml:23-33` (`uvx ruff@0.16.3 check .` + `format --check .`); erledigt laut `docs/REVIEW-2026-10-14.md:239` (N-6).
 
 #### REQ-HOM-107 — Service-Übersetzungen de/en (Fix F5)
 - **Priorität:** P2 · **Aufwand:** S
 - **Akzeptanzkriterien:**
-  - [ ] `services`-Sektion in de.json (übersetzt) + en.json (= strings.json)
-  - [ ] Paritätstest: Key-Bäume strings↔de↔en identisch
+  - [x] `services`-Sektion in de.json (übersetzt) + en.json (= strings.json) — `translations/de.json`/`en.json` `services`-Block (u. a. `test_translations.py:135-190` prüft Service-Doku in allen drei Dateien).
+  - [x] Paritätstest: Key-Bäume strings↔de↔en identisch — `tests/test_translations.py:75-91` (`test_req_hom_107_key_tree_parity`, `test_req_hom_107_required_sections_present`).
 
 #### REQ-HOM-108 — Toter Code entfernen (Fix F6)
 - **Priorität:** P3 · **Aufwand:** S
-- **Status: Umgesetzt (WP2, Ziel-Release 0.18.0 — noch nicht veröffentlicht)** —
+- **Status: Umgesetzt (WP2) — mit `0.18.0` veröffentlicht** —
   `logic.csv_header_footer` ist entfernt; `grep` über `custom_components/` und
   `tests/` liefert 0 Treffer. Beleg: `docs/REVIEW-2026-10-14.md` N-12,
   `docs/PLAN-OPEN-ISSUES.md` §WP2 Schritt 5.
@@ -426,7 +426,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 - **Anforderung:** Optionale Retention (Monate, Default „aus“): ältere Einträge beim
   Start ins Archiv (`health_o_mat_archive`-Store) verschieben; Export umfasst Archiv.
 - **Akzeptanzkriterien:**
-  - [ ] Default aus = exakt heutiges Verhalten; Summen unverändert; Archiv-Export
+  - [x] Default aus = exakt heutiges Verhalten; Summen unverändert; Archiv-Export — `retention_months` Default 0 (`config_flow.py:430-435`), `apply_retention`/Archiv-Store (`store.py:1262-1284,1324-1364`), `exporter.py:55-91` mergt Archiv; Tests `tests/test_wave_a.py:522-568,767-833` und `tests/test_store.py:811-868`. REQ-HOM-129 (Labor-Retention) ist davon getrennt (voidet statt Archiv) und ersetzt diese AK nicht.
 
 #### REQ-HOM-110 — README-Korrektur Tagesgrenze (Fix F2, Übergangslösung)
 - **Priorität:** P1 · **Aufwand:** S
@@ -514,8 +514,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   umgesetzt; die **dedizierte Testabdeckung ist fertig** (Logik, Sensor,
   WS-Payload, Card, Panel — siehe Akzeptanzkriterien) und die Verifikation auf
   `ha-test` ist erfolgt (E2E-Beleg: `docs/e2e-2026-10-19-wellbeing-score/`).
-  **Offen:** allein der **Release** (Versions-Bump `manifest.version` + `?v=`-
-  Cache-Buster zusammen, Tag, GitHub-Release).
+  **Release:** mit `0.10.0` veröffentlicht (Versions-Bump/Tag/GitHub-Release,
+  `CHANGELOG.md` §[0.10.0]).
 - **Anforderung:** Das Wohlbefinden bekommt eine **korrespondierende numerische
   Darstellung 1 … 10** (1 = „Sehr schlecht" = schlechtester Wert … 10 =
   „Ausgezeichnet" = bester Wert). Die Skala ist **reihenfolgetreu aus den zehn
@@ -652,8 +652,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 #### REQ-HOM-113 — Konfigurierbare Health-O-Mat-Karte
 - **Priorität:** P2 · **Aufwand:** M
 - **Status: Erledigt (Branch `feat/configurable-card`, 2026-10-21)** — umgesetzt
-  und getestet. **Kein Versions-Bump:** `manifest.json` und die
-  `?v=`-Cache-Buster bleiben unverändert; der Release (v0.10.0) folgt separat.
+  und getestet; mit **`v0.10.0` veröffentlicht** (`CHANGELOG.md` §[0.10.0]).
+  `manifest.json` und die `?v=`-Cache-Buster wurden im Release mitgezogen.
 - **Anforderung:** Die mitgelieferte Lovelace-Karte (`custom:health-o-mat-card`)
   wird über den **Karten-Editor** bzw. YAML konfigurierbar — flaches Schema,
   **alle Schlüssel optional**. Die Defaults sind bewusst **nicht** durchgehend
@@ -661,8 +661,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Eingabe-Blöcke** (manuelle Mengen, Blutdruck-Eingabe, Wohlbefinden-Eingabe)
   sind **per Default aktiv** — bestehende Karten erhalten sie beim Update. Das
   ist eine bewusste neue Funktion (im Release v0.10.0 unter „✨ New features"
-  gelistet; der Release-Eintrag folgt separat, die Funktion ist in diesem
-  Branch implementiert). Fünf Ziele:
+  gelistet und mit `v0.10.0` veröffentlicht — `CHANGELOG.md` §[0.10.0]; die
+  Funktion war in diesem Branch implementiert). Fünf Ziele:
   (1) Auswahl der Quick-Drinks aus den in der Integration konfigurierten
   Getränken (Referenz per Key, keine kartenlokale Zweitliste), (2) konfigurierbare
   manuelle ml-Presets plus optionales freies Zahlenfeld, (3) Blutdruck-Eingabe
@@ -777,9 +777,9 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   WS-Schema, Panel-Admin-Maske und Detail-Tab, Karten-Option inklusive Editor,
   Unit-/Node-Tests und README)
 - **Status: Erledigt (Branch `feat/wellbeing-confirm`, 2026-10-24)** — im
-  **Working Tree** implementiert und getestet, **noch nicht committet**, kein
-  Release. **Kein Versions-Bump:** `manifest.json` und die `?v=`-Cache-Buster
-  bleiben unverändert; der Release folgt separat.
+  **Working Tree** umgesetzt und getestet; mit **`v0.13.0` veröffentlicht**
+  (`CHANGELOG.md` §[0.13.0]). `manifest.json` und die `?v=`-Cache-Buster wurden
+  im Release auf `0.13.0` mitgezogen.
 - **Anforderung:** Die Wohlbefindens-Meldung kann optional eine **Bestätigung
   vor der Übernahme** verlangen. Dafür existieren **zwei unabhängige Schalter**
   mit demselben Namen `wellbeing_confirm` (bool, **Default `false`**). Die
@@ -1643,8 +1643,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 - **Status: Umgesetzt** (Branch `feat/entity-id-migration`, 2026-11-02) —
   Migration und Pinning sind implementiert und belegt; die Härtungen A-1…A-4
   stehen in **REQ-HOM-131**. **Releases `0.17.0`, `0.17.1` und `0.17.2`
-  veröffentlicht** (`manifest.json:22` = `0.17.2`;
-  `docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`).
+  veröffentlicht** (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
+  danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`).
 - **Spec:** `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   (§1 Ziel/Nicht-Ziele, §2 Ziel-Schemata, §3 Migration `VERSION 2 → 3`,
   §4 Härtungen A-1…A-4, §5 Release, §6 Teststrategie inkl. §6.3 Live-Test,
@@ -1760,8 +1760,9 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     💥-Migrationshinweis an erster Stelle in `CHANGELOG.md` und
     `docs/RELEASE-NOTES-0.17.0.md` (Spec §5.1/§5.3/§5.4).
     **Stand:** `0.17.0`, `0.17.1` und `0.17.2` veröffentlicht
-    (`manifest.json:22` = `0.17.2`; `docs/RELEASE-NOTES-0.17.1.md`,
-    `docs/RELEASE-NOTES-0.17.2.md`); Release-Commit `19c61f0`
+    (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
+    danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`,
+    `CHANGELOG.md` §[0.18.0]/§[0.19.0]); Release-Commit `19c61f0`
     (`chore(release): 0.17.0`) gemergt.
   - [ ] **HACS-Update-Test** (v0.16.2 → v0.17.0 auf der Dev-Instanz) — HACS
     liefert nur freigegebene Releases aus, der Test läuft daher erst **nach**
@@ -1802,7 +1803,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   sind implementiert und getestet; `0.17.1`/`0.17.2` beheben zusätzlich die
   Migrationspräfix-Fälle `device_slug_ambiguous`
   (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`;
-  `manifest.json:22` = `0.17.2`).
+  `manifest.json:22` = `0.19.0`; `0.17.2` war der Stand dieser Härtungen).
 - **Spec:** `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   §4 (A-1…A-4), §6.1/§6.4, §8.2 Nr. 5
 - **Bezug:** Ergänzt **REQ-HOM-130** (dort waren die Härtungen zunächst
@@ -1844,7 +1845,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 #### REQ-HOM-132 — Optionale Service-Antworten, CSV-Upload und atomarer Import
 - **Priorität:** P1 · **Aufwand:** M
 - **Status: Umgesetzt** (Branch `feat/71-72-service-responses-and-import-upload`,
-  2026-11-01) — noch kein Release/Tag.
+  2026-11-01) — **mit `0.18.0` veröffentlicht** (`CHANGELOG.md` §[0.18.0]).
 - **Bezug:** Issues **#71** (Service-Responses) und **#72** (Import von außen);
   Plan `docs/PLAN-OPEN-ISSUES.md` §3 WP1 inkl. D6, D7, D7b und O-2/O-3; Doku
   `docs/SERVICE-RESPONSES.md`.
@@ -1889,7 +1890,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 #### REQ-HOM-133 — Laborwert-Katalog #73: 12 Marker, Kategorie `metabolism`, Einheiten-Härtung
 - **Priorität:** P1 · **Aufwand:** M
 - **Status: Umgesetzt** (Branch `feat/73-lab-catalog-and-units`, 2026-11-01) —
-  noch kein Release/Tag (Release-Schritt 0.19.0).
+  **mit `0.19.0` veröffentlicht** (`CHANGELOG.md` §[0.19.0]).
 - **ID-Wahl:** **133 ist die nächste freie ID** — geprüft per
   `grep -rn "REQ-HOM-133\|REQ-HOM-134"` über das Repo (0 Treffer); 131 ist
   durch die Migrations-Härtungen A-1…A-4 belegt, 132 durch die optionalen
@@ -1974,7 +1975,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | Datum | Änderung |
 |---|---|
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
-| 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore weiterhin offen** |
+| 2026-10-15 | REQ-HOM-007 (CSV-Import) als **erledigt** markiert (Branch `feat/import-backup`, alle Akzeptanzkriterien [x] mit Beleg); Notiz ergänzt: `backup`-Service als JSON-Voll-Export existiert, **Restore war seinerzeit offen** (inzwischen durch REQ-HOM-116 erledigt) |
 | 2026-10-18 | UI-Ausbau (Branch `feat/ui-pro`): **REQ-HOM-009** (Pro-Person Feature-Toggles) **erledigt** (Options `areas`, bedingtes Entity-Setup, E2E auf `ha-test`); **neu angelegt** REQ-HOM-011 (Card-Ausbau), **012** (Person-Ansicht + Deep-Link), **013** (Admin-/Instanzverwaltung), **014** (Frontend-Struktur, NFA) — alle erledigt. Nebenfixes gegen durch die Toggles ausgelöste Reloads: Lebenszähler wird im Reload-Pfad nicht mehr zurückgesetzt, Panel wird beim Entfernen der letzten freischaltenden Person abgemeldet, Bestands-Card-Ressource auf den Cache-Buster nachgezogen. **Offen:** Browser-Smoke (Playwright) für den Deep-Link (REQ-HOM-012) |
 | 2026-10-19 | **Recorder-Einheiten-Fix** (Branch `fix/recorder-unit-migration`): **neu angelegt** REQ-HOM-111 (Fix F10, P1, Aufwand S) — **erledigt**. Die Integration migriert beim Config-Entry-Setup die Recorder-Statistik-Metadaten der beiden Volumen-Sensoren je Person von der Legacy-Einheit „ml" auf die HA-kanonische Einheit „mL" (`new_unit_of_measurement="mL"`, `new_unit_class="volume"`); bislang unterdrückte HA die Langzeitstatistik komplett („Generation of long term statistics will be suppressed"). Migration ist idempotent und verlustfrei, läuft bei deaktiviertem Recorder erst beim nächsten Setup (HA-Neustart/Entry-Reload) und ist nie setup-kritisch; die beiden Number-Entities melden nun ebenfalls „mL" (Datenfelder `daily_goal_ml` / `ml` in JSON/CSV unverändert), `unique_id`/`entity_id` und `manifest.json` unangetastet. E2E auf `ha-test` (HA 2026.9.1): vorher 4 `statistic_id`s mit `ml` (`unit_class` NULL) + 24 Recorder-Warnungen über 6 Starts + eingefrorene Statistik seit 2026-10-17, nachher `mL` + `unit_class` `volume`, 0 Warnungen, Kurzzeit-/Langzeitstatistik wieder laufend (ab 22:05 bzw. 2026-10-19 22:00), Kontroll-IDs und Store-Daten unverändert; `pytest -q` 580 passed, ruff clean. README: Einheiten-Angaben auf „mL" vereinheitlicht + Migrations-Hinweis für Alt-Installationen ergänzt |
 | 2026-10-19 | **Neu angelegt: REQ-HOM-112 — Wohlbefinden-Score & Verlaufs-Chart** (Branch `feat/wellbeing-score`): numerische Darstellung des Wohlbefindens **1…5**, reihenfolgetreu aus den fünf Zuständen abgeleitet und **rein abgeleitet/on-read** (keine eigene Persistenz, keine Migration); Sensor `wellbeing_score` (`measurement`, ohne Einheit/`device_class`, `unknown` ohne Meldung, Attribute `reported_at`/`scale_max`); **additiver** `score`-Key im WS-Payload `health_o_mat/panel_data` (aktueller Wert + je `wellbeing.history`-Eintrag, bestehende Schlüssel unverändert); Score-Chart in der **Card** (Badge + kompakte Sparkline der letzten 14 Meldungen) und im **Panel** (vollständiger SVG-Chart, Y-Achse 1–5, aktueller Wert als Marker, Leerfall mit Hinweis) — beide ohne externe Bibliothek, Farben nur über HA-CSS-Variablen. **Belege:** `tests/test_logic.py::test_req_hom_112_wellbeing_score_maps_every_state_to_index_plus_one`, `tests/test_sensor.py::test_req_hom_112_wellbeing_score_sensor_native_value_matches_status`, `tests/test_ws_api.py::test_req_hom_112_wellbeing_block_contains_current_score`, `tests/test_card_js.py::test_card_wellbeing_score_and_sparkline_helpers_exist`, `tests/test_panel_js.py::test_panel_base_exposes_wellbeing_chart_helpers` (weitere Fälle in den jeweiligen Dateien); `pytest -q` → **666 passed**; `ruff` clean. **E2E-Beleg:** Verifikation auf `ha-test` (HA 2026.9.1) — Report + Screenshots unter `docs/e2e-2026-10-19-wellbeing-score/`. **Code-Review:** durch, keine Blocker — der 🟡-Befund (Panel löste den Score für Kopfzeile und Chart aus zwei Quellen auf) und die 🟢-Befunde (Alias-/Case-Divergenz zwischen Client und Server, undokumentierte dritte Skala-Kopie) sind behoben; der Frontend-Spiegel ist per Mirror-Pinning-Test an `const.WELLBEING_STATES` gebunden (Keys + Reihenfolge + Länge). **Marker-Semantik:** der „aktuell"-Marker hängt am aktuellen Wert (ohne Meldung wird kein Punkt hervorgehoben, die Zusammenfassung nennt „letzter Wert" statt „aktuell"); **Label/Emoji** werden **live-first** aufgelöst (Live-Entity vor veraltetem `panel_data`-Snapshot). **Offen:** der **Release** (Versions-Bump `manifest.version` + `?v=`-Cache-Buster zusammen, Tag, GitHub-Release) |
@@ -1991,12 +1992,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-10-26 | **v0.14.0 veröffentlicht** (PR #44, Merge-Commit `618bda8`, Tag `v0.14.0`): Release-Dreiklang abgeschlossen; Tag ↔ `manifest.version` 0.14.0 synchron, alle `?v=`-Cache-Buster auf 0.14.0. CI auf dem Branch-Head: lint, tests, validate (hassfest/HACS) und E2E grün; 1159 Unit-Tests, 18 E2E-Tests, ruff clean. Release-Notes (de/en) unter `docs/RELEASE-NOTES-0.14.0.md`, GitHub-Release: <https://github.com/Popoboxxo/ha-health-o-mat/releases/tag/v0.14.0>. Feature-Branch `feat/ux-p1` bleibt erhalten; HACS-Update-Test und Alt-Entity-Cleanup auf der Dev-Instanz stehen als Betriebs-Follow-up aus. |
 | 2026-10-26 | **Neu angelegt: REQ-HOM-121 — Wohlbefinden-Zahleneingabe als Number-Entity** (Branch `feat/wellbeing-number-entity`) — **erledigt und mit Release 0.15.0 veröffentlicht (2026-10-26)**. Neue Number-Entity `number.…_wellbeing_input` (1…10, `step=1`, `mode=BOX`) als UI-loser Gegenpart zu Select und Melden-Buttons: `native_value` liefert den aktuellen Score, eine Eingabe wird über `logic.wellbeing_key_for_score` auf den Status-Key abgebildet und über `store.set_wellbeing` (inkl. Audit-Limit) gemeldet. Bereichs-Filter `wellbeing: false` erzeugt keine Entity; de/en-Übersetzungen und README ergänzt. **Belege:** `tests/test_number.py` (Wellbeing-Input-Fälle + Bereichs-Filter), `pytest -q` → **1167 passed**, `ruff check .` + `ruff format --check .` clean. **Release:** v0.15.0 veröffentlicht (MINOR, keine Migration; Release-Notes: `docs/RELEASE-NOTES-0.15.0.md`). |
 | 2026-10-26 | **v0.14.1 — Übersetzungs-Platzhalter-Fix + Dev-Instanz-Upgrade-Test:** Auf `ha-test` (HA 2026.9.1) wurde **HACS 2.0.5 temporär installiert**, `Popoboxxo/ha-health-o-mat` als Custom-Repository (`integration`) registriert und der echte **HACS-Install/Update-Pfad** getestet: Installation **v0.14.0** (HACS `installed_version=v0.14.0`, `pending_upgrade=true`) → Update **v0.14.1** (`pending_upgrade=false`), jeweils mit Neustart/Verifikation; danach HACS + GitHub-Token wieder entfernt. Zusätzlich Upgrade **0.10.2 → 0.14.0** per `bin/sync`: Store-Schema **v3 → v4** migriert (17 Einträge, keine Datenverluste), 4 Config-Entries geladen, **172 Entities** vollständig vorhanden, **keine verwaisten Entities/Devices** (Registry vs. States und Device-Registry geprüft); HACS-Test-Entities nach Entfernen ebenfalls bereinigt. Im Setup-Log fiel ein HA-Übersetzungsfehler auf: `restore_backup.fields.person_map.description` enthielt `{Quelle: Ziel-Entry-ID}` bzw. `{source: target entry ID}` und wurde als ungültiger Platzhalter validiert. **Fix:** Beschreibungen in `services.yaml`, `strings.json`, `de.json`, `en.json` ohne Platzhalter-Klammern; neue Tests für gültige Platzhalter und sprachübergreifende Platzhalter-Parität. **Belege:** `pytest -q` → **1161 passed**, `ruff check .` + `ruff format --check .` clean; Dev-Instanz nach Sync auf 0.14.1 ohne den Übersetzungsfehler. Patch-Release v0.14.1 (keine Migration, keine Entity-Änderungen). |
-| 2026-10-31 | **Neu angelegt und umgesetzt: REQ-HOM-122 — Laborwerte (Blutwerte) als vierte Datendomäne** (Branch `feat/lab-values`): Spec `docs/superpowers/specs/2026-10-30-lab-values-design.md`, Implementierungsplan `docs/superpowers/plans/2026-10-31-lab-values.md`. 9 Kategorien, 29 Katalog-Marker, Custom-Marker mit optionalem Alt-Unit-Paar, bidirektionale Einheiten-Konvertierung, zwei neue Services, Sensor je Marker + Warn-Binary je Kategorie, Admin-UI, eigene Lovelace-Card, Panel-Tab mit Swipe, Overview-Tile-Zeile, Backup v3/Restore/CSV-Export/-Import; ergänzend `areas.labs` mit Config-Flow-Toggle und Admin-Area-Checkbox, `lab_values` in Service-Schemata/WS-Export/UI-Selector, zweisprachige Katalog-Namen (`name_de`/`name_en`) und Lab-Panel-CSS. Store Schema v4 → v5. **Belege:** `pytest -q` → **1395 passed** (0 failed, 1 vorbestehende DeprecationWarning), E2E `tests_e2e/` → **19 passed**, `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert. Noch kein Release/Tag. |
+| 2026-10-31 | **Neu angelegt und umgesetzt: REQ-HOM-122 — Laborwerte (Blutwerte) als vierte Datendomäne** (Branch `feat/lab-values`): Spec `docs/superpowers/specs/2026-10-30-lab-values-design.md`, Implementierungsplan `docs/superpowers/plans/2026-10-31-lab-values.md`. 9 Kategorien, 29 Katalog-Marker, Custom-Marker mit optionalem Alt-Unit-Paar, bidirektionale Einheiten-Konvertierung, zwei neue Services, Sensor je Marker + Warn-Binary je Kategorie, Admin-UI, eigene Lovelace-Card, Panel-Tab mit Swipe, Overview-Tile-Zeile, Backup v3/Restore/CSV-Export/-Import; ergänzend `areas.labs` mit Config-Flow-Toggle und Admin-Area-Checkbox, `lab_values` in Service-Schemata/WS-Export/UI-Selector, zweisprachige Katalog-Namen (`name_de`/`name_en`) und Lab-Panel-CSS. Store Schema v4 → v5. **Belege:** `pytest -q` → **1395 passed** (0 failed, 1 vorbestehende DeprecationWarning), E2E `tests_e2e/` → **19 passed**, `ruff check .` clean, `ruff format --check .` → 63 Dateien formatiert. Seinerzeit noch kein Release/Tag; mit `0.16.0` veröffentlicht (`CHANGELOG.md` §[0.16.0]). |
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-123…126 — Laborwerte: Batch-Erfassung & Sichtbarkeit** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Erweiterung zu REQ-HOM-122): **Status: Offen — geplant (Spec beschlossen, Umsetzung ausstehend)**, Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. Inhalt: **123** Batch-Check-in eines Laborberichts (`add_lab_report` als Service + WS-Kommando + Mehrzeilen-Dialog in Card und Panel; Teilmenge erlaubt, jede befüllte Zeile valide, alles-oder-nichts, ein Store-Write/ein Refresh/ein Audit-Eintrag), **124** Umrechnungen in der Admin-UI sichtbar (Katalog-Spalte „Umrechnung" mit Alt-Einheit × Faktor → kanonische Einheit, „Einheit Pflicht"-Badge, Faktor locale-fähig über `formatNumber`, Custom-Marker-Faktor als Nice-to-have), **125** kontextbezogener Medizin-Hinweis im Panel-Tab „Laborwerte" (v1 immer sichtbar, Wortlaut wie Card), **126** Beispiel-Dashboard `examples/dashboard-labs-card.yaml` + README-Verweis + `tests/test_dashboards.py`-Erweiterung. Kein neues Datenmodell (Store-Schema bleibt v5, `unique_id`s unverändert, Backup/Restore/CSV unberührt); REQ-HOM-122 bleibt gültig, sein Kriterium „Medizin-Disclaimer in Card/Panel/README" wird durch REQ-HOM-125 präzisiert. Belege folgen mit der Umsetzung. |
 | 2026-11-01 | **Neu aufgenommen: REQ-HOM-127…129 — Laborwerte-Erweiterung, Nachträge** (Branch **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, §2.13/§2.14/§11): **127** Fehlercode-/i18n-Umbau der bestehenden Services/WS-Pfade auf strukturierte `{code, params}` + lokalisierte Meldungen — **eigener Plan, nicht Teil dieser Erweiterung** (§2.4/§14); **128** Batch-Undo `remove_lab_report` (voidet alle aktiven Werte desselben `ts`, optional gefiltert per `report_ref`, Grenzfall identischer `ts`, `no_active_report`/`invalid_ts`, ein Audit `lab_report_voided`, UI-Aktion „Diesen Bericht verwerfen" mit Sicherheitsabfrage, Einzel-Restore) — P2; **129** Labor-Retention `lab_retention_months` (Default `0` = aus, Options-Wizard „Grundlagen", 0…120, voidet beim Setup Laborwerte älter als N Monate mit `void_reason = "retention"`, kein Archiv, `restore_entry`-fähig, ein Audit `lab_values_retention`, Export enthält voidete Zeilen inkl. `voided_at`/`void_reason`, Re-Import = `skipped`) — P2. Akzeptanzkriterien 1:1 aus Spec §11 als offene Checkboxen. |
 | 2026-11-01 | **REQ-HOM-123…125 an die finalen Spec-Entscheidungen angepasst** (Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`): **123** — ein gemeinsames `ts`, Duplikat im Batch = Fehler (`duplicate_marker`, Alias-Kollision), gestufte Limits **60** (UI) / **200** (Server), Hybrid-Füllung („Alle sichtbaren Marker"/„Zuletzt verwendete Marker"), Einheiten-Dropdown je Zeile, strukturierte Fehler `{code, params, message}` (§2.4) und `NaN`/`inf`-Härtung auch im Einzelpfad (`add_lab_value`); **124** — Faktor auch bei Custom-Markern (Nice-to-have) und Locale-Formatierung über `formatNumber`; **125** — Hinweis **abschaltbar** über die Admin-Checkbox `lab_hide_panel_disclaimer` (Transport über `panel_data`, **nicht** `get_settings`; Default `false` = sichtbar), Leerzustandstext „Alle Kategorien ausgeblendet", Karten-Disclaimer via `ui_card_lab_disclaimer` lokalisiert, Backup + Diagnostics-Redaktion. **126** bleibt unverändert (P3). |
-| 2026-11-01 | **REQ-HOM-123…126/128/129 umgesetzt — Laborwerte: Batch, Undo, Retention & Sichtbarkeit** (Branch `feat/lab-batch-visibility`; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Plan `docs/superpowers/plans/2026-11-01-lab-values-batch-and-visibility.md`): Service + WS `add_lab_report` (ein `ts`/`report_ref`, Leerzeilen ignoriert, Limits 60/200, strukturierte Fehler `{code, params, message}`, ein Store-Write/ein Audit `lab_values_added` mit Rollback), symmetrisches `remove_lab_report` (voidet alle aktiven Werte eines Zeitpunkts, optional per `report_ref`, Audit `lab_report_voided`, UI-Aktion mit Sicherheitsabfrage), Mehrzeilen-Dialog in Card und Panel (Hybrid-Füllung, Einheiten-Dropdown aus `alt_units`, Single-Flight), Admin-Spalte „Umrechnung" + Badge „Einheit Pflicht", Panel-Medizin-Hinweis (Default sichtbar, abschaltbar über `lab_hide_panel_disclaimer`, Transport via `panel_data`), Karten-Disclaimer lokalisiert, Labor-Retention `lab_retention_months` (Default 0, voidet statt Archiv, ein Audit `lab_values_retention`), `lab_values.csv` inkl. voideter Zeilen + `voided_at`/`void_reason` (Re-Import: `skipped`, header-basiert und unabhängig vom Bestand; Altdateien ohne die Spalten behalten das Positionsverhalten), Beispiel-Dashboard `examples/dashboard-labs-card.yaml`. Kein neues Datenmodell (Store v5, `unique_id`s unverändert, Backup/Restore-Format unberührt; Backup-Options additiv). **Belege:** `pytest -q` → **1500 passed** (0 failed), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests** (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19). **REQ-HOM-127 bleibt offen** (eigener Plan). **Kein Release/Tag in diesem Schritt.** |
+| 2026-11-01 | **REQ-HOM-123…126/128/129 umgesetzt — Laborwerte: Batch, Undo, Retention & Sichtbarkeit** (Branch `feat/lab-batch-visibility`; Spec `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Plan `docs/superpowers/plans/2026-11-01-lab-values-batch-and-visibility.md`): Service + WS `add_lab_report` (ein `ts`/`report_ref`, Leerzeilen ignoriert, Limits 60/200, strukturierte Fehler `{code, params, message}`, ein Store-Write/ein Audit `lab_values_added` mit Rollback), symmetrisches `remove_lab_report` (voidet alle aktiven Werte eines Zeitpunkts, optional per `report_ref`, Audit `lab_report_voided`, UI-Aktion mit Sicherheitsabfrage), Mehrzeilen-Dialog in Card und Panel (Hybrid-Füllung, Einheiten-Dropdown aus `alt_units`, Single-Flight), Admin-Spalte „Umrechnung" + Badge „Einheit Pflicht", Panel-Medizin-Hinweis (Default sichtbar, abschaltbar über `lab_hide_panel_disclaimer`, Transport via `panel_data`), Karten-Disclaimer lokalisiert, Labor-Retention `lab_retention_months` (Default 0, voidet statt Archiv, ein Audit `lab_values_retention`), `lab_values.csv` inkl. voideter Zeilen + `voided_at`/`void_reason` (Re-Import: `skipped`, header-basiert und unabhängig vom Bestand; Altdateien ohne die Spalten behalten das Positionsverhalten), Beispiel-Dashboard `examples/dashboard-labs-card.yaml`. Kein neues Datenmodell (Store v5, `unique_id`s unverändert, Backup/Restore-Format unberührt; Backup-Options additiv). **Belege:** `pytest -q` → **1500 passed** (0 failed), `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests** (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19). **REQ-HOM-127 bleibt offen** (eigener Plan). **Seinerzeit kein Release/Tag in diesem Schritt**; mit `0.16.2` veröffentlicht (`CHANGELOG.md` §[0.16.2]). |
 | 2026-11-01 | **Neu angelegt und umgesetzt: REQ-HOM-133 — Laborwert-Katalog #73 (12 Marker, Kategorie `metabolism`, Einheiten-Härtung, B3)** (Branch `feat/73-lab-catalog-and-units`; Plan `docs/PLAN-OPEN-ISSUES.md` §3 WP3, §2 D1/D3/O-1): **ID 133** ist die nächste freie Nummer — 131 (Migrations-Härtungen A-1…A-4) und 132 (Service-Antworten/CSV-Upload) sind vergeben, `REQ-HOM-133`/`-134` hatten vor der Anlage **0 Treffer** im Repo. Inhalt: `LAB_MARKERS` 29 → **41** Keys (Bestand unverändert), neue Kategorie `metabolism` vor `other`, `alt_units` = gemeldet→kanonisch, `require_explicit_unit` für sieben Marker (Service/WS/Batch → `unit_required` auch bei Leerstring), tolerante `_norm_unit` (`u`→µ nur vor Mikro-Einheiten, Superscript-Exponenten, `Prozent`→`%`), HbA1c-`%` bleibt `unsupported_unit`, Flag in `panel_data` + Dropdown-Warnung in Karte/Panel, B3 Custom-Marker-Flag. Rein additiv: keine `unique_id`-, Store- oder Entry-Version-Änderung, `manifest.version` unangetastet. |
-| 2026-11-02 | **REQ-HOM-130 umgesetzt — Entity-ID-Migration auf sprachunabhängige `object_id`s** (Branch `feat/entity-id-migration`; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`, Plan `docs/superpowers/plans/2026-11-02-entity-id-migration.md`): Quick-Drinks `…_quick_drink_<n>` (1-basiert), Custom-Marker `…_lab_<key>`, Migration über `async_migrate_entry` (`ConfigFlow VERSION 2 → 3`, HA-freies `migration.py`, Callback setzt nur `new_entity_id`, Drift-Diagnose, fail-closed bei Kollision), Pinning für Neuregistrierungen; Härtungen **A-1** Kategorie-Validierung (`other`-Fallback), **A-2** Key-Erhalt (WS + Restore), **A-3** `WELLBEING_STATES`-Drift-Test, **A-4** E2E-Regression englische IDs (weiterhin in REQ-HOM-130 integriert, kein separates Folge-REQ). `unique_id`s, Store und Verlauf unverändert. Bewusst **MINOR 0.17.0** (Nutzerentscheidung, Spec §5.4); README-Kasten „Entity-IDs ab 0.17.0" ergänzt. **Belege:** `pytest -q` → **1566 passed** (CI-äquivalent 1565 passed, 1 skipped), `ruff` clean; `tests_e2e/` → **25 Tests** (neu `test_entity_ids_e2e.py`); Live-Migration auf `/home/hermes/ha-test` (4 Entries auf Version 3, `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler). **Live-Negativprobe und Restore-Pfad sind belegt** (Kollisionsprobe: 3 migriert / 1 `target_occupied` übersprungen, Entry blieb Version 2 → nach Kollisionsauflösung + Neustart alle 4 migriert/Version 3, zweiter Neustart idempotent, Custom-Marker `…_lab_vitamin_d` migriert, Cleanup bit-identisch; `/var/tmp/opencode/migration-live/REPORT.md`). **Offen:** Tag/GitHub-Release, HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1 (Repair-Issue + Erfolgs-Notification). |
+| 2026-11-02 | **REQ-HOM-130 umgesetzt — Entity-ID-Migration auf sprachunabhängige `object_id`s** (Branch `feat/entity-id-migration`; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`, Plan `docs/superpowers/plans/2026-11-02-entity-id-migration.md`): Quick-Drinks `…_quick_drink_<n>` (1-basiert), Custom-Marker `…_lab_<key>`, Migration über `async_migrate_entry` (`ConfigFlow VERSION 2 → 3`, HA-freies `migration.py`, Callback setzt nur `new_entity_id`, Drift-Diagnose, fail-closed bei Kollision), Pinning für Neuregistrierungen; Härtungen **A-1** Kategorie-Validierung (`other`-Fallback), **A-2** Key-Erhalt (WS + Restore), **A-3** `WELLBEING_STATES`-Drift-Test, **A-4** E2E-Regression englische IDs (weiterhin in REQ-HOM-130 integriert, kein separates Folge-REQ). `unique_id`s, Store und Verlauf unverändert. Bewusst **MINOR 0.17.0** (Nutzerentscheidung, Spec §5.4); README-Kasten „Entity-IDs ab 0.17.0" ergänzt. **Belege:** `pytest -q` → **1566 passed** (CI-äquivalent 1565 passed, 1 skipped), `ruff` clean; `tests_e2e/` → **25 Tests** (neu `test_entity_ids_e2e.py`); Live-Migration auf `/home/hermes/ha-test` (4 Entries auf Version 3, `quick_drink_1…4`, `unique_id`s unverändert, keine Fehler). **Live-Negativprobe und Restore-Pfad sind belegt** (Kollisionsprobe: 3 migriert / 1 `target_occupied` übersprungen, Entry blieb Version 2 → nach Kollisionsauflösung + Neustart alle 4 migriert/Version 3, zweiter Neustart idempotent, Custom-Marker `…_lab_vitamin_d` migriert, Cleanup bit-identisch; `/var/tmp/opencode/migration-live/REPORT.md`). **Seinerzeit offen:** Tag/GitHub-Release, HACS-Update-Test danach und das Folge-REQ aus Spec §9 O-1 (Repair-Issue + Erfolgs-Notification); die Releases `0.17.0`–`0.17.2` sind veröffentlicht, offen bleiben HACS-Update-Test und das Folge-REQ. |
 | 2026-11-02 | **B2 — Doku-Statusdrift bereinigt (Branch `chore/28-31-ci-and-e2e-hardening`):** **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen — Status **umgesetzt (0.17.0/0.17.1/0.17.2)**; die frühere Zuordnung „kein separates Härtungs-REQ" in REQ-HOM-130 ist damit überholt. **REQ-HOM-130** Release-Status von „0.17.0 noch nicht veröffentlicht" auf `0.17.2` korrigiert (`manifest.json:22`, `docs/RELEASE-NOTES-0.17.1.md`, `-0.17.2.md`). **REQ-HOM-001…004** und **008** mit belegtem Status „Umgesetzt" ergänzt; **REQ-HOM-006** (Blueprints: E2E-Import fehlt) und **REQ-HOM-010** (Text-Entity `measurement_note` fehlt) als **teilweise** belegt; **REQ-HOM-108** auf umgesetzt (grep-clean). **REQ-HOM-132** geprüft: Eintrag vollständig (Titel, Status, AK, Belege). Spec-Statusköpfe nachgezogen: Lab-Werte 0.16.0, Batch/Sichtbarkeit 0.16.2, Lexikon/Reset-Uhrzeit umgesetzt. `docs/REVIEW-2026-10-14.md`: N-11/N-13/N-14 mit Beleg auf erledigt. Keine Code-/Teständerung. |
+| 2026-11-02 | **Backlog-Abgleich gegen Release 0.19.0:** Release-Kopf auf `0.19.0` (0.18.0/0.19.0 veröffentlicht); REQ-HOM-132 (0.18.0) und REQ-HOM-133 (0.19.0) ohne „noch kein Release"; „Restore offen" in REQ-HOM-007 und der Changelog-Zeile durch REQ-HOM-116 ersetzt; REQ-HOM-101/102/106/107/109-AK mit Beleg abgehakt, REQ-HOM-101 AK 4 und REQ-HOM-105 (E2E) offen; Release-Aussagen REQ-HOM-108/112/113/114 korrigiert. Keine Code-/Teständerung. |
 | 2026-11-02 | **Neu aufgenommen: REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s** (Branch `feat/entity-id-migration` **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md` §5 Variante B): **P1 · Aufwand L · Status „Offen — geplant"** (überholt — **umgesetzt**, siehe Eintrag darüber). Inhalt: Migration der zwei abweichenden Entity-Klassen (Audit F-1 `QuickDrinkButton`, F-2 Custom-Labor-Marker) auf ein einheitliches Schema — Quick-Drinks `…_quick_drink_<n>` (**1-basiert**, aus der 0-basierten `unique_id` abgeleitet), Custom-Marker `…_lab_<key>` (nur bei slug-sicherem `key`, sonst Skip) — über `async_migrate_entry` (ConfigFlow `VERSION 2 → 3`, `async_migrate_entries` **awaited**) inklusive `suggested_object_id`-Pinning für Neuregistrierungen; `unique_id`, `original_name`, `device_id`, Store und Verlauf bleiben unverändert. Fail-closed bei Kollision/nicht eindeutigem `device_slug` (`target_occupied`, `device_slug_ambiguous`/`_unresolved`, `invalid_key`), **Version wird nur bei Erfolg** in genau einem `async_update_entry` gesetzt, Idempotenz + Retry nach Teil-Lauf. **Härtungen A-1…A-4** in REQ-HOM-130 integriert (Spec §4 führt sie ausdrücklich „in denselben Plan" und §8.2 nimmt sie in denselben REQ-Vorschlag auf — daher **kein** separates Härtungs-REQ): A-1 Kategorie-Validierung (`LAB_CATEGORIES`-Fremdwerte → `other`), A-2 Key-Erhalt für keylose Marker per Namens-Match (`previous`-Parameter), A-3 Drift-Test `WELLBEING_STATES` → `report_*` (Master/de/en), A-4 E2E-Regression englischer `object_id`s bei Systemsprache `de` inkl. Area-Fall. **Release: MINOR `0.17.0`** — **bewusste Abweichung** von der Repo-Regel „Entity-Änderung = MAJOR" (Nutzerentscheidung, Spec §5.4); Konsequenz: 💥-Migrationshinweis **an erster Stelle** in `CHANGELOG.md` und `docs/RELEASE-NOTES-0.17.0.md`, Nutzer müssen Automationen/Skripte/Dashboards/Szenen/Helfer/Template-Sensoren selbst anpassen, **der Verlauf bleibt** (Recorder-Metadaten werden auf die neue `entity_id` umgeschrieben). **Verbindlich:** Live-Migrationstest auf der geteilten Testinstanz `/home/hermes/ha-test` inkl. Negativprobe (Kollision + Retry) und Restore-Prozedur (Registry + Device-Registry + Config-Entries **gemeinsam** zurückspielen). Akzeptanzkriterien 1:1 aus Spec §8.2/§6.5 als offene Checkboxen; Belege folgen mit der Umsetzung. |

@@ -1,5 +1,24 @@
 # UI-Konzept: Health-O-Mat Oberfläche
 
+> **Nachtrag 2026-11-02 (Stand 0.19.0):** Dieses Konzept ist ein datierter
+> Entwurf (Ausgangsstand 2026-10-14, Phasen-Nachträge bis 2026-10-21); die
+> Originalaussagen bleiben als historischer Stand erhalten. Die Zeilenangaben
+> dieses Nachtrags beziehen sich auf die **Originalfassung ohne diesen Block**.
+> Überholt sind:
+> **`CONCEPT-UI.md:10-15`** — „Backup und CSV-Import bleiben offen“ trifft nicht
+> mehr zu: Backup/Restore ist mit **REQ-HOM-116** seit 0.14.0 erledigt
+> (`docs/REQUIREMENTS.md:966-969`), der CSV-Import mit **REQ-HOM-007** umgesetzt
+> und mit **REQ-HOM-132** (0.18.0) auf den heutigen Vertrag gehoben
+> (`docs/REQUIREMENTS.md:1844-1850`). **`:24-27, 211-219, 246`** — die
+> Wohlbefindens-Skala ist **1…10**, nicht 1…5: zehn Zustände in
+> `const.WELLBEING_STATES` (`const.py:111-135`), Score = Index + 1
+> (`logic.py:742-787`); die Wohlbefinden-Eingabe hat entsprechend zehn Zustände
+> (`docs/REQUIREMENTS.md:519-524`, `health-o-mat-card.js:97-110`). **`:228`** —
+> der Import ist kein „ggf.“ mehr, sondern umgesetzt (REQ-HOM-007/132).
+> **`:456, 485-488`** — Phase 4/5 gelten als erledigt: Backup gebaut
+> (REQ-HOM-116), CSV-Import vorhanden (REQ-HOM-007/132), `logic.hydration_pace`
+> implementiert statt Platzhalter (Beleg `docs/REVIEW-2026-10-14.md:98-108`).
+
 **Vorbild:** [`m3tac0de/home-assistant-sofabaton-x1s`](https://github.com/m3tac0de/home-assistant-sofabaton-x1s)
 — eine Integration, die ihre **eigene Frontend-Ebene mitliefert** (Sidebar-Panel,
 Custom-Cards, WebSocket-API, Per-User-Settings) statt den Nutzer mit YAML zu

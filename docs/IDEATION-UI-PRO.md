@@ -1,5 +1,21 @@
 # IDEATION-BRIEF — UI-Ausbau (Card · Panel · Admin · Deep-Link · Feature-Toggles)
 
+> **Nachtrag 2026-11-02 (Stand 0.19.0):** Dieses Briefing ist ein datierter
+> Recherchestand vom 2026-10-18; die Originalbefunde bleiben unverändert
+> erhalten. Die Zeilenangaben dieses Nachtrags beziehen sich auf die
+> **Originalfassung ohne diesen Block**. Überholt sind: **`:7`** — der Ist-Stand wurde gegen **v0.7.0**
+> verifiziert, aktuell ist **0.19.0** (`manifest.json:22`); alle folgenden
+> Code-Zeilenangaben sind historisch. **`:91-92`** — Restore des JSON-Backups ist
+> nicht mehr offen, sondern mit **REQ-HOM-116** seit 0.14.0 erledigt
+> (`docs/REQUIREMENTS.md:966-969`). **`:171-174`** — REQ-HOM-001…004 sind im Code
+> vorhanden **und** in `docs/REQUIREMENTS.md` als „Umgesetzt“ abgehakt
+> (`docs/REQUIREMENTS.md:94-140`). **`:178-179`** — REQ-HOM-009 ist implementiert
+> (Options-Schlüssel `areas`, `areas.py`; `docs/REQUIREMENTS.md:227-250`).
+> **`:183-185`** — tatsächlich: Config-Flow **`VERSION = 3`**
+> (`config_flow.py:251`) und Store-Schema **v5** (`const.py:17`). **`:369`** —
+> „Backup-Restore ist offen“ trifft nicht mehr zu (REQ-HOM-116). Weiterhin offen
+> ist nur **REQ-HOM-010** (Notiz-Entity fehlt, `docs/PLAN-BACKLOG-2026-11-02.md:32`).
+
 **Datum:** 2026-10-18 · **Autor:** `ideation`
 **Status:** Ideation (roh → strukturiert) — **keine** Implementierung, **keine** REQ-IDs, **kein** Plan
 **Bezug:** `docs/CONCEPT-UI.md` (Phasen 0–5), `docs/REQUIREMENTS.md`, `README.md:294–398`
