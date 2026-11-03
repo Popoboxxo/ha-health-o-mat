@@ -809,6 +809,22 @@ Store-/Refresh-Pfad wie das Panel. Die Laborwert-Services `add_lab_value` und
 `remove_last_lab_value` sind im Abschnitt
 [Laborwerte](#laborwerte-blutwerte) beschrieben.
 
+### Fehler & Meldungen (de/en)
+
+Fehlermeldungen sind **lokalisiert und maschinenlesbar**: Fachliche Service- und
+WebSocket-Fehler liefern einen stabilen, sprachunabhängigen **Code** (z. B.
+`amount_out_of_range`) plus strukturierte Parameter (`min`, `max`, `marker`, …).
+Home Assistant erhält den übersetzten Text in der Systemsprache (de/en) aus dem
+`exceptions`-Katalog der Integration; die mitgelieferten Karten und das Panel
+zeigen ihn über `translation_key` an. Der sprachneutrale `message`-Text bleibt
+nur als **Fallback** erhalten (z. B. in Logs).
+
+**Für Automatisierungen und eigene Clients:** auf den **Code** reagieren
+(`translation_key` im Fehlerobjekt bzw. `code` im Labor-Batch), **nicht** auf den
+`message`-Text — der wechselt mit der Systemsprache. Der vollständige Vertrag
+steht in
+[`docs/SERVICE-RESPONSES.md`](docs/SERVICE-RESPONSES.md#fehler-req-hom-127).
+
 ## Import & Backup
 
 ### CSV-Import
