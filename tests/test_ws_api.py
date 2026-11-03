@@ -110,6 +110,9 @@ class FakeHass:
     def __init__(self, entries: list | None = None) -> None:
         self.data: dict = {}
         self.config_entries = FakeConfigEntries(entries or [])
+        # HA-Executor-API: führt die Funktion inline aus und protokolliert den
+        # Aufruf — so lässt sich belegen, dass I/O nicht auf dem Loop läuft.
+        self.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
 
 
 class FakeConnection:
@@ -4494,6 +4497,25 @@ def test_list_import_files_ws_command_is_admin_only_and_returns_names(tmp_path):
     assert connection.errors == []
     assert connection.results == [(7, {"files": ["backup.json"]})]
     assert ws_api.COMMAND_LIST_IMPORT_FILES in ws_api.ADMIN_ONLY_COMMANDS
+
+
+def test_list_import_files_ws_command_runs_scan_in_executor(tmp_path):
+    """[M3b] Der Verzeichnis-Scan läuft im Executor, nicht auf dem Event-Loop."""
+    folder = _import_dir(tmp_path)
+    (folder / "backup.json").write_text("{}", encoding="utf-8")
+
+    hass = FakeHass()
+    hass.config = SimpleNamespace(config_dir=str(tmp_path))
+    connection = FakeConnection(is_admin=True)
+
+    asyncio.run(ws_api.websocket_list_import_files(hass, connection, {"id": 9}))
+
+    hass.async_add_executor_job.assert_awaited_once()
+    func, config_dir = hass.async_add_executor_job.await_args.args
+    assert func is ws_api._list_import_files
+    assert config_dir == str(tmp_path)
+    assert connection.errors == []
+    assert connection.results == [(9, {"files": ["backup.json"]})]
 
 
 def test_list_import_files_ws_command_rejects_non_admin(tmp_path):

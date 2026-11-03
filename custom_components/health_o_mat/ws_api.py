@@ -2310,7 +2310,11 @@ async def websocket_list_import_files(
     if not is_admin_connection(connection):
         _send_unauthorized(connection, msg)
         return
-    connection.send_result(msg["id"], {"files": _list_import_files(hass.config.config_dir)})
+    # Verzeichnis-Scan im Executor: `os.listdir`/`os.path.*` sind blockierendes
+    # I/O und dürfen den Event-Loop nicht anhalten (HA blockiert sonst mit
+    # "Detected blocking call inside the event loop").
+    files = await hass.async_add_executor_job(_list_import_files, hass.config.config_dir)
+    connection.send_result(msg["id"], {"files": files})
 
 
 async def websocket_import_csv(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:

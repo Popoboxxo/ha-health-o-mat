@@ -741,7 +741,11 @@ async def async_import_csv(
         if filename is None:
             filename = (call.data.get("filename") or "") if call is not None else ""
         try:
-            path = safe_import_path(hass.config.config_dir, filename)
+            # Pfadprüfung im Executor: `realpath`/`isfile` sind blockierendes
+            # Dateisystem-I/O und dürfen den Event-Loop nicht anhalten.
+            path = await hass.async_add_executor_job(
+                safe_import_path, hass.config.config_dir, filename
+            )
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 

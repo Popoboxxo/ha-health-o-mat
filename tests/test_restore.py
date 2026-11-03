@@ -839,6 +839,19 @@ def test_safe_import_path_rejects_traversal(tmp_path, monkeypatch):
         _run(restore.async_restore_from_file(hass, store, None, {"filename": "../evil.json"}))
 
 
+def test_restore_runs_path_validation_in_executor(tmp_path, monkeypatch):
+    """[M3] Die Restore-Pfadprüfung läuft im Executor, nicht auf dem Loop."""
+    hass, store, _archive = _apply_setup(tmp_path, monkeypatch, {"t1": _entry("Max")})
+    filename = _write_import_file(tmp_path, _doc({"src": _entry("Max")}))
+
+    _run(
+        restore.async_restore_from_file(hass, store, None, {"filename": filename, "dry_run": True})
+    )
+
+    calls = [await_call.args for await_call in hass.async_add_executor_job.await_args_list]
+    assert (restore.safe_restore_path, str(tmp_path), filename) in calls
+
+
 def test_apply_archive_replace_is_persisted(tmp_path, monkeypatch):
     """[M2c] Archiv-Store wird beim Replace mitgeschrieben."""
     hass, store, archive = _apply_setup(
