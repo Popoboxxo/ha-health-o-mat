@@ -363,11 +363,11 @@ kein Produktionscode.
 
 | ID | Messbarer Auslöser | Was dann passiert |
 |---|---|---|
-| D-1 | Bei einem Release-Schnitt: `ws_api.py` ≥ 3000 **oder** `__init__.py`/`store.py`/`logic.py`/`restore.py` ≥ 2500 Zeilen | Vor der nächsten Feature-Welle ein verhaltensneutraler Domänen-Split (`services/<domain>.py`, `storage/<domain>.py`, `logic/<domain>.py`); öffentliche Verträge, `unique_id`s und Store-Schema unverändert; volle Unit-/E2E-Suite als Netz |
-| D-2 | Eine **fünfte** Datendomäne (nach Trinken, Blutdruck, Wohlbefinden, Labor) wird geplant | Split **vor** der Feature-Arbeit; die neue Domäne darf nicht wieder > 200 Zeilen in jede der vier Kerndateien schreiben |
-| D-3 | `const.py` ≥ 1200 Zeilen **oder** Labor-Marker ≥ 80 | `LAB_MARKERS`/`LAB_CATEGORIES` in ein reines Datenmodul `lab_catalog.py` auslagern; Keys und Anzeigenamen bleiben zeichenidentisch |
-| D-4 | `www/health-o-mat-card.js` ≥ 4000 Zeilen **oder** ein dritter Konsument von `panel-base.js` | Split in ES-Module (kein Bundler); Importgraph muss ohne Build-Schritt von HA ladbar bleiben |
-| D-5 | Zwei aufeinanderfolgende Releases fügen derselben Kerndatei je > 200 Zeilen hinzu | Refactor im nächsten Release **einplanen** (nicht automatisch starten); Entscheidung im Release-Review dokumentieren |
+| T-1 | Bei einem Release-Schnitt: `ws_api.py` ≥ 3000 **oder** `__init__.py`/`store.py`/`logic.py`/`restore.py` ≥ 2500 Zeilen | Vor der nächsten Feature-Welle ein verhaltensneutraler Domänen-Split (`services/<domain>.py`, `storage/<domain>.py`, `logic/<domain>.py`); öffentliche Verträge, `unique_id`s und Store-Schema unverändert; volle Unit-/E2E-Suite als Netz |
+| T-2 | Eine **fünfte** Datendomäne (nach Trinken, Blutdruck, Wohlbefinden, Labor) wird geplant | Split **vor** der Feature-Arbeit; die neue Domäne darf nicht wieder > 200 Zeilen in jede der vier Kerndateien schreiben |
+| T-3 | `const.py` ≥ 1200 Zeilen **oder** Labor-Marker ≥ 80 | `LAB_MARKERS`/`LAB_CATEGORIES` in ein reines Datenmodul `lab_catalog.py` auslagern; Keys und Anzeigenamen bleiben zeichenidentisch |
+| T-4 | `www/health-o-mat-card.js` ≥ 4000 Zeilen **oder** ein dritter Konsument von `panel-base.js` | Split in ES-Module (kein Bundler); Importgraph muss ohne Build-Schritt von HA ladbar bleiben |
+| T-5 | Zwei aufeinanderfolgende Releases fügen derselben Kerndatei je > 200 Zeilen hinzu | Refactor im nächsten Release **einplanen** (nicht automatisch starten); Entscheidung im Release-Review dokumentieren |
 
 **Agent(en):** `orchestrator` (Prüfung im Release-Review), `documenter` (Baseline und
 Entscheidung), bei ausgelöstem Refactor `senior-developer` + `tester`.
@@ -639,8 +639,8 @@ Zählstand ohne erreichbaren Stack.
 | F-03 Testzahlen | — (Korrektur) | `pytest --collect-only`: 1754 Unit / 65 E2E (Compose, `HASS_BASE_URL=…:8124`); 46 nur ohne erreichbaren Stack (Blueprint-Modul-Guard) |
 | F-04 Entity-ID-Stabilität | — (erledigt) | 0.17.x-Releases, `tests_e2e/test_entity_ids_e2e.py` |
 | F-05 `_attr_name`-Ausnahmen | — (erledigt) | `button.py:67,83` |
-| F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger D-1/D-2/D-5; Release-Review-Messung |
-| F-07 Frontend-Größe | WP-D | Trigger D-4 |
+| F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger T-1/T-2/T-5; Release-Review-Messung |
+| F-07 Frontend-Größe | WP-D | Trigger T-4 |
 | F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A | `tests/test_error_contract.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression |
 | F-09 Labor-Eingabe/Zahlen | WP-C | Doc-Grep (41/10/51/41), Entscheidungsrecord |
 | F-10 HACS-Mechanik | WP-E | `docs/E2E-REPORT-WP-E-HACS-UPDATE.md`, REQ-HOM-130-AK |
