@@ -456,14 +456,35 @@ def _scrub(value: Any) -> Any:
     return value
 
 
-def _integration_version() -> str:
-    """``manifest.version`` lesen — ohne Home-Assistant-Abhängigkeit."""
+#: Pfad des eigenen Manifests (Modulkonstante, damit Tests sie ersetzen können).
+_MANIFEST_PATH = pathlib.Path(__file__).with_name("manifest.json")
+
+#: Cache der Integrationsversion — das Manifest wird höchstens einmal gelesen.
+_VERSION: str | None = None
+
+
+def _read_manifest_version() -> str:
+    """``manifest.version`` lesen — **blockierend**, nur im Executor aufrufen."""
     try:
-        manifest = pathlib.Path(__file__).with_name("manifest.json")
-        with manifest.open(encoding="utf-8") as handle:
+        with _MANIFEST_PATH.open(encoding="utf-8") as handle:
             return str(json.load(handle).get("version") or "unknown")
     except (OSError, ValueError):
         return "unknown"
+
+
+async def _async_integration_version(hass: Any) -> str:
+    """Integrationsversion ohne Blockieren des Event-Loops (gecacht).
+
+    ``async_get_config_entry_diagnostics`` läuft im Event-Loop: ein direktes
+    ``open()`` wird von Home Assistant als ``Detected blocking call to open``
+    geloggt (WP-B-E2E-Befund). Der Dateizugriff wandert daher in den Executor
+    (``hass.async_add_executor_job``, Muster wie ``export_csv``) und findet dank
+    Modul-Cache nur beim ersten Diagnostics-Download statt.
+    """
+    global _VERSION
+    if _VERSION is None:
+        _VERSION = await hass.async_add_executor_job(_read_manifest_version)
+    return _VERSION
 
 
 def _collect_entity_ids(hass: Any, entry: Any) -> list[dict[str, str]]:
@@ -574,7 +595,7 @@ async def async_get_config_entry_diagnostics(hass: Any, entry: Any) -> dict[str,
             store_available = False
 
     raw = {
-        "integration_version": _integration_version(),
+        "integration_version": await _async_integration_version(hass),
         "entry_version": getattr(entry, "version", None),
         "store_schema_version": STORE_SCHEMA_VERSION,
         "store_available": store_available,

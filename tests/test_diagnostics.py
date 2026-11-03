@@ -15,7 +15,7 @@ import os
 import sys
 import types
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 _COMPONENT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "custom_components", "health_o_mat")
@@ -46,6 +46,19 @@ DOMAIN = const.DOMAIN
 
 def _blob(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _executor_hass(hass):
+    """Fake-``hass`` mit Executor-Stub (führt den Job synchron aus, kein Thread).
+
+    ``async_get_config_entry_diagnostics`` liest die Manifest-Version im
+    Executor — ein ``open()`` im Event-Loop wird von Home Assistant als
+    ``Detected blocking call`` geloggt (WP-B-E2E-Befund). Ohne echte
+    HA-Installation gibt es keinen Thread-Pool; der Stub macht den Test
+    deterministisch.
+    """
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
+    return hass
 
 
 # Sensible Testdaten: alles hiervon darf NICHT im Output auftauchen.
@@ -182,7 +195,7 @@ def test_async_diagnostics_redacted_with_store():
     store = MagicMock()
     store.all_entries.return_value = {"e1": _RAW["store_entry"]}
 
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {DOMAIN: {"shared": {"store": store}}}
     entry = SimpleNamespace(
         entry_id="e1", version=3, options={"daily_goal_ml": 1500, "person_display": _PERSON}
@@ -201,7 +214,7 @@ def test_async_diagnostics_redacted_with_store():
 
 def test_async_diagnostics_without_store_is_defined():
     """[REQ-HOM-105] Ohne Store/Entry definiertes Ergebnis (available False, Zähler 0)."""
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {}
     entry = SimpleNamespace(entry_id="e1", version=2, options={})
 
@@ -219,7 +232,7 @@ def test_async_diagnostics_survives_store_error():
     store = MagicMock()
     store.all_entries.side_effect = RuntimeError("boom")
 
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {DOMAIN: {"shared": {"store": store}}}
     entry = SimpleNamespace(entry_id="e1", version=2, options={})
 
@@ -242,7 +255,7 @@ def test_async_diagnostics_collects_entity_ids_from_registry(monkeypatch):
     if helpers_module is not None:
         monkeypatch.setattr(helpers_module, "entity_registry", registry_module, raising=False)
 
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {DOMAIN: {}}
     entry = SimpleNamespace(entry_id="e1", version=2, options={})
 
@@ -254,13 +267,40 @@ def test_async_diagnostics_collects_entity_ids_from_registry(monkeypatch):
     ]
 
 
-def test_manifest_version_is_reported():
+def test_manifest_version_is_reported(monkeypatch):
     """[REQ-HOM-105] Integrationsversion stammt aus manifest.json."""
     manifest_path = os.path.join(_COMPONENT_DIR, "manifest.json")
     with open(manifest_path, encoding="utf-8") as handle:
         expected = json.load(handle)["version"]
 
-    assert diagnostics._integration_version() == expected
+    monkeypatch.setattr(diagnostics, "_VERSION", None)
+    hass = _executor_hass(MagicMock())
+
+    assert asyncio.run(diagnostics._async_integration_version(hass)) == expected
+
+
+def test_manifest_version_read_runs_in_executor_and_is_cached(monkeypatch):
+    """[WP-B] Manifest-Lesen läuft im Executor und nur einmal (kein Blocking-Call)."""
+    monkeypatch.setattr(diagnostics, "_VERSION", None)
+    hass = _executor_hass(MagicMock())
+    executor = hass.async_add_executor_job
+    entry = SimpleNamespace(entry_id="e1", version=2, options={})
+
+    first = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+    second = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+
+    assert first["integration"]["version"] != "unknown"
+    assert second["integration"]["version"] == first["integration"]["version"]
+    assert executor.await_count == 1  # gecacht: genau ein Dateizugriff
+
+
+def test_manifest_version_falls_back_when_manifest_unreadable(monkeypatch, tmp_path):
+    """[WP-B] Unlesbares Manifest → "unknown" statt Exception (defensiv)."""
+    monkeypatch.setattr(diagnostics, "_VERSION", None)
+    monkeypatch.setattr(diagnostics, "_MANIFEST_PATH", tmp_path / "missing.json")
+    hass = _executor_hass(MagicMock())
+
+    assert asyncio.run(diagnostics._async_integration_version(hass)) == "unknown"
 
 
 # ============================================================================
@@ -393,7 +433,7 @@ def test_req_hom_129_redacts_new_lab_options_as_counts_only():
 
 def test_async_diagnostics_redacts_lab_options_from_entry():
     """[REQ-HOM-122] entry.options mit Lab-Inhalten → nur Zähler im Download."""
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {}
     entry = SimpleNamespace(entry_id="e1", version=5, options=_LAB_OPTIONS)
 
@@ -446,7 +486,7 @@ def test_async_diagnostics_masks_custom_lab_entity_ids(monkeypatch):
         ],
     )
 
-    hass = MagicMock()
+    hass = _executor_hass(MagicMock())
     hass.data = {DOMAIN: {}}
     entry = SimpleNamespace(entry_id="e1", version=5, options={})
 
@@ -511,7 +551,7 @@ def _lab_registry(monkeypatch, entries):
 
 
 def _lab_hass(states=None):
-    return SimpleNamespace(data={DOMAIN: {}}, states=_States(states or {}))
+    return _executor_hass(SimpleNamespace(data={DOMAIN: {}}, states=_States(states or {})))
 
 
 def _lab_entry(options=None):
