@@ -1,10 +1,14 @@
 # Umsetzungsplan aus dem System-Audit (2026-11-03)
 
-**Status:** WP-A implementiert (Branch `feat/127-error-contract-impl`, noch nicht
-released); WP-B–WP-F offen · **Datum:** 2026-11-03, Fortschreibung 2026-11-04 ·
-**Basis:** `main` @ `1d6f832` (Zahlenstand; WP-A läuft auf einem Feature-Branch)
+**Status:** WP-A umgesetzt (PR #84, Release 0.21.0 offen), WP-B umgesetzt (PR #82),
+WP-C entschieden (D-1 = B4, reversibel), WP-D Trigger T-1…T-5 definiert,
+WP-F abgeschlossen (reauth gehärtet, Auth wiederhergestellt) — **WP-E ist dokumentiert,
+aber manuell offen** (keine HACS-Verifikation) · **Datum:** 2026-11-03,
+Fortschreibung 2026-11-04 · **Basis:** `main` @ `184272e`; der Zahlenstand in §6 stammt
+weiterhin aus der Messung @ `1d6f832`
 **Quelle:** `docs/reviews/2026-11-03-system-audit.md` (+ Nachtrag 2026-11-03)
-**Abgrenzung:** `docs/PLAN-BACKLOG-2026-11-02.md` (Wellen 0–3 abgeschlossen; Welle 4/5 offen)
+**Abgrenzung:** `docs/PLAN-BACKLOG-2026-11-02.md` (Wellen 0–4 umgesetzt; Welle 5
+geschlossen)
 
 > **Kein `plan_ref`.** Dieses Dokument ist ein Portfolio-Plan über mehrere Arbeitspakete
 > und Releases. Es enthält bewusst **keine** `pipeline_stages`-Frontmatter und ist nicht
@@ -37,7 +41,7 @@ nur der Zählstand ohne erreichbaren Stack. Die im Audit genannten Funktionszahl
 | E2E-Lücken | nicht als Welle geführt | **neu:** WP-B (vier Szenarien, konkrete Testdateien) |
 | Labor-Eingabe | §2.4 „Idee ohne REQ", Welle 5 Schritt 4 | **neu:** WP-C mit Zahlenkorrektur **vor** der Entscheidung, B1-vs-B4 als Nutzerentscheidung |
 | Datei-Wachstum | nur als Beobachtung im Audit | **neu:** WP-D mit messbaren Triggern statt Refactor |
-| HACS-Mechanik | Welle 1 Schritt 5 (nur simuliert belegt) | **neu:** WP-E mit realem HACS-Update auf isolierter Instanz |
+| HACS-Mechanik | Welle 1 Schritt 5 (nur simuliert belegt) | **neu:** WP-E mit realem HACS-Update auf isolierter Instanz — seit D-5 als manuelle Betreiber-Prozedur, nicht automatisiert |
 | `bin/reauth`-Race | nicht enthalten (fremdes Repo) | **neu:** WP-F, Befund + Fix-Form, kein Code hier |
 
 ---
@@ -51,15 +55,15 @@ nur der Zählstand ohne erreichbaren Stack. Die im Audit genannten Funktionszahl
 | F-03 | Testzahlen: Audit 1497 Unit / 39 E2E, Nachtrag 1754 Unit / 65 E2E | **erklärt (zwei Messmodi, kein Widerspruch)** | heute: 1754 Unit-Tests; E2E 65 mit laufendem Compose-Stack (`HASS_BASE_URL=…:8124`) bzw. 46 + übersprungenes Blueprint-Modul, wenn die Instanz-Adresse auf die geteilte Instanz zeigt (Modul-Guard, `tests_e2e/test_blueprints_e2e.py:83-92`) | — |
 | F-04 | Entity-ID-Stabilität REQ-HOM-130/131 released | **erledigt** (Status) | Audit §1; 0.17.0–0.17.2, `docs/REQUIREMENTS.md:1766-1772` | — |
 | F-05 | Bewusste `_attr_name`-Ausnahmen (M-8) dokumentiert | **erledigt** (Status) | Audit §1; `button.py:67,83` | — |
-| F-06 | Kern-Dateien wachsen (`ws_api.py` 2406, `__init__.py` 1809, `store.py` 1582, `logic.py` 1422, `restore.py` 1266, `const.py` 658) | **offen** | `wc -l` @ `1d6f832` | WP-D |
-| F-07 | Frontend-Einzeldateien (`card.js` 3362, `panel.js` 2362, `labs-card.js` 1791) | **offen** | `wc -l custom_components/health_o_mat/www/*.js` | WP-D |
-| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **erledigt** (WP-A, noch nicht released) | Umsetzung: `logic.ERROR_SPECS` (35 Codes), `errors.py`, 29 Service- + 32 WS-Stellen, 4 Relais, `exceptions`-Übersetzungen in `strings.json`/`de`/`en`; Beleg `tests/test_error_contract.py`, `tests/test_errors.py`; Doku `docs/SERVICE-RESPONSES.md` | WP-A |
-| F-09 | Labor-Eingabe: Options-Doc mit veralteter Zahlenbasis (29 Marker, 9 Kategorien, 38 Entities), B1-vs-B4 unbeantwortet | **offen + veraltet** | `docs/superpowers/specs/2026-11-01-lab-entity-surface-options.md:20-54`; heute 41 Marker / 10 Kategorien / 51 Labor-Entities | WP-C |
-| F-10 | HACS-Update-Test nur simuliert, HACS-Mechanik ungeprüft | **teilweise** | `docs/REQUIREMENTS.md:1830-1841`; Simulation 0.16.2→0.19.0, kein HACS im E2E-Image | WP-E |
+| F-06 | Kern-Dateien wachsen (`ws_api.py` 2406, `__init__.py` 1809, `store.py` 1582, `logic.py` 1422, `restore.py` 1266, `const.py` 658) | **entschieden** (Trigger T-1/T-2/T-5 definiert; kein Refactor) | `wc -l` @ `1d6f832` | WP-D |
+| F-07 | Frontend-Einzeldateien (`card.js` 3362, `panel.js` 2362, `labs-card.js` 1791) | **entschieden** (Trigger T-4 definiert; kein Refactor) | `wc -l custom_components/health_o_mat/www/*.js` | WP-D |
+| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **erledigt** (WP-A, PR #84; Release offen) | Umsetzung: `logic.ERROR_SPECS` (35 Codes), `errors.py`, 29 Service- + 32 WS-Stellen, 4 Relais, `exceptions`-Übersetzungen in `strings.json`/`de`/`en`; Beleg `tests/test_error_contract.py`, `tests/test_errors.py`; Doku `docs/SERVICE-RESPONSES.md` | WP-A |
+| F-09 | Labor-Eingabe: Options-Doc mit veralteter Zahlenbasis (29 Marker, 9 Kategorien, 38 Entities), B1-vs-B4 unbeantwortet | **entschieden** (D-1 = B4, reversibel; Zahlenkorrektur Teil des WP) | `docs/superpowers/specs/2026-11-01-lab-entity-surface-options.md:20-54`; heute 41 Marker / 10 Kategorien / 51 Labor-Entities | WP-C |
+| F-10 | HACS-Update-Test nur simuliert, HACS-Mechanik ungeprüft | **dokumentiert, manuell offen** (Prozedur in WP-E; keine HACS-Verifikation) | `docs/REQUIREMENTS.md:1830-1841`; Simulation 0.16.2→0.19.0, kein HACS im gepinnten E2E-Image | WP-E |
 | F-11 | Spec §9 O-1 (Repair-Issue + Erfolgs-Notification) | **erledigt** (Audit-Aussage überholt) | PR #75; `__init__.py:235-236`, `tests/test_entry_migration.py` | — |
-| F-12 | Vier E2E-Lücken (REQ-HOM-101 AK4, Button nach Reload, REQ-HOM-105 Diagnostics-Download, Update mit Alt-Bestand) | **offen**, zwei Paare sind dasselbe Szenario; REQ-HOM-104 fehlt in der Liste | `docs/REQUIREMENTS.md:429,456,463`; `tests_e2e/` ohne diese Fälle | WP-B |
+| F-12 | Vier E2E-Lücken (REQ-HOM-101 AK4, Button nach Reload, REQ-HOM-105 Diagnostics-Download, Update mit Alt-Bestand) | **erledigt** (WP-B, PR #82); zwei Paare waren dasselbe Szenario, REQ-HOM-104 ergänzt | `docs/REQUIREMENTS.md:429,456,463`; `tests_e2e/` | WP-B |
 | F-13 | **Vom Audit übersehen:** blockierendes I/O in `async`-Pfaden | **erledigt** (Nachtrag) | PR #79; `importer.py:746`, `restore.py:1170`, `ws_api.py:2316`; Regressionstests in `tests/test_import_backup.py`, `tests/test_restore.py`, `tests/test_ws_api.py` | — |
-| F-14 | **Nicht im Audit:** `bin/reauth`-Race in der geteilten Testinstanz | **offen** (extern) | `/home/hermes/ha-test/bin/reauth:49`, `bin/ha:43,51` | WP-F |
+| F-14 | **Nicht im Audit:** `bin/reauth`-Race in der geteilten Testinstanz | **erledigt** (extern; `reauth` gehärtet, Auth wiederhergestellt) | `/home/hermes/ha-test/bin/reauth:49`, `bin/ha:43,51` | WP-F |
 | F-15 | Blueprint-Defekt (fehlende Personenbindung) | **erledigt** (nach Audit-Basis) | PR #77; `blueprints/automation/health_o_mat/*.yaml` | — |
 | F-16 | Audit-Aussage „kein funktionaler Fehler gefunden" | **nicht belastbar** | Read-only-Statik; F-13 zeigt eine Klasse, die nur zur Laufzeit auffällt → als Scope-Aussage lesen, nicht als Beweis | — |
 | F-17 | **Nachtrag:** `README.md:1300` nennt „25 E2E-Tests" und „1563 Unit-Tests" | **erledigt (in diesem Änderungssatz)** | `README.md:1300` ist in diesem Änderungssatz auf 1754 Unit / 65 E2E (Compose) korrigiert | — |
@@ -421,54 +425,71 @@ E2E-Suite unverändert grün sein (Verhaltensneutralität).
 
 ---
 
-### WP-E — HACS-Update-Mechanik
+### WP-E — HACS-Update-Mechanik — **manuell offen (dokumentiert)**
 
 **Ziel:** Der echte HACS-Update-Pfad (Vorgängerversion → aktuelle Version über HACS
 selbst) ist einmal auf einer **isolierten** Instanz belegt — nicht auf der geteilten
 Instanz und nicht per Bind-Mount-Kopie.
 
-**Scope/Dateien:** neues Belegdokument `docs/E2E-REPORT-WP-E-HACS-UPDATE.md`
-(Pfadregel wie in WP-B: `docs/E2E-REPORT-<WP>-<THEMA>.md`, datumsfrei, keine
-Platzhalter — Datum und Commit stehen im Dokumentkopf);
-`docs/REQUIREMENTS.md` (REQ-HOM-130-Rest-AK, `:1830-1841`); keine
-Produktionscode-Änderung.
+**Stand (2026-11-04):** Die Mechanik ist auf dem aktuellen Stack **nicht automatisierbar**
+und wird deshalb als manuelle Betreiber-Prozedur dokumentiert. Belegt ist nur der
+**Upgrade-Pfad selbst** (Simulation 0.16.2 → 0.19.0 in Welle 1: Entry v2 → v3,
+`unique_id`s erhalten, Daten unverändert, eine Notification, idempotenter Neustart).
+**Nicht belegt ist die HACS-Mechanik** — dieser Abschnitt behauptet keine
+HACS-Verifikation.
 
-**Voraussetzungen**
+**Entscheidung D-5 — entschieden (2026-11-04):** kein neuer Container. Begründung: HACS
+fehlt im gepinnten E2E-Image, die Integration liegt dort als Read-only-Bind-Mount, und
+die HACS-Einrichtung verlangt einen interaktiven GitHub-Device-Flow. Ein eigener Container
+würde die Mechanik nicht ohne denselben interaktiven Schritt belegen. Stattdessen gilt die
+Prozedur unten, ausgeführt von einem Betreiber auf einer von ihm bereitgestellten
+isolierten Instanz.
 
-- Eigene HA-Instanz (neuer Container/Port, nicht `127.0.0.1:8123`, nicht der
-  Compose-E2E-Stack mit read-only Bind-Mount), HA-Version `2026.9.1` wie im
-  E2E-Stack (`docker-compose.e2e.yml:62`).
-- HACS in dieser Instanz installiert (HACS-Release entpacken, Neustart, Integration
-  einrichten) — die HACS-Version wird im Beleg festgehalten.
-- Veröffentlichtes 0.19.0 als Ausgangsversion (Tag/Release vorhanden) und ein
-  veröffentlichtes 0.20.0 als Ziel (siehe §4).
+**Scope/Dateien:** Belegdokument `docs/E2E-REPORT-WP-E-HACS-UPDATE.md` (Pfadregel wie in
+WP-B: `docs/E2E-REPORT-<WP>-<THEMA>.md`, datumsfrei, keine Platzhalter — Datum und Commit
+stehen im Dokumentkopf); `docs/REQUIREMENTS.md` (REQ-HOM-130-Rest-AK, `:1830-1841`);
+keine Produktionscode-Änderung, kein Container in diesem Repo.
 
-**Schritte**
+**Voraussetzungen (durch den Betreiber)**
 
-1. Isolierte Instanz provisionieren, HACS installieren, HACS-Version notieren.
-2. Über die HACS-UI das Repository hinzufügen und **0.19.0** installieren; danach
-   einen Entry mit Bestand anlegen: eigene Quick-Drinks, BD-Messung, Wohlbefinden,
-   Laborwerte inkl. Custom-Marker.
-3. Snapshot vor dem Update: `/api/states`, `.storage/core.entity_registry`,
-   `.storage/health_o_mat*`, Entry-Version, Anzahl Entities, Stichprobenwerte.
-4. 0.20.0 veröffentlichen (Release-Dreiklang), in HACS den Update-Check auslösen und
-   **über die HACS-UI** aktualisieren; HA neu starten.
-5. Checkliste prüfen: `manifest.version` = 0.20.0, Entry lädt, kein
-   `Migration handler not found`, Entry-Version korrekt, `unique_id`s unverändert,
-   Quick-Drink-Entity-IDs stabil, Datenwerte unverändert, Entity-Delta entspricht den
-   Release Notes, kein Repair-Issue, höchstens eine Migrations-Notification, zweiter
-   Neustart idempotent.
-6. Beleg schreiben: HA-Version, HACS-Version, Von-/Nach-Version, Entry-Versionen,
-   Entity-Zahlen vorher/nachher, Storage-Zusammenfassung, relevante Logzeilen
-   (ohne Tokens), Ergebnis je Checklistenpunkt.
-7. Denselben Lauf nach 0.21.0 wiederholen (0.20.0 → 0.21.0), weil WP-A die
-   Fehlertexte ändert; der zweite Lauf ist Teil der 0.21.0-Abnahme.
+- Eine isolierte HA-Instanz, die **nicht** `127.0.0.1:8123` und **nicht** der
+  Compose-E2E-Stack mit Read-only-Bind-Mount ist; HA-Version `2026.9.1` wie im E2E-Stack
+  (`docker-compose.e2e.yml:62`).
+- HACS in dieser Instanz installiert (Release entpacken, Neustart, Integration
+  einrichten); die HACS-Version wird im Beleg festgehalten.
+- Ein veröffentlichtes `v0.16.2` als Ausgangsversion und das aktuelle Release als Ziel.
+
+**Schritte (manuelle Prozedur, 8 Schritte)**
+
+1. Isolierte HA-Instanz provisionieren und HACS installieren; HA- und HACS-Version
+   notieren.
+2. In HACS das Custom-Repository `Popoboxxo/ha-health-o-mat` hinzufügen.
+3. Über die HACS-UI `v0.16.2` installieren und HA neu starten.
+4. Eine Person anlegen (ein Config-Entry) und Bestand erzeugen: eigene Quick-Drinks,
+   Blutdruck-Messung, Wohlbefinden, Laborwert inkl. Custom-Marker.
+5. Snapshot vor dem Update: Entry-Version, `unique_id`s, Entity-Anzahl, Stichprobenwerte,
+   `/api/states`, `.storage/health_o_mat*`.
+6. In HACS den Update-Check auslösen und **über die HACS-UI** auf das aktuelle Release
+   aktualisieren; HA neu starten.
+7. Prüfpunkte abarbeiten: `manifest.version` entspricht dem Release, Entry lädt, kein
+   `Migration handler not found`, Entry-Version korrekt migriert, `unique_id`s unverändert,
+   Quick-Drink-Entity-IDs stabil, Datenwerte unverändert, höchstens eine
+   Migrations-Notification, kein Repair-Issue; zweiter Neustart idempotent.
+8. Beleg in `docs/E2E-REPORT-WP-E-HACS-UPDATE.md` schreiben: HA-/HACS-Version,
+   Von-/Nach-Version, Entry-Versionen, Entity-Zahlen vorher/nachher,
+   Storage-Zusammenfassung, relevante Logzeilen (ohne Tokens), Ergebnis je Prüfpunkt.
+
+**Abschlusskriterium:** WP-E gilt als **geschlossen**, wenn ein Betreiber den Lauf nach
+dieser Prozedur ausgeführt und das Belegdokument committed hat und **alle** Prüfpunkte aus
+Schritt 7 grün sind. Bis dahin bleibt WP-E **manuell offen**; die Existenz dieser Prozedur
+ist kein Beleg. Schlägt ein Prüfpunkt fehl: Issue mit Repro, Fix, PATCH-Release, Lauf
+wiederholen — der Punkt bleibt bis zum grünen Lauf offen.
 
 **Akzeptanzkriterien**
 
 - Das Update wurde über die HACS-UI ausgeführt, nicht durch Kopieren von Dateien und
   nicht durch einen bloßen Tag.
-- Der Beleg enthält alle sieben Checklistenpunkte mit Ergebnis.
+- Der Beleg enthält alle Prüfpunkte aus Schritt 7 mit Ergebnis.
 - Kein Datenverlust, keine verwaisten oder duplizierten Entities.
 - REQ-HOM-130-Rest-AK ist mit Belegpfad abgehakt.
 - Bei einem Fehlschlag: Issue mit Repro, Fix, Patch-Release, Lauf wiederholen — der AK
@@ -486,9 +507,11 @@ pytest-Szenario (HACS ist nicht im E2E-Image, `docs/REQUIREMENTS.md:1836-1840`).
   Schritt prüfen, kein `bin/sync` gegen `8123`.
 
 **DoD:** Belegdokument committed, REQUIREMENTS-AK abgehakt, kein Release durch dieses
-WP selbst.
+WP selbst. **Bis dahin: WP-E manuell offen.**
 
-**Abhängigkeit:** braucht ein veröffentlichtes 0.20.0; der zweite Lauf braucht 0.21.0.
+**Abhängigkeit:** braucht ein veröffentlichtes Ziel-Release (aktuell 0.20.0/0.21.0) und
+einen Betreiber, der den Lauf ausführt. Der Lauf nach 0.21.0 entfällt nicht: WP-A ändert
+die Fehlertexte, deshalb ist er Teil der 0.21.0-Abnahme, sobald 0.21.0 veröffentlicht ist.
 
 ---
 
@@ -575,8 +598,10 @@ WP-F: unabhängig, extern
   beide `tests_e2e/` — erst B, dann A vermeidet Konflikte.
 - **WP-C ist unabhängig, aber nutzerblockiert.** Die Zahlenkorrektur (Schritte 1–3)
   kann sofort laufen; die Entscheidung wartet auf `main_chat`.
-- **WP-E nach 0.20.0, zwingend vor 0.21.0:** Der reale Update-Pfad muss einmal belegt
-  sein, bevor die nächste verhaltensändernde Version ausgeliefert wird (Audit §4.4).
+- **WP-E nach dem jeweiligen Release:** Der reale Update-Pfad soll einmal belegt sein,
+  bevor die nächste verhaltensändernde Version ausgeliefert wird (Audit §4.4). Nach D-5
+  ist das kein Automatikschritt mehr: der Lauf erfolgt manuell durch einen Betreiber und
+  ist für 0.21.0 Teil der Abnahme — bis dahin bleibt WP-E offen.
 - **WP-D blockiert nichts.** Es ist eine Release-Review-Messung; ein ausgelöster
   Refactor würde die Reihenfolge brechen und vor der nächsten Feature-Welle laufen.
 - **WP-F blockiert nichts in diesem Repo**, wohl aber die Reproduzierbarkeit von
@@ -612,11 +637,11 @@ Automationen/Panel und den Full-Changelog-Link.
 
 | ID | Entscheidung | Optionen | Entscheider | Wirkung/Blockade |
 |---|---|---|---|---|
-| D-1 | B1 (vier Eingabe-Entities) vs. B4 (Status quo + Doku) | B1 / B4 / R1-Kombination (B1 + A2 + A7) | Nutzer (`main_chat`) | blockiert WP-C ab Schritt 4 und jedes B1-Feature |
+| D-1 | B1 (vier Eingabe-Entities) vs. B4 (Status quo + Doku) | **entschieden (2026-11-04): B4** (Status quo + Doku), reversibel | Nutzer (`main_chat`) | erledigt; ein B1-Feature bräuchte einen neuen Beschluss |
 | D-2 | 0.19.1 streichen und in 0.20.0 bündeln | bündeln / separates 0.19.1 | `orchestrator` mit Nutzer | bestimmt den Release-Schnitt in §4 |
 | D-3 | Fehler-Transport: HA-native Übersetzungsfelder vs. eigenes Envelope | **entschieden (2026-11-03, Konzept §8):** HA-native `translation_*` (`code == translation_key`), Batch bleibt `{code, params, message}` | `concept-reviewer` im WP-A-Konzept | erledigt; blockiert nicht mehr |
 | D-4 | `planner`-Rolle aktivieren | aktivieren / Fallback `documenter` beibehalten | Nutzer (Backlog §10, E-4) | beeinflusst nur den Prozess, nicht den Inhalt |
-| D-5 | HACS-Testinstanz provisionieren | neuer Container / dediziertes Compose-Profil | `devops-engineer` + `orchestrator` | blockiert WP-E Schritt 1 |
+| D-5 | HACS-Testinstanz provisionieren | **entschieden (2026-11-04):** kein neuer Container; manuelle Betreiber-Prozedur statt Automatisierung | `orchestrator` | erledigt; WP-E bleibt manuell offen, blockiert kein Release |
 | D-6 | Wo der `bin/reauth`-Fix landet | Tooling-Repo / direkt auf der Instanz | Betreiber der Testinstanz | blockiert nur WP-F |
 
 ---
@@ -630,7 +655,7 @@ Automationen/Panel und den Full-Changelog-Link.
 | Syntax | lokal/CI | `python3 -m compileall -q custom_components/health_o_mat` |
 | HA-Config | Dev-Instanz | `/home/hermes/ha-test/bin/ha core check` (nur lesend) |
 | E2E | Compose, gepinnt `2026.9.1` | `pytest -q tests_e2e` — Baseline 65 (Compose-Stack, `HASS_BASE_URL=…:8124`); 46 nur ohne erreichbaren Stack (Blueprint-Modul-Guard); nie schreibend gegen `8123` |
-| HACS-Update | isolierte Instanz | WP-E-Belegdokument, HACS-UI-Pfad |
+| HACS-Update | isolierte Instanz (Betreiber) | WP-E-Prozedur (8 Schritte); Belegdokument erst nach dem manuellen Lauf — bis dahin WP-E offen |
 | Doku-Wahrheit | lokal | gezielte `grep`-Prüfungen je WP (Zahlen, Codes, AK-Belege) |
 | Secret-Scan | vor jedem Commit | Scan der gestagten Änderungen; Befund blockiert den Commit |
 
@@ -655,15 +680,15 @@ Zählstand ohne erreichbaren Stack.
 | F-03 Testzahlen | — (Korrektur) | `pytest --collect-only`: 1754 Unit / 65 E2E (Compose, `HASS_BASE_URL=…:8124`); 46 nur ohne erreichbaren Stack (Blueprint-Modul-Guard) |
 | F-04 Entity-ID-Stabilität | — (erledigt) | 0.17.x-Releases, `tests_e2e/test_entity_ids_e2e.py` |
 | F-05 `_attr_name`-Ausnahmen | — (erledigt) | `button.py:67,83` |
-| F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger T-1/T-2/T-5; Release-Review-Messung |
-| F-07 Frontend-Größe | WP-D | Trigger T-4 |
-| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A (umgesetzt, E2E-Beleg ausstehend) | `tests/test_error_contract.py`, `tests/test_errors.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression; `docs/SERVICE-RESPONSES.md` |
-| F-09 Labor-Eingabe/Zahlen | WP-C | Doc-Grep (41/10/51/41), Entscheidungsrecord |
-| F-10 HACS-Mechanik | WP-E | `docs/E2E-REPORT-WP-E-HACS-UPDATE.md`, REQ-HOM-130-AK |
+| F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger T-1/T-2/T-5; kein Refactor ausgelöst |
+| F-07 Frontend-Größe | WP-D | Trigger T-4; kein Refactor ausgelöst |
+| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A (PR #84, Release offen) | `tests/test_error_contract.py`, `tests/test_errors.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression; `docs/SERVICE-RESPONSES.md` |
+| F-09 Labor-Eingabe/Zahlen | WP-C | Doc-Grep (41/10/51/41), Entscheidungsrecord D-1 = B4 |
+| F-10 HACS-Mechanik | WP-E (**manuell offen**) | Prozedur in WP-E (8 Schritte) + Abschlusskriterium; Belegdokument erst nach dem Lauf |
 | F-11 Spec §9 O-1 | — (erledigt) | PR #75, `tests/test_entry_migration.py` |
-| F-12 vier E2E-Lücken | WP-B | `tests_e2e/test_config_migration_e2e.py`, `test_diagnostics_e2e.py`, `test_input_persistence_e2e.py` |
+| F-12 vier E2E-Lücken | WP-B (PR #82) | `tests_e2e/test_config_migration_e2e.py`, `test_diagnostics_e2e.py`, `test_input_persistence_e2e.py` |
 | F-13 blockierendes I/O | — (erledigt) | PR #79 + drei Executor-Regressionstests |
-| F-14 `bin/reauth`-Race | WP-F | Befund hier + externer Stresslauf (50 Iterationen) |
+| F-14 `bin/reauth`-Race | WP-F (extern erledigt) | Befund hier + Fix-Form (Lock, atomisches Replace, Modus 600); Stresslauf im Tooling-Repo |
 | F-15 Blueprint-Personenbindung | — (erledigt) | PR #77, `tests_e2e/test_blueprints_e2e.py` |
 | F-16 „kein funktionaler Fehler" | — (Scope-Korrektur) | F-13 als Gegenbeispiel; Aussage nur als statischer Befund lesen |
 | F-17 README-Testzahlen | — (erledigt, dieser Änderungssatz) | `README.md:1300` → 1754 Unit / 65 E2E (Compose); nach WP-B erneut prüfen |
@@ -675,7 +700,8 @@ Zählstand ohne erreichbaren Stack.
 - **Produktionscode für B1** — WP-C endet mit der Entscheidung; eine B1-Umsetzung ist
   ein eigenes Feature mit eigenem Task-Plan und eigener REQ.
 - **Refactor der Kerndateien** — WP-D definiert nur Trigger; ohne Auslösung kein Split.
-- **Vision E2–E6, B5/B6/B7** — bleiben in `docs/PLAN-BACKLOG-2026-11-02.md` Welle 5.
+- **Vision E2–E6, B5/B6/B7** — in `docs/PLAN-BACKLOG-2026-11-02.md` Welle 5 entschieden:
+  B5 nicht unterstützt, B6/B7 gestrichen, Vision geparkt; hier nicht umgesetzt.
 - **Spec-Restpunkte O-2/O-3/O-4** — Pre-Pinning-Bestand, übersetzbare Default-Labels,
   veraltetes Migrations-Rezept; separater Umgang, nicht Teil dieses Plans.
 - **HACS-/Frontend-Änderungen in diesem Repo** — WP-E prüft nur den Update-Pfad.
