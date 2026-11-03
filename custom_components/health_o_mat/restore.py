@@ -1165,7 +1165,11 @@ async def async_restore_from_file(
         raise RestoreError("Health-O-Mat-Speicher nicht verfügbar")
     filename = str(data.get("filename") or "").strip()
     try:
-        path = safe_restore_path(hass.config.config_dir, filename)
+        # Pfadprüfung im Executor: `realpath`/`isfile`/`islink` sind
+        # blockierendes Dateisystem-I/O und dürfen den Event-Loop nicht anhalten.
+        path = await hass.async_add_executor_job(
+            safe_restore_path, hass.config.config_dir, filename
+        )
     except ValueError as err:
         raise RestoreError(str(err)) from err
 

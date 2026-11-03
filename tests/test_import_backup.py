@@ -107,7 +107,8 @@ def _fresh_store():
 def _import_hass(config_dir: Path, entry_id: str = "e1") -> MagicMock:
     hass = MagicMock()
     hass.config.config_dir = str(config_dir)
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn: fn())
+    # HA-Executor-API: führt inline aus und protokolliert den Aufruf.
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *args: fn(*args))
     hass.services.async_call = AsyncMock()
     hass.data = {_DOMAIN: {"shared": {}, entry_id: {"coordinator": MagicMock()}}}
     return hass
@@ -378,6 +379,19 @@ def test_async_import_csv_missing_file_raises(tmp_path):
                 hass, store, "e1", _call({"filename": "nope.csv", "dataset": "all"})
             )
         )
+
+
+def test_async_import_csv_runs_path_validation_in_executor(tmp_path):
+    """[M3] Die Pfad-Whitelist-Prüfung läuft im Executor, nicht auf dem Loop."""
+    folder = _import_dir(tmp_path)
+    (folder / "drinks.csv").write_text(_drinks_csv(), encoding="utf-8")
+    store = _fresh_store()
+    hass = _import_hass(tmp_path)
+
+    _run(importer.async_import_csv(hass, store, "e1", _call({"filename": "drinks.csv"})))
+
+    calls = [await_call.args for await_call in hass.async_add_executor_job.await_args_list]
+    assert (importer.safe_import_path, str(tmp_path), "drinks.csv") in calls
 
 
 # ============================================================================
