@@ -1,5 +1,86 @@
 # System-Audit — ha-health-o-mat (2026-11-03)
 
+> **Nachtrag 2026-11-03 (Stand `1d6f832`):** Der Audit oben bleibt als Momentaufnahme zu
+> `3d769d7` **unverändert** stehen. Dieser Nachtrag ergänzt ihn um den Stand nach den PRs
+> #75, #77 und #79. Die Zeilenangaben in Klammern beziehen sich auf das Original **vor**
+> diesem Nachtrag; überholte Aussagen sind dort nicht umgeschrieben, sondern hier als
+> „superseded" ausgewiesen.
+>
+> | Thema | Original | Stand `1d6f832` |
+> |---|---|---|
+> | Spec §9 O-1 — Repair-Issue + Erfolgs-Notification | offen (Z. 122–123) | **umgesetzt** (PR #75), inkl. `async_remove_entry`-Cleanup |
+> | HACS-Update-Test | offen (Z. 118–121) | **teilweise**: Update-Pfad 0.16.2 → 0.19.0 belegt; HACS-Mechanik **nicht geprüft** |
+> | Blueprints | im Audit nicht erfasst | **vier** (`goal_reached`); `person_name`-Bindungsdefekt behoben (PR #77) |
+> | Blocking I/O im Event-Loop | keine Befunde (Z. 132–134) | **superseded**: drei Blocking-Calls gefunden, im Executor behoben (PR #79) |
+> | Testumfang | 1497 Unit / 39 E2E (Z. 29–30) | **superseded**: 1754 Unit / 65 E2E |
+>
+> **Als superseded markiert** (Originaltext bleibt wörtlich stehen): Z. 29–30
+> (Testzahlen), Z. 118–123 (HACS-Update-Test offen; Spec §9 O-1 offen), Z. 132–134
+> („Keine Korrektheits-, Sicherheits- oder Datenschutz-Befunde"), Z. 148–150
+> (P3: HACS-Update-Test + Spec-§9-O-1-Folgepunkt) und Z. 152–154 („Nicht gefunden" mit
+> der Pauschalaussage „keine unentdeckte Doku/Code-Abweichung") — diese Pauschalaussage
+> war zu stark: die Testzahl-Drift an `README.md:1300` (in diesem Nachtrag gefunden,
+> inzwischen korrigiert, s. u.) ist genau eine solche unentdeckte Doku/Code-Abweichung.
+>
+> **Erledigt seit dem Audit:**
+>
+> 1. **Spec §9 O-1 (PR #75).** Repair-Issue im blockierten Migrationsfall (stabile ID
+>    `migration_blocked_<entry_id>`, `is_fixable=False`, skalares `data` mit Paarliste,
+>    Löschung bei sauberem Pass **und** in `async_remove_entry`) plus genau eine
+>    Erfolgs-Notification nach echten Renames (`entity_id_migration_<entry_id>`, nie
+>    setup-kritisch). Belege: `__init__.py`/`migration.py`,
+>    `tests/test_entry_migration.py`, `tests/test_remove_entry.py`,
+>    `docs/REQUIREMENTS.md:2072`.
+> 2. **HACS-Update-Test — teilweise.** Der Update-Pfad 0.16.2 → 0.19.0 ist auf dem
+>    Compose-Stack **simuliert** belegt: Entry v2 → v3, 82 alte `unique_id`s erhalten,
+>    95 Entities, Daten unverändert, eine Notification, kein Repair-Issue, zweiter
+>    Neustart idempotent. **Nicht belegt:** die HACS-Mechanik selbst (kein HACS im
+>    gepinnten E2E-Image, Read-only-Bind-Mount, interaktiver Device-Flow) — REQ-HOM-130
+>    bleibt deshalb „teilweise".
+> 3. **Blueprints (PR #77).** Vierter Blueprint `goal_reached.yaml`; in
+>    `evening_reminder`/`blood_pressure_warning` war `person_name` im Jinja-Template
+>    referenziert, aber nie gebunden (HA substituiert nur `!input`) — behoben über
+>    `variables: {person: !input person_name}`; Regression in `tests/test_blueprints.py`,
+>    neuer 19-Test-E2E (`tests_e2e/test_blueprints_e2e.py`).
+> 4. **Blocking I/O (PR #79).** Die Aussage „keine Befunde" (Z. 132–134) hat eine ganze
+>    Fehlerklasse übersehen: `list_import_files`/`os.listdir`, `safe_import_path` und
+>    `safe_restore_path` liefen im Event-Loop. Gefunden über das E2E-HA-Log (1 Warnung
+>    vorher, 0 nachher), behoben per Executor. Belege im Code: `ws_api.py:2316`,
+>    `importer.py:747`, `restore.py:1171`; Tests: `tests/test_ws_api.py:4502`,
+>    `tests/test_restore.py:852`.
+> 5. **Teststand.** 1754 Unit-Tests, 65 E2E-Tests; die vollständige Suite lief zweimal
+>    grün. Die E2E-Zahl ist nachgezählt: 65 E2E-Tests, wenn `HASS_BASE_URL` auf den
+>    Compose-Stack zeigt (46 + 19 Blueprint-Tests). Ohne erreichbare Instanz überspringt
+>    `tests_e2e/test_blueprints_e2e.py:83-92` das Modul (`allow_module_level`), dann sind
+>    es 46 Tests plus ein übersprungenes Modul. (Die 1754 stammen aus dem letzten
+>    vollständigen `pytest -q`-Lauf, nicht aus einem neuen Lauf für diesen Nachtrag.)
+>
+> **Weiterhin offen (unverändert):**
+>
+> - **REQ-HOM-127** — Fehlercode-/i18n-Umbau der Alt-Pfade (Zwei-Klassen-Fehlerbehandlung,
+>   Z. 65–72).
+> - **E2E-Lücken** — REQ-HOM-101 AK4, REQ-HOM-105 (Diagnostics-E2E), „Update mit
+>   Alt-Bestand + Button-Änderung nach Reload".
+> - **Entscheidung Eingabe-Vereinfachung Laborwerte** — Options-Doc-Zahlen weiterhin
+>   veraltet (29 → 41 Marker, 9 → 10 Kategorien, Z. 110–115).
+> - **Datei-Wachstumstrend** (Z. 42–57) und **HACS-Mechanik selbst** (s. o.).
+> - **Doku-Drift — erledigt (2026-11-03):** `README.md:1300` nannte „25 E2E-Tests" und
+>   „1563 Unit-Tests"; korrigiert auf **1754 Unit- / 65 E2E-Tests**, dazu die veraltete
+>   Parenthese „CI-äquivalent 1562 passed, 1 skipped" entfernt. Bleibt als Beleg stehen,
+>   ist aber kein offener Punkt mehr.
+>
+> **Neuer Befund außerhalb dieses Repos (nicht hier zu fixen):**
+> `/home/hermes/ha-test/bin/reauth:49` schreibt `token.json` in place und nimmt **nicht**
+> das `refresh.lock`, das `bin/ha` (Z. 51–95) für die Token-Rotation nutzt — derselbe
+> Rotation-Race kann erneut auftreten, wenn `reauth` parallel zu einem `bin/ha`-Refresh
+> läuft.
+>
+> **Quelle des Nachtrags:** Repo-Stand `main` @ `1d6f832` (2026-11-03), die genannten PRs,
+> `docs/REQUIREMENTS.md` (Changelog-Einträge 2026-11-02/03), die Blueprint-/Test-Dateien
+> im Repo sowie ein Blick in `/home/hermes/ha-test/bin/{ha,reauth}`.
+
+---
+
 > **Methode:** Read-only, im Main Chat, ohne GitHub-Funktion (kein Issue/PR).
 > Scope: `custom_components/health_o_mat/**` (Python + `www/*.js`) und
 > `tests/`/`tests_e2e/`. Agenten-Tooling (`.claude/**`, `.agent-meta/**`) und
