@@ -1,6 +1,6 @@
 # Backlog-Umsetzungsplan — 0.19.1 / 0.20.0 / 0.21.0
 
-**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Welle 2 umgesetzt (offen: Merge/Release 0.20.0), Wellen 3–5 geplant · **Datum:** 2026-11-02
+**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Welle 2 umgesetzt (offen: Merge/Release 0.20.0), Welle 3 umgesetzt (offen: Merge/Release 0.20.0), Wellen 4–5 geplant · **Datum:** 2026-11-02
 **Basis:** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean
 **Vorgänger:** `docs/PLAN-OPEN-ISSUES.md` — abgeschlossen (alle drei Releases veröffentlicht)
 **Quellen:** GitHub (`gh issue list`/`gh pr list` = 0 offen, Stand 2026-11-02), `docs/REQUIREMENTS.md`, `docs/REVIEW-2026-10-14.md`, `docs/CONCEPT-UI.md`, `docs/IDEATION-UI-PRO.md`, `docs/IDEATION-VISION.md`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
@@ -16,7 +16,7 @@
 - **GitHub-Backlog leer heißt nicht dokumentierter Backlog leer.** `gh issue list` und `gh pr list` melden am 2026-11-02 jeweils 0 offene Einträge. Insgesamt sind 10 Issues geschlossen: #28, #29, #30, #31, #32, #33, #70, #71, #72, #73.
 - **Der Vorgängerplan ist abgearbeitet:** `docs/PLAN-OPEN-ISSUES.md` führte 0.17.3, 0.18.0 und 0.19.0; alle drei Releases sind veröffentlicht, `manifest.version` steht auf 0.19.0.
 - **Was der Vorgängerplan bewusst zurückgelassen hat:** B1 (REQ-HOM-127), B5, B6/B7 und B9 aus `docs/PLAN-OPEN-ISSUES.md:444-451`. B2, B3, B4, B8 und B10 sind dagegen erledigt.
-- **Was zusätzlich offen ist:** die Restpunkte von REQ-HOM-130 (HACS-Update-Test, Repair-Issue, Erfolgs-Notification) und REQ-HOM-006 AK 1 (Blueprint-E2E). REQ-HOM-010 (Text-Entity `measurement_note`) war bei Planaufstellung offen und ist inzwischen in Welle 2 umgesetzt (offen nur Merge/Release 0.20.0).
+- **Was zusätzlich offen ist:** die Restpunkte von REQ-HOM-130 (HACS-Update-Test, Repair-Issue, Erfolgs-Notification). REQ-HOM-010 (Text-Entity `measurement_note`) war bei Planaufstellung offen und ist inzwischen in Welle 2 umgesetzt, REQ-HOM-006 AK 1 (Blueprint-E2E) in Welle 3 (jeweils offen nur Merge/Release 0.20.0).
 - **Was den Blick verstellt:** Die Dokumentation nennt an mehreren Stellen Release-Stände und Erledigungsgrade, die seit 0.14.0 bis 0.19.0 überholt sind. Solange das so bleibt, ist jede Priorisierung auf falschem Status gebaut — deshalb steht Welle 0 vor allem anderen.
 
 ---
@@ -28,7 +28,7 @@
 | Item | Inhalt | Prio | Beleg |
 |---|---|---|---|
 | REQ-HOM-127 | Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen; eigener Plan fehlt | P2 | `docs/REQUIREMENTS.md:1516-1538` |
-| REQ-HOM-006 | Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht" | P2 | `docs/REQUIREMENTS.md:174-184` |
+| REQ-HOM-006 | ~~Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht"~~ — **in Welle 3 umgesetzt** (vierter Blueprint, Personen-Bindungs-Fix, Compose-E2E 19/19); der Import auf der geteilten Instanz bleibt manuelle Abnahme; offen nur Merge/Release 0.20.0 | P2 | `docs/REQUIREMENTS.md:172-211` |
 | REQ-HOM-010 | ~~Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`)~~ — **in Welle 2 umgesetzt** (Entity, zentrales Leeren, History-/CSV-Beleg); offen nur Merge/Release 0.20.0 | P3 | `docs/REQUIREMENTS.md:325-364` |
 | REQ-HOM-130 Rest | HACS-Update-Test v0.16.2 nach v0.17.x; Repair-Issue und Erfolgs-Notification (Spec §9 O-1) | P1 | `docs/REQUIREMENTS.md:1766-1772`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md:1246-1254` |
 | B5 | HbA1c in `%` (DCCT) — bewusst `unsupported_unit`, eigenes Issue vorgesehen | — | `docs/PLAN-OPEN-ISSUES.md:448` |
@@ -191,6 +191,8 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Ziel:** Der Blueprint-Import auf `ha-test` ist automatisiert belegt; der optionale Blueprint „Ziel erreicht" ist ergänzt.
 
+**Stand Welle 3:** umgesetzt — vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer), `tests/test_blueprints.py` um die Personen-Bindungs-Regression erweitert, `README.md`-Liste drei → vier, neues `tests_e2e/test_blueprints_e2e.py`. Der E2E-Lauf deckte einen echten Defekt auf: `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template ohne Bindung (HA substituiert nur `!input`), der Personenname rendete nie — behoben via `variables: {person: !input person_name}` (`weekly_report` braucht das nicht, kein Template). **Belege:** `pytest -q` → **1751 passed**; E2E **19 Tests, 19 passed** (Compose-Stack 8124) — Import via Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Validierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Abweichung bei AK 1:** der automatisierte Import läuft per Entscheidung D8 (`docs/PLAN-OPEN-ISSUES.md:40`) auf Compose (8124), nicht auf der geteilten Instanz; dort bleibt der Import manuelle Abnahme. **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration → keine auslösbare Entity), also kein realer Notify-Aufruf. **Offen:** Merge und Release 0.20.0 (gemeinsam mit Welle 2).
+
 **Scope/Dateien:** `tests_e2e/` (neues Blueprint-E2E), `blueprints/automation/health_o_mat/` (optionaler Blueprint), `README.md` und Blueprint-Doku. Bestand: `weekly_report.yaml`, `evening_reminder.yaml`, `blood_pressure_warning.yaml`.
 
 **Agent(en):** `tester`, danach `documenter`.
@@ -199,7 +201,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 1. E2E-Skript für Blueprint-Import und Schema-Validierung schreiben.
 2. Optionalen Blueprint „Ziel erreicht" in `blueprints/automation/health_o_mat/` anlegen, inklusive README-Eintrag.
-3. Abgrenzung zu REQ-HOM-118 dokumentieren: 118 liefert die drei Blueprints, 006 schließt nur die E2E-Lücke.
+3. Abgrenzung zu REQ-HOM-118 dokumentieren: 118 liefert die vier Blueprints, 006 schließt nur die E2E-Lücke.
 4. Negativtest: Import mit Schema-Verstoß muss fehlschlagen.
 
 **Akzeptanzkriterien**

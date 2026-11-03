@@ -171,17 +171,44 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-006 — Automation-Blueprints
 - **Priorität:** P2 · **Aufwand:** S
-- **Status: Teilweise** — drei Blueprints
-  (`evening_reminder`, `blood_pressure_warning`, `weekly_report`) vorhanden und
-  strukturell getestet (`blueprints/automation/health_o_mat/*.yaml`,
-  `tests/test_blueprints.py`); der in AK 1 geforderte **E2E-Import auf
-  `ha-test`** ist nicht belegt, und ein optionaler „Ziel-erreicht"-Blueprint
-  fehlt.
+- **Status: Umgesetzt (noch kein Release)** — vier Blueprints
+  (`evening_reminder`, `blood_pressure_warning`, `weekly_report`,
+  `goal_reached`) unter `blueprints/automation/health_o_mat/`, strukturell
+  getestet (`tests/test_blueprints.py`) und per **HA-eigenem** Import-/
+  Validierungspfad E2E belegt (`tests_e2e/test_blueprints_e2e.py`).
 - **Beschreibung:** Blueprints unter `blueprints/automation/health_o_mat/`:
   Abend-Erinnerung (Ziel < 100 %), Blutdruck-Warnung, optional Ziel-erreicht.
 - **Akzeptanzkriterien:**
-  - [ ] Validieren gegen HA-Schema (E2E: Import auf ha-test)
+  - [x] Validieren gegen HA-Schema (E2E: Import auf ha-test) — **mit
+    dokumentierter Abweichung:** der automatisierte Import läuft nach
+    Plan-Entscheidung D8 (`docs/PLAN-OPEN-ISSUES.md:40`) auf dem Compose-Stack
+    (Port 8124), **nicht** auf der geteilten Instanz `ha-test`; dort bleibt der
+    Import die manuelle Abnahme. Belegt ist der echte HA-Pfad, nicht unser
+    YAML-Loader: `blueprint/save` (Admin-WS) → `automation.reload` →
+    `blueprint/list` liefert alle vier Blueprints mit Metadaten, Domain und
+    exaktem Input-Set; `POST /api/config/automation/config/<id>`
+    (`async_validate_config_item`) akzeptiert `goal_reached` und
+    `evening_reminder` mit konkreten Inputs und liest sie unverändert zurück;
+    Negativfälle werden abgewiesen (`invalid_format` / `Invalid blueprint`,
+    fehlender Input → 400); `blueprint/substitute` + `POST /api/template`
+    rendern den Personennamen.
   - [x] de/en Beschreibungstexte; Person frei wählbar
+- **Belege:** `blueprints/automation/health_o_mat/{evening_reminder,
+  blood_pressure_warning,weekly_report,goal_reached}.yaml`;
+  `tests/test_blueprints.py` (Struktur, Input-Sets, Entity-Domain,
+  Personen-Bindung, Ziel-Trigger); `tests_e2e/test_blueprints_e2e.py`
+  (**19 Tests, 19 passed**, Compose-Stack 8124); `pytest -q` → **1751 passed**.
+  Der E2E-Lauf deckte einen echten Defekt auf: `evening_reminder` und
+  `blood_pressure_warning` referenzierten `person_name` im Jinja-Template, ohne
+  es zu binden — HA ersetzt ausschließlich die `!input`-Platzhalter im YAML, das
+  Template sah eine undefinierte Variable, der Personenname rendete nie. Beide
+  binden jetzt `variables: {person: !input person_name}` und nutzen `person`;
+  `weekly_report` braucht keine Bindung (kein Template, reicht
+  `!input person_name` direkt als Service-Daten durch). Der Regressionstest in
+  `tests/test_blueprints.py` schlägt auf dem Vorher-Stand fehl.
+  **Nicht belegt:** es feuert keine Automation (die Seed-Konfiguration enthält
+  keinen `automation:`-Include, also existiert keine auslösbare Entity) — ein
+  realer Notify-Aufruf ist damit nicht nachgewiesen.
 
 ### REQ-HOM-007 — CSV-Import-Service
 - **Priorität:** P3 · **Aufwand:** M
@@ -2040,6 +2067,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 | Datum | Änderung |
 |---|---|
+| 2026-11-03 | **Welle 3 — REQ-HOM-006 Blueprint-E2E umgesetzt (noch kein Release):** vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Ziel-erreicht, Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer nötig); **echter Defekt behoben** — `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template, ohne es zu binden (HA substituiert nur `!input`), daher rendete der Personenname nie; beide binden jetzt `variables: {person: !input person_name}` und nutzen `person`, `weekly_report` braucht keine Bindung (kein Template); `tests/test_blueprints.py` um die Bindungs-Regression erweitert (schlägt auf dem Vorher-Stand fehl); `README.md`-Blueprint-Liste drei → vier. **Belege:** `pytest -q` → **1751 passed**; neu `tests_e2e/test_blueprints_e2e.py` → **19 Tests, 19 passed** auf dem Compose-Stack (8124) — Import über Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Automationsvalidierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration, also keine auslösbare Entity) — kein realer Notify-Aufruf. **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
 | 2026-11-02 | **Welle 2 — REQ-HOM-010 Mess-Notiz umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`):** neue Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, `mdi:note-text-outline`, max. 255 Zeichen, Gate `AREA_BP`); die angefangene Notiz liegt im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Schema-Bump/Migrator) und wird zentral in `HealthOMatStore.add_reading` geleert, sodass Button, Service, WS und CSV-Import denselben Choke-Point nutzen; `SaveReadingButton` reicht die Notiz mit; nach dem Validator-Befund fließt die angefangene Notiz auch über den Service `add_blood_pressure` und das WS-Kommando `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene); Note sichtbar in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (Spalten additiv, Bestandsimporte unverändert). **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean; E2E `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)) — frische Person, Identität (`unique_id`, englisch gepinnte `entity_id`, lokalisierter Anzeigename), Notiz an gespeicherter Messung, Feld danach leer, Notiz in `history_json` + CSV, Bereichs-Toggle behält `unique_id`/`entity_id`. Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, gepinnt durch Unit-Regressionstest. **Scope:** nur Blutdruck (`set_wellbeing` hat keinen `note`-Parameter). **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
 | 2026-11-02 | **Welle 1 — REQ-HOM-130-Restpunkte umgesetzt (Branch `feat/130-migration-repairs`, Commit `4d32166`, PR #75):** Repair-Issue im blockierten Migrationsfall (stabile ID `migration_blocked_<entry_id>`, `is_fixable=False`, skalares `data` mit Paarliste, `translation_key="migration_blocked"`, Löschung bei sauberem Pass und in `async_remove_entry`), genau eine Erfolgs-Notification nach echten Renames (`entity_id_migration_<entry_id>`, nie setup-kritisch), Übersetzungen in `strings.json`/`translations/de.json`/`translations/en.json`. **Update-Pfad 0.16.2 → 0.19.0** auf dem Compose-Stack (Port 8124) **simuliert** belegt: Entry v2→v3, 4 Quick-Drink-Renames, 82 alte `unique_id`s erhalten (95 Entities danach, +13 gegenüber 0.19.0), Getränke 750 ml / BD 124/82/64 / Wohlbefinden 7 / Labor-CRP 3,2 mg/L unverändert lesbar, eine Notification, kein Repair-Issue, kein `Migration handler not found`, zweiter Neustart idempotent. **Nicht belegt:** die HACS-Mechanik selbst (kein HACS im gepinnten E2E-Image, Integration read-only bind-gemountet, HACS braucht interaktiven GitHub-Device-Flow) — REQ-HOM-130 bleibt deshalb **teilweise**. **Belege:** `tests/test_entry_migration.py`, `tests/test_remove_entry.py`; `pytest -q` → **1719 passed**, `ruff check .` + `ruff format --check .` clean. Kein Release/Tag. |
 | 2026-09-06 | Initiale Anlage; nach Review-Feedback in zwei Tracks getrennt: Features (001–010) dokumentiert, Funde & Risiken (101–110) priorisiert; **Umsetzungsplan ausgelagert nach `plan-funde-risiken.md`** (Planner-Konvention: Pläne = eigene Dokumente) |
