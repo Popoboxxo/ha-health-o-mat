@@ -1102,7 +1102,115 @@
     "ui_panel_lab_unit_required": "Unit required",
     "ui_panel_lab_report_discard": "Discard this report",
     "ui_panel_lab_report_discard_confirm": "Discard this report with {count} values?",
+    "ui_panel_lab_report_row_hint": "Row {row}",
     "ui_panel_val_lab_value": "Please enter a marker and a numeric value."
+  },
+  "exceptions": {
+    "no_person_configured": {
+      "message": "No Health-O-Mat person is set up."
+    },
+    "person_ambiguous": {
+      "message": "Several people are set up. Select one of them."
+    },
+    "person_not_found": {
+      "message": "This person is not set up."
+    },
+    "invalid_ts": {
+      "message": "Invalid timestamp {value}. Expected ISO 8601, at most 5 minutes in the future and not before 1900."
+    },
+    "invalid_history_kind": {
+      "message": "Unknown type {kind}. Allowed: {allowed}."
+    },
+    "missing_item_id": {
+      "message": "The entry to change is missing an id."
+    },
+    "entry_not_found": {
+      "message": "The entry was not found or is already in the requested state."
+    },
+    "invalid_undo_kind": {
+      "message": "Undo is not available for type {kind}. Allowed: {allowed}."
+    },
+    "undo_not_supported": {
+      "message": "Undo is not available for {kind}."
+    },
+    "nothing_to_remove": {
+      "message": "There is nothing to remove for {kind}."
+    },
+    "limit_out_of_range": {
+      "message": "Limit must be between {min} and {max}."
+    },
+    "offset_invalid": {
+      "message": "Offset must be 0 or greater."
+    },
+    "invalid_since": {
+      "message": "Since must be an ISO 8601 timestamp."
+    },
+    "amount_out_of_range": {
+      "message": "Amount must be between {min} and {max} ml."
+    },
+    "bp_out_of_range": {
+      "message": "Systolic and diastolic must be between {min} and {max}."
+    },
+    "wellbeing_target_missing": {
+      "message": "Provide either a status or a score between 1 and {max}."
+    },
+    "wellbeing_score_invalid": {
+      "message": "The score must be between {min} and {max}."
+    },
+    "wellbeing_key_unknown": {
+      "message": "Unknown wellbeing status. Allowed: {allowed}."
+    },
+    "unknown_marker": {
+      "message": "Unknown marker {marker}."
+    },
+    "unit_required": {
+      "message": "A unit is required for marker {marker}."
+    },
+    "invalid_value": {
+      "message": "The value for marker {marker} is not a valid number."
+    },
+    "unsupported_unit": {
+      "message": "Unit {unit} is not supported for marker {marker}."
+    },
+    "duplicate_marker": {
+      "message": "Marker {marker} appears more than once in this report."
+    },
+    "empty_report": {
+      "message": "The report has no values."
+    },
+    "too_many_rows": {
+      "message": "The report has {count} rows; at most {limit} are allowed."
+    },
+    "no_active_report": {
+      "message": "There is no active report at this time."
+    },
+    "no_active_value": {
+      "message": "There is no active value for marker {marker}."
+    },
+    "invalid_setting": {
+      "message": "Invalid setting {field}."
+    },
+    "unknown_dataset": {
+      "message": "Unknown dataset. Allowed: {allowed}."
+    },
+    "confirm_mismatch": {
+      "message": "The confirmation does not match the person key."
+    },
+    "invalid_import_source": {
+      "message": "Provide exactly one of filename or content."
+    },
+    "content_not_utf8": {
+      "message": "The content is not valid UTF-8."
+    },
+    "content_too_large": {
+      "message": "The content exceeds {max} bytes."
+    },
+    "config_flow_unavailable": {
+      "message": "This Home Assistant version cannot start a config flow."
+    },
+    "config_flow_failed": {
+      "message": "The config flow could not be started."
+    }
   },
   "issues": {
     "migration_blocked": {

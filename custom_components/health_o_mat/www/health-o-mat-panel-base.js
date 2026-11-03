@@ -718,10 +718,18 @@ export const PANEL_CSS = `
  * Without an injected translator — e.g. in the unit tests — `t()` returns the
  * German fallback embedded at each call site. */
 let _uiTranslate = null;
+let _uiErrorTranslate = null;
 let _uiLanguage = "de";
 
 export function setUiTranslator(fn) {
   _uiTranslate = typeof fn === "function" ? fn : null;
+}
+
+/* Error translator (exceptions catalog), injected by the entry module next to
+ * `setUiTranslator`. Kept as a separate hook because error objects carry
+ * `translation_key`/`translation_placeholders` instead of a `common` key. */
+export function setUiErrorTranslator(fn) {
+  _uiErrorTranslate = typeof fn === "function" ? fn : null;
 }
 
 export function setUiLanguage(language) {
@@ -821,21 +829,51 @@ export function intOrNull(raw) {
   return Number.isFinite(n) ? Math.round(n) : null;
 }
 
-/* WS error -> display text. Home Assistant rejects `callWS` with an object that
- * carries `code`/`message` and (for validated commands) `translation_placeholders`
- * — the backend puts the offending lexicon line there, so it is appended instead
- * of being swallowed by `errMsg`. */
-export function wsErrorText(err) {
-  const base = errMsg(err);
-  const ph = err && err.translation_placeholders;
-  if (ph && typeof ph === "object") {
-    if (ph.detail) return `${base}: ${String(ph.detail)}`;
-    const parts = Object.keys(ph)
-      .filter((k) => ph[k] != null && ph[k] !== "")
-      .map((k) => `${k}=${ph[k]}`);
-    if (parts.length) return `${base} (${parts.join(", ")})`;
+/* WS error -> display text.
+ *
+ * Priority per the error contract: the localized `exceptions` catalog text
+ * (injected via `setUiErrorTranslator`) → the neutral server `message` → the
+ * code. The old `translation_placeholders` appendix is gone: the placeholders
+ * are interpolated into the localized text by `tError`; only `row` is shown as
+ * a separate row hint (the catalog texts never contain `{row}`). */
+export function tError(err) {
+  if (err == null) return "";
+  if (typeof err !== "object") return String(err);
+
+  if (_uiErrorTranslate) {
+    try {
+      const value = _uiErrorTranslate(err);
+      if (value != null && String(value).trim() !== "") return String(value);
+    } catch (_error) {
+      // A broken translator must never break rendering.
+    }
   }
-  return base;
+
+  const key = err.translation_key || err.code || "";
+  if (err.message != null && String(err.message) !== "") return String(err.message);
+  if (key) return String(key);
+  return "";
+}
+
+/** "Zeile 2"/"Row 2" for row-scoped errors; "" when the error has no row. */
+export function rowHint(err) {
+  const params = err && (err.params || err.translation_placeholders);
+  if (!params || typeof params !== "object") return "";
+  const row = params.row;
+  if (row == null || row === "") return "";
+  return t("ui_panel_lab_report_row_hint", "Zeile {row}", { row: row });
+}
+
+/** Append the row hint when a row-scoped error carries one. */
+export function withRowHint(text, err) {
+  const hint = rowHint(err);
+  if (!hint) return text;
+  if (String(text).indexOf(hint) !== -1) return text;
+  return `${text} (${hint})`;
+}
+
+export function wsErrorText(err) {
+  return withRowHint(tError(err) || errMsg(err), err);
 }
 
 /* Normalised quick-drink list, used for both dirty-checking and payloads. */

@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from custom_components.health_o_mat import logic
+
 _COMPONENT_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "health_o_mat"
 _MASTER = _COMPONENT_DIR / "strings.json"
 _TRANSLATIONS = {
@@ -624,3 +626,142 @@ def test_req_hom_010_measurement_note_translation_present() -> None:
 
     assert all(value.strip() for value in names.values()), names
     assert names["de"] != names["master"], "deutscher Anzeigename muss abweichen"
+
+
+# --- Fehlerkatalog (REQ-HOM-127) -------------------------------------------
+
+# `logic.ERROR_SPECS` is the single source of truth (35 codes). Every code has
+# an `exceptions.<code>.message` in the English master and both translations.
+_CATALOG = logic.ERROR_SPECS
+_CATALOG_CODES = tuple(_CATALOG)
+_EXCEPTION_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_QUOTED_PLACEHOLDER = re.compile(r"""['"]\{[^}]+\}['"]""")
+
+
+def _exceptions(path: Path) -> dict[str, dict[str, str]]:
+    section = _load(path).get("exceptions")
+    assert isinstance(section, dict), f"{path}: Sektion 'exceptions' fehlt"
+    return section
+
+
+def _exception_message(path: Path, code: str) -> str:
+    return _exceptions(path)[code]["message"]
+
+
+def test_req_hom_127_catalog_is_the_translation_source() -> None:
+    """[REQ-HOM-127] Der Katalog bleibt die Quelle: 35 eindeutige Codes."""
+    assert len(_CATALOG_CODES) == 35
+    assert len(set(_CATALOG_CODES)) == 35
+
+
+def test_req_hom_127_every_catalog_code_has_a_translation() -> None:
+    """[REQ-HOM-127] Jeder Katalogcode hat einen nicht-leeren Text in allen drei Dateien."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        section = _exceptions(path)
+        for code in _CATALOG_CODES:
+            assert code in section, f"{path}: exceptions.{code} fehlt"
+            message = section[code].get("message")
+            assert isinstance(message, str) and message.strip(), (
+                f"{path}: exceptions.{code}.message ist leer"
+            )
+
+
+def test_req_hom_127_no_orphan_exception_translation() -> None:
+    """[REQ-HOM-127] Kein `exceptions`-Key ohne Katalogcode (kein toter Text)."""
+    catalog_codes = set(_CATALOG_CODES)
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        orphans = sorted(set(_exceptions(path)) - catalog_codes)
+        assert not orphans, f"{path}: exceptions-Keys ohne Katalogcode: {orphans}"
+
+
+def test_req_hom_127_exception_placeholders_match_across_languages() -> None:
+    """[REQ-HOM-127] Platzhalter-Menge je Code in Master/de/en identisch.
+
+    Set equality, not a subset: HA discards a translation whose placeholder set
+    differs from the English master (design §9.2 rule 5).
+    """
+    for code in _CATALOG_CODES:
+        expected = set(_EXCEPTION_PLACEHOLDER.findall(_exception_message(_MASTER, code)))
+        for lang, path in sorted(_TRANSLATIONS.items()):
+            actual = set(_EXCEPTION_PLACEHOLDER.findall(_exception_message(path, code)))
+            assert actual == expected, (
+                f"translations/{lang}.json: Platzhalter bei exceptions.{code} "
+                f"weichen ab: {sorted(actual)} != {sorted(expected)}"
+            )
+
+
+def test_req_hom_127_exception_placeholders_are_declared_params() -> None:
+    """[REQ-HOM-127] Jeder Platzhalter ist ein deklarierter Param, nie `row`."""
+    for code in _CATALOG_CODES:
+        declared = set(_CATALOG[code]["params"])
+        for path in (_MASTER, *_TRANSLATIONS.values()):
+            placeholders = set(_EXCEPTION_PLACEHOLDER.findall(_exception_message(path, code)))
+            assert placeholders <= declared, (
+                f"{path}: exceptions.{code} nutzt nicht deklarierte Platzhalter: "
+                f"{sorted(placeholders - declared)}"
+            )
+            assert "row" not in placeholders, f"{path}: exceptions.{code} rendert {{row}}"
+            assert "first_row" not in placeholders, (
+                f"{path}: exceptions.{code} rendert {{first_row}}"
+            )
+
+
+def test_req_hom_127_invalid_value_never_renders_value() -> None:
+    """[REQ-HOM-127] Review-Auflage 1: `invalid_value` rendert den Messwert nie.
+
+    The `invalid_value.value` raw echo is projected into
+    `translation_placeholders`, so the text must not reference `{value}`.
+    Across the whole section `{value}` is only allowed for `invalid_ts`
+    (caller-supplied timestamp).
+    """
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        assert "{value}" not in _exception_message(path, "invalid_value"), (
+            f"{path}: exceptions.invalid_value.message darf {{value}} nicht rendern"
+        )
+        for code in _CATALOG_CODES:
+            if code == "invalid_ts":
+                continue
+            assert "{value}" not in _exception_message(path, code), (
+                f"{path}: {{value}} ist nur für invalid_ts erlaubt, nicht für {code}"
+            )
+
+
+def test_req_hom_127_no_single_quotes_around_placeholders() -> None:
+    """[REQ-HOM-127] Keine Anführungszeichen um Platzhalter (hassfest, §9.2 Regel 2)."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        for code, entry in _exceptions(path).items():
+            assert not _QUOTED_PLACEHOLDER.search(entry["message"]), (
+                f"{path}: exceptions.{code}.message klammert einen Platzhalter in Anführungszeichen"
+            )
+
+
+def test_req_hom_127_german_and_english_texts_differ() -> None:
+    """[REQ-HOM-127] de und en sind tatsächlich übersetzt, nicht kopiert."""
+    for code in _CATALOG_CODES:
+        de_text = _exception_message(_TRANSLATIONS["de"], code)
+        en_text = _exception_message(_TRANSLATIONS["en"], code)
+        assert de_text != en_text, f"exceptions.{code}: de == en"
+
+
+def test_req_hom_127_english_exception_templates_are_ascii() -> None:
+    """[REQ-HOM-127] Review-Auflage 2: ASCII gilt fürs englische Template.
+
+    Not the rendered text — `marker`/`value` params may carry non-ASCII
+    characters. The German translation is localized prose (umlauts) by design
+    and is therefore exempt from the ASCII guard.
+    """
+    for path in (_MASTER, _TRANSLATIONS["en"]):
+        for code in _CATALOG_CODES:
+            _exception_message(path, code).encode("ascii")  # must not raise
+
+
+def test_req_hom_127_lab_report_row_hint_exists() -> None:
+    """[REQ-HOM-127] `common.ui_panel_lab_report_row_hint` existiert mit `{row}`."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        hint = _common(path).get("ui_panel_lab_report_row_hint")
+        assert isinstance(hint, str) and hint.strip(), (
+            f"{path}: common.ui_panel_lab_report_row_hint fehlt"
+        )
+        assert set(_EXCEPTION_PLACEHOLDER.findall(hint)) == {"row"}, (
+            f"{path}: Zeilen-Hinweis muss genau {{row}} nutzen"
+        )

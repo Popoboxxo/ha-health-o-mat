@@ -3107,6 +3107,136 @@ def test_req_hom_117_panel_translations_load_fallback_and_language_switch(tmp_pa
     assert "Gut" not in html, "das Server-Label wird nicht per Key übersetzt"
 
 
+# --- REQ-HOM-127: localized error objects (translation_key || code) --------
+
+_ERROR_I18N_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const i18n = await import(pathToFileURL(process.argv[3]).href);
+
+const calls = [];
+const hass = {
+  language: "en",
+  callWS: async (request) => {
+    calls.push(request.category);
+    return {
+      resources:
+        request.category === "exceptions"
+          ? {
+              "component.health_o_mat.exceptions.amount_out_of_range.message":
+                "Amount must be between {min} and {max} ml.",
+              "component.health_o_mat.exceptions.duplicate_marker.message":
+                "Marker {marker} appears more than once in this report.",
+            }
+          : {
+              "component.health_o_mat.common.ui_panel_lab_report_row_hint": "Row {row}",
+            },
+    };
+  },
+};
+
+await i18n.loadUiTranslations(hass);
+base.setUiTranslator(i18n.t);
+base.setUiErrorTranslator(i18n.tError);
+base.setUiLanguage(i18n.currentLanguage());
+
+const localized = base.wsErrorText({
+  translation_key: "amount_out_of_range",
+  translation_placeholders: { min: "1", max: "10000" },
+  message: "amount_out_of_range (min=1, max=10000)",
+});
+const rowHinted = base.wsErrorText({
+  code: "duplicate_marker",
+  params: { row: 2, marker: "gptx", first_row: 1 },
+  message: "duplicate_marker (row=2, marker=gptx, first_row=1)",
+});
+const unknown = base.wsErrorText({ code: "mystery", message: "neutral mystery" });
+
+await i18n.resetUiTranslations();
+const afterReset = i18n.tError({
+  translation_key: "amount_out_of_range",
+  message: "fallback message",
+});
+const wsAfterReset = base.wsErrorText({
+  translation_key: "amount_out_of_range",
+  message: "fallback message",
+});
+
+process.stdout.write(
+  JSON.stringify({
+    categories: Array.from(new Set(calls)),
+    localized,
+    rowHinted,
+    unknown,
+    afterReset,
+    wsAfterReset,
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_i18n_loads_exceptions_category(tmp_path):
+    """[REQ-HOM-127] Der Loader holt `exceptions` parallel und `reset` leert beide Caches."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _ERROR_I18N_RUNNER,
+            [
+                str(_WWW_DIR / "health-o-mat-panel-base.js"),
+                str(_WWW_DIR / "health-o-mat-i18n.js"),
+            ],
+            "runner_error_i18n",
+        )
+    )
+
+    assert out["categories"] == ["common", "exceptions"]
+    assert out["afterReset"] == "fallback message"
+    assert out["wsAfterReset"] == "fallback message"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_ws_error_text_localizes(tmp_path):
+    """[REQ-HOM-127] `wsErrorText` lokalisiert vor `message`; kein Placeholder-Anhang."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _ERROR_I18N_RUNNER,
+            [
+                str(_WWW_DIR / "health-o-mat-panel-base.js"),
+                str(_WWW_DIR / "health-o-mat-i18n.js"),
+            ],
+            "runner_error_ws",
+        )
+    )
+
+    assert out["localized"] == "Amount must be between 1 and 10000 ml."
+    assert "min=" not in out["localized"], "der alte Placeholder-Anhang ist noch aktiv"
+    assert out["rowHinted"] == "Marker gptx appears more than once in this report. (Row 2)"
+    assert "{row}" not in out["rowHinted"]
+    assert out["unknown"] == "neutral mystery", "unbekannter Code faellt auf message zurueck"
+
+
+def test_req_hom_127_panel_result_error_localizes():
+    """[REQ-HOM-127] `resultError` lokalisiert die Batch-Envelope ueber `code` + `params`."""
+    source = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(source, "resultError")
+
+    assert "tError(error)" in body, "die Batch-Meldung wird nicht ueber den Katalog lokalisiert"
+    assert "withRowHint(text, error)" in body, "der Zeilen-Hinweis aus `params.row` fehlt"
+    assert "error.message ||" not in body, "message darf nicht mehr Vorrang vor dem Code haben"
+
+
+def test_req_hom_127_panel_ws_error_form_uses_localizer():
+    """[REQ-HOM-127] Formularfehler laufen ueber `wsErrorText` (lokalisiert)."""
+    source = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+
+    assert "panel._formError = wsErrorText(err);" in source
+    panel = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+    assert "setUiErrorTranslator(uiErrorTranslate);" in panel
+    assert "tError as uiErrorTranslate" in panel
+
+
 # --- REQ-HOM-122: Laborwerte im Admin-Formular ------------------------------
 #
 # Die Referenzdaten (`lab_catalog`, read-only aus const.py) und die drei

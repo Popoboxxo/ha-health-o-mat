@@ -8,22 +8,27 @@
  * modules import it with a cache-buster query instead).
  *
  * Contract:
- *   loadUiTranslations(hass)  -> "de" | "en" | …   (never throws)
- *   t(key, fallback, vars?)   -> translated string, `{placeholder}` interpolated
- *   currentLanguage()         -> language of the last load (default "de")
+ *   loadUiTranslations(hass)        -> "de" | "en" | …   (never throws)
+ *   t(key, fallback, vars?)         -> translated string, `{placeholder}` interpolated
+ *   loadExceptionTranslations(hass) -> "de" | "en" | …   (never throws)
+ *   tError(err)                     -> localized error text (never empty)
+ *   currentLanguage()               -> language of the last load (default "de")
  *
- * Resources come from `frontend/get_translations` (category `common`,
- * integration `health_o_mat`) as a flat map:
+ * Resources come from `frontend/get_translations` (integration `health_o_mat`)
+ * as flat maps in two categories:
  *
- *   {"component.health_o_mat.common.ui_panel_drink_today": "Heute", …}
+ *   common:      {"component.health_o_mat.common.ui_panel_drink_today": "Heute", …}
+ *   exceptions:  {"component.health_o_mat.exceptions.amount_out_of_range.message": "…"}
  *
  * A failed load leaves an EMPTY cache for that language — the German fallback
  * text embedded in the renderers then stays visible. `t()` never renders a raw
  * `ui_…` key: a missing translation falls back to the caller's fallback (or ""
- * when there is none).
+ * when there is none). `tError()` never renders a raw `ui_…` key either: an
+ * unknown code falls back to the neutral server `message`, then to the code.
  */
 
 const KEY_PREFIX = "component.health_o_mat.common.";
+const ERROR_KEY_PREFIX = "component.health_o_mat.exceptions.";
 const DEFAULT_LANGUAGE = "de";
 const WS_GET_TRANSLATIONS = "frontend/get_translations";
 const INTEGRATION = "health_o_mat";
@@ -32,6 +37,10 @@ const INTEGRATION = "health_o_mat";
 const _cache = new Map();
 /** language -> Promise<void> of an in-flight load. */
 const _inflight = new Map();
+/** language -> { "<code>.message": translatedText } (exceptions catalog). */
+const _errorCache = new Map();
+/** language -> Promise<void> of an in-flight exceptions load. */
+const _errorInflight = new Map();
 let _language = DEFAULT_LANGUAGE;
 
 export function currentLanguage() {
@@ -50,21 +59,28 @@ export function hasUiTranslations(language) {
   return _cache.has(normaliseLanguage(language == null ? _language : language));
 }
 
-/** Test/reset hook — clears every cached language. */
+/** True if the `exceptions` catalog was already attempted for this language. */
+export function hasErrorTranslations(language) {
+  return _errorCache.has(normaliseLanguage(language == null ? _language : language));
+}
+
+/** Test/reset hook — clears every cached language (both categories). */
 export function resetUiTranslations() {
   _cache.clear();
   _inflight.clear();
+  _errorCache.clear();
+  _errorInflight.clear();
   _language = DEFAULT_LANGUAGE;
 }
 
 /** Flat HA resource map -> short-key dictionary (prefix stripped). */
-function normaliseResources(resources) {
+function normaliseResources(resources, prefix) {
   const out = Object.create(null);
   if (!resources || typeof resources !== "object") return out;
   Object.keys(resources).forEach((fullKey) => {
     const value = resources[fullKey];
     if (typeof value !== "string" || value === "") return;
-    const key = fullKey.startsWith(KEY_PREFIX) ? fullKey.slice(KEY_PREFIX.length) : fullKey;
+    const key = fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : fullKey;
     out[key] = value;
   });
   return out;
@@ -84,15 +100,72 @@ export function interpolateUi(template, vars) {
 }
 
 /**
+ * Fetch one translation category — never rejects.
+ *
+ * @returns {Promise<object|null>} flat resource map or null on failure
+ */
+async function fetchResources(hass, language, category) {
+  try {
+    if (hass && typeof hass.callWS === "function") {
+      const result = await hass.callWS({
+        type: WS_GET_TRANSLATIONS,
+        language,
+        category,
+        integration: [INTEGRATION],
+      });
+      return result && result.resources ? result.resources : null;
+    }
+  } catch (_error) {
+    // Resilience: keep the fallback texts, never break the UI.
+  }
+  return null;
+}
+
+/**
+ * Load (once per language) the integration's `exceptions` translations.
+ *
+ * Returns the language that is active afterwards — never rejects.
+ */
+export async function loadExceptionTranslations(hass) {
+  const language = normaliseLanguage(hass && hass.language);
+  _language = language;
+  if (_errorCache.has(language)) return language;
+
+  const running = _errorInflight.get(language);
+  if (running) {
+    await running;
+    return _language;
+  }
+
+  const load = (async () => {
+    const resources = await fetchResources(hass, language, "exceptions");
+    _errorCache.set(language, normaliseResources(resources, ERROR_KEY_PREFIX));
+  })();
+
+  _errorInflight.set(language, load);
+  try {
+    await load;
+  } finally {
+    _errorInflight.delete(language);
+  }
+  return _language;
+}
+
+/**
  * Load (once per language) the integration's `common` translations.
  *
- * Returns the language that is active afterwards — never rejects. A missing
- * `hass`/`callWS` or a WS error simply stores an empty dictionary.
+ * The `exceptions` catalog is loaded in parallel (both caches are per
+ * language), so callers only need this one entry point.
+ *
+ * Returns the language that is active afterwards — never rejects.
  */
 export async function loadUiTranslations(hass) {
   const language = normaliseLanguage(hass && hass.language);
   _language = language;
-  if (_cache.has(language)) return language;
+  if (_cache.has(language)) {
+    if (!_errorCache.has(language)) await loadExceptionTranslations(hass);
+    return language;
+  }
 
   const running = _inflight.get(language);
   if (running) {
@@ -101,22 +174,11 @@ export async function loadUiTranslations(hass) {
   }
 
   const load = (async () => {
-    let resources = null;
-    try {
-      if (hass && typeof hass.callWS === "function") {
-        const result = await hass.callWS({
-          type: WS_GET_TRANSLATIONS,
-          language,
-          category: "common",
-          integration: [INTEGRATION],
-        });
-        resources = result && result.resources;
-      }
-    } catch (_error) {
-      // Resilience: keep the German fallback texts, never break the UI.
-      resources = null;
-    }
-    _cache.set(language, normaliseResources(resources));
+    const [resources] = await Promise.all([
+      fetchResources(hass, language, "common"),
+      loadExceptionTranslations(hass),
+    ]);
+    _cache.set(language, normaliseResources(resources, KEY_PREFIX));
   })();
 
   _inflight.set(language, load);
@@ -142,4 +204,27 @@ export function t(key, fallback, vars) {
   const value = dict && typeof dict === "object" ? dict[shortKey] : "";
   if (typeof value === "string" && value !== "") return interpolateUi(value, vars);
   return interpolateUi(fallback == null ? "" : fallback, vars);
+}
+
+/**
+ * Translate a structured error object (`{translation_key, translation_placeholders}`
+ * or the batch `{code, params}`).
+ *
+ * Priority: the HA `exceptions` catalog text (interpolated) → the neutral server
+ * `message` → the code. Never an empty string, never a raw `ui_…` key.
+ *
+ * @param {object|string} err error object or plain message
+ */
+export function tError(err) {
+  if (err == null) return "";
+  if (typeof err !== "object") return String(err);
+
+  const key = err.translation_key || err.code || "";
+  const vars = err.translation_placeholders || err.params || {};
+  const dict = key ? _errorCache.get(_language) : null;
+  const text = dict && typeof dict === "object" ? dict[`${key}.message`] : "";
+  if (typeof text === "string" && text !== "") return interpolateUi(text, vars);
+  if (err.message != null && String(err.message) !== "") return String(err.message);
+  if (key) return String(key);
+  return "";
 }
