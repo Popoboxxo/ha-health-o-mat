@@ -119,6 +119,9 @@ class FakeConnection:
     def __init__(self, user_id: str | None = "user-1", is_admin: bool = False) -> None:
         self.results: list[tuple] = []
         self.errors: list[tuple] = []
+        # ``translation_*`` keyword arguments per ``send_error`` call (REQ-HOM-127);
+        # ``errors`` stays a 3-tuple list so the existing assertions keep working.
+        self.error_kwargs: list[tuple] = []
         self.events: list[tuple] = []
         self.subscriptions: dict = {}
         self.user = SimpleNamespace(id=user_id, is_admin=is_admin) if user_id else None
@@ -126,8 +129,10 @@ class FakeConnection:
     def send_result(self, msg_id, result=None) -> None:
         self.results.append((msg_id, result))
 
-    def send_error(self, msg_id, code, message) -> None:
+    def send_error(self, msg_id, code, message, **kwargs) -> None:
         self.errors.append((msg_id, code, message))
+        if kwargs:
+            self.error_kwargs.append((msg_id, kwargs))
 
     def send_event(self, msg_id, event) -> None:
         self.events.append((msg_id, event))
@@ -5270,7 +5275,7 @@ def test_req_hom_123_websocket_add_lab_report_sends_structured_error(monkeypatch
                 "error": {
                     "code": "unknown_marker",
                     "params": {"row": 2, "marker": "gptx"},
-                    "message": "Zeile 2 (gptx): unknown_marker",
+                    "message": "unknown_marker (row=2, marker=gptx)",
                 },
             },
         )
@@ -5303,7 +5308,7 @@ def test_req_hom_123_websocket_add_lab_report_invalid_ts_envelope(monkeypatch):
     assert result["ok"] is False
     assert result["error"]["code"] == "invalid_ts"
     assert result["error"]["params"] == {"value": "kaputt"}
-    assert result["error"]["message"].startswith("invalid_ts: ")
+    assert result["error"]["message"] == "invalid_ts (value=kaputt)"
     store.add_lab_readings.assert_not_awaited()
 
 

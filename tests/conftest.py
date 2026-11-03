@@ -360,7 +360,24 @@ if not _USING_REAL_HA:
         OPTIONAL = "optional"
 
     class HomeAssistantError(Exception):
-        """Minimal stand-in for homeassistant.exceptions.HomeAssistantError."""
+        """Minimal stand-in for homeassistant.exceptions.HomeAssistantError.
+
+        Mirrors the HA 2026.9 signature: the ``translation_*`` keyword
+        arguments are accepted and stored as attributes so error-contract
+        tests can assert on the code/params projection instead of on prose.
+        """
+
+        def __init__(
+            self,
+            *args: object,
+            translation_domain: str | None = None,
+            translation_key: str | None = None,
+            translation_placeholders: dict[str, str] | None = None,
+        ) -> None:
+            super().__init__(*args)
+            self.translation_domain = translation_domain
+            self.translation_key = translation_key
+            self.translation_placeholders = translation_placeholders
 
     class ServiceValidationError(HomeAssistantError):
         """Minimal stand-in for homeassistant.exceptions.ServiceValidationError."""

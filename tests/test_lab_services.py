@@ -569,7 +569,7 @@ def test_req_hom_123_add_lab_report_rejects_unknown_marker_without_write():
         }
     )
 
-    with pytest.raises(ServiceValidationError, match=r"Zeile 3 \(gptx\): unknown_marker"):
+    with pytest.raises(ServiceValidationError, match=r"unknown_marker \(row=3, marker=gptx\)"):
         _run(registered["add_lab_report"](call))
 
     store.add_lab_readings.assert_not_awaited()
@@ -582,7 +582,7 @@ def test_req_hom_123_add_lab_report_prefixes_invalid_ts():
     registered = _wire_services(hass, store)
     call = _make_call({"values": [{"marker": "alt", "value": 32}], "ts": "kaputt"})
 
-    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+    with pytest.raises(ServiceValidationError, match=r"^invalid_ts \(value=kaputt\)"):
         _run(registered["add_lab_report"](call))
 
     store.add_lab_readings.assert_not_awaited()
@@ -712,7 +712,7 @@ def test_req_hom_128_remove_lab_report_invalid_ts_raises_with_prefix():
     hass = MagicMock()
     registered = _wire_services(hass, store)
 
-    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+    with pytest.raises(ServiceValidationError, match=r"^invalid_ts \(value=kaputt\)"):
         _run(registered["remove_lab_report"](_make_call({"ts": "kaputt"})))
 
     store.void_lab_report.assert_not_awaited()
