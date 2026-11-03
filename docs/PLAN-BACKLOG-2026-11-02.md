@@ -1,6 +1,6 @@
 # Backlog-Umsetzungsplan — 0.19.1 / 0.20.0 / 0.21.0
 
-**Status:** Welle 0 abgeschlossen (PR #74), Welle 1 umgesetzt (offen: Merge/Release 0.19.1), Welle 2 umgesetzt (offen: Merge/Release 0.20.0), Welle 3 umgesetzt (offen: Merge/Release 0.20.0), Wellen 4–5 geplant · **Datum:** 2026-11-02
+**Status:** Wellen 0–4 umgesetzt — Welle 0 abgeschlossen (PR #74), Welle 1 gemergt (offen: Release 0.19.1), Wellen 2/3 gemergt (offen: Release 0.20.0), Welle 4 = REQ-HOM-127 umgesetzt (PR #84, offen: Release 0.21.0) · Welle 5 geschlossen: B5 bewusst nicht unterstützt, B6/B7 gestrichen, B9 erledigt, Vision E2–E6 bewusst geparkt · **Datum:** 2026-11-02, Fortschreibung 2026-11-04
 **Basis:** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean
 **Vorgänger:** `docs/PLAN-OPEN-ISSUES.md` — abgeschlossen (alle drei Releases veröffentlicht)
 **Quellen:** GitHub (`gh issue list`/`gh pr list` = 0 offen, Stand 2026-11-02), `docs/REQUIREMENTS.md`, `docs/REVIEW-2026-10-14.md`, `docs/CONCEPT-UI.md`, `docs/IDEATION-UI-PRO.md`, `docs/IDEATION-VISION.md`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
@@ -25,15 +25,17 @@
 
 ### 2.1 Echt offen
 
+> **Stand 2026-11-04:** REQ-HOM-127 ist umgesetzt (PR #84), B5/B6/B7/B9 sind entschieden. Die Zeilen bleiben als Beleg stehen; offen sind nur noch die Releases (0.19.1, 0.20.0, 0.21.0).
+
 | Item | Inhalt | Prio | Beleg |
 |---|---|---|---|
-| REQ-HOM-127 | Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen; eigener Plan fehlt | P2 | `docs/REQUIREMENTS.md:1516-1538` |
+| REQ-HOM-127 | ~~Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen~~ — **umgesetzt (PR #84)**; offen nur Release 0.21.0 (MINOR + 💥) | P2 | `docs/REQUIREMENTS.md:1516-1538`, `docs/PLAN-AUDIT-2026-11-03.md` WP-A |
 | REQ-HOM-006 | ~~Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht"~~ — **in Welle 3 umgesetzt** (vierter Blueprint, Personen-Bindungs-Fix, Compose-E2E 19/19); der Import auf der geteilten Instanz bleibt manuelle Abnahme; offen nur Merge/Release 0.20.0 | P2 | `docs/REQUIREMENTS.md:172-211` |
 | REQ-HOM-010 | ~~Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`)~~ — **in Welle 2 umgesetzt** (Entity, zentrales Leeren, History-/CSV-Beleg); offen nur Merge/Release 0.20.0 | P3 | `docs/REQUIREMENTS.md:325-364` |
 | REQ-HOM-130 Rest | HACS-Update-Test v0.16.2 nach v0.17.x; Repair-Issue und Erfolgs-Notification (Spec §9 O-1) | P1 | `docs/REQUIREMENTS.md:1766-1772`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md:1246-1254` |
-| B5 | HbA1c in `%` (DCCT) — bewusst `unsupported_unit`, eigenes Issue vorgesehen | — | `docs/PLAN-OPEN-ISSUES.md:448` |
-| B6/B7 | zurückgestellt, ohne Inhalt benannt — Konkretisierung nötig | — | `docs/PLAN-OPEN-ISSUES.md:449` |
-| B9 | Beobachtung an `agent-meta-manager` melden (nicht patchen) | — | `docs/PLAN-OPEN-ISSUES.md:451` |
+| B5 | **geschlossen — bewusst nicht unterstützt:** HbA1c in `%` (DCCT) verlangt eine nicht-lineare Umrechnung aus IFCC; das Risiko einer klinisch falschen Anzeige wiegt schwerer als der Nutzen. `unsupported_unit` bleibt das dokumentierte Verhalten. Reversibel: eigenes Issue bei Bedarf. | — | `docs/PLAN-OPEN-ISSUES.md:449` |
+| B6/B7 | **geschlossen — gestrichen:** nie mit Inhalt benannt; ohne belastbare Beschreibung wird nichts rekonstruiert. | — | `docs/PLAN-OPEN-ISSUES.md:450` |
+| B9 | **geschlossen — erledigt:** Beobachtung ist über den Audit-Nachtrag abgesetzt; Framework-Thema, nicht Repo-Scope. | — | `docs/PLAN-OPEN-ISSUES.md:452` |
 
 ### 2.2 Doku-Drift (kein Backlog, aber Arbeit)
 
@@ -222,6 +224,8 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Ziel:** Strukturierte Fehlercodes `{code, params}` plus lokalisierte Meldungen, additiv via `errors_detail`, ohne Bruch des D6-Vertrags aus REQ-HOM-132.
 
+**Stand Welle 4:** umgesetzt (PR #84) — Konzept APPROVED (`docs/superpowers/specs/2026-11-03-error-contract-design.md`), Transport per D-3 auf HA-native `translation_*` festgelegt (`errors_detail` verworfen), 35 Codes in `logic.ERROR_SPECS`, 29 Service- und 32 WS-Stellen migriert, 4 Relais, `exceptions`-Übersetzungen de/en; Belege `tests/test_error_contract.py`, `tests/test_errors.py`, `docs/SERVICE-RESPONSES.md`. **Offen:** Release 0.21.0 (MINOR + 💥).
+
 **Scope/Dateien:** `custom_components/health_o_mat/__init__.py`, `ws_api.py`, `logic.py`, `strings.json`, `translations/de.json`, `translations/en.json`, betroffene Tests.
 
 **Agent(en):** `concept-development` (`ideation` mit `concept-reviewer`, maximal 3 Iterationen), danach Task-Plan (`planner`), danach `feature-lifecycle`.
@@ -254,23 +258,25 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Ziel:** Die zurückgestellten Punkte bekommen eine Entscheidung oder werden bewusst geparkt — ohne Produktionscode.
 
+**Stand Welle 5:** geschlossen (2026-11-04), kein Produktionscode. **B5** bewusst nicht unterstützt (`unsupported_unit` bleibt das Verhalten; die IFCC↔DCCT-Umrechnung ist nicht linear, klinisches Fehlerrisiko), **B6/B7** gestrichen (kein Inhalt dokumentiert), **B9** erledigt (über den Audit-Nachtrag abgesetzt). **Vision E2–E6** bleibt bewusst geparkt — kein Roadmap-Schnitt für 1.x. Die Schritte unten sind damit beantwortet.
+
 **Scope/Dateien:** GitHub-Issues, `docs/REQUIREMENTS.md` (nur durch `requirements`), Meldung an `agent-meta-manager`.
 
 **Agent(en):** `requirements` für B5/B6/B7, `orchestrator` für die B9-Meldung, `ideation` für die Vision-Priorisierung.
 
 **Schritte**
 
-1. B5: Issue anlegen (HbA1c in `%`/DCCT, nicht-lineare Umrechnung) — Entscheidung vor Code.
-2. B6/B7: konkretisieren oder streichen (kein Inhalt dokumentiert, `docs/PLAN-OPEN-ISSUES.md:449`).
-3. B9: Beobachtung an `agent-meta-manager` melden — Framework-Thema, nicht Repo-Scope.
-4. Vision E2–E6 und Lab-Entity-Surface priorisieren oder bewusst parken.
+1. B5: **entschieden** — kein Issue; `unsupported_unit` bleibt das Verhalten, ein Issue entsteht nur bei Bedarf (reversibel).
+2. B6/B7: **entschieden** — gestrichen (kein Inhalt dokumentiert, `docs/PLAN-OPEN-ISSUES.md:450`).
+3. B9: **erledigt** — über den Audit-Nachtrag abgesetzt; Framework-Thema, nicht Repo-Scope.
+4. Vision E2–E6: **geparkt**; die Lab-Entity-Surface liegt bei WP-C (D-1 = B4).
 
 **Akzeptanzkriterien**
 
-- Für B5 existiert ein Issue mit Entscheidungsfrage und Scope.
-- B6/B7 sind entweder mit Inhalt als Issue erfasst oder als „gestrichen" dokumentiert.
-- B9 ist als Meldung abgesetzt und im Plan nachvollziehbar.
-- Vision-Punkte tragen eine Priorität oder den Status „geparkt".
+- B5 ist als „bewusst nicht unterstützt" mit Begründung dokumentiert (Issue nur bei Bedarf).
+- B6/B7 sind als „gestrichen" dokumentiert.
+- B9 ist als erledigt nachvollziehbar.
+- Vision-Punkte tragen den Status „geparkt".
 
 **Tests:** Keine Code-Tests; Prüfung über Issue-Liste und Doku-Diff.
 
@@ -313,9 +319,9 @@ Welle 0 ──► Welle 1 ──► Welle 2 ──► Welle 3 ──► Welle 4
 
 | # | Entscheidung | Optionen | Wirkung |
 |---|---|---|---|
-| E-1 | HbA1c in `%` (B5) | unterstützen mit nicht-linearer Umrechnung / bei `unsupported_unit` bleiben | eigenes Issue, kein Release-Blocker |
-| E-2 | B6/B7 | konkretisieren / streichen | Backlog-Bereinigung |
-| E-3 | Vision E2–E6 | priorisieren / parken | Roadmap-Schnitt für 1.x |
+| E-1 | HbA1c in `%` (B5) | **entschieden (2026-11-04):** bei `unsupported_unit` bleiben; reversibel über ein eigenes Issue bei Bedarf | kein Release-Blocker, kein Issue vorerst |
+| E-2 | B6/B7 | **entschieden (2026-11-04):** streichen | Backlog-Bereinigung erledigt |
+| E-3 | Vision E2–E6 | **entschieden (2026-11-04):** parken | kein Roadmap-Schnitt für 1.x |
 | E-4 | `planner`-Rolle aktivieren | Rolle in `.meta-config/project.yaml` aufnehmen / projektlokale Extension | Voraussetzung für plan-driven Wellen (§10) |
 
 ---
@@ -331,7 +337,7 @@ Welle 0 ──► Welle 1 ──► Welle 2 ──► Welle 3 ──► Welle 4
 | E2E | Compose 8124 | `tests_e2e/` gegen den gepinnten Stack, nie gegen die geteilte Instanz schreibend |
 | Manuelle Abnahme | geteilte Instanz | nur lesend nach `bin/sync`: Entities, `friendly_name`, `entity_id` sichten |
 
-**Nicht testbar in diesem Plan:** reale HACS-Nutzerpfade außerhalb des Compose-Update-Tests, Produktionsdatenmengen, HA-Versionen außerhalb der gepinnten E2E-Version, Sprachumschaltung auf der geteilten Instanz (instanzweiter Blast-Radius).
+**Nicht testbar in diesem Plan:** reale HACS-Nutzerpfade außerhalb des Compose-Update-Tests (die manuelle Betreiber-Prozedur steht in `docs/PLAN-AUDIT-2026-11-03.md` WP-E und ist bis zu ihrem Lauf unbelegt), Produktionsdatenmengen, HA-Versionen außerhalb der gepinnten E2E-Version, Sprachumschaltung auf der geteilten Instanz (instanzweiter Blast-Radius).
 
 ---
 
@@ -361,10 +367,10 @@ Welle 0 ──► Welle 1 ──► Welle 2 ──► Welle 3 ──► Welle 4
 | W4-3 | REQ-HOM-127 | `tests/test_translations.py` (Parität de/en) |
 | W4-4 | REQ-HOM-127 | Tests auf `errors`-Cap 20 |
 | W4-5 | REQ-HOM-127 | bestehende Exception-Tests unverändert grün |
-| W5-1 | B5 (HbA1c) | Issue-Liste: Issue mit Entscheidungsfrage und Scope |
-| W5-2 | B6/B7 | Issue-Liste oder Doku-Eintrag „gestrichen" |
-| W5-3 | B9 | Meldungsnachweis an `agent-meta-manager` |
-| W5-4 | Vision E2–E6, Lab-Entity-Surface | Prioritäts- oder Parkstatus je Punkt |
+| W5-1 | B5 (HbA1c) | **geschlossen 2026-11-04:** bewusst nicht unterstützt; `unsupported_unit` bleibt das Verhalten, eigenes Issue nur bei Bedarf |
+| W5-2 | B6/B7 | **geschlossen 2026-11-04:** gestrichen, kein Inhalt dokumentiert |
+| W5-3 | B9 | **geschlossen 2026-11-04:** über den Audit-Nachtrag abgesetzt (Framework-Thema) |
+| W5-4 | Vision E2–E6, Lab-Entity-Surface | **Vision geparkt** (kein 1.x-Schnitt); Lab-Surface-Entscheidung liegt bei WP-C (`docs/PLAN-AUDIT-2026-11-03.md`) |
 
 ---
 
