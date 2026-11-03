@@ -1,10 +1,11 @@
-"""Tests: HA-Blueprints für Erinnerungen/Blutdruck/Wochenbericht (REQ-HOM-118)."""
+"""Tests: HA-Blueprints für Erinnerungen/Blutdruck/Wochenbericht/Ziel (REQ-HOM-118/006)."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -28,6 +29,10 @@ _BLUEPRINTS = {
     "weekly_report": {
         "inputs": {"person_name", "report_day", "report_time"},
         "entity_domain": None,
+    },
+    "goal_reached": {
+        "inputs": {"person_name", "goal_sensor", "notify_service"},
+        "entity_domain": "binary_sensor",
     },
 }
 
@@ -78,7 +83,7 @@ def test_blueprint_inputs_are_documented_and_bilingual(name: str) -> None:
     assert "English:" in data["blueprint"]["description"]
 
 
-@pytest.mark.parametrize("name", ["evening_reminder", "blood_pressure_warning"])
+@pytest.mark.parametrize("name", ["evening_reminder", "blood_pressure_warning", "goal_reached"])
 def test_notify_blueprints_reference_input_service(name: str) -> None:
     """Notify-Blueprints rufen den als Input gewählten Service auf."""
     data = _load_yaml(_BLUEPRINT_DIR / f"{name}.yaml")
@@ -89,9 +94,38 @@ def test_notify_blueprints_reference_input_service(name: str) -> None:
     assert step["data"]["message"]
 
 
+# Blueprints, die den Personennamen in einem Jinja-Template verwenden.
+# `weekly_report` fehlt hier bewusst: er reicht `!input person_name` direkt als
+# Service-Daten durch (kein Template) — dort greift die !input-Substitution.
+_TEMPLATE_PERSON_BLUEPRINTS = ("evening_reminder", "blood_pressure_warning", "goal_reached")
+
+
+@pytest.mark.parametrize("name", _TEMPLATE_PERSON_BLUEPRINTS)
+def test_person_name_is_bound_before_use_in_message_template(name: str) -> None:
+    """`!input` ist in Templates nicht sichtbar — die Person muss gebunden sein.
+
+    HA ersetzt ausschließlich die `!input`-Platzhalter im YAML. Ein Template, das
+    `person_name` direkt referenziert, sieht eine undefinierte Variable und
+    rendert den Personennamen nie (der Fehler, den evening_reminder und
+    blood_pressure_warning vorher hatten). `variables` bindet den Input auf
+    `person`; das Template nutzt nur `person`.
+    """
+    data = _load_yaml(_BLUEPRINT_DIR / f"{name}.yaml")
+
+    assert data.get("variables") == {"person": {"__input__": "person_name"}}
+
+    message = data["action"][0]["data"]["message"]
+    assert re.search(r"(?<!\w)person(?!\w)", message), f"{name}: Template nutzt die Person nicht"
+    assert "person_name" not in message, f"{name}: ungebundener Input im Template"
+
+
 @pytest.mark.parametrize(
     ("name", "domain"),
-    [("evening_reminder", "sensor"), ("blood_pressure_warning", "binary_sensor")],
+    [
+        ("evening_reminder", "sensor"),
+        ("blood_pressure_warning", "binary_sensor"),
+        ("goal_reached", "binary_sensor"),
+    ],
 )
 def test_blueprint_entity_selector_matches_domain(name: str, domain: str) -> None:
     """Der Entity-Selector zeigt auf die passende Entity-Domain."""
@@ -100,6 +134,26 @@ def test_blueprint_entity_selector_matches_domain(name: str, domain: str) -> Non
 
     key = next(key for key, spec in inputs.items() if "entity" in spec.get("selector", {}))
     assert inputs[key]["selector"]["entity"]["domain"] == domain
+
+
+def test_goal_reached_blueprint_triggers_on_the_goal_sensor() -> None:
+    """Der Ziel-Blueprint reagiert auf den Wechsel aus -> ein des Zielsensors."""
+    data = _load_yaml(_BLUEPRINT_DIR / "goal_reached.yaml")
+
+    assert data["trigger"] == [
+        {
+            "platform": "state",
+            "entity_id": {"__input__": "goal_sensor"},
+            "from": "off",
+            "to": "on",
+        }
+    ]
+    # Inputs sind in Templates nicht automatisch verfügbar -> explizite Bindung.
+    assert data["variables"] == {"person": {"__input__": "person_name"}}
+
+    message = data["action"][0]["data"]["message"]
+    assert "person ~" in message
+    assert "Tagesziel" in message
 
 
 def test_weekly_report_blueprint_calls_the_registered_service() -> None:

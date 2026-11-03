@@ -18,6 +18,10 @@ docker/ha_config_e2e/*.db-wal
 docker/ha_config_e2e/.HA_VERSION
 docker/ha_config_e2e/.ha_run.lock
 docker/ha_config_e2e/home-assistant.log*
+# Written by HA's automation config API (used by the blueprint E2E tests); the
+# seed configuration.yaml deliberately has no `automation:` include, so this
+# file is never source.
+docker/ha_config_e2e/automations.yaml
 
 # Bootstrap state of scripts/e2e_bootstrap.py --json-out (token/password are
 # stripped before writing, but the file is still runtime state, not source).

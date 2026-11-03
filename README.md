@@ -146,13 +146,16 @@ eingerichtete Person einen eigenen Bericht.
 
 ### Blueprints
 
-Unter `blueprints/automation/health_o_mat/` liegen drei importierbare
+Unter `blueprints/automation/health_o_mat/` liegen vier importierbare
 Automationen:
 
 - `evening_reminder.yaml` — Abend-Erinnerung, wenn das Tagesziel noch nicht
   erreicht ist
 - `blood_pressure_warning.yaml` — Benachrichtigung bei Blutdruck-Warnung
 - `weekly_report.yaml` — ruft den Wochenbericht-Service auf
+- `goal_reached.yaml` — Benachrichtigung, sobald das Tagesziel erreicht ist
+  (Binärsensor „Tagesziel erreicht" / `…_daily_goal_reached`); meldet einmal pro
+  Zustandswechsel `off → on`, ohne zusätzlichen Helfer
 
 **Wichtig:** HACS installiert Blueprints **nicht automatisch**. Die YAML-Dateien
 müssen manuell importiert werden (Einstellungen → Automationen & Szenen →

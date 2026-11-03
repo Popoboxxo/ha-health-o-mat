@@ -1,0 +1,66 @@
+blueprint:
+  name: Health-O-Mat Ziel erreicht
+  description: >-
+    Benachrichtigt, sobald die Person ihr Tagesziel erreicht hat. Bitte den
+    Binärsensor "Tagesziel erreicht" ("Daily goal reached") der Person wählen.
+    Der Blueprint benötigt keinen Helfer: er meldet sich einmal pro
+    Zustandswechsel des Sensors (aus -> ein); trinkt die Person nach einem
+    zwischenzeitlichen Abfall erneut über das Ziel, kommt eine weitere Meldung.
+    English: notifies once the person reaches the daily drinking goal. Pick the
+    person's "Daily goal reached" binary sensor. No helper is required — it
+    notifies once per state change (off -> on); crossing the goal again after a
+    drop produces another notification.
+  domain: automation
+  source_url: https://github.com/Popoboxxo/ha-health-o-mat/blob/main/blueprints/automation/health_o_mat/goal_reached.yaml
+  input:
+    person_name:
+      name: Person
+      description: >-
+        Name der Person (nur für den Benachrichtigungstext).
+        English: person name used in the message.
+      default: ""
+      selector:
+        text:
+    goal_sensor:
+      name: Tagesziel erreicht (Binärsensor)
+      description: >-
+        Binärsensor "Tagesziel erreicht" der Person.
+        English: the "Daily goal reached" binary sensor of the person.
+      selector:
+        entity:
+          domain: binary_sensor
+    notify_service:
+      name: Benachrichtigungsdienst
+      description: >-
+        Notify-Service (z. B. notify.mobile_app_phone).
+        English: notify service to call.
+      default: notify.notify
+      selector:
+        text:
+
+# Blueprint-Inputs sind in Templates NICHT automatisch als Variable verfügbar
+# (HA ersetzt nur die !input-Platzhalter im YAML) — daher explizit binden.
+variables:
+  person: !input person_name
+
+trigger:
+  - platform: state
+    entity_id: !input goal_sensor
+    from: "off"
+    to: "on"
+
+condition:
+  # Schutz gegen kurzes Auf/Ab-Flattern: nur melden, wenn das Ziel noch steht.
+  - condition: state
+    entity_id: !input goal_sensor
+    state: "on"
+
+action:
+  - service: !input notify_service
+    data:
+      title: Health-O-Mat Tagesziel
+      message: >-
+        {{ (person ~ ' hat das Tagesziel erreicht!') if person else
+        'Das Tagesziel ist erreicht!' }} / Daily drinking goal reached.
+
+mode: single

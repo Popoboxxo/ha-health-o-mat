@@ -23,6 +23,11 @@ COPY tests_e2e/ tests_e2e/
 # Shipped dashboard examples are test artifacts, not docs: REQ-HOM-126 renders
 # examples/dashboard-labs-card.yaml in a real Lovelace dashboard.
 COPY examples/ examples/
+# Shipped blueprints are test artifacts too: tests_e2e/test_blueprints_e2e.py
+# reads them relative to the repo root (REPO_ROOT/blueprints/automation/
+# health_o_mat) and imports them into HA. Without this COPY the suite passes on
+# a host checkout (directory present) and fails only in the image.
+COPY blueprints/ blueprints/
 
 ENTRYPOINT ["pytest"]
 CMD ["tests_e2e/", "-v", "--output=test-results", "--tracing=retain-on-failure"]

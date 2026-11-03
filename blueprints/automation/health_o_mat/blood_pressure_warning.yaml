@@ -33,6 +33,11 @@ blueprint:
       selector:
         text:
 
+# Blueprint-Inputs sind in Templates NICHT automatisch als Variable verfügbar
+# (HA ersetzt nur die !input-Platzhalter im YAML) — daher explizit binden.
+variables:
+  person: !input person_name
+
 trigger:
   - platform: state
     entity_id: !input warning_sensor
@@ -45,7 +50,7 @@ action:
     data:
       title: Health-O-Mat Blutdruck-Warnung
       message: >-
-        {{ 'Blutdruck-Warnung für ' ~ person_name ~ ': ' if person_name else
+        {{ 'Blutdruck-Warnung für ' ~ person ~ ': ' if person else
         'Blutdruck-Warnung: ' }}Der gemessene Wert liegt über der
         konfigurierten Schwelle. / The measured value is above the configured
         threshold.

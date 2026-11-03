@@ -12,6 +12,10 @@ on:
   pull_request:
     paths:
       - "custom_components/health_o_mat/**"
+      # Automation blueprints are loaded and validated by the E2E suite
+      # (blueprints/automation/health_o_mat/*.yaml), so a blueprint-only change
+      # must re-trigger this workflow.
+      - "blueprints/**"
       - "tests_e2e/**"
       - "docker-compose.e2e.yml"
       - "Dockerfile.e2e"
