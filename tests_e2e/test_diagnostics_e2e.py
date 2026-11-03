@@ -33,7 +33,13 @@ from typing import Any
 
 import pytest
 import requests
-from e2e_helpers import ALLOW_SHARED_ENV, is_shared_dev_instance, wait_for
+from e2e_helpers import (
+    ALLOW_SHARED_ENV,
+    call_service,
+    is_shared_dev_instance,
+    wait_for,
+    wait_for_entry_loaded,
+)
 
 from scripts.e2e_bootstrap import _headers, ensure_person
 
@@ -76,18 +82,6 @@ if (
         f" or set {ALLOW_SHARED_ENV}=1 if that really is a throwaway stack.",
         allow_module_level=True,
     )
-
-
-def _call_service(base_url: str, token: str, service: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Call one `health_o_mat/*` service (the path a user or automation uses)."""
-    response = requests.post(
-        f"{base_url}/api/services/{DOMAIN}/{service}",
-        headers=_headers(token),
-        json=data,
-        timeout=60,
-    )
-    response.raise_for_status()
-    return response.json()
 
 
 def _diagnostics(base_url: str, token: str, entry_id: str) -> requests.Response:
@@ -146,19 +140,27 @@ def test_req_hom_105_diagnostics_download_is_valid_json_and_redacted(
     )
     entry_id = str(person["entry_id"])
     try:
-        _call_service(
+        # `ensure_person` saves the quick-drink set through the options flow, and
+        # that save reloads the entry (REQ-HOM-101 AK1). Until the reload is done
+        # the person is not resolvable, so every service call below would answer
+        # "Person '...' nicht gefunden".
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
+        call_service(
             hass_base_url,
             hass_bearer_token,
+            DOMAIN,
             "add_drink",
             {
                 "person": PERSON_DIAG,
                 "amount_ml": AMOUNT_ML,
                 "drink_type": DRINK_TYPE,
             },
+            entry_id=entry_id,
         )
-        _call_service(
+        call_service(
             hass_base_url,
             hass_bearer_token,
+            DOMAIN,
             "add_blood_pressure",
             {
                 "person": PERSON_DIAG,
@@ -167,12 +169,15 @@ def test_req_hom_105_diagnostics_download_is_valid_json_and_redacted(
                 "pulse": PULSE,
                 "note": NOTE,
             },
+            entry_id=entry_id,
         )
-        _call_service(
+        call_service(
             hass_base_url,
             hass_bearer_token,
+            DOMAIN,
             "set_wellbeing",
             {"person": PERSON_DIAG, "status": "poor"},
+            entry_id=entry_id,
         )
 
         # The counters are read from the store, so wait until the writes landed
@@ -262,6 +267,9 @@ def test_req_hom_105_diagnostics_download_rejects_non_admin(
     )
     entry_id = str(person["entry_id"])
     try:
+        # The bootstrap's options save reloads the entry; the download is only
+        # meaningful once it is set up again (same gate as the admin test).
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         # Control: the admin token does reach the view (otherwise 401 for the
         # non-admin could simply mean the view does not exist).
         assert _diagnostics(hass_base_url, hass_bearer_token, entry_id).status_code == 200

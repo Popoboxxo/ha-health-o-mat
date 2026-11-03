@@ -12,17 +12,24 @@ instance:
    geladene Person", ``ws_api._send_entry_error``).
 
 (2) is expected product behaviour, not a defect — but a naive poll treats the
-first answer of that window as the final one and aborts. Both helpers below
-therefore retry **only** that exact transient answer:
+first answer of that window as the final one and aborts. The helpers below
+therefore handle **only** that transient window:
 
-* ``wait_for`` counts it as "not yet" and keeps polling (it is the same polling
-  loop as for a store write).
+* ``wait_for_entry_loaded`` gates every step that follows an options write: it
+  polls HA's config-entry state until the entry is ``loaded`` again.
+* ``wait_for`` counts a transient reload answer as "not yet" and keeps polling
+  (it is the same polling loop as for a store write).
 * ``ws_command`` retries a one-shot read that lands in the window, bounded by
   ``RELOAD_RETRY_TIMEOUT``.
+* ``call_service`` does the same for a ``health_o_mat/*`` service call, which
+  answers ``HTTP 500`` (``ServiceValidationError: Person '<slug>' nicht
+  gefunden``) instead of a websocket error code; retries there are tied to the
+  observable reload state, not to a blanket timeout.
 
 Everything else — including a permanently unknown ``entry_id``, which answers
-with the same ``not_found`` — exhausts the retry and then raises as before, so
-no real failure is swallowed.
+with the same ``not_found``, and a wrong person name, which answers with the
+same ``Person '<slug>' nicht gefunden`` — exhausts the retry and then raises as
+before, so no real failure is swallowed.
 """
 
 from __future__ import annotations
@@ -128,6 +135,112 @@ def ws_command(
             if not is_transient_reload_error(exc) or time.monotonic() >= deadline:
                 raise
         time.sleep(interval)
+
+
+# ---------------------------------------------------------------------------
+# Entry-reload gate (REQ-HOM-101 AK1)
+#
+# Saving options can schedule ``hass.config_entries.async_reload``
+# (``__init__._options_updated``: a changed quick-drink set or area set). The
+# entry then leaves ``loaded``, drops ``hass.data[DOMAIN][entry_id]`` and sets up
+# again — a service call or entity write issued in between answers "person not
+# found". The reload is *scheduled*, so it can also start a moment after the
+# options write returned: callers therefore gate on the entry state instead of
+# sleeping, and `call_service` keeps that gate for the write itself.
+# ---------------------------------------------------------------------------
+
+#: A reload re-runs the whole entry setup (store load, platform forwarding), so
+#: the gate gets a generous window — never a fixed sleep.
+ENTRY_RELOAD_TIMEOUT = 60.0
+
+
+def config_entry_state(base_url: str, token: str, entry_id: str) -> str | None:
+    """`state` of one config entry (`loaded`, `setup_in_progress`, ...).
+
+    ``None`` means the entry does not exist (deleted). HA's per-entry REST
+    resource only supports POST/DELETE here, so the state is read from the
+    collection view and selected by `entry_id`.
+    """
+    response = requests.get(
+        f"{base_url}/api/config/config_entries/entry",
+        headers=_headers(token),
+        timeout=30,
+    )
+    response.raise_for_status()
+    for entry in response.json():
+        if entry.get("entry_id") == entry_id:
+            return str(entry.get("state") or "") or None
+    return None
+
+
+def wait_for_entry_loaded(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    *,
+    timeout: float = ENTRY_RELOAD_TIMEOUT,
+) -> str:
+    """Block until the config entry is `loaded` again (no reload in flight).
+
+    Must be called after every options write that can change the entity set
+    (bootstrap ``ensure_person``, the options flow) before the test talks to
+    *this* person again. While a reload runs, HA serves
+    ``setup_in_progress``/``unload_in_progress``/``not_loaded``; those are
+    rejected, and an entry that never comes back raises with the observed
+    state instead of silently proceeding.
+    """
+    return str(
+        wait_for(
+            lambda: config_entry_state(base_url, token, entry_id),
+            lambda state: state == "loaded",
+            f"config entry {entry_id} to be loaded again (an options write reloads the entry)",
+            timeout=timeout,
+        )
+    )
+
+
+def call_service(
+    base_url: str,
+    token: str,
+    domain: str,
+    service: str,
+    data: dict[str, Any],
+    *,
+    entry_id: str | None = None,
+    timeout: float = RELOAD_RETRY_TIMEOUT,
+) -> Any:
+    """Call one real service, surviving the entry-reload window.
+
+    A ``health_o_mat/*`` call that lands in the reload window fails with a bare
+    ``HTTP 500`` (``ServiceValidationError: Person '<slug>' nicht gefunden`` from
+    ``get_runtime_data``: the person's runtime registry entry is gone). That
+    request never reached the store, so repeating it cannot book twice.
+
+    The retry is tied to the **observable** window, not to a blanket timeout:
+    while the entry is not ``loaded`` (requires `entry_id`) the call is
+    retried; once the entry is loaded again at most **one** confirmation
+    attempt follows — a genuinely wrong person name produces the same 500 and
+    is then raised. Every other status is raised immediately, so no real
+    failure is delayed or swallowed.
+    """
+    url = f"{base_url}/api/services/{domain}/{service}"
+    deadline = time.monotonic() + timeout
+    confirmed_after_recovery = False
+    while True:
+        response = requests.post(url, headers=_headers(token), json=data, timeout=60)
+        if response.status_code != 500 or entry_id is None:
+            response.raise_for_status()
+            return response.json() if response.content.strip() else None
+        state = config_entry_state(base_url, token, entry_id)
+        if state != "loaded" and time.monotonic() < deadline:
+            pass  # still unloading/setting up -> retry below
+        elif state == "loaded" and not confirmed_after_recovery:
+            # The window may have closed between the call and this read: give
+            # the request exactly one more chance instead of guessing.
+            confirmed_after_recovery = True
+        else:
+            response.raise_for_status()
+        time.sleep(RELOAD_RETRY_INTERVAL)
 
 
 # ---------------------------------------------------------------------------

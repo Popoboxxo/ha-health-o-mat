@@ -36,6 +36,7 @@ from e2e_helpers import (
     is_shared_dev_instance,
     restart_home_assistant,
     wait_for,
+    wait_for_entry_loaded,
     wait_for_instance_ready,
     ws_command,
 )
@@ -177,6 +178,9 @@ def test_req_hom_104_half_filled_bp_inputs_survive_restart(hass_base_url, hass_b
     person = ensure_person(hass_base_url, hass_bearer_token, PERSON, enable_panel=False)
     entry_id = str(person["entry_id"])
     try:
+        # The bootstrap saves the quick-drink set, which reloads the entry; the
+        # input entities below are (re)built by that setup.
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         mapping = _wait_entity_ids(
             hass_base_url, hass_bearer_token, entry_id, (*INPUT_KEYS, SAVE_KEY, HISTORY_KEY)
         )

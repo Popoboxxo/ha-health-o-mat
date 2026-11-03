@@ -59,6 +59,7 @@ from e2e_helpers import (
     start_home_assistant,
     stop_home_assistant,
     wait_for,
+    wait_for_entry_loaded,
     wait_for_instance_ready,
     ws_command,
 )
@@ -421,6 +422,8 @@ def test_req_hom_101_ak4_legacy_entry_migrates_without_losing_quick_drinks(
     drinks_sensor = f"sensor.{LEGACY_PREFIX}_drinks_today"
     quick_entity_ids = [f"button.{LEGACY_PREFIX}_quick_drink_{i + 1}" for i in range(4)]
     try:
+        # The bootstrap's options save reloads the entry (quick-drink set).
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         _wait_quick_rows(hass_base_url, hass_bearer_token, entry_id)
 
         # 1) Existing data: one drink, booked through the real button.
@@ -513,6 +516,9 @@ def test_req_hom_101_ak4_legacy_entry_migrates_without_losing_quick_drinks(
             label=CHANGED_LABEL,
             ml=CHANGED_ML,
         )
+        # The save itself reloads the entry; wait it out before the explicit
+        # reload below so the button press cannot land in either window.
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         _reload_entry(hass_base_url, hass_bearer_token, entry_id)
         changed_entity_id = quick_entity_ids[CHANGED_INDEX]
         wait_for(
@@ -567,6 +573,8 @@ def test_req_hom_101_ak4_quick_drink_change_is_served_after_entry_reload(
     )
     entry_id = str(person["entry_id"])
     try:
+        # The bootstrap's options save reloads the entry (quick-drink set).
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         before = _wait_quick_rows(hass_base_url, hass_bearer_token, entry_id)
         drinks_sensor = f"sensor.{RELOAD_PREFIX}_drinks_today"
         changed_entity_id = before[f"{entry_id}_button_quick_{CHANGED_INDEX}"]["entity_id"]
@@ -579,6 +587,9 @@ def test_req_hom_101_ak4_quick_drink_change_is_served_after_entry_reload(
             label=CHANGED_LABEL,
             ml=CHANGED_ML,
         )
+        # The save itself reloads the entry; wait it out before the explicit
+        # reload below so the button press cannot land in either window.
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
         _reload_entry(hass_base_url, hass_bearer_token, entry_id)
 
         wait_for(
