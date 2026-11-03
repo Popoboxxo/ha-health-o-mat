@@ -1,12 +1,13 @@
 # Laborwerte — Entity-Oberfläche & Eingabe-Entities (Optionsraum)
 
-> **STATUS: BRAINSTORM — NICHT BESCHLOSSEN.**
+> **STATUS: BRAINSTORM — Zahlenstand 2026-11-03 aktualisiert; D-1 entschieden (B4).**
 > Dieses Dokument sammelt und bewertet Optionen für zwei offene Schwachstellen der
 > Laborwerte-Domäne (REQ-HOM-122 + Erweiterung REQ-HOM-123…129). Es enthält **keine
-> REQ-IDs, keinen Plan, keine Implementierungsfreigabe**. Nichts hier ist entschieden;
-> die Empfehlungen in §6 sind Vorschläge für die nächste Entscheidungsrunde.
+> REQ-IDs, keinen Plan, keine Implementierungsfreigabe**. Mit Ausnahme der vorläufigen
+> Entscheidung D-1 (Entscheidungsblock vor §2) ist nichts entschieden; die
+> Empfehlungen in §6 sind Vorschläge für die nächste Entscheidungsrunde.
 >
-> **Basis:** `main` = `b18e96e` · `docs/superpowers/specs/2026-10-30-lab-values-design.md`
+> **Basis:** `main` = `6e9ca31` (Zahlenstand 2026-11-03) · `docs/superpowers/specs/2026-10-30-lab-values-design.md`
 > (REQ-HOM-122) · `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
 > (REQ-HOM-123…129, geplant) · Code-Stellen sind mit `datei:zeile` belegt.
 
@@ -19,27 +20,29 @@
 | Bereich | Sensoren | Binary | Number | Select | Text | Button | Summe |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | Trinken | 7 | 1 | 2 | – | 1 | 6 | **17** |
-| Blutdruck | 6 | 1 | 5 | – | – | 1 | **13** |
+| Blutdruck | 6 | 1 | 5 | – | 1 | 1 | **14** |
 | Wohlbefinden | 2 | – | 1 | 1 | – | 10 | **14** |
-| **Laborwerte** | **29** | **9** | – | – | – | – | **38** |
-| **Summe (Defaults)** | 44 | 11 | 8 | 1 | 1 | 17 | **82** |
+| **Laborwerte** | **41** | **10** | – | – | – | – | **51** |
+| **Summe (Defaults)** | 56 | 12 | 8 | 1 | 2 | 17 | **96** |
 
-Belege: `sensor.py:31-59`, `binary_sensor.py:27-41`, `number.py:24-49`,
-`button.py:20-38`, `select.py:16-17`, `text.py:19-20`. Die 29 Labor-Sensoren sind
-`LAB_MARKERS` (`const.py:192-485`); die 9 Warn-Binaries entstehen aus den Kategorien
-**ohne** `other` (`const.py:175-186`, `binary_sensor.py:32-39`). Jeder Custom-Marker
+Belege: `sensor.py:31-59`, `binary_sensor.py:27-41`, `number.py:23-49`,
+`button.py:20-38`, `select.py:16-17`, `text.py:19-26`. Die 41 Labor-Sensoren sind
+`LAB_MARKERS` (`const.py:196-621`); die 10 Warn-Binaries entstehen aus den Kategorien
+**ohne** `other` (`const.py:175-190`, `binary_sensor.py:32-39`). Jeder Custom-Marker
 erhöht die Zahl um **1 Sensor**; ein Custom-Marker in einer bereits vorhandenen
 Kategorie erzeugt **keine** zusätzliche Warn-Binary.
 
-> Die 82 ist die Rechnung mit den Default-Quick-Drinks (4). `quick_drinks` ist
-> options-getrieben — die Trinken-Summe wächst mit jedem konfigurierten Quick-Drink.
+> Die 96 ist die Rechnung mit den Default-Quick-Drinks (4) und der in Welle 2
+> ergänzten Text-Entity `measurement_note` (Blutdruck); ohne sie sind es 95
+> (Stand 0.19.0). `quick_drinks` ist options-getrieben — die Trinken-Summe wächst
+> mit jedem konfigurierten Quick-Drink.
 
-### 1.2 Was die 38 Labor-Entities tatsächlich kosten
+### 1.2 Was die 51 Labor-Entities tatsächlich kosten
 
 - Jeder `LabValueSensor` ist `state_class = MEASUREMENT` **mit** Einheit
   (`sensor.py:507-513`) → HA erzeugt **Langzeitstatistik (LTS) je Marker**, also
-  **29 LTS-Streams pro Person**. Dazu kommt State-History bei jeder Wertänderung.
-- Die 9 `binary_sensor`-Warnungen erzeugen State-History, **keine** LTS.
+  **41 LTS-Streams pro Person**. Dazu kommt State-History bei jeder Wertänderung.
+- Die 10 `binary_sensor`-Warnungen erzeugen State-History, **keine** LTS.
 - `number`/`text`/`select`/`button` erzeugen laut HA-Regel keine LTS
   (`statistics.py:17-19` bestätigt das für dieses Repo) — aber `number`/`text`/`select`
   schreiben State-History, jeder Zwischenwert ist ein Recorder-Eintrag.
@@ -51,7 +54,7 @@ Kategorie erzeugt **keine** zusätzliche Warn-Binary.
 
 | Hebel | Wirkung | Grenze |
 |---|---|---|
-| `areas.labs = false` | entfernt **alle 38** Labor-Entities beim Plattform-Setup **und** den Panel-Tab | Alles-oder-nichts; keine Teilmengen |
+| `areas.labs = false` | entfernt **alle 51** Labor-Entities beim Plattform-Setup **und** den Panel-Tab | Alles-oder-nichts; keine Teilmengen |
 | `lab_hidden_categories` | **nur Anzeige** im Panel (`ws_api.py:628`, `644-671`); keine Entity-Wirkung, kein Reload (`__init__.py:392-397`) | löst Problem A nicht |
 | Manuelles Deaktivieren in HA | wirkt echt (keine States, keine LTS) | Handarbeit, nicht im Integration-Backup, kein Bulk |
 
@@ -69,11 +72,41 @@ Daraus folgt:
 
 ---
 
+## Entscheidung D-1 (2026-11-03)
+
+> **vorläufig entschieden (reversibel)** — delegierte Entscheidung unter dem Mandat
+> „abarbeiten und lösen"; sie ist durch eine neue Entscheidungsrunde jederzeit
+> revidierbar und schließt B1 nicht aus.
+
+**Entscheidung: B4 — Status quo.** Es werden **keine** neuen Eingabe-Entities gebaut.
+Die vorhandenen Erfassungswege bleiben der offizielle Eingabeweg: Services
+(`add_lab_value`, `add_lab_report`), Panel-Formular, Labs-Card und CSV-/Backup-Import.
+
+**Begründung.** B1 (vier neue Eingabe-Entities je Person nach dem Blutdruck-Muster:
+`select`/`number`/`text`/`button`) ist ein **neues Feature** mit eigenem Plan und
+eigener Entity-Oberfläche — nicht eine Korrektur der Zahlenbasis. Der Audit-Befund
+empfahl zuerst, die Zahlen zu korrigieren; B1 würde die Entity-Zahl um vier pro Person
+**erhöhen** (51 → 55), nicht senken. Die Asymmetrie zu Blutdruck bleibt damit bewusst
+bestehen.
+
+**Was B4 konkret bedeutet.** Keine Code-Änderung, keine neuen `unique_id`s, keine
+Migration, keine neuen Übersetzungen/Optionsschlüssel; Doku und UI bleiben inhaltlich
+unverändert. Offen ist nur der Doku-Punkt, die bestehenden Service-/WS-Eingabewege in
+der README explizit als offiziellen Weg zu benennen (kein Code).
+
+**Was offen bleibt.** B1 bleibt als dokumentierte, **reversible** Option in §4 stehen
+(inkl. der dort genannten Risiken: Zustands-Leichen, getrennte `clear_inputs()`-Pfade,
+`require_explicit_unit`). Wird B1 später gewollt, braucht es eine eigene Anforderung,
+einen eigenen Plan und eine erneute Betrachtung der Entity-Zahl. Die Kombinationen
+C1/C3/R1/R2 (die B1 enthalten) sind für diese Runde **zurückgestellt, nicht verworfen**.
+
+---
+
 ## 2. Bewertungsmaßstab
 
 Jede Option wird an fünf Kriterien gemessen:
 
-1. **Entity-Anzahl** — wie viele der 38 fallen weg (dauerhaft, nicht nur im UI)?
+1. **Entity-Anzahl** — wie viele der 51 fallen weg (dauerhaft, nicht nur im UI)?
 2. **Recorder/LTS** — weniger States/LTS oder nur „aus dem Blickfeld"?
 3. **`unique_id`-Sicherheit** — bleibt `{entry_id}_lab_<marker>` unverändert?
 4. **Persistenz** — überlebt die Entscheidung Backup/Restore? (Optionen ja, Registry nein)
@@ -87,14 +120,14 @@ Jede Option wird an fünf Kriterien gemessen:
 
 | Option | Entities danach | Recorder/LTS | Bestand betroffen | Breaking | Aufwand |
 |---|---|---|---|---|---|
-| A1 `lab_enabled_markers` | 1 … 29 + gefilterte Warn-Binaries | sinkt (bewusst) | nein (Default = alle) | nein | M |
-| A2 `enabled_default = False` | ca. 10–14 (nur Neuinstallationen) | sinkt (neu) | nein | nein | S |
-| A3 `entity_category = diagnostic` | 38 | **unverändert** | nein | nein | S |
-| A4 Kategorie-Aggregat | 9 statt 29 | LTS je Marker **weg** | ja | **MAJOR** | M |
+| A1 `lab_enabled_markers` | 1 … 41 + gefilterte Warn-Binaries | sinkt (bewusst) | nein (Default = alle) | nein | M |
+| A2 `enabled_default = False` | ca. 10–14 von 41 (nur Neuinstallationen) | sinkt (neu) | nein | nein | S |
+| A3 `entity_category = diagnostic` | 51 | **unverändert** | nein | nein | S |
+| A4 Kategorie-Aggregat | 10 statt 41 | LTS je Marker **weg** | ja | **MAJOR** | M |
 | A5 `hidden_categories` erweitern | je Auswahl | sinkt | ja | **MAJOR** | M |
-| A6 Device je Kategorie | 38 | unverändert | nein (Device-Umzug) | nein | M |
-| A7 Bulk-Registry-Aktionen | 38 (User entscheidet) | sinkt nur bei Klick | nein | nein | M |
-| A8 Lazy-Erzeugung bei 1. Wert | 0 … 29 | sinkt | nein (Bestand bleibt) | nein | M |
+| A6 Device je Kategorie | 51 | unverändert | nein (Device-Umzug) | nein | M |
+| A7 Bulk-Registry-Aktionen | 51 (User entscheidet) | sinkt nur bei Klick | nein | nein | M |
+| A8 Lazy-Erzeugung bei 1. Wert | 0 … 41 | sinkt | nein (Bestand bleibt) | nein | M |
 | A9 Outsider: Event-Entity | 1–2 | LTS je Marker weg | ja | MAJOR | M–L |
 
 ### A1 — Option `lab_enabled_markers` (Whitelist)
@@ -184,8 +217,8 @@ Konfiguration — dort nicht anwenden.
 
 ### A4 — Ein Aggregat-Sensor je Kategorie
 
-**Kurzbeschreibung.** Statt 29 Einzel-Sensoren ein Sensor je Kategorie (9, mit `other`
-10), dessen `native_value` z. B. die Anzahl außerhalb des Referenzbereichs ist und der
+**Kurzbeschreibung.** Statt 41 Einzel-Sensoren ein Sensor je Kategorie (10, mit `other`
+11), dessen `native_value` z. B. die Anzahl außerhalb des Referenzbereichs ist und der
 alle letzten Marker-Werte als JSON-Attribut trägt.
 
 **HA-Pattern-Fit.** Als Muster im Repo vorhanden (`HistoryDrinksSensor`,
@@ -195,7 +228,7 @@ nicht grafisch als Einzelreihe nutzbar und werden im Recorder bei jeder Änderun
 mitgeschrieben.
 
 **Aufwand / Dateien.** **M** für den Code (`sensor.py`, ggf. `logic.py`), **L** für die
-Migration, wenn die 29 Einzel-Sensoren ersetzt werden: 29 `unique_id`s werden verwaist,
+Migration, wenn die 41 Einzel-Sensoren ersetzt werden: 41 `unique_id`s werden verwaist,
 Dashboards/Automationen brechen, LTS endet.
 
 **Bestehende Installationen.** Als **Ersatz** breaking (MAJOR + Migrationshinweis); als
@@ -241,7 +274,7 @@ Device-Registry-Einträge sind **kein** Filter: Entities bleiben global sichtbar
 recorden unverändert.
 
 **Aufwand / Dateien.** **M** — `entity.py`/`sensor.py`/`binary_sensor.py`
-(`device_info`-Aufbau), Tests; Device-Registry wächst um bis zu 10 Einträge pro Person.
+(`device_info`-Aufbau), Tests; Device-Registry wächst um bis zu 11 Einträge pro Person.
 
 **Bestehende Installationen.** Additiv; Entities ziehen beim Reload um, `entity_id` bleibt.
 Kein Datenverlust.
@@ -318,7 +351,7 @@ binden. Es bricht den REQ-HOM-122-Vertrag „ein Sensor je Marker".
 **Aufwand / Dateien.** **M–L** (neue Plattform `event.py`, `PLATFORMS`, Tests,
 Dokumentation), Breaking für alle, die heute Marker-Sensoren abonnieren.
 
-**Bestehende Installationen.** Breaking; 29 Sensoren würden zu Orphans.
+**Bestehende Installationen.** Breaking; 41 Sensoren würden zu Orphans.
 
 **Risiken/Nachteile.** Kein Verlauf, keine Automation auf „Wert > X" ohne Event-Trigger;
 der Nutzen (1 Entity) wird mit dem Verlust der Kernfunktion erkauft.
@@ -336,6 +369,9 @@ Buttons (`select.py:20-70`, `button.py:154-174`) — die Asymmetrie ist real.
 
 ### B1 — `select` (Marker) + `number` (Wert) + `text` (Einheit) + `button` (Speichern)
 
+> **Entscheidung D-1:** nicht umgesetzt — B4 gewählt (siehe Entscheidungsblock vor §2);
+> B1 bleibt dokumentierte, **reversible** Option für eine spätere Runde.
+
 **Kurzbeschreibung.** Vier Entities bilden den Eingabeweg nach dem BP-Muster:
 
 | Entity | `unique_id` | Inhalt |
@@ -351,7 +387,7 @@ generisches Dict ist.
 
 **HA-Pattern-Fit.** Exakt das Haus-Muster für Eingaben (BP). `select`-Optionen sind rohe
 Marker-Keys; für lokalisierte Anzeigen bräuchte es
-`entity.select.<key>.state.<marker>`-Übersetzungen (29 Keys × 3 Dateien) — oder man
+`entity.select.<key>.state.<marker>`-Übersetzungen (41 Keys × 3 Dateien) — oder man
 akzeptiert englische Keys. Wertvalidierung/Umrechnung passiert im Button über die
 vorhandene HA-freie Logik (`resolve_lab_marker`, `coerce_lab_number`,
 `convert_lab_value`, `logic.py:1076-1108`).
@@ -391,7 +427,7 @@ Zeichen, `mode: text`), kein Mehrzeilenfeld. Ein echtes Paste-Feld für ganze Be
 gehört in Panel/Card — dort entsteht es mit REQ-HOM-123 ohnehin.
 
 **Aufwand / Dateien.** **M** — `text.py` (neue Klasse), neuer HA-freier Parser in
-`logic.py`/eigenem Modul, `button.py`, `const.py`, Tests. Keine 29 Select-Übersetzungen.
+`logic.py`/eigenem Modul, `button.py`, `const.py`, Tests. Keine 41 Select-Übersetzungen.
 
 **Bestehende Installationen.** Additiv (2 neue Entities, neue `unique_id`s).
 
@@ -402,18 +438,18 @@ Einheiten-Raten ist bei Laborwerten gefährlich (g/g vs. mg/g); Discoverability 
 
 **Nutzen.** Problem B: **mittel**; Problem A: neutral (+2).
 
-### B3 — `number` je Marker (29 Stück)
+### B3 — `number` je Marker (41 Stück)
 
 **Kurzbeschreibung.** Je Marker eine `number`-Entity; das Setzen der Zahl bucht sofort
 einen Wert (Muster `WellbeingInputNumber`, `number.py:201-235`). Kein Speichern-Button.
 
-**HA-Pattern-Fit.** Für kleine, feste Mengen HA-idiomatisch; bei 29 Markern kippt es.
+**HA-Pattern-Fit.** Für kleine, feste Mengen HA-idiomatisch; bei 41 Markern kippt es.
 `number` erzeugt keine LTS, aber State-History.
 
 **Aufwand / Dateien.** **M** — `number.py` (Klasse je Marker oder Factory), `logic.py`
 (Zeitstempel/Validierung), Tests. `unique_id`-Muster `{entry_id}_number_lab_<marker>`.
 
-**Bestehende Installationen.** Additiv, aber **+29 Entities** — verschärft Problem A.
+**Bestehende Installationen.** Additiv, aber **+41 Entities** — verschärft Problem A.
 
 **Risiken/Nachteile.**
 - **Akzidentelle Buchungen:** jede Automation/Dashboard-Interaktion schreibt eine echte
@@ -427,6 +463,9 @@ einen Wert (Muster `WellbeingInputNumber`, `number.py:201-235`). Kein Speichern-
 **Empfehlung: nur in Kombination mit A1 und nur für eine Handvoll Marker denkbar.**
 
 ### B4 — Keine Eingabe-Entities; Pfade dokumentieren (Status quo)
+
+> **Entscheidung D-1:** **gewählt** (vorläufig, reversibel) — siehe Entscheidungsblock
+> vor §2.
 
 **Kurzbeschreibung.** Es bleibt bei Services, Panel-Formular, Labs-Card und CSV-Import;
 README/CONCEPT-UI dokumentieren diese Wege explizit als „Eingabe".
@@ -471,14 +510,14 @@ wandert zum Nutzer; nicht supportbar.
 
 Kernmarker standardmäßig aktiv, Rest `enabled_default = False`; dazu der
 4-Entity-Eingabeweg aus B1; für Bestandsinstallationen ein Bulk-Knopf aus A7.
-Neue Installationen starten mit ca. 10–14 aktiven Marker-Sensoren statt 29 und haben
+Neue Installationen starten mit ca. 10–14 aktiven Marker-Sensoren statt 41 und haben
 trotzdem einen sauberen Eingabeweg. Kein Breaking, keine neue Option, kein
-Migrationspfad.
+Migrationspfad. *(Enthält B1 → mit D-1 für diese Runde zurückgestellt.)*
 
 ### C2 — A4 + B4
 
 Kategorie-Aggregate statt Einzel-Sensoren, Schreiben bleibt Service/Panel/Card.
-Auf dem Papier die radikalste Reduktion (9 statt 29), praktisch der teuerste Weg:
+Auf dem Papier die radikalste Reduktion (10 statt 41), praktisch der teuerste Weg:
 Breaking, LTS-Verlust, Attribut-JSON statt Einzel-Historie. **Nur als bewusste
 „Compact-Mode"-Entscheidung mit MAJOR-Release denkbar.**
 
@@ -487,7 +526,7 @@ Breaking, LTS-Verlust, Attribut-JSON statt Einzel-Historie. **Nur als bewusste
 Explizite Marker-Whitelist in `entry.options`, Presets als Startpunkt, B1 als Eingabe.
 Persistenzfest (Optionen überleben Backup/Restore), kein Registry-Drift, volle Kontrolle.
 Aufwand höher (Options-UI, `panel_data`, Backup, Diagnostics), dafür die „saubere"
-Variante.
+Variante. *(Enthält B1 → mit D-1 für diese Runde zurückgestellt.)*
 
 ### C4 — Marker-Presets (Baustein, keine eigene Option)
 
@@ -496,8 +535,8 @@ Benannte Marker-Mengen als Konstante, z. B.:
 | Preset | Inhalt (Vorschlag) |
 |---|---|
 | `core` | alt, ast, ggt, creatinine, egfr, crp, tsh, hemoglobin, leukocytes, platelets, cholesterol_total, ldl, hdl, triglycerides |
-| `kidney_liver` | liver + kidney (9 Marker) |
-| `all` | alle 29 (Default/Status quo) |
+| `kidney_liver` | liver + kidney (12 Marker) |
+| `all` | alle 41 (Default/Status quo) |
 
 Presets sind nur Daten (`const.py`) und ein UI-Shortcut — kein Framework. Sie können
 entweder A1 (Options-Whitelist) oder A2 (Kernset) oder A7 (Registry-Bulk) befüllen.
@@ -516,13 +555,14 @@ der 4-Entity-Eingabeweg aus B1 (select/number/text/button) mit Entwurf im
 `inputs`-Dict.
 
 **Warum.** Kleinster Eingriff mit echtem Effekt auf **beide** Probleme: neue
-Installationen starten bei ~10–14 statt 38 Labor-Entities; der Bestand kann per Klick
+Installationen starten bei ~10–14 statt 51 Labor-Entities; der Bestand kann per Klick
 nachziehen; die Eingabe-Asymmetrie verschwindet ohne neues UI-Konzept. Keine
 `unique_id`-Änderung, kein Schema-Bump, kein Breaking. Aufwand **M** (S für A2, M für
 B1, M für A7 — A7 kann in eine Folgerunde).
 
-**Grenze.** A2 wirkt nicht rückwirkend; ohne A7 bleibt der Bestand bei 38 Entities.
-Das Kernset ist eine Design-Entscheidung, die begründet werden muss.
+**Grenze.** A2 wirkt nicht rückwirkend; ohne A7 bleibt der Bestand bei 51 Entities.
+Das Kernset ist eine Design-Entscheidung, die begründet werden muss. *(Enthält B1 →
+mit D-1 für diese Runde zurückgestellt; A2/A7 bleiben einzeln prüfbar.)*
 
 ### R2 — „Sauber und persistenzfest": C3 (A1 + Presets + B1)
 
@@ -549,13 +589,14 @@ wenn „Entity-Flut" das dominante Problem ist und die Eingabe über UI akzeptie
 
 > **Wenn wirklich nur eine Runde Zeit ist: R1.** A2 ist eine Property, B1 ist ein
 > bekanntes Haus-Muster, A7 ist nachrüstbar. R2 ist die Zielarchitektur, R3 die
-> Option für später.
+> Option für später. *(Mit D-1 ist für diese Runde B4 gewählt; R1/R2 bleiben
+> zurückgestellt.)*
 
 ---
 
 ## 7. Was NICHT (Anti-Pattern / Over-Engineering)
 
-- **A4 als Ersatz der Einzel-Sensoren.** 29 `unique_id`s verwaist, LTS je Marker weg,
+- **A4 als Ersatz der Einzel-Sensoren.** 41 `unique_id`s verwaist, LTS je Marker weg,
   Attribute sind keine Historie. Laborwerte sind der klassische Langzeit-Trend —
   genau dafür braucht man die Einzel-Sensoren.
 - **A3 als alleinige Maßnahme.** `entity_category` ist Kosmetik: kein Recorder-Effekt,
@@ -566,7 +607,7 @@ wenn „Entity-Flut" das dominante Problem ist und die Eingabe über UI akzeptie
   Recorder-Entlastung.
 - **A9 (Event-Entity) als Ersatz.** Bricht den REQ-HOM-122-Vertrag, kein Verlauf, keine
   LTS, keine Automation auf Zustände.
-- **B3 (29 `number`-Entities).** Verschärft A, erzeugt akzidentelle Buchungen, kein
+- **B3 (41 `number`-Entities).** Verschärft A, erzeugt akzidentelle Buchungen, kein
   `ts`/`report_ref`, Einheiten-/Alt-Einheiten-Logik fehlt, `native_value`-Konflikt.
 - **B2 als Mehrzeilen-Parser-Entity.** HA-`text` ist einzeilig; ein Paste-Feld gehört in
   Panel/Card (REQ-HOM-123), nicht in eine Entity.
@@ -588,7 +629,7 @@ wenn „Entity-Flut" das dominante Problem ist und die Eingabe über UI akzeptie
    der Entity-Registry (HA-nativ, aber nicht im Backup, A2/A7)?
 4. **Eingabe:** Reicht der bestehende UI-/Service-Weg (B4), soll es der 4-Entity-Weg
    (B1) sein, oder ein Freitext-Parser (B2)? Darf B1 vier zusätzliche Entities
-   erzeugen?
+   erzeugen? → **durch D-1 beantwortet: B4 (vorläufig, reversibel).**
 5. **Ist Breaking erlaubt?** Dürfen Entities verschwinden (A4/A5, MAJOR mit
    Migrationshinweis), oder gilt „nichts verschwindet ungefragt" als harte Grenze?
 
@@ -598,7 +639,8 @@ wenn „Entity-Flut" das dominante Problem ist und die Eingabe über UI akzeptie
 
 **1. Was wird gebaut?** Keine neuen Datenquellen, keine neuen Abhängigkeiten. Neue
 Steuerflächen: Options-Whitelist (A1), Registry-Schreibzugriffe (A7), ggf. Eingabe-
-Entities (B1). Gesundheitsdaten bleiben im Store; Panel/Card lesen sie wie heute.
+Entities (B1 — mit D-1 **nicht** umgesetzt). Gesundheitsdaten bleiben im Store;
+Panel/Card lesen sie wie heute.
 
 **2. Was könnte schiefgehen?**
 - **Marker-Identitäten leaken:** `lab_enabled_markers` verrät, welche Marker eine Person
@@ -637,22 +679,22 @@ keine neuen Tokens, keine Cloud-Calls.
 | A1 | nur aktive Marker | nur aktive Marker (ab Aktivierung) |
 | A2 | nur aktivierte Marker | nur aktivierte Marker (ab Aktivierung) |
 | A3 | unverändert | unverändert |
-| A4 | 9 Aggregate (Attribute größer) | **keine** Einzel-LTS mehr |
+| A4 | 10 Aggregate (Attribute größer) | **keine** Einzel-LTS mehr |
 | A5 | nur nicht ausgeblendete Kategorien | dito |
 | A6 | unverändert | unverändert |
 | A7 | nur aktivierte Entities | nur aktivierte Entities |
 | A8 | nur Marker mit Daten | dito |
 | B1 | 4 zusätzliche State-Quellen (Entwurf) | keine |
-| B3 | 29 zusätzliche State-Quellen | keine |
+| B3 | 41 zusätzliche State-Quellen | keine |
 
 ---
 
-## 10. Belege (verifiziert am Code, `main` = `b18e96e`)
+## 10. Belege (verifiziert am Code, `main` = `6e9ca31`, 2026-11-03)
 
 - Entity-Aufbau: `custom_components/health_o_mat/sensor.py:25-60`, `:495-549`;
   `binary_sensor.py:21-42`, `:92-123`; `number.py:18-49`; `button.py:14-38`;
-  `select.py:13-17`; `text.py:16-20`.
-- Katalog: `const.py:175-186` (10 Kategorien inkl. `other`), `:192-485` (29 Marker).
+  `select.py:13-17`; `text.py:16-26`.
+- Katalog: `const.py:175-190` (11 Kategorien inkl. `other`), `:196-621` (41 Marker).
 - `unique_id`/Device: `entity.py:22-32`.
 - Bereiche/Areas: `areas.py:1-14`.
 - Hidden nur Anzeige: `ws_api.py:616-671`; Reload-Semantik `__init__.py:381-432`.
