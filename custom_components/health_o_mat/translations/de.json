@@ -1102,7 +1102,115 @@
     "ui_panel_lab_unit_required": "Einheit erforderlich",
     "ui_panel_lab_report_discard": "Diesen Bericht verwerfen",
     "ui_panel_lab_report_discard_confirm": "Diesen Bericht mit {count} Werten verwerfen?",
+    "ui_panel_lab_report_row_hint": "Zeile {row}",
     "ui_panel_val_lab_value": "Bitte Marker und einen numerischen Wert angeben."
+  },
+  "exceptions": {
+    "no_person_configured": {
+      "message": "Keine Health-O-Mat-Person eingerichtet."
+    },
+    "person_ambiguous": {
+      "message": "Mehrere Personen sind eingerichtet. Bitte eine davon auswählen."
+    },
+    "person_not_found": {
+      "message": "Diese Person ist nicht eingerichtet."
+    },
+    "invalid_ts": {
+      "message": "Ungültiger Zeitpunkt {value}. Erwartet ISO 8601, höchstens 5 Minuten in der Zukunft und nicht vor 1900."
+    },
+    "invalid_history_kind": {
+      "message": "Unbekannter Typ {kind}. Erlaubt: {allowed}."
+    },
+    "missing_item_id": {
+      "message": "Beim zu ändernden Eintrag fehlt die id."
+    },
+    "entry_not_found": {
+      "message": "Der Eintrag wurde nicht gefunden oder ist bereits im gewünschten Zustand."
+    },
+    "invalid_undo_kind": {
+      "message": "Für den Typ {kind} gibt es kein Rückgängig. Erlaubt: {allowed}."
+    },
+    "undo_not_supported": {
+      "message": "Rückgängig ist für {kind} nicht verfügbar."
+    },
+    "nothing_to_remove": {
+      "message": "Für {kind} gibt es nichts zu entfernen."
+    },
+    "limit_out_of_range": {
+      "message": "Das Limit muss zwischen {min} und {max} liegen."
+    },
+    "offset_invalid": {
+      "message": "Der Offset muss 0 oder größer sein."
+    },
+    "invalid_since": {
+      "message": "Since muss ein ISO-8601-Zeitpunkt sein."
+    },
+    "amount_out_of_range": {
+      "message": "Die Menge muss zwischen {min} und {max} ml liegen."
+    },
+    "bp_out_of_range": {
+      "message": "Systolisch und diastolisch müssen zwischen {min} und {max} liegen."
+    },
+    "wellbeing_target_missing": {
+      "message": "Bitte entweder einen Status oder einen Score zwischen 1 und {max} angeben."
+    },
+    "wellbeing_score_invalid": {
+      "message": "Der Score muss zwischen {min} und {max} liegen."
+    },
+    "wellbeing_key_unknown": {
+      "message": "Unbekannter Wohlbefinden-Status. Erlaubt: {allowed}."
+    },
+    "unknown_marker": {
+      "message": "Unbekannter Marker {marker}."
+    },
+    "unit_required": {
+      "message": "Für den Marker {marker} ist eine Einheit erforderlich."
+    },
+    "invalid_value": {
+      "message": "Der Wert für den Marker {marker} ist keine gültige Zahl."
+    },
+    "unsupported_unit": {
+      "message": "Die Einheit {unit} wird für den Marker {marker} nicht unterstützt."
+    },
+    "duplicate_marker": {
+      "message": "Der Marker {marker} kommt in diesem Bericht mehrfach vor."
+    },
+    "empty_report": {
+      "message": "Der Bericht enthält keine Werte."
+    },
+    "too_many_rows": {
+      "message": "Der Bericht hat {count} Zeilen; höchstens {limit} sind erlaubt."
+    },
+    "no_active_report": {
+      "message": "Zu diesem Zeitpunkt gibt es keinen aktiven Bericht."
+    },
+    "no_active_value": {
+      "message": "Für den Marker {marker} gibt es keinen aktiven Wert."
+    },
+    "invalid_setting": {
+      "message": "Ungültige Einstellung {field}."
+    },
+    "unknown_dataset": {
+      "message": "Unbekannter Datensatz. Erlaubt: {allowed}."
+    },
+    "confirm_mismatch": {
+      "message": "Die Bestätigung stimmt nicht mit dem Personen-Schlüssel überein."
+    },
+    "invalid_import_source": {
+      "message": "Genau eines von filename oder content angeben."
+    },
+    "content_not_utf8": {
+      "message": "Der Inhalt ist kein gültiges UTF-8."
+    },
+    "content_too_large": {
+      "message": "Der Inhalt überschreitet {max} Bytes."
+    },
+    "config_flow_unavailable": {
+      "message": "Diese Home-Assistant-Version kann keinen Einrichtungsdialog starten."
+    },
+    "config_flow_failed": {
+      "message": "Der Einrichtungsdialog konnte nicht gestartet werden."
+    }
   },
   "issues": {
     "migration_blocked": {

@@ -1746,24 +1746,23 @@ def test_req_hom_123_lab_report_error_builds_the_contract_shape():
     assert row_error == {
         "code": "unknown_marker",
         "params": {"row": 3, "marker": "kreatinin"},
-        "message": "Zeile 3 (kreatinin): unknown_marker",
+        "message": "unknown_marker (row=3, marker=kreatinin)",
     }
 
     duplicate = logic.lab_report_error(
         "duplicate_marker", {"row": 2, "marker": "gpt", "first_row": 1}
     )
-    assert duplicate["message"] == "Zeile 2 (gpt): duplicate_marker (schon in Zeile 1)"
+    assert duplicate["message"] == "duplicate_marker (row=2, marker=gpt, first_row=1)"
 
     too_many = logic.lab_report_error("too_many_rows", {"count": 201, "limit": 200})
-    assert too_many["message"] == "too_many_rows (201 > 200)"
+    assert too_many["message"] == "too_many_rows (count=201, limit=200)"
 
     invalid_ts = logic.lab_report_error("invalid_ts", {"value": "kaputt"})
-    assert invalid_ts["message"].startswith("invalid_ts: ")
-    assert "kaputt" in invalid_ts["message"]
+    assert invalid_ts["message"] == "invalid_ts (value=kaputt)"
 
     assert (
         logic.lab_report_error("no_active_report", {"ts": "2026-11-01T09:15:00+01:00"})["message"]
-        == "no_active_report"
+        == "no_active_report (ts=2026-11-01T09:15:00+01:00)"
     )
 
 
@@ -1835,7 +1834,7 @@ def test_req_hom_123_validate_rows_rejects_more_than_200_filled_rows():
     assert error == {
         "code": "too_many_rows",
         "params": {"count": 201, "limit": 200},
-        "message": "too_many_rows (201 > 200)",
+        "message": "too_many_rows (count=201, limit=200)",
     }
 
 
@@ -1875,7 +1874,7 @@ def test_req_hom_123_validate_rows_row_numbers_count_original_positions():
     assert rows == []
     assert error["code"] == "unknown_marker"
     assert error["params"] == {"row": 3, "marker": "gptx"}
-    assert error["message"] == "Zeile 3 (gptx): unknown_marker"
+    assert error["message"] == "unknown_marker (row=3, marker=gptx)"
 
 
 def test_req_hom_123_validate_rows_renders_missing_marker_as_dash():
@@ -1889,7 +1888,7 @@ def test_req_hom_123_validate_rows_renders_missing_marker_as_dash():
     assert error == {
         "code": "unknown_marker",
         "params": {"row": 1, "marker": ""},
-        "message": "Zeile 1 (-): unknown_marker",
+        "message": "unknown_marker (row=1, marker=-)",
     }
 
 
@@ -1904,7 +1903,7 @@ def test_req_hom_123_validate_rows_requires_explicit_unit():
     assert error == {
         "code": "unit_required",
         "params": {"row": 1, "marker": "urine_protein_creatinine_ratio"},
-        "message": "Zeile 1 (urine_protein_creatinine_ratio): unit_required",
+        "message": "unit_required (row=1, marker=urine_protein_creatinine_ratio)",
     }
 
 
@@ -1938,7 +1937,7 @@ def test_req_hom_123_validate_rows_reports_unsupported_unit():
     assert error == {
         "code": "unsupported_unit",
         "params": {"row": 1, "marker": "alt", "unit": "mg/dL"},
-        "message": "Zeile 1 (alt): unsupported_unit",
+        "message": "unsupported_unit (row=1, marker=alt, unit=mg/dL)",
     }
 
 
@@ -1953,7 +1952,7 @@ def test_req_hom_123_validate_rows_reports_alias_duplicate_with_first_row():
     assert error == {
         "code": "duplicate_marker",
         "params": {"row": 2, "marker": "gpt", "first_row": 1},
-        "message": "Zeile 2 (gpt): duplicate_marker (schon in Zeile 1)",
+        "message": "duplicate_marker (row=2, marker=gpt, first_row=1)",
     }
 
 

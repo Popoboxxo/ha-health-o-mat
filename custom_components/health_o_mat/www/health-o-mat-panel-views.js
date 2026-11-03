@@ -40,6 +40,9 @@ import {
   labMarkerOptionsHtml,
   labDisplayName,
   t,
+  tError,
+  withRowHint,
+  wsErrorText,
   WS,
   errMsg,
 } from "./health-o-mat-panel-base.js?v=0.19.0";
@@ -1305,7 +1308,7 @@ async function submitLabReport(panel, entryId) {
     if (panel._labReportOpen) panel._labReportOpen[entryId] = false;
     await panel._reloadEntry(entryId);
   } catch (err) {
-    panel._formError = errMsg(err);
+    panel._formError = wsErrorText(err);
   } finally {
     panel._busy = false;
     panel._render();
@@ -1313,11 +1316,14 @@ async function submitLabReport(panel, entryId) {
 }
 
 /* Envelope-Fehler der Batch-Kommandos (§3): `panel._ws` löst bei
- * {"ok": false} nicht ab. */
+ * {"ok": false} nicht ab. Der Batch trägt `{code, params, message}` —
+ * `tError` lokalisiert aus dem `exceptions`-Katalog und interpoliert
+ * `params`; der Zeilen-Hinweis kommt aus `params.row`. */
 function resultError(result) {
   if (!result || result.ok !== false) return "";
   const error = result.error && typeof result.error === "object" ? result.error : {};
-  return error.message || error.code || t("ui_panel_lab_report_empty", "Fehler");
+  const text = tError(error) || t("ui_panel_lab_report_empty", "Fehler");
+  return withRowHint(text, error);
 }
 
 /* Kategorie schrittweise wechseln (Knoepfe + Wischgeste). Faellt die gemerkte
@@ -1503,7 +1509,7 @@ async function discardLabReport(panel, entryId) {
     }
     await panel._reloadEntry(entryId);
   } catch (err) {
-    panel._formError = errMsg(err);
+    panel._formError = wsErrorText(err);
   } finally {
     panel._busy = false;
     panel._render();

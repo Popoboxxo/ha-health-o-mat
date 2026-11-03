@@ -1576,12 +1576,16 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-127 — Fehlercode-/i18n-Umbau der bestehenden Pfade (eigener Plan)
 - **Priorität:** P2 · **Aufwand:** M–L
-- **Status: Offen — geplant (eigener Plan)** — **nicht** Teil der
-  Batch-Erweiterung (REQ-HOM-123…129), sondern ein separates Vorhaben mit
-  eigenem Plan.
-- **Spec:** `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
+- **Status: Umgesetzt (Branch `feat/127-error-contract-impl`, noch kein
+  Release)** — Akzeptanzkriterien erfüllt; Belege am Kapitelende. Separat von
+  der Batch-Erweiterung (REQ-HOM-123…129) mit eigenem Konzept und Plan.
+- **Spec:** `docs/superpowers/specs/2026-11-03-error-contract-design.md`
+  (Vertrag §4/§5, Kanäle §5.2–5.5, Client-Lokalisierung §5.6, Frontend §7.5,
+  Relais-Pflicht §7.7, Akzeptanzkriterien §11); Ursprung:
+  `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`
   (§2.4 Fehlervertrag, §3.3 Gemeinsame Regeln, §11 Akzeptanzkriterien, §14
   Offene Punkte)
+- **Plan:** `docs/superpowers/plans/2026-11-03-error-contract.md`
 - **Bezug:** Die Batch-Erweiterung liefert nur das Referenzformat
   (`{code, params}`) und die Werte-Tabelle; die Migration der **bestehenden**
   Services/WS-Fehler ist ausdrücklich nicht Teil dieses Konzepts.
@@ -1591,13 +1595,41 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   code-only/strukturierte Format migriert. Umsetzung und Reihenfolge gehören in
   einen eigenen Plan (Planner-Konvention), nicht in diese Erweiterung.
 - **Akzeptanzkriterien:**
-  - [ ] **Nicht** Teil dieser Erweiterung. Ziel: bestehende Services/WS-Fehler
-    auf code-only/strukturiert (`{code, params}`) migrieren und die
-    Meldungstexte lokalisieren.
-  - [ ] Diese Spec liefert dafür nur das Referenzformat (§2.4) und die
-    Werte-Tabelle.
-- **Belege:** stehen mit dem eigenen Plan aus; bis dahin bleiben die
-  Batch-Fehlertexte deutsch (Server-`message`, §14).
+  - [x] Bestehende Services/WS-Fehler sind auf code-only/strukturiert
+    (`{code, params}`) migriert; die Meldungstexte werden lokalisiert
+    (35-Code-Katalog `errors.ERROR_SPECS`, 29 Service- und 32 WS-Fehlerstellen,
+    `exceptions`-Übersetzungen de/en).
+  - [x] Der Batch-Pfad bleibt beim Referenzformat (`{code, params, message}`,
+    **ohne** `translation_*`); die Batch-Spec liefert dafür nur das
+    Referenzformat (§2.4) und die Werte-Tabelle.
+- **Belege:**
+  - **Katalog:** `custom_components/health_o_mat/logic.py` —
+    `ERROR_SPECS` mit **35 Codes** (`params`, `template`, `row_template`) plus
+    `RAW_ECHO_CODES`; `build_error` liefert sprachneutrale `message`-Templates.
+    HA-Projektion ausschließlich in `errors.py` (`validation_error`,
+    `send_ws_error`, `relay_error`); Invariante `code == translation_key`.
+  - **Migrierte Stellen:** **29 Service-** und **32 WS-Fehlerstellen** nutzen
+    den Katalog; **4 Relais-Stellen** (`export_failed`, `backup_failed`,
+    `import_failed`, `restore_failed`) reichen `translation_domain`/
+    `translation_key`/`translation_placeholders` durch, statt die Meldung zu
+    verlieren.
+  - **Übersetzungen:** **35 `exceptions`-Einträge** in `strings.json` sowie
+    `translations/de.json`/`translations/en.json` mit **identischen
+    Platzhalter-Sets** je Code.
+  - **Batch unverändert:** Envelope bleibt `{code, params, message}` — **keine**
+    `translation_*`-Keys; die Lokalisierung erfolgt clientseitig aus `code` +
+    `params` (Konzept §5.4).
+  - **Frontend löst per Code auf:** `translation_key || code` hat Vorrang vor
+    `message`, Platzhalter aus `translation_placeholders || params`; unbekannter
+    Code fällt auf `message`, dann auf den Code zurück (nie leer, nie roher
+    `ui_…`-Key). Ergänzter Key: `ui_panel_lab_report_row_hint` in Master/de/en.
+  - **Tests:** `pytest -q` → **1865 passed**; `ruff check .` clean,
+    `compileall` OK. E2E `tests_e2e/` → **73 passed** auf dem Compose-Stack
+    (Port 8124), inkl. lokalisierter Darstellung de/en, Unknown-Code-Fallback
+    und Batch-Envelope ohne `translation_*`.
+  - **Bewusst nicht migriert** (Konzept §7.6): Entity-Aktionen in `button.py`/
+    `text.py` (kein Service-/WS-Aufruf) — Folgekandidat ohne eigene REQ.
+  - **Kein Release:** `0.21.0` ist geplant, aber **nicht** geschnitten.
 
 #### REQ-HOM-128 — Batch-Undo (`remove_lab_report`)
 - **Priorität:** P2 · **Aufwand:** S–M
@@ -2067,6 +2099,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 | Datum | Änderung |
 |---|---|
+| 2026-11-03 | **REQ-HOM-127 umgesetzt — Fehlercode-/i18n-Vertrag für bestehende Services und WS-Pfade** (Branch `feat/127-error-contract-impl`; Konzept `docs/superpowers/specs/2026-11-03-error-contract-design.md`, Plan `docs/superpowers/plans/2026-11-03-error-contract.md`): zentraler **35-Code-Katalog** `errors.ERROR_SPECS` (HA-frei in `logic.py`, `params`/`template`/`row_template`, `RAW_ECHO_CODES`) mit HA-Projektion ausschließlich in `errors.py` (`validation_error`, `send_ws_error`, `relay_error`; Invariante `code == translation_key`); **29 Service-** und **32 WS-Fehlerstellen** von Prosa/`send_error` auf den Katalog migriert; **4 Relais-Stellen** (`export_failed`, `backup_failed`, `import_failed`, `restore_failed`) reichen `translation_domain`/`translation_key`/`translation_placeholders` durch; **35 `exceptions`-Übersetzungen** in `strings.json`/`translations/de.json`/`translations/en.json` mit identischen Platzhalter-Sets; **Batch-Envelope unverändert** `{code, params, message}` **ohne** `translation_*` (Lokalisierung clientseitig aus `code` + `params`); Frontend löst ausschließlich **per Code** auf (`translation_key || code`, dann `translation_placeholders || params`, Unknown-Code-Fallback auf `message`, dann Code), ergänzter Key `ui_panel_lab_report_row_hint`. **Belege:** `pytest -q` → **1865 passed**, `ruff check .` clean, `compileall` OK; E2E `tests_e2e/` → **73 passed** auf dem Compose-Stack (8124), inkl. lokalisierter Darstellung de/en, Unknown-Code-Fallback und Batch-Envelope ohne `translation_*`. **Kein Release/Tag** — `0.21.0` ist geplant, aber nicht geschnitten. |
 | 2026-11-03 | **Welle 3 — REQ-HOM-006 Blueprint-E2E umgesetzt (noch kein Release):** vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Ziel-erreicht, Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer nötig); **echter Defekt behoben** — `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template, ohne es zu binden (HA substituiert nur `!input`), daher rendete der Personenname nie; beide binden jetzt `variables: {person: !input person_name}` und nutzen `person`, `weekly_report` braucht keine Bindung (kein Template); `tests/test_blueprints.py` um die Bindungs-Regression erweitert (schlägt auf dem Vorher-Stand fehl); `README.md`-Blueprint-Liste drei → vier. **Belege:** `pytest -q` → **1751 passed**; neu `tests_e2e/test_blueprints_e2e.py` → **19 Tests, 19 passed** auf dem Compose-Stack (8124) — Import über Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Automationsvalidierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration, also keine auslösbare Entity) — kein realer Notify-Aufruf. **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
 | 2026-11-02 | **Welle 2 — REQ-HOM-010 Mess-Notiz umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`):** neue Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, `mdi:note-text-outline`, max. 255 Zeichen, Gate `AREA_BP`); die angefangene Notiz liegt im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Schema-Bump/Migrator) und wird zentral in `HealthOMatStore.add_reading` geleert, sodass Button, Service, WS und CSV-Import denselben Choke-Point nutzen; `SaveReadingButton` reicht die Notiz mit; nach dem Validator-Befund fließt die angefangene Notiz auch über den Service `add_blood_pressure` und das WS-Kommando `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene); Note sichtbar in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (Spalten additiv, Bestandsimporte unverändert). **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean; E2E `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)) — frische Person, Identität (`unique_id`, englisch gepinnte `entity_id`, lokalisierter Anzeigename), Notiz an gespeicherter Messung, Feld danach leer, Notiz in `history_json` + CSV, Bereichs-Toggle behält `unique_id`/`entity_id`. Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, gepinnt durch Unit-Regressionstest. **Scope:** nur Blutdruck (`set_wellbeing` hat keinen `note`-Parameter). **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
 | 2026-11-02 | **Welle 1 — REQ-HOM-130-Restpunkte umgesetzt (Branch `feat/130-migration-repairs`, Commit `4d32166`, PR #75):** Repair-Issue im blockierten Migrationsfall (stabile ID `migration_blocked_<entry_id>`, `is_fixable=False`, skalares `data` mit Paarliste, `translation_key="migration_blocked"`, Löschung bei sauberem Pass und in `async_remove_entry`), genau eine Erfolgs-Notification nach echten Renames (`entity_id_migration_<entry_id>`, nie setup-kritisch), Übersetzungen in `strings.json`/`translations/de.json`/`translations/en.json`. **Update-Pfad 0.16.2 → 0.19.0** auf dem Compose-Stack (Port 8124) **simuliert** belegt: Entry v2→v3, 4 Quick-Drink-Renames, 82 alte `unique_id`s erhalten (95 Entities danach, +13 gegenüber 0.19.0), Getränke 750 ml / BD 124/82/64 / Wohlbefinden 7 / Labor-CRP 3,2 mg/L unverändert lesbar, eine Notification, kein Repair-Issue, kein `Migration handler not found`, zweiter Neustart idempotent. **Nicht belegt:** die HACS-Mechanik selbst (kein HACS im gepinnten E2E-Image, Integration read-only bind-gemountet, HACS braucht interaktiven GitHub-Device-Flow) — REQ-HOM-130 bleibt deshalb **teilweise**. **Belege:** `tests/test_entry_migration.py`, `tests/test_remove_entry.py`; `pytest -q` → **1719 passed**, `ruff check .` + `ruff format --check .` clean. Kein Release/Tag. |

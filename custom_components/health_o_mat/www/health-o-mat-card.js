@@ -153,9 +153,11 @@ const TS_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
  * call site is the resilience fallback; a failed load never throws and never
  * renders a raw `ui_…` key. */
 const UI_KEY_PREFIX = "component.health_o_mat.common.";
+const UI_ERROR_KEY_PREFIX = "component.health_o_mat.exceptions.";
 const UI_DEFAULT_LANGUAGE = "de";
 let _uiLanguage = UI_DEFAULT_LANGUAGE;
 let _uiCache = Object.create(null);
+let _uiErrorCache = Object.create(null);
 const _uiInflight = Object.create(null);
 const _uiAttempted = Object.create(null);
 
@@ -186,16 +188,30 @@ function _t(key, fallback, vars) {
   return _uiInterpolate(fallback == null ? "" : fallback, vars);
 }
 
-function _normaliseUiResources(resources) {
+function _normaliseUiResources(resources, prefix) {
   const out = Object.create(null);
   if (!resources || typeof resources !== "object") return out;
   Object.keys(resources).forEach((fullKey) => {
     const value = resources[fullKey];
     if (typeof value !== "string" || value === "") return;
-    const key = fullKey.startsWith(UI_KEY_PREFIX) ? fullKey.slice(UI_KEY_PREFIX.length) : fullKey;
+    const key = fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : fullKey;
     out[key] = value;
   });
   return out;
+}
+
+/** Structured error -> display text (catalog → neutral message → code). */
+function _errorText(err) {
+  if (err == null) return "";
+  if (typeof err !== "object") return String(err);
+  const key = err.translation_key || err.code || "";
+  const vars = err.translation_placeholders || err.params || {};
+  const dict = key ? _uiErrorCache[_uiLanguage] : null;
+  const text = dict && typeof dict === "object" ? dict[`${key}.message`] : "";
+  if (typeof text === "string" && text !== "") return _uiInterpolate(text, vars);
+  if (err.message != null && String(err.message) !== "") return String(err.message);
+  if (key) return String(key);
+  return "";
 }
 
 /** Load once per language; resolves `true` when new texts became available. */
@@ -205,22 +221,30 @@ function _loadUiTranslations(hass) {
   if (_uiAttempted[language]) return Promise.resolve(false);
   if (_uiInflight[language]) return _uiInflight[language];
   _uiAttempted[language] = true;
-  _uiInflight[language] = (async () => {
-    let resources = null;
+  const fetchCategory = async (category) => {
     try {
       if (hass && typeof hass.callWS === "function") {
         const result = await hass.callWS({
           type: "frontend/get_translations",
           language,
-          category: "common",
+          category,
           integration: ["health_o_mat"],
         });
-        resources = result && result.resources;
+        return result && result.resources ? result.resources : null;
       }
     } catch (_error) {
-      resources = null;
+      return null;
     }
-    _uiCache[language] = _normaliseUiResources(resources);
+    return null;
+  };
+  _uiInflight[language] = (async () => {
+    // Both categories load in parallel (per-language cache each).
+    const [common, exceptions] = await Promise.all([
+      fetchCategory("common"),
+      fetchCategory("exceptions"),
+    ]);
+    _uiCache[language] = _normaliseUiResources(common, UI_KEY_PREFIX);
+    _uiErrorCache[language] = _normaliseUiResources(exceptions, UI_ERROR_KEY_PREFIX);
     delete _uiInflight[language];
     _updateCustomCardDescription();
     return true;
@@ -1189,7 +1213,7 @@ class HealthOMatCard extends HTMLElement {
        * Fehlerzustand: eine alte Aktions-Meldung darf nicht stehen bleiben. */
       if (silent && this._data) this._actionError = "";
     } catch (err) {
-      this._error = (err && err.message) ? err.message : String(err);
+      this._error = _errorText(err);
       if (!silent) this._data = null;
     } finally {
       this._loading = false;
@@ -1295,7 +1319,7 @@ class HealthOMatCard extends HTMLElement {
       this._resetTs("drink-ts");
       await this._loadData(true);
     } catch (err) {
-      this._actionError = (err && err.message) ? err.message : String(err);
+      this._actionError = _errorText(err);
       this._render();
     } finally {
       this._busyMl = null;
@@ -1450,7 +1474,7 @@ class HealthOMatCard extends HTMLElement {
       this._resetTs("bp-ts");
       await this._loadData(true);
     } catch (err) {
-      this._bpError = (err && err.message) ? err.message : String(err);
+      this._bpError = _errorText(err);
       this._render();
     } finally {
       this._busyBp = false;
@@ -1548,7 +1572,7 @@ class HealthOMatCard extends HTMLElement {
       this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
-      this._wbError = (err && err.message) ? err.message : String(err);
+      this._wbError = _errorText(err);
       this._render();
     } finally {
       this._busyWb = false;
@@ -1593,7 +1617,7 @@ class HealthOMatCard extends HTMLElement {
       this._resetTs("wb-ts");
       await this._loadData(true);
     } catch (err) {
-      this._wbError = (err && err.message) ? err.message : String(err);
+      this._wbError = _errorText(err);
       this._render();
     } finally {
       this._busyWb = false;
@@ -1621,7 +1645,7 @@ class HealthOMatCard extends HTMLElement {
       this._actionError = "";
       await this._loadData(true);
     } catch (err) {
-      this._actionError = (err && err.message) ? err.message : String(err);
+      this._actionError = _errorText(err);
       this._render();
     } finally {
       this._undoBusyKind = "";
@@ -1663,7 +1687,7 @@ class HealthOMatCard extends HTMLElement {
           state.loaded = true;
         } catch (err) {
           if (this._activeEntry !== entryId) return;
-          state.error = (err && err.message) ? err.message : String(err);
+          state.error = _errorText(err);
           state.loaded = true;
         } finally {
           if (this._activeEntry === entryId) state.loading = false;
@@ -1713,7 +1737,7 @@ class HealthOMatCard extends HTMLElement {
       });
       await this._loadData(true);
     } catch (err) {
-      this._actionError = (err && err.message) ? err.message : String(err);
+      this._actionError = _errorText(err);
     } finally {
       this._historyBusy = false;
       this._render();
@@ -2016,7 +2040,7 @@ class HealthOMatCard extends HTMLElement {
       // Absolute last resort: never let the card break the dashboard.
       this.shadowRoot.innerHTML =
         `<ha-card><div class="hom"><div class="msg error">` +
-        `Health-O-Mat: ${escapeHtml(err && err.message ? err.message : err)}</div></div></ha-card>`;
+        `Health-O-Mat: ${escapeHtml(_errorText(err))}</div></div></ha-card>`;
     }
   }
 

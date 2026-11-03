@@ -23,7 +23,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from . import logic, parser
+from . import errors, logic, parser
 from .areas import AREA_LABS, AREAS, OPTION_AREAS, active_areas
 from .const import (
     AUDIT_LIMIT_OPTION,
@@ -157,13 +157,6 @@ _UNDO_ALIASES: dict[str, str] = {
     "drinks": UNDO_DRINK,
     "blood_pressure": UNDO_BLOOD_PRESSURE,
     "wellbeing": UNDO_WELLBEING,
-}
-
-# Menschliche Bezeichnung des Undo-Ziels (Fehlertexte).
-_UNDO_LABELS: dict[str, str] = {
-    UNDO_DRINK: "Getränke",
-    UNDO_BLOOD_PRESSURE: "Blutdruckmessungen",
-    UNDO_WELLBEING: "Wohlbefinden-Meldungen",
 }
 
 # Shared-Bereich: Lazy-Singleton des Per-User-UI-Stores.
@@ -882,7 +875,7 @@ def parse_entry_ts(value: Any, now: datetime) -> str | None:
         return None
     parsed = logic.parse_entry_timestamp(value, now=now)
     if parsed is None:
-        raise ValueError(logic.ENTRY_TS_INVALID_MESSAGE.format(value=value))
+        raise ValueError(logic.build_error("invalid_ts", {"value": value})["message"])
     return parsed.isoformat()
 
 
@@ -1300,17 +1293,21 @@ async def websocket_book_drink(hass: HomeAssistant, connection: Any, msg: dict[s
         return
     ml = _as_int(msg.get("ml"), 0)
     if ml < MIN_DRINK_ML or ml > MAX_AMOUNT_ML:
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"ml muss zwischen {MIN_DRINK_ML} und {MAX_AMOUNT_ML} liegen",
+            "amount_out_of_range",
+            {"min": MIN_DRINK_ML, "max": MAX_AMOUNT_ML},
         )
         return
     now = dt_util.now()
     try:
         ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
-    except ValueError as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+    except ValueError:
+        errors.send_ws_error(
+            connection, msg["id"], ERR_INVALID_FORMAT, "invalid_ts", {"value": msg.get("ts")}
+        )
         return
     await store.add_drink(
         entry_id,
@@ -1335,10 +1332,12 @@ async def websocket_undo_last(hass: HomeAssistant, connection: Any, msg: dict[st
         return
     kind = normalize_undo_kind(msg.get("kind"))
     if kind is None:
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(sorted(_UNDO_ALIASES))})",
+            "invalid_undo_kind",
+            {"kind": msg.get("kind"), "allowed": ", ".join(sorted(_UNDO_ALIASES))},
         )
         return
     remove_last = getattr(store, logic.REMOVE_LAST_METHOD_BY_KIND[kind])
@@ -1348,7 +1347,9 @@ async def websocket_undo_last(hass: HomeAssistant, connection: Any, msg: dict[st
         audit_limit=_audit_limit(hass, entry_id),
     )
     if not removed:
-        connection.send_error(msg["id"], ERR_NOT_FOUND, f"Keine {_UNDO_LABELS[kind]} zum Entfernen")
+        errors.send_ws_error(
+            connection, msg["id"], ERR_NOT_FOUND, "nothing_to_remove", {"kind": kind}
+        )
         return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
@@ -1372,10 +1373,12 @@ async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict
         return
     kind = logic.normalize_history_kind(msg.get("kind"))
     if kind is None:
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(logic.HISTORY_KINDS)})",
+            "invalid_history_kind",
+            {"kind": msg.get("kind"), "allowed": ", ".join(logic.HISTORY_KINDS)},
         )
         return
     limit = msg.get("limit")
@@ -1385,17 +1388,19 @@ async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict
             or isinstance(limit, bool)
             or not 1 <= limit <= HISTORY_LIMIT_MAX
         ):
-            connection.send_error(
+            errors.send_ws_error(
+                connection,
                 msg["id"],
                 ERR_INVALID_FORMAT,
-                f"limit muss zwischen 1 und {HISTORY_LIMIT_MAX} liegen",
+                "limit_out_of_range",
+                {"min": 1, "max": HISTORY_LIMIT_MAX},
             )
             return
     elif kind == logic.HISTORY_KIND_LAB:
         limit = HISTORY_LAB_DEFAULT_LIMIT
     offset = msg.get("offset") or 0
     if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "offset muss >= 0 sein")
+        errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "offset_invalid")
         return
     since = None
     raw_since = msg.get("since")
@@ -1404,20 +1409,23 @@ async def websocket_list_history(hass: HomeAssistant, connection: Any, msg: dict
         # andere Nicht-String ist dagegen ein Formatfehler statt ein stiller
         # "kein Filter".
         if not isinstance(raw_since, str):
-            connection.send_error(
+            errors.send_ws_error(
+                connection,
                 msg["id"],
                 ERR_INVALID_FORMAT,
-                f"since muss ein ISO-Zeitpunkt (String) sein, "
-                f"erhalten {type(raw_since).__name__} {raw_since!r}",
+                "invalid_since",
+                {"expected": "ISO 8601 timestamp"},
             )
             return
         if raw_since.strip():
             since = logic.parse_entry_timestamp(raw_since, now=dt_util.now())
             if since is None:
-                connection.send_error(
+                errors.send_ws_error(
+                    connection,
                     msg["id"],
                     ERR_INVALID_FORMAT,
-                    f"Ungültiger since-Zeitpunkt: {raw_since!r}",
+                    "invalid_since",
+                    {"expected": "ISO 8601 timestamp"},
                 )
                 return
     entries, has_more = build_history(
@@ -1465,10 +1473,12 @@ async def _set_entry_voided(
         return
     kind = logic.normalize_history_kind(msg.get("kind"))
     if kind is None:
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"Unbekannter kind: {msg.get('kind')!r} (erlaubt: {', '.join(logic.HISTORY_KINDS)})",
+            "invalid_history_kind",
+            {"kind": msg.get("kind"), "allowed": ", ".join(logic.HISTORY_KINDS)},
         )
         return
     item_id = _entry_item_id(msg)
@@ -1480,11 +1490,8 @@ async def _set_entry_voided(
         audit_limit=_audit_limit(hass, entry_id),
     )
     if not changed:
-        state = "nicht gelöscht" if restore else "bereits gelöscht"
-        connection.send_error(
-            msg["id"],
-            ERR_NOT_FOUND,
-            f"Eintrag {item_id!r} nicht gefunden oder {state}",
+        errors.send_ws_error(
+            connection, msg["id"], ERR_NOT_FOUND, "entry_not_found", {"kind": kind}
         )
         return
     signal_refresh(hass, entry_id)
@@ -1531,18 +1538,22 @@ async def websocket_save_measurement(
     if not (MIN_BP_VALUE <= sys_value <= MAX_BP_VALUE) or not (
         MIN_BP_VALUE <= dia_value <= MAX_BP_VALUE
     ):
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"sys/dia müssen zwischen {MIN_BP_VALUE} und {MAX_BP_VALUE} liegen",
+            "bp_out_of_range",
+            {"min": MIN_BP_VALUE, "max": MAX_BP_VALUE},
         )
         return
     pulse = msg.get("pulse")
     now = dt_util.now()
     try:
         ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
-    except ValueError as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+    except ValueError:
+        errors.send_ws_error(
+            connection, msg["id"], ERR_INVALID_FORMAT, "invalid_ts", {"value": msg.get("ts")}
+        )
         return
     await store.add_reading(
         entry_id,
@@ -1571,7 +1582,13 @@ def _resolve_lab_marker_or_error(
     """
     resolved = logic.resolve_lab_marker(msg.get("marker"), options.get(OPTION_LAB_CUSTOM_MARKERS))
     if resolved is None:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unknown_marker")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "unknown_marker",
+            {"marker": msg.get("marker")},
+        )
     return resolved
 
 
@@ -1600,25 +1617,45 @@ async def websocket_add_lab_value(
     # greift die Einheiten-Pflicht (konsistent zum Batch-Pfad in logic.py).
     raw_unit = str(msg.get("unit") or "").strip() or None
     if raw_unit is None and marker_def.get("require_explicit_unit"):
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "unit_required")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "unit_required",
+            {"marker": msg.get("marker")},
+        )
         return
     try:
         reported_value = logic.coerce_lab_number(msg.get("value"))
         if reported_value is None:
-            connection.send_error(msg["id"], ERR_INVALID_FORMAT, "invalid_value")
+            errors.send_ws_error(
+                connection,
+                msg["id"],
+                ERR_INVALID_FORMAT,
+                "invalid_value",
+                {"marker": msg.get("marker")},
+            )
             return
         canonical_value, canonical_unit = logic.convert_lab_value(
             marker_def, reported_value, raw_unit
         )
-    except (TypeError, ValueError) as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "unsupported_unit")
+    except (TypeError, ValueError):
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "unsupported_unit",
+            {"marker": msg.get("marker"), "unit": raw_unit},
+        )
         return
     report_ref = (msg.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
     now = dt_util.now()
     try:
         ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
-    except ValueError as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+    except ValueError:
+        errors.send_ws_error(
+            connection, msg["id"], ERR_INVALID_FORMAT, "invalid_ts", {"value": msg.get("ts")}
+        )
         return
     try:
         await store.add_lab_reading(
@@ -1634,10 +1671,16 @@ async def websocket_add_lab_value(
             actor=user_id_of(connection),
             audit_limit=_audit_limit(hass, entry_id),
         )
-    except ValueError as err:
+    except ValueError:
         # Kanonische Dedupe-Regel (#71/#72): gleiches (ts, marker_key) → kein
         # zweiter Wert, kein Teilzustand. Der Fehlercode ist stabil.
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err) or "duplicate_marker")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "duplicate_marker",
+            {"marker": msg.get("marker")},
+        )
         return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
@@ -1690,16 +1733,14 @@ async def websocket_add_lab_report(
             actor=user_id_of(connection),
             audit_limit=_audit_limit(hass, entry_id),
         )
-    except ValueError as err:
+    except ValueError:
+        # Der Store meldet nur den Code (ohne Zeilen-/Markerbezug). `rows` ist
+        # hier immer nicht-leer (leere Berichte scheitern vorher), der erste
+        # Marker dient als Platzhalter-Anker wie im Service-Pfad.
+        marker = rows[0]["marker_key"] if rows else "-"
         connection.send_result(
             msg["id"],
-            _lab_error_result(
-                {
-                    "code": "duplicate_marker",
-                    "params": {},
-                    "message": str(err) or "duplicate_marker",
-                }
-            ),
+            _lab_error_result(logic.lab_report_error("duplicate_marker", {"marker": marker})),
         )
         return
     signal_refresh(hass, entry_id)
@@ -1773,7 +1814,13 @@ async def websocket_remove_last_lab_value(
         audit_limit=_audit_limit(hass, entry_id),
     )
     if not changed:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "no_active_value")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "no_active_value",
+            {"marker": msg.get("marker")},
+        )
         return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
@@ -1790,26 +1837,43 @@ async def websocket_set_wellbeing(
         return
     key = msg.get("key")
     score = msg.get("score")
+    allowed = [state["key"] for state in WELLBEING_STATES]
     if key is None and score is None:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, "Entweder 'key' oder 'score' angeben")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "wellbeing_target_missing",
+            {"max": len(allowed)},
+        )
         return
     if key is None:
         key = logic.wellbeing_key_for_score(score)
         if key is None:
-            connection.send_error(
+            errors.send_ws_error(
+                connection,
                 msg["id"],
                 ERR_INVALID_FORMAT,
-                f"Ungültiger Wohlbefinden-Score: {score} (erlaubt: 1 bis {len(WELLBEING_STATES)})",
+                "wellbeing_score_invalid",
+                {"min": 1, "max": len(allowed)},
             )
             return
     if _wellbeing_state(key) is None:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, f"Unbekannter Wohlbefinden-Key: {key}")
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "wellbeing_key_unknown",
+            {"allowed": ", ".join(allowed)},
+        )
         return
     now = dt_util.now()
     try:
         ts_iso = parse_entry_ts(msg.get("ts"), now) or now.isoformat()
-    except ValueError as err:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, str(err))
+    except ValueError:
+        errors.send_ws_error(
+            connection, msg["id"], ERR_INVALID_FORMAT, "invalid_ts", {"value": msg.get("ts")}
+        )
         return
     await store.set_wellbeing(
         entry_id,
@@ -2044,16 +2108,27 @@ def build_settings(entry: Any) -> dict[str, Any]:
     }
 
 
+def _invalid_setting(field: str) -> dict[str, Any]:
+    """Strukturiertes `invalid_setting`-Objekt für einen abgelehnten Schlüssel."""
+    return logic.build_error("invalid_setting", {"field": field})
+
+
 def parse_settings_message(
     msg: Mapping[str, Any], *, previous_markers: Any = None
-) -> tuple[dict[str, Any], str | None]:
-    """WS-Payload → (Options-Updates, Fehlermeldung). Reine Funktion.
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """WS-Payload → (Options-Updates, Fehlerobjekt). Reine Funktion.
 
     Es werden ausschließlich bekannte Settings-Schlüssel übernommen. Skalare
     Felder laufen durch `SETTINGS_SCHEMA` (Bereiche aus const.py), das
     `drink_lexicon` durch `parser.parse_lexicon_text()` — dieselbe Funktion, die
     der Options-Flow benutzt, also exakt dieselbe Dict-Repräsentation
-    (`{wort: (Typ, ml)}`). Lexikon-Fehler tragen die Zeilennummer mit.
+    (`{wort: (Typ, ml)}`).
+
+    Das zweite Element ist ein strukturiertes Fehlerobjekt
+    (:func:`logic.build_error` mit ``invalid_setting`` und dem ersten
+    abgelehnten Top-Level-Schlüssel als ``field``). Der konkrete
+    Validator-Detailtext (z. B. die Lexikon-Zeilennummer) bleibt im Log — er
+    wäre Freitext und damit kein vertragsfähiger Fehler-Param (§14).
 
     `previous_markers` sind die aktuell gespeicherten Custom-Marker: ein
     eingehender Marker ohne `key`, dessen `name` exakt einem gespeicherten
@@ -2062,37 +2137,45 @@ def parse_settings_message(
     """
     raw = {key: msg[key] for key in SETTINGS_KEYS if key in msg}
     if not raw:
-        return {}, f"Keine Einstellung übergeben (erlaubt: {', '.join(SETTINGS_KEYS)})"
+        # Kein Settings-Schlüssel im Payload: kein Feldname verfügbar, also der
+        # neutrale Sammelbegriff (wie der Fallback des Schemas unten).
+        return {}, _invalid_setting("settings")
 
     updates: dict[str, Any] = {}
     if WELLBEING_IMAGES_OPTION in raw:
         raw_images = raw.pop(WELLBEING_IMAGES_OPTION)
         if not isinstance(raw_images, dict):
-            return {}, (
-                "Ungültige Einstellung 'wellbeing_images': erwartet ein Objekt, "
-                f"erhalten {type(raw_images).__name__}"
+            _LOGGER.debug(
+                "Health-O-Mat: invalid %s payload type %s",
+                WELLBEING_IMAGES_OPTION,
+                type(raw_images).__name__,
             )
+            return {}, _invalid_setting(WELLBEING_IMAGES_OPTION)
         updates[WELLBEING_IMAGES_OPTION] = logic.normalize_wellbeing_images(raw_images)
 
     if "drink_lexicon" in raw:
         raw_text = raw.pop("drink_lexicon")
         if not isinstance(raw_text, str):
-            return {}, (
-                "Ungültige Einstellung 'drink_lexicon': erwartet Text, "
-                f"erhalten {type(raw_text).__name__}"
+            _LOGGER.debug(
+                "Health-O-Mat: invalid drink_lexicon payload type %s",
+                type(raw_text).__name__,
             )
+            return {}, _invalid_setting("drink_lexicon")
         try:
             updates["drink_lexicon"] = parser.parse_lexicon_text(raw_text)
         except ValueError as err:
-            return {}, f"Getränke-Lexikon: {err}"
+            _LOGGER.debug("Health-O-Mat: invalid drink_lexicon: %s", err)
+            return {}, _invalid_setting("drink_lexicon")
 
     if OPTION_LAB_CUSTOM_MARKERS in raw:
         raw_markers = raw.pop(OPTION_LAB_CUSTOM_MARKERS)
         if not isinstance(raw_markers, list):
-            return {}, (
-                f"Ungültige Einstellung '{OPTION_LAB_CUSTOM_MARKERS}': erwartet eine Liste, "
-                f"erhalten {type(raw_markers).__name__}"
+            _LOGGER.debug(
+                "Health-O-Mat: invalid %s payload type %s",
+                OPTION_LAB_CUSTOM_MARKERS,
+                type(raw_markers).__name__,
             )
+            return {}, _invalid_setting(OPTION_LAB_CUSTOM_MARKERS)
         # Normalisierung statt Durchreichen: brauchbare Einträge bekommen einen
         # stabilen `key` (Slug), unbrauchbare (ohne name/unit) fallen weg. Die
         # gespeicherten Marker schützen einen fehlenden `key` vor Drift (A-2).
@@ -2103,27 +2186,32 @@ def parse_settings_message(
     if OPTION_LAB_REF_OVERRIDES in raw:
         raw_overrides = raw.pop(OPTION_LAB_REF_OVERRIDES)
         if not isinstance(raw_overrides, dict):
-            return {}, (
-                f"Ungültige Einstellung '{OPTION_LAB_REF_OVERRIDES}': erwartet ein Objekt, "
-                f"erhalten {type(raw_overrides).__name__}"
+            _LOGGER.debug(
+                "Health-O-Mat: invalid %s payload type %s",
+                OPTION_LAB_REF_OVERRIDES,
+                type(raw_overrides).__name__,
             )
+            return {}, _invalid_setting(OPTION_LAB_REF_OVERRIDES)
         # Nur bekannte Katalog-Marker mit numerischen Grenzen bleiben erhalten.
         updates[OPTION_LAB_REF_OVERRIDES] = logic.normalize_lab_ref_overrides(raw_overrides)
 
     if OPTION_LAB_HIDDEN_CATEGORIES in raw:
         raw_hidden = raw.pop(OPTION_LAB_HIDDEN_CATEGORIES)
         if not isinstance(raw_hidden, list):
-            return {}, (
-                f"Ungültige Einstellung '{OPTION_LAB_HIDDEN_CATEGORIES}': erwartet eine Liste, "
-                f"erhalten {type(raw_hidden).__name__}"
+            _LOGGER.debug(
+                "Health-O-Mat: invalid %s payload type %s",
+                OPTION_LAB_HIDDEN_CATEGORIES,
+                type(raw_hidden).__name__,
             )
+            return {}, _invalid_setting(OPTION_LAB_HIDDEN_CATEGORIES)
         updates[OPTION_LAB_HIDDEN_CATEGORIES] = logic.normalize_lab_hidden_categories(raw_hidden)
 
     try:
         updates.update(SETTINGS_SCHEMA(raw))
     except vol.Invalid as err:
-        field = ".".join(str(part) for part in err.path) or "settings"
-        return {}, f"Ungültige Einstellung '{field}': {err.msg}"
+        _LOGGER.debug("Health-O-Mat: invalid settings payload: %s", err)
+        field = str(err.path[0]) if err.path else "settings"
+        return {}, _invalid_setting(field)
     return updates, None
 
 
@@ -2160,7 +2248,9 @@ async def websocket_set_settings(hass: HomeAssistant, connection: Any, msg: dict
         previous_markers=(getattr(entry, "options", None) or {}).get(OPTION_LAB_CUSTOM_MARKERS),
     )
     if error is not None:
-        connection.send_error(msg["id"], ERR_INVALID_FORMAT, error)
+        errors.send_ws_error(
+            connection, msg["id"], ERR_INVALID_FORMAT, error["code"], error["params"]
+        )
         return
     current_options = getattr(entry, "options", None) or {}
     if "areas" in updates:
@@ -2185,10 +2275,12 @@ async def websocket_export_csv(hass: HomeAssistant, connection: Any, msg: dict[s
         return
     dataset = msg.get("dataset") or DEFAULT_EXPORT_DATASET
     if dataset not in EXPORT_DATASETS:
-        connection.send_error(
+        errors.send_ws_error(
+            connection,
             msg["id"],
             ERR_INVALID_FORMAT,
-            f"Unbekannter Datensatz: {dataset!r} (erlaubt: {', '.join(EXPORT_DATASETS)})",
+            "unknown_dataset",
+            {"allowed": ", ".join(EXPORT_DATASETS)},
         )
         return
 
@@ -2208,8 +2300,9 @@ async def websocket_export_csv(hass: HomeAssistant, connection: Any, msg: dict[s
     except HomeAssistantError as err:
         # Deckt `ServiceValidationError` (fachlich, z. B. „Keine Daten") und
         # `ServiceNotFound` (kein Entry geladen) ab — beides strukturiert
-        # zurückmelden statt als `unknown_error` zu verpuffen.
-        connection.send_error(msg["id"], ERR_EXPORT_FAILED, str(err))
+        # zurückmelden statt als `unknown_error` zu verpuffen. Das Relais reicht
+        # vorhandene `translation_*`-Felder unverändert durch (§7.7).
+        errors.relay_error(connection, msg["id"], ERR_EXPORT_FAILED, err)
         return
 
     connection.send_result(
@@ -2232,21 +2325,14 @@ async def websocket_start_person_flow(
         return
     async_init = getattr(getattr(hass, "config_entries", None), "async_init", None)
     if async_init is None:
-        connection.send_error(
-            msg["id"],
-            ERR_INVALID_FORMAT,
-            "Config-Flow-Start wird von dieser Home-Assistant-Version nicht unterstützt",
-        )
+        errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "config_flow_unavailable")
         return
     try:
         flow = await async_init(DOMAIN, context={"source": "user"})
-    except Exception as err:  # noqa: BLE001 - Flow-Start darf nie den WS-Handler sprengen
+    except Exception:  # noqa: BLE001 - Flow-Start darf nie den WS-Handler sprengen
+        # Die Roh-Exception bleibt im Log (§14) — nicht in `params`/`message`.
         _LOGGER.exception("Health-O-Mat: Config-Flow konnte nicht gestartet werden")
-        connection.send_error(
-            msg["id"],
-            ERR_INVALID_FORMAT,
-            f"Config-Flow konnte nicht gestartet werden: {err}",
-        )
+        errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "config_flow_failed")
         return
     flow_id = flow.get("flow_id") if isinstance(flow, Mapping) else None
     connection.send_result(msg["id"], {"flow_id": flow_id})
@@ -2271,11 +2357,7 @@ async def websocket_delete_person(
         return
     slug = entry.data.get("person", "")
     if msg["confirm"] != slug:
-        connection.send_error(
-            msg["id"],
-            ERR_INVALID_FORMAT,
-            "Die Bestätigung stimmt nicht mit dem Personen-Schlüssel überein",
-        )
+        errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "confirm_mismatch")
         return
     await hass.config_entries.async_remove(entry_id)
     connection.send_result(msg["id"], {"ok": True, "entry_id": entry_id})
@@ -2292,7 +2374,7 @@ async def websocket_backup(hass: HomeAssistant, connection: Any, msg: dict[str, 
     try:
         await hass.services.async_call(DOMAIN, "backup", {}, blocking=True)
     except HomeAssistantError as err:
-        connection.send_error(msg["id"], ERR_BACKUP_FAILED, str(err))
+        errors.relay_error(connection, msg["id"], ERR_BACKUP_FAILED, err)
         return
     connection.send_result(msg["id"], {"ok": True})
 
@@ -2340,25 +2422,23 @@ async def websocket_import_csv(hass: HomeAssistant, connection: Any, msg: dict[s
     content = msg.get("content")
     has_content = isinstance(content, str) and content != ""
     if bool(filename) == has_content:
-        connection.send_error(
-            msg["id"],
-            ERR_INVALID_FORMAT,
-            "Genau eines von 'filename' oder 'content' angeben",
-        )
+        errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "invalid_import_source")
         return
     if has_content:
         try:
             size = len(content.encode("utf-8"))
         except UnicodeEncodeError:
-            connection.send_error(msg["id"], ERR_INVALID_FORMAT, "content ist kein gültiges UTF-8")
+            errors.send_ws_error(connection, msg["id"], ERR_INVALID_FORMAT, "content_not_utf8")
             return
         # Längenprüfung VOR dem Parsen — zu großer Inhalt wird abgelehnt, nie
         # abgeschnitten (Event-Loop-Schutz, kein Schreibzugriff).
         if size > MAX_IMPORT_CONTENT_BYTES:
-            connection.send_error(
+            errors.send_ws_error(
+                connection,
                 msg["id"],
                 ERR_CONTENT_TOO_LARGE,
-                f"content überschreitet {MAX_IMPORT_CONTENT_BYTES} Bytes",
+                "content_too_large",
+                {"max": MAX_IMPORT_CONTENT_BYTES},
             )
             return
     from .importer import async_import_csv
@@ -2378,7 +2458,7 @@ async def websocket_import_csv(hass: HomeAssistant, connection: Any, msg: dict[s
             actor=user_id_of(connection),
         )
     except HomeAssistantError as err:
-        connection.send_error(msg["id"], ERR_IMPORT_FAILED, str(err))
+        errors.relay_error(connection, msg["id"], ERR_IMPORT_FAILED, err)
         return
     connection.send_result(msg["id"], result)
 
@@ -2401,6 +2481,6 @@ async def websocket_restore_backup(
     try:
         result = await async_restore_command(hass, data, actor=user_id_of(connection))
     except (RestoreError, HomeAssistantError) as err:
-        connection.send_error(msg["id"], ERR_RESTORE_FAILED, str(err))
+        errors.relay_error(connection, msg["id"], ERR_RESTORE_FAILED, err)
         return
     connection.send_result(msg["id"], result)

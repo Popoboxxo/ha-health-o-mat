@@ -580,7 +580,7 @@ def test_card_drink_booking_sends_the_label_as_drink_type():
     # reserviert und wird bei vorhandenen Daten nicht gerendert).
     for method in ("_book", "_undo"):
         body = _js_method_block(text, method)
-        assert "this._actionError = (err && err.message)" in body, (
+        assert "this._actionError = _errorText(err)" in body, (
             f"{method} meldet Aktionsfehler nicht im Banner-Kanal"
         )
         assert "this._error =" not in body, f"{method} ueberschreibt den Ladefehler-Kanal"
@@ -2054,6 +2054,77 @@ def test_req_hom_117_card_inline_translations_and_language_switch(tmp_path):
     )
 
 
+# --- REQ-HOM-127: card error rendering (translation_key || code) -----------
+
+_NODE_CARD_ERROR_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const context = {
+  HTMLElement: class HTMLElement {},
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-card.js" });
+
+const hass = {
+  language: "en",
+  callWS: async (request) => ({
+    resources:
+      request.category === "exceptions"
+        ? {
+            "component.health_o_mat.exceptions.amount_out_of_range.message":
+              "Amount must be between {min} and {max} ml.",
+          }
+        : {},
+  }),
+};
+await context._loadUiTranslations(hass);
+
+const localized = context._errorText({
+  translation_key: "amount_out_of_range",
+  translation_placeholders: { min: "1", max: "10000" },
+  message: "amount_out_of_range (min=1, max=10000)",
+});
+const batch = context._errorText({
+  code: "amount_out_of_range",
+  params: { min: "1", max: "10000" },
+  message: "amount_out_of_range (min=1, max=10000)",
+});
+const fallback = context._errorText({ code: "mystery", message: "neutral message" });
+const codeOnly = context._errorText({ code: "mystery" });
+const empty = context._errorText(null);
+
+process.stdout.write(JSON.stringify({ localized, batch, fallback, codeOnly, empty }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_card_error_text_uses_translation_key(tmp_path):
+    """[REQ-HOM-127] Karte: Katalogtext vor message, message vor code — nie leer."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_CARD_ERROR_RUNNER,
+            [str(Path(_CARD_JS))],
+            "runner_card_error_text",
+        )
+    )
+
+    assert out["localized"] == "Amount must be between 1 and 10000 ml."
+    assert out["batch"] == "Amount must be between 1 and 10000 ml."
+    assert out["fallback"] == "neutral message"
+    assert out["codeOnly"] == "mystery"
+    assert out["empty"] == ""
+
+
 # --- REQ-HOM-122: Laborwerte-Karte (standalone Lovelace card) ---------------
 
 _LABS_CARD_JS = os.path.join(
@@ -2361,7 +2432,7 @@ card._hass = {
           error: {
             code: "unknown_marker",
             params: { row: 1, marker: "alt" },
-            message: "Zeile 1 (alt): unknown_marker",
+            message: "unknown_marker (row=1, marker=alt)",
           },
         };
       }
@@ -2418,13 +2489,186 @@ def test_req_hom_123_labs_card_report_roundtrip(tmp_path):
     assert ok["saving"] is False
 
     failed = outcomes["fail"]
-    assert failed["error"] == "Zeile 1 (alt): unknown_marker"
+    assert failed["error"] == "unknown_marker (row=1, marker=alt)"
     assert failed["draft"]["rows"] == [{"marker": "alt", "value": "32", "unit": "U/L"}]
     assert failed["draft"]["ts"] == "2026-10-30T09:15"
 
     filled = outcomes["fill"]
     assert filled["rows"][0]["marker"] == "alt"
     assert filled["rows"][1]["marker"] == "creatinine"
+
+
+_NODE_LABS_ERROR_RUNNER = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+const mode = process.argv[3];
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const catalogs = {
+  de: {
+    common: {
+      "component.health_o_mat.common.ui_panel_lab_report_row_hint": "Zeile {row}",
+    },
+    exceptions: {
+      "component.health_o_mat.exceptions.unknown_marker.message":
+        "Unbekannter Marker {marker}.",
+      "component.health_o_mat.exceptions.duplicate_marker.message":
+        "Marker {marker} kommt mehrfach vor.",
+    },
+  },
+  en: {
+    common: {
+      "component.health_o_mat.common.ui_panel_lab_report_row_hint": "Row {row}",
+    },
+    exceptions: {
+      "component.health_o_mat.exceptions.unknown_marker.message": "Unknown marker {marker}.",
+      "component.health_o_mat.exceptions.duplicate_marker.message":
+        "Marker {marker} appears more than once in this report.",
+    },
+  },
+};
+
+const language = mode === "english" || mode === "row" ? "en" : "de";
+const useCatalog = mode !== "fallback";
+const failures = {
+  unknown: {
+    code: "unknown_marker",
+    params: { row: 1, marker: "alt" },
+    message: "unknown_marker (row=1, marker=alt)",
+  },
+  row: {
+    code: "duplicate_marker",
+    params: { row: 2, marker: "gptx", first_row: 1 },
+    message: "duplicate_marker (row=2, marker=gptx, first_row=1)",
+  },
+  fallback: {
+    code: "unknown_marker",
+    params: { row: 1, marker: "alt" },
+    message: "unknown_marker (row=1, marker=alt)",
+  },
+  codeonly: { code: "mystery_code", params: {} },
+};
+
+let failureKey = "unknown";
+if (mode === "row") failureKey = "row";
+else if (mode === "fallback") failureKey = "fallback";
+else if (mode === "codeonly") failureKey = "codeonly";
+const hass = {
+  language,
+  callWS: async (request) => ({
+    resources: useCatalog
+      ? (catalogs[request.language] || {})[request.category] || {}
+      : {},
+  }),
+  connection: {
+    sendMessagePromise: async () => ({ ok: false, error: failures[failureKey] }),
+  },
+};
+context.setCardLanguage(hass);
+await context._loadTranslations(hass);
+
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+const card = new CardClass();
+card._config = { entry_id: "entry-1", person_mode: "fixed" };
+card._activeEntry = "entry-1";
+card._reportDraft = {
+  ts: "2026-10-30T09:15",
+  reportRef: "",
+  rows: [{ marker: "alt", value: "32", unit: "U/L" }],
+};
+card._collectReportDraftFromDom = () => {};
+card._loadData = async () => {};
+card._render = () => {};
+card._hass = hass;
+await card._saveReport();
+process.stdout.write(JSON.stringify({ error: card._actionError }));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_labs_error_message_prefers_code(tmp_path):
+    """[REQ-HOM-127] Batch-Meldung wird ueber `code` lokalisiert, nicht per Prosa-Match."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_ERROR_RUNNER,
+            [str(Path(_LABS_CARD_JS)), "english"],
+            "runner_labs_error_code",
+        )
+    )
+
+    assert out["error"] == "Unknown marker alt. (Row 1)", (
+        "der neutrale message-Fallback wurde nicht durch den exceptions-Katalog ersetzt"
+    )
+    assert "unknown_marker" not in out["error"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_labs_card_renders_row_hint(tmp_path):
+    """[REQ-HOM-127] `params.row` wird als Zeilen-Hinweis gerendert, nie als `{row}`."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_ERROR_RUNNER,
+            [str(Path(_LABS_CARD_JS)), "row"],
+            "runner_labs_error_row",
+        )
+    )
+
+    assert "appears more than once" in out["error"]
+    assert "Row 2" in out["error"]
+    assert "{row}" not in out["error"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_127_labs_error_falls_back_without_catalog(tmp_path):
+    """[REQ-HOM-127] Ohne Katalog bleibt die neutrale message der Fallback."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_ERROR_RUNNER,
+            [str(Path(_LABS_CARD_JS)), "fallback"],
+            "runner_labs_error_fallback",
+        )
+    )
+
+    assert out["error"] == "unknown_marker (row=1, marker=alt)"
+
+    code_only = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_ERROR_RUNNER,
+            [str(Path(_LABS_CARD_JS)), "codeonly"],
+            "runner_labs_error_codeonly",
+        )
+    )
+    assert code_only["error"] == "mystery_code"
 
 
 def test_req_hom_128_labs_card_discard_only_with_last_report():

@@ -1,6 +1,8 @@
 # Umsetzungsplan aus dem System-Audit (2026-11-03)
 
-**Status:** geplant · **Datum:** 2026-11-03 · **Basis:** `main` @ `1d6f832`
+**Status:** WP-A implementiert (Branch `feat/127-error-contract-impl`, noch nicht
+released); WP-B–WP-F offen · **Datum:** 2026-11-03, Fortschreibung 2026-11-04 ·
+**Basis:** `main` @ `1d6f832` (Zahlenstand; WP-A läuft auf einem Feature-Branch)
 **Quelle:** `docs/reviews/2026-11-03-system-audit.md` (+ Nachtrag 2026-11-03)
 **Abgrenzung:** `docs/PLAN-BACKLOG-2026-11-02.md` (Wellen 0–3 abgeschlossen; Welle 4/5 offen)
 
@@ -31,7 +33,7 @@ nur der Zählstand ohne erreichbaren Stack. Die im Audit genannten Funktionszahl
 
 | Thema | Backlog-Plan | Dieser Plan |
 |---|---|---|
-| REQ-HOM-127 | Welle 4, bereits geplant | **kein Duplikat:** WP-A übernimmt Welle 4 als Rahmen (inkl. des dort genannten additiven Transports `errors_detail`) und ergänzt nur Konzept-Gate, Datei-Anker und Release-Schnitt. **Der Transport-Key selbst ist noch nicht festgelegt** — er wird erst durch D-3 im WP-A-Konzept entschieden |
+| REQ-HOM-127 | Welle 4, bereits geplant | **kein Duplikat:** WP-A übernimmt Welle 4 als Rahmen (inkl. des dort genannten additiven Transports `errors_detail`) und ergänzt nur Konzept-Gate, Datei-Anker und Release-Schnitt. **D-3 hat den Transport festgelegt:** HA-native `translation_*` mit `code == translation_key`; `errors_detail` ist verworfen (Konzept §8) |
 | E2E-Lücken | nicht als Welle geführt | **neu:** WP-B (vier Szenarien, konkrete Testdateien) |
 | Labor-Eingabe | §2.4 „Idee ohne REQ", Welle 5 Schritt 4 | **neu:** WP-C mit Zahlenkorrektur **vor** der Entscheidung, B1-vs-B4 als Nutzerentscheidung |
 | Datei-Wachstum | nur als Beobachtung im Audit | **neu:** WP-D mit messbaren Triggern statt Refactor |
@@ -51,7 +53,7 @@ nur der Zählstand ohne erreichbaren Stack. Die im Audit genannten Funktionszahl
 | F-05 | Bewusste `_attr_name`-Ausnahmen (M-8) dokumentiert | **erledigt** (Status) | Audit §1; `button.py:67,83` | — |
 | F-06 | Kern-Dateien wachsen (`ws_api.py` 2406, `__init__.py` 1809, `store.py` 1582, `logic.py` 1422, `restore.py` 1266, `const.py` 658) | **offen** | `wc -l` @ `1d6f832` | WP-D |
 | F-07 | Frontend-Einzeldateien (`card.js` 3362, `panel.js` 2362, `labs-card.js` 1791) | **offen** | `wc -l custom_components/health_o_mat/www/*.js` | WP-D |
-| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **offen** | Audit §1; `__init__.py` Prosa-Exceptions vs. `logic.lab_report_error` (`logic.py:1195`), WS-Envelope (`ws_api.py:1646`) | WP-A |
+| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **erledigt** (WP-A, noch nicht released) | Umsetzung: `logic.ERROR_SPECS` (35 Codes), `errors.py`, 29 Service- + 32 WS-Stellen, 4 Relais, `exceptions`-Übersetzungen in `strings.json`/`de`/`en`; Beleg `tests/test_error_contract.py`, `tests/test_errors.py`; Doku `docs/SERVICE-RESPONSES.md` | WP-A |
 | F-09 | Labor-Eingabe: Options-Doc mit veralteter Zahlenbasis (29 Marker, 9 Kategorien, 38 Entities), B1-vs-B4 unbeantwortet | **offen + veraltet** | `docs/superpowers/specs/2026-11-01-lab-entity-surface-options.md:20-54`; heute 41 Marker / 10 Kategorien / 51 Labor-Entities | WP-C |
 | F-10 | HACS-Update-Test nur simuliert, HACS-Mechanik ungeprüft | **teilweise** | `docs/REQUIREMENTS.md:1830-1841`; Simulation 0.16.2→0.19.0, kein HACS im E2E-Image | WP-E |
 | F-11 | Spec §9 O-1 (Repair-Issue + Erfolgs-Notification) | **erledigt** (Audit-Aussage überholt) | PR #75; `__init__.py:235-236`, `tests/test_entry_migration.py` | — |
@@ -69,18 +71,30 @@ Sie bekommen kein eigenes Arbeitspaket; F-03 und F-16 sind Aussagen-Korrekturen,
 
 ## 2. Arbeitspakete
 
-### WP-A — REQ-HOM-127: Fehlercode-/i18n-Vertrag
+### WP-A — REQ-HOM-127: Fehlercode-/i18n-Vertrag — **umgesetzt, Release offen**
+
+**Stand (2026-11-04):** Schritte 1–6 sind abgeschlossen — Konzept APPROVED
+(`docs/superpowers/specs/2026-11-03-error-contract-design.md`), Task-Plan
+(`docs/superpowers/plans/2026-11-03-error-contract.md`), Katalog mit 35 Codes,
+29 Service- und 32 WS-Stellen migriert, 4 Relais, `exceptions`-Übersetzungen in
+`strings.json`/`de`/`en`; Schritt 7 (Frontend lokalisiert über `translation_key`)
+ist implementiert. Der E2E-Beleg (Task 7) läuft parallel und wird nach seinem
+Ergebnis hier nachgetragen; `docs/SERVICE-RESPONSES.md` ist aktualisiert,
+`docs/REQUIREMENTS.md` folgt über `requirements`. **Offen ist nur die
+Release-Entscheidung** (0.21.0, MINOR + 💥, §4) — dieser Branch hebt keine
+Version und erzeugt kein Release.
 
 **Ziel:** Die bestehenden Services und WS-Kommandos liefern Fehler strukturiert als
 `{code, params}` und lokalisieren die Meldungstexte de/en — **additiv**, ohne den
 Response-Vertrag aus REQ-HOM-132 zu brechen. Die Labor-Batch-Pfade bleiben das
 Referenzformat; sie werden nicht neu erfunden.
 
-**Transport (noch nicht festgelegt):** Backlog (`docs/PLAN-BACKLOG-2026-11-02.md:223`)
-und offene Punkte (`docs/PLAN-OPEN-ISSUES.md:445`) nennen `errors_detail` als additiven
-Transport. Ob `errors_detail`, ein anderes Feld oder ausschließlich HA-Übersetzungsfelder
-verwendet wird, entscheidet **D-3** (§5) im WP-A-Konzept; dieser Plan fixiert den
-Transport-Key nicht.
+**Transport (entschieden, D-3):** Backlog (`docs/PLAN-BACKLOG-2026-11-02.md:223`)
+und offene Punkte (`docs/PLAN-OPEN-ISSUES.md:445`) nannten `errors_detail` als
+additiven Transport. **D-3 ist im Konzept entschieden:** Transport sind die
+HA-nativen `translation_domain`/`translation_key`/`translation_placeholders`
+(`code == translation_key`); der Labor-Batch bleibt `{code, params, message}`.
+`errors_detail` ist damit **verworfen** (Konzept §8, Umsetzung `errors.py`).
 
 **Scope/Dateien (Anker @ `1d6f832`)**
 
@@ -173,9 +187,11 @@ viele Dateien), `tester`, `validator`, `documenter`, `git`.
 - i18n-Parität driftet → Paritätstest plus Code-Enumerationstest.
 - Rolle `planner` fehlt → Fallback `documenter`, im Status-Payload dokumentieren.
 
-**DoD:** Konzept APPROVED, Task-Plan als `plan_ref`, Tests grün (Basis 1754 + neue
-Fälle), `ruff` clean, REQ-HOM-127-Akzeptanzkriterien mit Beleg abgehakt,
-`docs/SERVICE-RESPONSES.md` aktualisiert, Release 0.21.0 mit 💥-Hinweis.
+**DoD:** Konzept APPROVED, Task-Plan als `plan_ref`, Tests grün (laut
+`tester`-Lauf: 1865+ Unit-Tests, `ruff` clean), Akzeptanzkriterien unten erfüllt;
+`docs/SERVICE-RESPONSES.md` aktualisiert. **Offen:** Abhaken der
+REQ-HOM-127-AKs in `docs/REQUIREMENTS.md` (über `requirements`) und die
+**Release-Entscheidung 0.21.0 mit 💥-Hinweis** (§4).
 
 ---
 
@@ -598,7 +614,7 @@ Automationen/Panel und den Full-Changelog-Link.
 |---|---|---|---|---|
 | D-1 | B1 (vier Eingabe-Entities) vs. B4 (Status quo + Doku) | B1 / B4 / R1-Kombination (B1 + A2 + A7) | Nutzer (`main_chat`) | blockiert WP-C ab Schritt 4 und jedes B1-Feature |
 | D-2 | 0.19.1 streichen und in 0.20.0 bündeln | bündeln / separates 0.19.1 | `orchestrator` mit Nutzer | bestimmt den Release-Schnitt in §4 |
-| D-3 | Fehler-Transport: HA-native Übersetzungsfelder vs. eigenes Envelope | `translation_key`/`translation_domain` + `{code, params}` / reines Code-Envelope | `concept-reviewer` im WP-A-Konzept | blockiert WP-A Schritt 5 |
+| D-3 | Fehler-Transport: HA-native Übersetzungsfelder vs. eigenes Envelope | **entschieden (2026-11-03, Konzept §8):** HA-native `translation_*` (`code == translation_key`), Batch bleibt `{code, params, message}` | `concept-reviewer` im WP-A-Konzept | erledigt; blockiert nicht mehr |
 | D-4 | `planner`-Rolle aktivieren | aktivieren / Fallback `documenter` beibehalten | Nutzer (Backlog §10, E-4) | beeinflusst nur den Prozess, nicht den Inhalt |
 | D-5 | HACS-Testinstanz provisionieren | neuer Container / dediziertes Compose-Profil | `devops-engineer` + `orchestrator` | blockiert WP-E Schritt 1 |
 | D-6 | Wo der `bin/reauth`-Fix landet | Tooling-Repo / direkt auf der Instanz | Betreiber der Testinstanz | blockiert nur WP-F |
@@ -609,7 +625,7 @@ Automationen/Panel und den Full-Changelog-Link.
 
 | Prüfung | Wo | Wie |
 |---|---|---|
-| Unit | lokal/CI | `python3 -m pytest -q` — Baseline 1754 collected |
+| Unit | lokal/CI | `python3 -m pytest -q` — Baseline 1754 collected (`1d6f832`); nach WP-A auf dem Feature-Branch 1865+ (`tester`-Lauf) |
 | Lint/Format | lokal/CI | `ruff check .` und `ruff format --check .` |
 | Syntax | lokal/CI | `python3 -m compileall -q custom_components/health_o_mat` |
 | HA-Config | Dev-Instanz | `/home/hermes/ha-test/bin/ha core check` (nur lesend) |
@@ -641,7 +657,7 @@ Zählstand ohne erreichbaren Stack.
 | F-05 `_attr_name`-Ausnahmen | — (erledigt) | `button.py:67,83` |
 | F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger T-1/T-2/T-5; Release-Review-Messung |
 | F-07 Frontend-Größe | WP-D | Trigger T-4 |
-| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A | `tests/test_error_contract.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression |
+| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A (umgesetzt, E2E-Beleg ausstehend) | `tests/test_error_contract.py`, `tests/test_errors.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression; `docs/SERVICE-RESPONSES.md` |
 | F-09 Labor-Eingabe/Zahlen | WP-C | Doc-Grep (41/10/51/41), Entscheidungsrecord |
 | F-10 HACS-Mechanik | WP-E | `docs/E2E-REPORT-WP-E-HACS-UPDATE.md`, REQ-HOM-130-AK |
 | F-11 Spec §9 O-1 | — (erledigt) | PR #75, `tests/test_entry_migration.py` |

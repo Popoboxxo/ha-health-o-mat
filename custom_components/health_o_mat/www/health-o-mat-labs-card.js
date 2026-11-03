@@ -111,6 +111,134 @@ function cardText(key) {
   return (CARD_TEXT[language] && CARD_TEXT[language][key]) || CARD_TEXT.de[key] || "";
 }
 
+/* ---- Error translations (self-contained: the card has no imports) -------- *
+ * The card loads `common` (row hint / labels) and the `exceptions` catalog per
+ * language, exactly like www/health-o-mat-i18n.js. Error rendering keys on the
+ * structured `code`/`translation_key` — never on the German prose in `message`
+ * (which is only the neutral fallback for unknown codes). */
+const UI_KEY_PREFIX = "component.health_o_mat.common.";
+const ERROR_KEY_PREFIX = "component.health_o_mat.exceptions.";
+const _uiCache = Object.create(null);
+const _errorCache = Object.create(null);
+const _uiAttempted = Object.create(null);
+const _errorAttempted = Object.create(null);
+const _uiInflight = Object.create(null);
+const _errorInflight = Object.create(null);
+
+function stripPrefix(resources, prefix) {
+  const out = Object.create(null);
+  if (!resources || typeof resources !== "object") return out;
+  Object.keys(resources).forEach((fullKey) => {
+    const value = resources[fullKey];
+    if (typeof value !== "string" || value === "") return;
+    out[fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : fullKey] = value;
+  });
+  return out;
+}
+
+function _interpolate(template, vars) {
+  let out = template == null ? "" : String(template);
+  if (vars && typeof vars === "object") {
+    out = out.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name) =>
+      Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null
+        ? String(vars[name])
+        : match
+    );
+  }
+  return out;
+}
+
+async function _fetchTranslationCategory(hass, language, category) {
+  try {
+    if (hass && typeof hass.callWS === "function") {
+      const result = await hass.callWS({
+        type: "frontend/get_translations",
+        language,
+        category,
+        integration: ["health_o_mat"],
+      });
+      return result && result.resources ? result.resources : null;
+    }
+  } catch (_error) {
+    // Resilience: keep the neutral fallbacks, never break the card.
+  }
+  return null;
+}
+
+/* Load both categories once per language; never throws. Exposed for the Node
+ * test runner so the catalog can be injected without a live HA instance. */
+function _loadTranslations(hass) {
+  const language = _language;
+  const loads = [];
+  if (!_uiAttempted[language]) {
+    _uiAttempted[language] = true;
+    _uiInflight[language] = _fetchTranslationCategory(hass, language, "common").then(
+      (resources) => {
+        _uiCache[language] = stripPrefix(resources, UI_KEY_PREFIX);
+      }
+    );
+    loads.push(_uiInflight[language]);
+  }
+  if (!_errorAttempted[language]) {
+    _errorAttempted[language] = true;
+    _errorInflight[language] = _fetchTranslationCategory(hass, language, "exceptions").then(
+      (resources) => {
+        _errorCache[language] = stripPrefix(resources, ERROR_KEY_PREFIX);
+      }
+    );
+    loads.push(_errorInflight[language]);
+  }
+  return Promise.all(loads);
+}
+
+/** Translate a `common` key (row hint etc.), fallback = call-site text. */
+function _t(key, fallback, vars) {
+  const dict = _uiCache[_language];
+  const value = dict ? dict[key] : "";
+  if (typeof value === "string" && value !== "") return _interpolate(value, vars);
+  return _interpolate(fallback == null ? "" : fallback, vars);
+}
+
+function _errorSource(err) {
+  if (err == null) return {};
+  if (typeof err === "string") return { message: err };
+  return typeof err === "object" ? err : {};
+}
+
+/* Catalog hit only — "" when the code is unknown or the catalog is unavailable. */
+function _errorCatalogText(err) {
+  const source = _errorSource(err);
+  const key = source.translation_key || source.code || "";
+  if (!key) return "";
+  const dict = _errorCache[_language];
+  const text = dict ? dict[`${key}.message`] : "";
+  if (typeof text !== "string" || text === "") return "";
+  return _interpolate(text, source.translation_placeholders || source.params || {});
+}
+
+function _rowHint(err) {
+  const source = _errorSource(err);
+  const params = source.params || source.translation_placeholders;
+  if (!params || typeof params !== "object") return "";
+  const row = params.row;
+  if (row == null || row === "") return "";
+  return _t("ui_panel_lab_report_row_hint", "Zeile {row}", { row });
+}
+
+/* `code` wins (localized catalog text), `message` is the neutral fallback. */
+function _errorText(err, fallback) {
+  const source = _errorSource(err);
+  const localized = _errorCatalogText(source);
+  if (localized) {
+    const hint = _rowHint(source);
+    return hint && localized.indexOf(hint) === -1 ? `${localized} (${hint})` : localized;
+  }
+  if (source.message != null && String(source.message) !== "") return String(source.message);
+  if (source.code) return String(source.code);
+  if (source.translation_key) return String(source.translation_key);
+  return fallback;
+}
+
 /* ✓ im Referenzbereich, ⚠ außerhalb, – kein Referenzbereich hinterlegt. */
 function labBadge(inRange) {
   if (inRange === true) return `<span class="status good" aria-hidden="true">✓</span>`;
@@ -225,28 +353,20 @@ function labMarkerOptionsHtml(markers, selectedKey) {
 }
 
 function errorMessage(err) {
-  const raw = err && err.message ? String(err.message) : String(err == null ? "" : err);
-  const text = raw.trim();
-  const known = {
-    unknown_marker: "Unbekannter Marker.",
-    unit_required: "Für diesen Marker ist eine Einheit erforderlich.",
-    unsupported_unit: "Diese Einheit wird für den Marker nicht unterstützt.",
-    invalid_value: "Ungültiger Wert.",
-  };
-  return known[text] || text || "Speichern fehlgeschlagen.";
+  return _errorText(err, "Speichern fehlgeschlagen.");
 }
 
 /* Strukturierte Batch-Fehler (§2.4/§3): `sendMessagePromise` löst bei
- * {"ok": false} NICHT ab — der Aufrufer muss die Envelope selbst prüfen. */
+ * {"ok": false} NICHT ab — der Aufrufer muss die Envelope selbst prüfen.
+ * Die Form bleibt `{code, params, message}`; lokalisiert wird über `code`. */
 function resultError(result) {
   if (!result || result.ok !== false) return "";
   const error = result.error && typeof result.error === "object" ? result.error : {};
-  return error.message || error.code || "Speichern fehlgeschlagen.";
+  return _errorText(error, "Speichern fehlgeschlagen.");
 }
 
 function reportErrorMessage(err) {
-  const message = err && err.message ? String(err.message) : String(err == null ? "" : err);
-  return message.trim() || "Speichern fehlgeschlagen.";
+  return _errorText(err, "Speichern fehlgeschlagen.");
 }
 
 /* Ein Personen-Eintrag passt zu einem Filterwert, wenn entry_id, Slug oder
@@ -455,6 +575,7 @@ class HealthOMatLabsCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     setCardLanguage(hass);
+    if (hass) _loadTranslations(hass);
     if (!this._config) return;
     if (!this._data && !this._loading && !this._error) {
       this._loadData();
@@ -1403,6 +1524,7 @@ class HealthOMatLabsCardEditor extends HTMLElement {
     const first = !this._hass;
     this._hass = hass;
     setCardLanguage(hass);
+    if (hass) _loadTranslations(hass);
     if (first && hass) {
       if (this._persons === null) this._loadPersons();
       this._maybeLoadCategories();

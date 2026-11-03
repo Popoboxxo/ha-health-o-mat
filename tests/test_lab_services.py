@@ -6,6 +6,8 @@ Muster bewusst identisch zu `tests/test_binary_sensor.py`/`test_wave_a.py`:
 HA-Integration-Paket aufgelöst werden.
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib.util
 import os
@@ -381,8 +383,11 @@ def test_req_hom_122_restore_entry_unknown_lab_id_raises():
     hass = MagicMock()
     registered = _wire_services(hass, store)
 
-    with pytest.raises(ServiceValidationError, match="nicht gefunden"):
+    with pytest.raises(ServiceValidationError) as exc:
         _run(registered["restore_entry"](_make_call({"kind": "lab_values", "id": "nope"})))
+
+    assert exc.value.translation_key == "entry_not_found"
+    assert exc.value.translation_placeholders == {"kind": "lab_values"}
 
 
 def test_req_hom_122_void_entry_marks_lab_reading_voided():
@@ -437,8 +442,14 @@ def test_req_hom_122_remove_last_entry_rejects_lab_values_without_keyerror():
     hass = MagicMock()
     registered = _wire_services(hass, store)
 
-    with pytest.raises(ServiceValidationError, match="nicht verfügbar"):
+    with pytest.raises(ServiceValidationError) as exc:
         _run(registered["remove_last_entry"](_make_call({"kind": "lab_values"})))
+
+    assert exc.value.translation_key == "undo_not_supported"
+    assert exc.value.translation_placeholders == {
+        "kind": "lab_values",
+        "allowed": "drinks, blood_pressure, wellbeing",
+    }
 
 
 def test_req_hom_122_remove_last_entry_unknown_kind_excludes_lab_values():
@@ -569,7 +580,7 @@ def test_req_hom_123_add_lab_report_rejects_unknown_marker_without_write():
         }
     )
 
-    with pytest.raises(ServiceValidationError, match=r"Zeile 3 \(gptx\): unknown_marker"):
+    with pytest.raises(ServiceValidationError, match=r"unknown_marker \(row=3, marker=gptx\)"):
         _run(registered["add_lab_report"](call))
 
     store.add_lab_readings.assert_not_awaited()
@@ -582,7 +593,7 @@ def test_req_hom_123_add_lab_report_prefixes_invalid_ts():
     registered = _wire_services(hass, store)
     call = _make_call({"values": [{"marker": "alt", "value": 32}], "ts": "kaputt"})
 
-    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+    with pytest.raises(ServiceValidationError, match=r"^invalid_ts \(value=kaputt\)"):
         _run(registered["add_lab_report"](call))
 
     store.add_lab_readings.assert_not_awaited()
@@ -597,8 +608,10 @@ def test_req_hom_123_add_lab_report_resolves_person_before_timestamp():
         {"person": "niemand", "values": [{"marker": "alt", "value": 32}], "ts": "kaputt"}
     )
 
-    with pytest.raises(ServiceValidationError, match="nicht gefunden"):
+    with pytest.raises(ServiceValidationError) as exc:
         _run(registered["add_lab_report"](call))
+
+    assert exc.value.translation_key == "person_not_found"
 
 
 def test_req_hom_123_add_lab_report_caps_report_ref_length():
@@ -712,7 +725,7 @@ def test_req_hom_128_remove_lab_report_invalid_ts_raises_with_prefix():
     hass = MagicMock()
     registered = _wire_services(hass, store)
 
-    with pytest.raises(ServiceValidationError, match="^invalid_ts: "):
+    with pytest.raises(ServiceValidationError, match=r"^invalid_ts \(value=kaputt\)"):
         _run(registered["remove_lab_report"](_make_call({"ts": "kaputt"})))
 
     store.void_lab_report.assert_not_awaited()
@@ -896,3 +909,153 @@ def test_req_hom_123_add_lab_report_second_write_is_rejected_by_real_store(monke
         _run(registered["add_lab_report"](second))
 
     assert [item["marker_key"] for item in store.entry("e1")["lab_readings"]] == ["alt"]
+
+
+# ---------------------------------------------------------------------------
+# REQ-HOM-127: Service-Fehler transportieren Code + Params (kein Prosa-Text)
+# ---------------------------------------------------------------------------
+
+
+def _const_module() -> types.ModuleType:
+    return sys.modules[f"{_PKG}.const"]
+
+
+def test_req_hom_127_unknown_marker_service_error_carries_code():
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+    call = _make_call({"marker": "not_a_marker", "value": 1})
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["add_lab_value"](call))
+
+    assert exc.value.translation_key == "unknown_marker"
+    assert exc.value.translation_placeholders == {"marker": "not_a_marker"}
+    message = str(exc.value)
+    assert message.isascii()
+    assert "Zeile" not in message
+
+
+def test_req_hom_127_lab_report_row_error_keeps_batch_code():
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+    call = _make_call(
+        {
+            "values": [
+                {"marker": "alt", "value": 1},
+                {"marker": "alt", "value": 2},
+            ]
+        }
+    )
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["add_lab_report"](call))
+
+    assert exc.value.translation_key == "duplicate_marker"
+    assert exc.value.translation_placeholders["row"] == "2"
+    assert exc.value.translation_placeholders["marker"] == "alt"
+
+
+@pytest.mark.parametrize(
+    ("service", "payload"),
+    [
+        ("add_drink", {"amount_ml": 250}),
+        ("add_lab_report", {"values": [{"marker": "alt", "value": 1}]}),
+        ("remove_lab_report", {}),
+    ],
+)
+def test_req_hom_127_invalid_ts_service_error_carries_value(service, payload):
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered[service](_make_call({**payload, "ts": "kaputt"})))
+
+    assert exc.value.translation_key == "invalid_ts"
+    assert exc.value.translation_placeholders == {"value": "kaputt"}
+
+
+def test_req_hom_127_amount_out_of_range_service_error_carries_bounds():
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["add_drink"](_make_call({"amount_ml": 0})))
+
+    assert exc.value.translation_key == "amount_out_of_range"
+    assert exc.value.translation_placeholders == {"min": "1", "max": "10000"}
+
+
+def test_req_hom_127_set_wellbeing_target_missing_reports_scale_max():
+    expected_max = str(len(_const_module().WELLBEING_STATES))
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["set_wellbeing"](_make_call({})))
+
+    assert exc.value.translation_key == "wellbeing_target_missing"
+    assert exc.value.translation_placeholders == {"max": expected_max}
+
+
+def test_req_hom_127_set_wellbeing_unknown_key_lists_allowed():
+    allowed = ", ".join(state["key"] for state in _const_module().WELLBEING_STATES)
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["set_wellbeing"](_make_call({"status": "bogus"})))
+
+    assert exc.value.translation_key == "wellbeing_key_unknown"
+    assert exc.value.translation_placeholders == {"allowed": allowed}
+
+
+def test_req_hom_127_undo_and_remove_codes():
+    store = MagicMock()
+    store.remove_last_drink = AsyncMock(return_value=False)
+    store.remove_last_lab_reading = AsyncMock(return_value=False)
+    hass = MagicMock()
+    registered = _wire_services(hass, store)
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_entry"](_make_call({"kind": "tea"})))
+    assert exc.value.translation_key == "invalid_undo_kind"
+    assert exc.value.translation_placeholders["kind"] == "tea"
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_entry"](_make_call({"kind": "lab_values"})))
+    assert exc.value.translation_key == "undo_not_supported"
+    assert exc.value.translation_placeholders["kind"] == "lab_values"
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_entry"](_make_call({"kind": "drinks"})))
+    assert exc.value.translation_key == "nothing_to_remove"
+    assert exc.value.translation_placeholders == {"kind": "drinks"}
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_lab_value"](_make_call({"marker": "not_a_marker"})))
+    assert exc.value.translation_key == "unknown_marker"
+    assert exc.value.translation_placeholders == {"marker": "not_a_marker"}
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["remove_last_lab_value"](_make_call({"marker": "alt"})))
+    assert exc.value.translation_key == "no_active_value"
+    assert exc.value.translation_placeholders == {"marker": "alt"}
+
+
+def test_req_hom_127_weekly_report_codes():
+    hass = MagicMock()
+    registered = _wire_services(hass, MagicMock())
+    hass.data = {hass_init.DOMAIN: {"shared": {}}}
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered["weekly_report"](_make_call({})))
+    assert exc.value.translation_key == "no_person_configured"
+    assert exc.value.translation_placeholders == {}
+
+    hass_no_entries = MagicMock()
+    registered_no_entries = _wire_services(hass_no_entries, MagicMock())
+    hass_no_entries.data = {hass_init.DOMAIN: {"shared": {"store": MagicMock()}}}
+
+    with pytest.raises(ServiceValidationError) as exc:
+        _run(registered_no_entries["weekly_report"](_make_call({})))
+    assert exc.value.translation_key == "no_person_configured"

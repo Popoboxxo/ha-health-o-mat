@@ -156,11 +156,9 @@ ENTRY_TS_FUTURE_TOLERANCE = timedelta(minutes=5)
 # Zeitfenster-/Trend-Berechnungen nur Rauschen erzeugen).
 ENTRY_TS_MIN = datetime(1900, 1, 1, tzinfo=UTC)
 
-# Einheitliche Fehlermeldung für Services/WS (beide Schreibwege).
-ENTRY_TS_INVALID_MESSAGE = (
-    "Ungültiger Zeitpunkt '{value}' — erwartet ISO 8601 (z. B. 2026-10-24T18:30), "
-    "höchstens 5 Minuten in der Zukunft und nicht vor 1900."
-)
+# Fehlertexte für einen ungültigen Zeitpunkt kommen ausschließlich aus dem
+# Katalog (`build_error("invalid_ts", …)` + `exceptions.invalid_ts`) — eine
+# zweite Prosa-Konstante hier wäre eine widersprüchliche Quelle (REQ-HOM-127).
 
 
 def parse_entry_timestamp(
@@ -1178,42 +1176,255 @@ def convert_lab_value(marker_def: dict, value: float, unit: str | None) -> tuple
     raise ValueError("unsupported_unit")
 
 
-# --- Laborbericht-Batch (REQ-HOM-123/128/129) -------------------------------
+# --- Fehlerkatalog (REQ-HOM-127) --------------------------------------------
 
-# Fehlercodes, deren `params` einen Zeilenbezug tragen (§2.4).
-_LAB_ROW_ERROR_CODES = frozenset(
-    {
-        "unknown_marker",
-        "unit_required",
-        "invalid_value",
-        "unsupported_unit",
-        "duplicate_marker",
-    }
-)
+# Einzige Quelle für Fehlercodes, erlaubte Params und den neutralen
+# ``message``-Fallback (§5.1/§6 des Fehler-Vertrags). Die Templates sind
+# bewusst ASCII und sprachneutral — lokalisierte Texte liegen in
+# ``strings.json``/``translations/*.json`` unter ``exceptions.<code>.message``.
+#
+# ``params``-Konvention: Pflicht-Params zuerst, optionale (nur im Batch- oder
+# nur im Einzelpfad vorhanden) danach. ``row_template`` wird nur genutzt, wenn
+# ``row`` tatsächlich übergeben wurde — der Service-Pfad hat keinen Zeilenbezug.
+ERROR_SPECS: dict[str, dict[str, Any]] = {
+    "no_person_configured": {
+        "params": (),
+        "template": "no_person_configured",
+        "row_template": None,
+    },
+    "person_ambiguous": {
+        "params": ("count",),
+        "template": "person_ambiguous (count={count})",
+        "row_template": None,
+    },
+    "person_not_found": {
+        "params": (),
+        "template": "person_not_found",
+        "row_template": None,
+    },
+    "invalid_ts": {
+        "params": ("value",),
+        "template": "invalid_ts (value={value})",
+        "row_template": None,
+    },
+    "invalid_history_kind": {
+        "params": ("kind", "allowed"),
+        "template": "invalid_history_kind (kind={kind}, allowed={allowed})",
+        "row_template": None,
+    },
+    "missing_item_id": {
+        "params": (),
+        "template": "missing_item_id",
+        "row_template": None,
+    },
+    "entry_not_found": {
+        "params": ("kind",),
+        "template": "entry_not_found (kind={kind})",
+        "row_template": None,
+    },
+    "invalid_undo_kind": {
+        "params": ("kind", "allowed"),
+        "template": "invalid_undo_kind (kind={kind}, allowed={allowed})",
+        "row_template": None,
+    },
+    "undo_not_supported": {
+        "params": ("kind", "allowed"),
+        "template": "undo_not_supported (kind={kind}, allowed={allowed})",
+        "row_template": None,
+    },
+    "nothing_to_remove": {
+        "params": ("kind",),
+        "template": "nothing_to_remove (kind={kind})",
+        "row_template": None,
+    },
+    "limit_out_of_range": {
+        "params": ("min", "max"),
+        "template": "limit_out_of_range (min={min}, max={max})",
+        "row_template": None,
+    },
+    "offset_invalid": {
+        "params": (),
+        "template": "offset_invalid",
+        "row_template": None,
+    },
+    "invalid_since": {
+        "params": ("expected",),
+        "template": "invalid_since (expected={expected})",
+        "row_template": None,
+    },
+    "amount_out_of_range": {
+        "params": ("min", "max"),
+        "template": "amount_out_of_range (min={min}, max={max})",
+        "row_template": None,
+    },
+    "bp_out_of_range": {
+        "params": ("min", "max"),
+        "template": "bp_out_of_range (min={min}, max={max})",
+        "row_template": None,
+    },
+    "wellbeing_target_missing": {
+        "params": ("max",),
+        "template": "wellbeing_target_missing (max={max})",
+        "row_template": None,
+    },
+    "wellbeing_score_invalid": {
+        "params": ("min", "max"),
+        "template": "wellbeing_score_invalid (min={min}, max={max})",
+        "row_template": None,
+    },
+    "wellbeing_key_unknown": {
+        "params": ("allowed",),
+        "template": "wellbeing_key_unknown (allowed={allowed})",
+        "row_template": None,
+    },
+    "unknown_marker": {
+        "params": ("row", "marker"),
+        "template": "unknown_marker (marker={marker})",
+        "row_template": "unknown_marker (row={row}, marker={marker})",
+    },
+    "unit_required": {
+        "params": ("row", "marker"),
+        "template": "unit_required (marker={marker})",
+        "row_template": "unit_required (row={row}, marker={marker})",
+    },
+    "invalid_value": {
+        "params": ("row", "marker", "value"),
+        "template": "invalid_value (marker={marker})",
+        "row_template": "invalid_value (row={row}, marker={marker})",
+    },
+    "unsupported_unit": {
+        "params": ("row", "marker", "unit"),
+        "template": "unsupported_unit (marker={marker}, unit={unit})",
+        "row_template": "unsupported_unit (row={row}, marker={marker}, unit={unit})",
+    },
+    "duplicate_marker": {
+        "params": ("row", "marker", "first_row"),
+        "template": "duplicate_marker (marker={marker})",
+        "row_template": "duplicate_marker (row={row}, marker={marker}, first_row={first_row})",
+    },
+    "empty_report": {
+        "params": (),
+        "template": "empty_report",
+        "row_template": None,
+    },
+    "too_many_rows": {
+        "params": ("count", "limit"),
+        "template": "too_many_rows (count={count}, limit={limit})",
+        "row_template": None,
+    },
+    "no_active_report": {
+        "params": ("ts",),
+        "template": "no_active_report (ts={ts})",
+        "row_template": None,
+    },
+    "no_active_value": {
+        "params": ("marker",),
+        "template": "no_active_value (marker={marker})",
+        "row_template": None,
+    },
+    "invalid_setting": {
+        "params": ("field",),
+        "template": "invalid_setting (field={field})",
+        "row_template": None,
+    },
+    "unknown_dataset": {
+        "params": ("allowed",),
+        "template": "unknown_dataset (allowed={allowed})",
+        "row_template": None,
+    },
+    "confirm_mismatch": {
+        "params": (),
+        "template": "confirm_mismatch",
+        "row_template": None,
+    },
+    "invalid_import_source": {
+        "params": (),
+        "template": "invalid_import_source",
+        "row_template": None,
+    },
+    "content_not_utf8": {
+        "params": (),
+        "template": "content_not_utf8",
+        "row_template": None,
+    },
+    "content_too_large": {
+        "params": ("max",),
+        "template": "content_too_large (max={max})",
+        "row_template": None,
+    },
+    "config_flow_unavailable": {
+        "params": (),
+        "template": "config_flow_unavailable",
+        "row_template": None,
+    },
+    "config_flow_failed": {
+        "params": (),
+        "template": "config_flow_failed",
+        "row_template": None,
+    },
+}
+
+# Codes, deren ``value``-Param ein Roh-Echo des Aufrufers ist (§5.1). Nur
+# ``invalid_ts`` rendert es im Text; ``invalid_value`` trägt es ausschließlich
+# als Maschinen-Feld. Alle Roh-Echos werden auf 64 Zeichen gekürzt.
+RAW_ECHO_CODES: frozenset[str] = frozenset({"invalid_ts", "invalid_value"})
+
+_RAW_ECHO_PARAM = "value"
+_RAW_ECHO_MAX_CHARS = 64
+_MISSING_PARAM_FALLBACK = "-"
+
+
+def _raw_echo_value(value: Any) -> Any:
+    """Normalisieren und kürzen — Roh-Echos sind nie länger als 64 Zeichen."""
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else str(value)
+    return text[:_RAW_ECHO_MAX_CHARS]
+
+
+def _render_param(value: Any) -> Any:
+    """Fehlende/leere Params als ``-`` rendern (nur optionale können fehlen)."""
+    return _MISSING_PARAM_FALLBACK if value is None or value == "" else value
+
+
+def build_error(code: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Kanonisches Fehlerobjekt aus dem Katalog bauen (§5.1).
+
+    Rückgabe: ``{"code": str, "params": dict, "message": str}``. ``params`` ist
+    auf die pro Code deklarierten Schlüssel beschränkt (Whitelist), Roh-Echos
+    werden gekürzt. ``message`` entsteht ausschließlich aus dem per-Code-Template
+    und ist damit sprachneutral; ein unbekannter Code fällt auf sich selbst
+    zurück (``message == code``), niemals auf einen leeren String.
+    """
+    spec = ERROR_SPECS.get(code)
+    if spec is None:
+        return {"code": code, "params": {}, "message": code}
+
+    declared: tuple[str, ...] = spec["params"]
+    values: dict[str, Any] = {}
+    for key, value in dict(params or {}).items():
+        if key not in declared:
+            continue
+        if key == _RAW_ECHO_PARAM:
+            if code not in RAW_ECHO_CODES:
+                continue
+            value = _raw_echo_value(value)
+        values[key] = value
+
+    row_template: str | None = spec["row_template"]
+    template = row_template if row_template is not None and "row" in values else spec["template"]
+    render = {name: _render_param(values.get(name, _MISSING_PARAM_FALLBACK)) for name in declared}
+    return {"code": code, "params": values, "message": template.format(**render)}
 
 
 def lab_report_error(code: str, params: Mapping[str, Any] | None = None) -> dict:
-    """Fehlerobjekt im Batch-Vertrag bauen (§2.4).
+    """Fehlerobjekt im Batch-Vertrag bauen (§2.4, REQ-HOM-123).
 
     Rückgabe: ``{"code": str, "params": dict, "message": str}``. Der Service
     transportiert nur ``message``; die WS-Batch-Kommandos liefern das ganze
-    Objekt. ``marker`` ist immer der eingegebene Rohwert; ein leerer Marker
-    erscheint im Text als ``-``.
+    Objekt. Delegiert an :func:`build_error`, damit es genau eine Quelle gibt.
     """
-    values = dict(params or {})
-    if code == "invalid_ts":
-        prose = ENTRY_TS_INVALID_MESSAGE.format(value=values.get("value"))
-        message = f"invalid_ts: {prose}"
-    elif code == "too_many_rows":
-        message = f"too_many_rows ({values.get('count')} > {values.get('limit')})"
-    elif code in _LAB_ROW_ERROR_CODES:
-        marker = values.get("marker") or "-"
-        message = f"Zeile {values.get('row')} ({marker}): {code}"
-        if code == "duplicate_marker":
-            message += f" (schon in Zeile {values.get('first_row')})"
-    else:
-        message = code
-    return {"code": code, "params": values, "message": message}
+    return build_error(code, params)
 
 
 def coerce_lab_number(value: Any) -> float | None:

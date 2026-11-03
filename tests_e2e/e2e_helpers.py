@@ -34,6 +34,7 @@ before, so no real failure is swallowed.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import subprocess
@@ -43,8 +44,9 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import requests
+from websockets.sync.client import connect
 
-from scripts.e2e_bootstrap import BootstrapError, _headers, _ws_command
+from scripts.e2e_bootstrap import BootstrapError, _headers, _ws_command, _ws_url
 
 # Default poll window for an asynchronous write (shared with the E2E tests).
 WRITE_TIMEOUT = 45.0
@@ -134,6 +136,70 @@ def ws_command(
         except BootstrapError as exc:
             if not is_transient_reload_error(exc) or time.monotonic() >= deadline:
                 raise
+        time.sleep(interval)
+
+
+def _ws_error_once(base_url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Run one websocket command that is EXPECTED to fail; return its `error`."""
+    with connect(_ws_url(base_url), open_timeout=15, close_timeout=5) as socket:
+        hello = json.loads(socket.recv())
+        if hello.get("type") != "auth_required":
+            raise AssertionError(f"unexpected websocket greeting: {hello}")
+        socket.send(json.dumps({"type": "auth", "access_token": token}))
+        auth = json.loads(socket.recv())
+        if auth.get("type") != "auth_ok":
+            raise AssertionError("websocket authentication failed")
+        socket.send(json.dumps({"id": 1, **payload}))
+        while True:
+            message = json.loads(socket.recv())
+            if message.get("id") != 1:
+                continue
+            if message.get("success"):
+                raise AssertionError(
+                    f"websocket command {payload.get('type')!r} was expected to fail,"
+                    f" but succeeded: {message.get('result')!r}"
+                )
+            error = message.get("error")
+            if not isinstance(error, dict):
+                raise AssertionError(
+                    f"websocket command {payload.get('type')!r} answered without an"
+                    f" `error` object: {message!r}"
+                )
+            return error
+
+
+def ws_error(
+    base_url: str,
+    token: str,
+    payload: dict[str, Any],
+    *,
+    timeout: float = RELOAD_RETRY_TIMEOUT,
+    interval: float = RELOAD_RETRY_INTERVAL,
+) -> dict[str, Any]:
+    """Run one failing websocket command and return the RAW `error` object.
+
+    `_ws_command` deliberately collapses a failure into a formatted
+    `BootstrapError`; the error contract (REQ-HOM-127) is about the object
+    itself (`code`, `message`, `translation_*`), so the E2E assertions need the
+    unchanged payload HA delivered. Expecting a failure is asserted, not
+    assumed: a command that succeeds raises instead of returning `{}`.
+
+    The transient entry-reload answer (``not_found`` for a person that is being
+    reloaded) is retried exactly like `ws_command`, so a rejected command never
+    fails the test just because an options write of the preceding test is still
+    reloading. Any other error — including a permanent ``not_found`` — is
+    returned as-is for the caller to assert on.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        error = _ws_error_once(base_url, token, payload)
+        # Same identifiers as `is_transient_reload_error`, read from the raw
+        # object instead of the formatted BootstrapError.
+        transient = error.get("code") == _TRANSIENT_CODE and _TRANSIENT_MESSAGE in str(
+            error.get("message") or ""
+        )
+        if not transient or time.monotonic() >= deadline:
+            return error
         time.sleep(interval)
 
 
