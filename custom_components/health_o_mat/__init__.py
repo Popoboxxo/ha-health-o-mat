@@ -151,6 +151,37 @@ def _lab_options_snapshot(options: dict) -> LabOptionsSnapshot:
     )
 
 
+def _quick_drinks_snapshot(options: dict) -> tuple[tuple[str, int, str], ...]:
+    """Vergleichbarer Snapshot der Quick-Drink-Slots (REQ-HOM-101 AK1).
+
+    Die Quick-Drink-Buttons entstehen beim Setup aus ``quick_drinks``
+    (``button.py``: ein Button je Slot, Label/ml/icon werden im ``__init__``
+    einmalig gelesen). Ändert sich ein Slot, muss der Entry neu geladen werden —
+    sonst zeigt der Button weiter das alte Label und bucht die alte Menge.
+
+    Die Defaults spiegeln ``button.py`` (``Quick {n}`` / ``200`` ml /
+    ``mdi:cup-water``), damit ein fehlendes Feld und der explizit gesetzte
+    Default als gleich gelten (kein Reload durch reines Format-Rauschen).
+    """
+    drinks = options.get("quick_drinks") or DEFAULT_QUICK_DRINKS
+    snapshot: list[tuple[str, int, str]] = []
+    for index, drink in enumerate(drinks):
+        if not isinstance(drink, dict):
+            continue
+        try:
+            ml = int(drink.get("ml", 200))
+        except (TypeError, ValueError):
+            ml = 200
+        snapshot.append(
+            (
+                str(drink.get("label") or f"Quick {index + 1}"),
+                ml,
+                str(drink.get("icon") or "mdi:cup-water"),
+            )
+        )
+    return tuple(snapshot)
+
+
 class HealthOMatData:
     """Laufzeitdaten eines Config-Entries (= eine Person)."""
 
@@ -165,6 +196,10 @@ class HealthOMatData:
         # frischen Setups ohne Custom-Marker/Overrides), damit ein Entry ohne
         # Lab-Options keinen Reload auslöst.
         self.lab_options: LabOptionsSnapshot = _lab_options_snapshot({})
+        # REQ-HOM-101 AK1: Quick-Drink-Slots, aus denen die Buttons beim Setup
+        # gebaut wurden. Ein geänderter Slot (Label/Menge/Icon/Anzahl) erfordert
+        # einen Reload, sonst bucht der Button weiter die alte Menge.
+        self.quick_drinks: tuple[tuple[str, int, str], ...] = _quick_drinks_snapshot({})
         # S-4: zuletzt gesehener `set_lifetime_ml`-Optionswert. Nur eine
         # explizite Änderung darf den Lebenszähler setzen — sonst würde jede
         # Options-Änderung (z. B. Tagesziel) den gewachsenen Zähler zurücksetzen.
@@ -715,6 +750,7 @@ def _apply_options(hass: HomeAssistant, entry) -> None:
     opts = entry.options or {}
     rt.areas = areas.active_areas(opts)
     rt.lab_options = _lab_options_snapshot(opts)
+    rt.quick_drinks = _quick_drinks_snapshot(opts)
     if opts.get("daily_goal_ml"):
         rt.daily_goal_ml = int(opts["daily_goal_ml"])
     _mirror_bp_thresholds(rt, opts)
@@ -742,7 +778,10 @@ async def _options_updated(hass, entry) -> None:
     Ein Reload ist genau dann nötig, wenn sich die **Entity-Menge** ändert:
     Personen-Umbenennung (Device-Name), Bereichs-Auswahl und — seit REQ-HOM-122
     (Review-Fix B-1) — die Menge der Custom-Lab-Marker (ein Sensor je Marker).
-    Alles andere wird am laufenden Entry nachgezogen.
+    Dazu kommt der Quick-Drink-Satz (REQ-HOM-101 AK1): Label/ml/icon/Anzahl
+    werden von den Buttons nur beim Setup gelesen — eine Slot-Änderung ohne
+    Reload würde die alte Menge buchen. Alles andere wird am laufenden Entry
+    nachgezogen.
 
     Review-Fix N-2: Die übrigen Lab-Options lösen KEINEN Reload mehr aus:
     ``lab_ref_overrides`` lesen sensor.py/binary_sensor.py live über die
@@ -760,6 +799,7 @@ async def _options_updated(hass, entry) -> None:
 
     new_areas = areas.active_areas(opts)
     new_lab_options = _lab_options_snapshot(opts)
+    new_quick_drinks = _quick_drinks_snapshot(opts)
 
     # Anzeige-Name geändert → Store synchron halten + Entities neu laden
     # (Device-Name kommt aus den Entities; Reload ist einzig sauberer Weg)
@@ -767,7 +807,11 @@ async def _options_updated(hass, entry) -> None:
     person_changed = current_person != effective_person(entry)
     # N-2: Nur der Marker-Satz bestimmt die Entity-Menge.
     markers_changed = new_lab_options.markers != rt.lab_options.markers
-    if person_changed or new_areas != rt.areas or markers_changed:
+    # REQ-HOM-101 AK1: Ein geänderter Quick-Drink-Slot (Label/Menge/Icon/Anzahl)
+    # wird von den Buttons nur beim Setup gelesen — ohne Reload bliebe das alte
+    # Label stehen und der Button würde weiter die alte ml-Menge buchen.
+    quick_drinks_changed = new_quick_drinks != rt.quick_drinks
+    if person_changed or new_areas != rt.areas or markers_changed or quick_drinks_changed:
         if person_changed:
             await store.set_person(entry.entry_id, effective_person(entry))
         rt.areas = new_areas
@@ -775,6 +819,7 @@ async def _options_updated(hass, entry) -> None:
         # genau diesen Optionen neu auf, ein erneuter Listener-Lauf darf also
         # keinen weiteren Reload auslösen (kein Reload-Loop).
         rt.lab_options = new_lab_options
+        rt.quick_drinks = new_quick_drinks
         # Vor dem Reload: Timer neu aufsetzen (der Reload löst zwar erneut
         # Setup aus, aber bis dahin soll die neue Options-Wahl schon gelten).
         await async_setup_reminders(hass, entry, store)
@@ -785,6 +830,7 @@ async def _options_updated(hass, entry) -> None:
     # den gespiegelten Stand trotzdem nachziehen, damit ein späterer
     # Marker-Vergleich nur die Entity-Menge bewertet.
     rt.lab_options = new_lab_options
+    rt.quick_drinks = new_quick_drinks
 
     wanted = int(opts.get("set_lifetime_ml") or 0)
     seen = getattr(rt, "lifetime_setting_seen", None)

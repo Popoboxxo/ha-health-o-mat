@@ -426,3 +426,54 @@ def test_options_updated_lab_reload_is_idempotent(monkeypatch):
     _run(init._options_updated(hass, entry))
 
     hass.config_entries.async_reload.assert_called_once_with("e1")
+
+
+# ============================================================================
+# REQ-HOM-101 AK1 — Quick-Drink-Slots sind Setup-Zeit-Konfiguration
+# ============================================================================
+
+
+def test_options_updated_quick_drink_change_triggers_reload(monkeypatch):
+    """[REQ-HOM-101 AK1] Geänderter Quick-Drink-Slot → Reload (neues Label + ml).
+
+    WP-B-Befund: ohne Reload behielt der Button das alte Label UND die alte
+    Menge — Options sagten 640 ml, der Button buchte weiter 500 ml.
+    """
+    init = _load_init()
+    monkeypatch.setattr(init, "_async_apply_panel_layer", AsyncMock())
+    monkeypatch.setattr(init, "async_setup_reminders", AsyncMock())
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    entry = _cfg_entry(options={})
+    entry.runtime_data = init.HealthOMatData()
+    hass = _hass(store, entry)
+    init._apply_options(hass, entry)  # Setup-Stand: Default-Slots
+
+    entry.options = {"quick_drinks": [{"label": "Kaffee", "ml": 640, "icon": "mdi:coffee"}]}
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_called_once_with("e1")
+    assert entry.runtime_data.quick_drinks == (("Kaffee", 640, "mdi:coffee"),)
+
+
+def test_options_updated_unchanged_quick_drinks_do_not_reload(monkeypatch):
+    """[REQ-HOM-101 AK1] Unveränderte Slots (nur unkritische Keys) → kein Reload."""
+    slots = [{"label": "Wasser", "ml": 250, "icon": "mdi:cup-water"}]
+    init = _load_init()
+    monkeypatch.setattr(init, "_async_apply_panel_layer", AsyncMock())
+    monkeypatch.setattr(init, "async_setup_reminders", AsyncMock())
+    store = _fresh_store()
+    _run(store.set_person("e1", "Max"))
+    entry = _cfg_entry(options={"quick_drinks": slots})
+    entry.runtime_data = init.HealthOMatData()
+    hass = _hass(store, entry)
+    init._apply_options(hass, entry)
+
+    # Derselbe Satz, ml als String, plus ein unkritischer Key (Tagesziel).
+    entry.options = {
+        "quick_drinks": [{"label": "Wasser", "ml": "250", "icon": "mdi:cup-water"}],
+        "daily_goal_ml": 2000,
+    }
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_not_called()
