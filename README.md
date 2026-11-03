@@ -1297,8 +1297,9 @@ Katalog-Namen (de/en).
 
 ## E2E-Tests (Playwright)
 
-**Aktueller Stand:** **25 E2E-Tests** (realer HA-Docker-Stack) und **1563
-Unit-Tests** (`pytest -q`; CI-äquivalent 1562 passed, 1 skipped); `ruff check .`
+**Aktueller Stand:** **65 E2E-Tests** (realer HA-Docker-Stack; ohne erreichbare
+Compose-Instanz wird das Blueprint-Modul übersprungen, dann 46) und **1754
+Unit-Tests** (`pytest -q` → 1754 passed, 0 skipped; CI fährt dieselbe Suite); `ruff check .`
 und `ruff format --check .` sind clean. Der
 Deep-Link des Panels (`?person=<slug>`) ist als **echter Browser-Test**
 abgesichert: `tests_e2e/` fährt eine **reale Home-Assistant-Instanz** mit
