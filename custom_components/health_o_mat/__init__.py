@@ -23,7 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
-from . import areas, logic
+from . import areas, errors, logic
 from .const import (
     DEFAULT_DAILY_GOAL_ML,
     DEFAULT_DIA_THRESHOLD,
@@ -32,6 +32,7 @@ from .const import (
     DOMAIN,
     LAB_MARKERS,
     LAB_REPORT_REF_MAX_LEN,
+    MAX_AMOUNT_ML,
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_REF_OVERRIDES,
@@ -1045,18 +1046,15 @@ def get_runtime_data(hass: HomeAssistant, call: ServiceCall):
         matches.append((key, value, persons.get(key, "")))
 
     if not matches:
-        raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+        raise errors.validation_error("no_person_configured")
     if not wanted:
         if len(matches) > 1:
-            names = ", ".join(m[2] for m in matches)
-            raise ServiceValidationError(
-                f"Mehrere Personen vorhanden ({names}) — bitte 'person' angeben"
-            )
+            raise errors.validation_error("person_ambiguous", {"count": len(matches)})
         return matches[0][0], matches[0][1]
     for key, value, person in matches:
         if person == wanted:
             return key, value
-    raise ServiceValidationError(f"Person '{wanted}' nicht gefunden")
+    raise errors.validation_error("person_not_found")
 
 
 async def _async_setup_frontend_layer(hass: HomeAssistant) -> None:
@@ -1138,7 +1136,7 @@ def _service_entry_ts(call: ServiceCall, now: datetime) -> str | None:
         return None
     parsed = logic.parse_entry_timestamp(raw, now=now)
     if parsed is None:
-        raise ServiceValidationError(logic.ENTRY_TS_INVALID_MESSAGE.format(value=raw))
+        raise errors.validation_error("invalid_ts", {"value": raw})
     return parsed.isoformat()
 
 
@@ -1172,12 +1170,8 @@ async def _async_require_admin(hass: HomeAssistant, call: ServiceCall) -> None:
         raise ServiceValidationError("Dieser Service ist Administratoren vorbehalten")
 
 
-# Menschliche Bezeichnung der Korrektur-Ziele (Fehlertexte).
-_KIND_LABELS: dict[str, str] = {
-    "drinks": "Getränke",
-    "blood_pressure": "Blutdruckmessungen",
-    "wellbeing": "Wohlbefinden-Meldungen",
-}
+# Menschliche Bezeichnung der Korrektur-Ziele liegt jetzt im Übersetzungskatalog
+# (`exceptions.nothing_to_remove`); `kind` wird als Param transportiert.
 
 
 async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: bool) -> None:
@@ -1195,12 +1189,13 @@ async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: b
     raw_kind = call.data.get("kind")
     kind = logic.normalize_history_kind(raw_kind)
     if kind is None:
-        raise ServiceValidationError(
-            f"Unbekannter kind '{raw_kind}' — erlaubt: {', '.join(logic.HISTORY_KINDS)}"
+        raise errors.validation_error(
+            "invalid_history_kind",
+            {"kind": raw_kind, "allowed": ", ".join(logic.HISTORY_KINDS)},
         )
     item_id = str(call.data.get("id") or "").strip()
     if not item_id:
-        raise ServiceValidationError("id fehlt")
+        raise errors.validation_error("missing_item_id")
     store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
     methods = logic.RESTORE_METHOD_BY_KIND if restore else logic.VOID_METHOD_BY_KIND
     method = methods[kind]
@@ -1211,8 +1206,7 @@ async def _set_entry_state(hass: HomeAssistant, call: ServiceCall, *, restore: b
         audit_limit=_entry_audit_limit(hass, entry_id),
     )
     if not changed:
-        state = "nicht gelöscht" if restore else "bereits gelöscht"
-        raise ServiceValidationError(f"Eintrag '{item_id}' nicht gefunden oder {state}")
+        raise errors.validation_error("entry_not_found", {"kind": kind})
     signal_refresh(hass, entry_id)
 
 
@@ -1230,8 +1224,8 @@ def _register_services(hass: HomeAssistant) -> None:
     async def add_drink(call: ServiceCall) -> None:
         entry_id, _info = get_runtime_data(hass, call)
         ml = int(call.data["amount_ml"])
-        if ml <= 0 or ml > 10000:
-            raise ServiceValidationError("amount_ml muss zwischen 1 und 10000 liegen")
+        if ml <= 0 or ml > MAX_AMOUNT_ML:
+            raise errors.validation_error("amount_out_of_range", {"min": 1, "max": MAX_AMOUNT_ML})
         now = dt_util.now()
         ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
@@ -1277,25 +1271,26 @@ def _register_services(hass: HomeAssistant) -> None:
         """
         entry_id, _info = get_runtime_data(hass, call)
         options = _entry_options(hass, entry_id)
-        resolved = logic.resolve_lab_marker(
-            call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
-        )
+        raw_marker = call.data["marker"]
+        resolved = logic.resolve_lab_marker(raw_marker, options.get(OPTION_LAB_CUSTOM_MARKERS))
         if resolved is None:
-            raise ServiceValidationError("unknown_marker")
+            raise errors.validation_error("unknown_marker", {"marker": raw_marker})
         marker_key, marker_def = resolved
         # REQ-HOM-133: Leerstring/Whitespace ist "keine Angabe" — erst danach
         # greift die Einheiten-Pflicht (sonst meldete der Pfad
         # `unsupported_unit` statt `unit_required`).
         raw_unit = str(call.data.get("unit") or "").strip() or None
         if raw_unit is None and marker_def.get("require_explicit_unit"):
-            raise ServiceValidationError("unit_required")
+            raise errors.validation_error("unit_required", {"marker": raw_marker})
         value = logic.coerce_lab_number(call.data["value"])
         if value is None:
-            raise ServiceValidationError("invalid_value")
+            raise errors.validation_error("invalid_value", {"marker": raw_marker})
         try:
             canonical_value, canonical_unit = logic.convert_lab_value(marker_def, value, raw_unit)
         except ValueError as err:
-            raise ServiceValidationError(str(err)) from err
+            raise errors.validation_error(
+                "unsupported_unit", {"marker": raw_marker, "unit": raw_unit}
+            ) from err
         report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
         now = dt_util.now()
         ts_iso = _service_entry_ts(call, now) or now.isoformat()
@@ -1317,7 +1312,7 @@ def _register_services(hass: HomeAssistant) -> None:
         except ValueError as err:
             # Kanonische Dedupe-Regel (#71/#72): gleiches (ts, marker_key) —
             # auch mit anderem Wert — wird nie ein zweiter Eintrag.
-            raise ServiceValidationError(str(err) or "duplicate_marker") from err
+            raise errors.validation_error("duplicate_marker", {"marker": raw_marker}) from err
         signal_refresh(hass, entry_id)
 
     async def add_lab_report(call: ServiceCall) -> None:
@@ -1334,9 +1329,7 @@ def _register_services(hass: HomeAssistant) -> None:
         try:
             parsed_ts = _service_entry_ts(call, now)
         except ServiceValidationError as err:
-            raise ServiceValidationError(
-                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
-            ) from err
+            raise errors.validation_error("invalid_ts", {"value": raw_ts}) from err
         # Der validierte Originalstring bleibt erhalten (Offset-Schreibweise
         # des Aufrufers), statt ihn in die Systemzone umzurechnen — der
         # Bericht soll exakt den eingegebenen Zeitpunkt tragen (§2.2).
@@ -1347,7 +1340,7 @@ def _register_services(hass: HomeAssistant) -> None:
             call.data.get("values"), options.get(OPTION_LAB_CUSTOM_MARKERS)
         )
         if error is not None:
-            raise ServiceValidationError(error["message"])
+            raise errors.validation_error(error["code"], error["params"])
         report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         try:
@@ -1361,7 +1354,11 @@ def _register_services(hass: HomeAssistant) -> None:
                 audit_limit=_entry_audit_limit(hass, entry_id),
             )
         except ValueError as err:
-            raise ServiceValidationError(str(err) or "duplicate_marker") from err
+            # Der Store meldet nur "duplicate_marker" (ohne Zeilenbezug); für
+            # den Platzhalter dient der erste Bericht-Marker als Anker. `rows`
+            # ist hier immer nicht-leer (leere Berichte scheitern vorher).
+            marker = rows[0]["marker_key"] if rows else "-"
+            raise errors.validation_error("duplicate_marker", {"marker": marker}) from err
         signal_refresh(hass, entry_id)
 
     async def remove_lab_report(call: ServiceCall) -> None:
@@ -1377,13 +1374,9 @@ def _register_services(hass: HomeAssistant) -> None:
         try:
             parsed_ts = _service_entry_ts(call, now)
         except ServiceValidationError as err:
-            raise ServiceValidationError(
-                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
-            ) from err
+            raise errors.validation_error("invalid_ts", {"value": raw_ts}) from err
         if parsed_ts is None:
-            raise ServiceValidationError(
-                logic.lab_report_error("invalid_ts", {"value": raw_ts})["message"]
-            )
+            raise errors.validation_error("invalid_ts", {"value": raw_ts})
         # Wie `add_lab_report`: der validierte Originalstring bleibt erhalten.
         ts_iso = raw_ts.strip() if isinstance(raw_ts, str) else parsed_ts.isoformat()
         report_ref = (call.data.get("report_ref") or "").strip()[:LAB_REPORT_REF_MAX_LEN] or None
@@ -1396,9 +1389,7 @@ def _register_services(hass: HomeAssistant) -> None:
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
         if not voided:
-            raise ServiceValidationError(
-                logic.lab_report_error("no_active_report", {"ts": ts_iso})["message"]
-            )
+            raise errors.validation_error("no_active_report", {"ts": ts_iso})
         signal_refresh(hass, entry_id)
 
     async def set_wellbeing(call: ServiceCall) -> None:
@@ -1408,17 +1399,15 @@ def _register_services(hass: HomeAssistant) -> None:
         score = call.data.get("score")
         allowed = [state["key"] for state in WELLBEING_STATES]
         if status is None and score is None:
-            raise ServiceValidationError("Entweder 'status' oder 'score' angeben")
+            raise errors.validation_error("wellbeing_target_missing", {"max": len(allowed)})
         if status is None:
             status = logic.wellbeing_key_for_score(score)
             if status is None:
-                raise ServiceValidationError(
-                    f"Ungültiger Wohlbefinden-Score '{score}' — erlaubt: 1 bis {len(allowed)}"
+                raise errors.validation_error(
+                    "wellbeing_score_invalid", {"min": 1, "max": len(allowed)}
                 )
         elif status not in allowed:
-            raise ServiceValidationError(
-                f"Ungültiger Wohlbefinden-Status '{status}' — erlaubt: {', '.join(allowed)}"
-            )
+            raise errors.validation_error("wellbeing_key_unknown", {"allowed": ", ".join(allowed)})
         now = dt_util.now()
         ts_iso = _service_entry_ts(call, now) or now.isoformat()
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
@@ -1441,17 +1430,20 @@ def _register_services(hass: HomeAssistant) -> None:
             # Erlaubt-Liste aus der Undo-Tabelle: `lab_values` ist ein gültiges
             # Verlaufsziel, hat aber kein globales Undo (marker-spezifisch,
             # siehe `remove_last_lab_value`) — es darf hier nicht angeboten werden.
-            raise ServiceValidationError(
-                f"Unbekannter kind '{call.data.get('kind')}' — "
-                f"erlaubt: {', '.join(logic.REMOVE_LAST_METHOD_BY_KIND)}"
+            raise errors.validation_error(
+                "invalid_undo_kind",
+                {
+                    "kind": call.data.get("kind"),
+                    "allowed": ", ".join(logic.REMOVE_LAST_METHOD_BY_KIND),
+                },
             )
         # Laborwerte haben kein globales "letzter Eintrag" — deshalb kein
         # KeyError, sondern eine klare Validierungsmeldung.
         remove_last_name = logic.REMOVE_LAST_METHOD_BY_KIND.get(kind)
         if remove_last_name is None:
-            raise ServiceValidationError(
-                f"Undo ist für '{kind}' nicht verfügbar — "
-                f"erlaubt: {', '.join(logic.REMOVE_LAST_METHOD_BY_KIND)}"
+            raise errors.validation_error(
+                "undo_not_supported",
+                {"kind": kind, "allowed": ", ".join(logic.REMOVE_LAST_METHOD_BY_KIND)},
             )
         remove_last = getattr(store, remove_last_name)
         removed = await remove_last(
@@ -1460,7 +1452,7 @@ def _register_services(hass: HomeAssistant) -> None:
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
         if not removed:
-            raise ServiceValidationError(f"Keine {_KIND_LABELS[kind]} zum Entfernen")
+            raise errors.validation_error("nothing_to_remove", {"kind": kind})
         signal_refresh(hass, entry_id)
 
     async def remove_last_lab_value(call: ServiceCall) -> None:
@@ -1480,7 +1472,7 @@ def _register_services(hass: HomeAssistant) -> None:
             call.data["marker"], options.get(OPTION_LAB_CUSTOM_MARKERS)
         )
         if resolved is None:
-            raise ServiceValidationError("unknown_marker")
+            raise errors.validation_error("unknown_marker", {"marker": call.data["marker"]})
         marker_key, _marker_def = resolved
         store: HealthOMatStore = hass.data[DOMAIN]["shared"]["store"]
         changed = await store.remove_last_lab_reading(
@@ -1490,9 +1482,7 @@ def _register_services(hass: HomeAssistant) -> None:
             audit_limit=_entry_audit_limit(hass, entry_id),
         )
         if not changed:
-            raise ServiceValidationError(
-                f"Kein aktiver Wert für Marker '{marker_key}' zum Entfernen"
-            )
+            raise errors.validation_error("no_active_value", {"marker": marker_key})
         signal_refresh(hass, entry_id)
 
     async def void_entry(call: ServiceCall) -> None:
@@ -1594,7 +1584,7 @@ def _register_services(hass: HomeAssistant) -> None:
         """
         store: HealthOMatStore = hass.data.get(DOMAIN, {}).get("shared", {}).get("store")
         if store is None:
-            raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+            raise errors.validation_error("no_person_configured")
         if (call.data.get("person") or "").strip():
             entry_id, _info = get_runtime_data(hass, call)
             target_ids = [entry_id]
@@ -1605,7 +1595,7 @@ def _register_services(hass: HomeAssistant) -> None:
                 if key not in _NON_ENTRY_KEYS and isinstance(value, dict) and "coordinator" in value
             ]
             if not target_ids:
-                raise ServiceValidationError("Keine Health-O-Mat-Person eingerichtet")
+                raise errors.validation_error("no_person_configured")
         entries = {e.entry_id: e for e in hass.config_entries.async_entries(DOMAIN)}
         language = getattr(hass.config, "language", "de")
         now = dt_util.now()

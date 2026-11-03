@@ -2364,25 +2364,30 @@ def test_set_settings_lexicon_parsed_like_the_options_flow():
         ("wasser=Wasser,250\n=Kaffee,250\n", 2),
     ],
 )
-def test_set_settings_invalid_lexicon_line_reports_line_number(text, line):
-    """Ungültige Lexikon-Zeile → `invalid_format` MIT Zeilenangabe, kein Write."""
+def test_set_settings_invalid_lexicon_reports_field_and_logs_line(caplog, text, line):
+    """Ungültige Lexikon-Zeile → `invalid_setting`/`drink_lexicon`, Detail im Log.
+
+    REQ-HOM-127: der Validator-Detailtext (inkl. Zeilennummer) ist Freitext und
+    damit kein vertragsfähiger Fehler-Param — er bleibt im Debug-Log.
+    """
     entry = _entry("e1", options={"daily_goal_ml": 2000})
     hass = _settings_hass(entry)
     connection = _admin_connection()
 
-    asyncio.run(
-        ws_api.websocket_set_settings(
-            hass,
-            connection,
-            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", drink_lexicon=text),
+    with caplog.at_level("DEBUG", logger=ws_api._LOGGER.name):
+        asyncio.run(
+            ws_api.websocket_set_settings(
+                hass,
+                connection,
+                _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", drink_lexicon=text),
+            )
         )
-    )
 
     assert connection.results == []
     assert connection.errors[0][1] == "invalid_format"
-    message = connection.errors[0][2]
-    assert "Getränke-Lexikon" in message
-    assert f"Zeile {line}" in message
+    assert connection.error_kwargs[-1][1]["translation_key"] == "invalid_setting"
+    assert connection.error_kwargs[-1][1]["translation_placeholders"] == {"field": "drink_lexicon"}
+    assert f"Zeile {line}" in caplog.text
     assert hass.config_entries.updates == []  # nichts persistiert
 
 
@@ -2463,7 +2468,8 @@ def test_set_settings_without_any_field_sends_error():
 
     assert connection.results == []
     assert connection.errors[0][1] == "invalid_format"
-    assert "Keine Einstellung" in connection.errors[0][2]
+    assert connection.error_kwargs[-1][1]["translation_key"] == "invalid_setting"
+    assert connection.error_kwargs[-1][1]["translation_placeholders"] == {"field": "settings"}
     assert hass.config_entries.updates == []
 
 
@@ -3182,7 +3188,8 @@ def test_parse_settings_message_rejects_non_object_wellbeing_images():
 
     assert updates == {}
     assert error is not None
-    assert "wellbeing_images" in error
+    assert error["code"] == "invalid_setting"
+    assert error["params"]["field"] == "wellbeing_images"
 
 
 # --- REQ-HOM-114: Wohlbefinden-Bestätigung vor Übernahme --------------------
@@ -3245,8 +3252,7 @@ def test_req_hom_114_set_settings_rejects_non_boolean_wellbeing_confirm(value):
     assert hass.config_entries.updates == []
     code, message = connection.errors[0][1], connection.errors[0][2]
     assert code == "invalid_format"
-    assert "wellbeing_confirm" in message
-    assert "Boolean" in message
+    assert message == "invalid_setting (field=wellbeing_confirm)"
 
 
 @pytest.mark.parametrize(
@@ -3273,7 +3279,8 @@ def test_req_hom_114_parse_settings_message_rejects_mixed_partial_update(mixed):
     updates, error = ws_api.parse_settings_message(mixed)
     assert updates == {}
     assert error is not None
-    assert "wellbeing_confirm" in error
+    assert error["code"] == "invalid_setting"
+    assert error["params"]["field"] == "wellbeing_confirm"
 
     entry = _entry("e1", options={"daily_goal_ml": 2000})
     hass = _settings_hass(entry)
@@ -3290,7 +3297,9 @@ def test_req_hom_114_parse_settings_message_rejects_mixed_partial_update(mixed):
     assert connection.results == []
     assert hass.config_entries.updates == [], "es wurde ein Teil-Update persistiert"
     assert connection.errors[0][1] == "invalid_format"
-    assert "wellbeing_confirm" in connection.errors[0][2]
+    assert connection.error_kwargs[-1][1]["translation_placeholders"] == {
+        "field": "wellbeing_confirm"
+    }
 
 
 def test_req_hom_114_parse_settings_message_roundtrip():
@@ -3310,8 +3319,9 @@ def test_req_hom_114_parse_settings_message_rejects_string_bool():
 
     assert updates == {}
     assert error is not None
-    assert "wellbeing_confirm" in error
-    assert "Boolean" in error
+    assert error["code"] == "invalid_setting"
+    assert error["params"]["field"] == "wellbeing_confirm"
+    assert "Boolean" not in error["message"], "Validator-Detailtext gehört ins Log"
 
 
 @pytest.mark.parametrize(
@@ -4179,7 +4189,8 @@ def test_undo_last_wellbeing_empty_sends_error(monkeypatch):
     )
 
     assert connection.errors[0][1] == "not_found"
-    assert "Wohlbefinden" in connection.errors[0][2]
+    assert connection.error_kwargs[-1][1]["translation_key"] == "nothing_to_remove"
+    assert connection.error_kwargs[-1][1]["translation_placeholders"] == {"kind": "wellbeing"}
 
 
 def test_book_drink_forwards_actor_and_audit_limit(monkeypatch):
@@ -4217,7 +4228,9 @@ def test_settings_audit_limit_default_zero_and_validation():
 
     for bad in (-1, "1000", 1000.5, True, 1_000_001):
         _updates, error = ws_api.parse_settings_message({"audit_limit": bad})
-        assert error is not None and "audit_limit" in error, bad
+        assert error is not None, bad
+        assert error["code"] == "invalid_setting", bad
+        assert error["params"]["field"] == "audit_limit", bad
 
 
 # --- restore_backup (M2c) ---------------------------------------------------
@@ -4435,7 +4448,8 @@ def test_req_hom_120_ws_rejects_invalid_ts(monkeypatch, ts, handler, message, me
     assert connection.results == []
     assert len(connection.errors) == 1
     assert connection.errors[0][1] == ws_api.ERR_INVALID_FORMAT
-    assert "Zeitpunkt" in connection.errors[0][2]
+    assert connection.error_kwargs[-1][1]["translation_key"] == "invalid_ts"
+    assert connection.error_kwargs[-1][1]["translation_placeholders"] == {"value": ts}
     getattr(store, method).assert_not_awaited()
 
 
@@ -4624,12 +4638,13 @@ def test_req_hom_122_parse_settings_message_normalizes_hidden_categories():
     ],
 )
 def test_req_hom_122_parse_settings_message_rejects_wrong_container_types(payload):
-    """Falscher Containertyp → Fehlermeldung im bestehenden `Ungültige Einstellung`-Stil."""
+    """Falscher Containertyp → strukturiertes `invalid_setting` mit Feldnamen."""
     updates, error = ws_api.parse_settings_message(payload)
 
     assert updates == {}
     assert error is not None
-    assert error.startswith("Ungültige Einstellung '")
+    assert error["code"] == "invalid_setting"
+    assert error["params"]["field"] == next(iter(payload))
 
 
 def test_req_hom_122_set_settings_persists_normalized_lab_settings():
@@ -4943,7 +4958,7 @@ def test_req_hom_122_websocket_add_lab_value_unknown_marker_sends_error(monkeypa
         )
     )
 
-    assert connection.errors == [(13, "invalid_format", "unknown_marker")]
+    assert connection.errors == [(13, "invalid_format", "unknown_marker (marker=not_a_marker)")]
     assert connection.results == []
     store.add_lab_reading.assert_not_awaited()
 
@@ -4969,7 +4984,9 @@ def test_req_hom_122_websocket_add_lab_value_requires_explicit_unit(monkeypatch)
         )
     )
 
-    assert connection.errors == [(14, "invalid_format", "unit_required")]
+    assert connection.errors == [
+        (14, "invalid_format", "unit_required (marker=urine_protein_creatinine_ratio)")
+    ]
     store.add_lab_reading.assert_not_awaited()
 
 
@@ -4996,7 +5013,7 @@ def test_req_hom_133_websocket_add_lab_value_blank_unit_required(monkeypatch):
             )
         )
 
-        assert connection.errors == [(16, "invalid_format", "unit_required")]
+        assert connection.errors == [(16, "invalid_format", "unit_required (marker=hba1c)")]
         store.add_lab_reading.assert_not_awaited()
 
 
@@ -5022,7 +5039,7 @@ def test_req_hom_133_websocket_add_lab_value_hba1c_percent_unsupported(monkeypat
         )
     )
 
-    assert connection.errors == [(17, "invalid_format", "unsupported_unit")]
+    assert connection.errors == [(17, "invalid_format", "unsupported_unit (marker=hba1c, unit=%)")]
     store.add_lab_reading.assert_not_awaited()
 
 
@@ -5048,7 +5065,9 @@ def test_req_hom_122_websocket_add_lab_value_rejects_unsupported_unit(monkeypatc
         )
     )
 
-    assert connection.errors == [(15, "invalid_format", "unsupported_unit")]
+    assert connection.errors == [
+        (15, "invalid_format", "unsupported_unit (marker=alt, unit=furlong)")
+    ]
     store.add_lab_reading.assert_not_awaited()
 
 
@@ -5125,7 +5144,7 @@ def test_req_hom_122_websocket_remove_last_lab_value_unknown_marker_sends_error(
         )
     )
 
-    assert connection.errors == [(22, "invalid_format", "unknown_marker")]
+    assert connection.errors == [(22, "invalid_format", "unknown_marker (marker=not_a_marker)")]
     store.remove_last_lab_reading.assert_not_awaited()
 
 
@@ -5150,7 +5169,7 @@ def test_req_hom_122_websocket_remove_last_lab_value_without_active_value(monkey
         )
     )
 
-    assert connection.errors == [(23, "invalid_format", "no_active_value")]
+    assert connection.errors == [(23, "invalid_format", "no_active_value (marker=alt)")]
     assert connection.results == []
 
 
@@ -5449,7 +5468,7 @@ def test_req_hom_123_websocket_add_lab_value_rejects_nan(monkeypatch):
     )
 
     assert connection.results == []
-    assert connection.errors == [(27, ws_api.ERR_INVALID_FORMAT, "invalid_value")]
+    assert connection.errors == [(27, ws_api.ERR_INVALID_FORMAT, "invalid_value (marker=alt)")]
     store.add_lab_reading.assert_not_awaited()
 
 
@@ -5857,3 +5876,628 @@ def test_e2e_admin_gate_catalog_matches_admin_only_commands():
     assert len(parsed) == len(ws_api.ADMIN_ONLY_COMMANDS)
     for constant_name, command in parsed.items():
         assert getattr(ws_api, constant_name) == command
+
+
+# --- REQ-HOM-127: WS-Fehlercodes + HA-Übersetzungsfelder --------------------
+#
+# Jede fachliche WS-Stelle sendet `code == translation_key` plus stringifizierte
+# `translation_placeholders`; der Transportcode (`invalid_format`, `not_found`,
+# …) bleibt unverändert. Der Batch-Envelope behält `{code, params, message}`.
+
+
+def _assert_ws_error(connection, msg_id, translation_key, placeholders=None, ha_code=None):
+    """Der letzte `send_error`-Aufruf trägt genau diese `translation_*`-Felder."""
+    assert connection.error_kwargs[-1][0] == msg_id
+    kwargs = connection.error_kwargs[-1][1]
+    assert kwargs["translation_domain"] == "health_o_mat"
+    assert kwargs["translation_key"] == translation_key
+    if placeholders is not None:
+        assert kwargs["translation_placeholders"] == placeholders
+    if ha_code is not None:
+        assert connection.errors[-1][1] == ha_code
+
+
+def test_req_hom_127_book_drink_amount_error_carries_code(monkeypatch):
+    """`book_drink` — ml: `amount_out_of_range` mit beiden Grenzen."""
+    _now(monkeypatch)
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {
+                "id": 30,
+                "type": ws_api.COMMAND_BOOK_DRINK,
+                "entry_id": "e1",
+                "ml": 0,
+            },
+        )
+    )
+
+    assert connection.errors == [(30, "invalid_format", "amount_out_of_range (min=1, max=10000)")]
+    assert connection.error_kwargs == [
+        (
+            30,
+            {
+                "translation_domain": "health_o_mat",
+                "translation_key": "amount_out_of_range",
+                "translation_placeholders": {"min": "1", "max": "10000"},
+            },
+        )
+    ]
+    store.add_drink.assert_not_awaited()
+
+
+def test_req_hom_127_undo_errors_carry_code(monkeypatch):
+    """`undo_last` — unbekannter kind bzw. nichts zu entfernen."""
+    _now(monkeypatch)
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 31, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "tea"},
+        )
+    )
+    _assert_ws_error(
+        connection,
+        31,
+        "invalid_undo_kind",
+        {"kind": "tea", "allowed": "blood_pressure, drink, drinks, wellbeing"},
+        ha_code="invalid_format",
+    )
+
+    store = _write_store()
+    store.remove_last_drink = AsyncMock(return_value=False)
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_undo_last(
+            hass,
+            connection,
+            {"id": 32, "type": ws_api.COMMAND_UNDO_LAST, "entry_id": "e1", "kind": "drinks"},
+        )
+    )
+    _assert_ws_error(
+        connection, 32, "nothing_to_remove", {"kind": "drinks"}, ha_code=ws_api.ERR_NOT_FOUND
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "translation_key", "placeholders"),
+    [
+        (
+            {"kind": "tea"},
+            "invalid_history_kind",
+            {"kind": "tea", "allowed": ", ".join(ws_api.logic.HISTORY_KINDS)},
+        ),
+        ({"limit": 0}, "limit_out_of_range", {"min": "1", "max": "1000"}),
+        ({"offset": -1}, "offset_invalid", {}),
+        ({"since": 42}, "invalid_since", {"expected": "ISO 8601 timestamp"}),
+        ({"since": "kaputt"}, "invalid_since", {"expected": "ISO 8601 timestamp"}),
+    ],
+)
+def test_req_hom_127_history_errors_code_matrix(extra, translation_key, placeholders):
+    """`list_history` — kind/limit/offset/since liefern Code + Parameter."""
+    connection = _run_list_history(_history_store({}), **extra)
+
+    assert connection.results == []
+    _assert_ws_error(connection, 10, translation_key, placeholders)
+
+
+def test_req_hom_127_void_and_restore_errors_carry_code(monkeypatch):
+    """`void_entry`/`restore_entry` — kind und kein Treffer."""
+    _now(monkeypatch)
+
+    store = _history_store({})
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            connection,
+            {"id": 33, "type": ws_api.COMMAND_VOID_ENTRY, "entry_id": "e1", "kind": "tea"},
+        )
+    )
+    _assert_ws_error(
+        connection,
+        33,
+        "invalid_history_kind",
+        {"kind": "tea", "allowed": ", ".join(ws_api.logic.HISTORY_KINDS)},
+    )
+
+    store = _history_store({})
+    store.void_drink = AsyncMock(return_value=False)
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_void_entry(
+            hass,
+            connection,
+            {
+                "id": 34,
+                "type": ws_api.COMMAND_VOID_ENTRY,
+                "entry_id": "e1",
+                "kind": "drinks",
+                "item_id": "d1",
+            },
+        )
+    )
+    _assert_ws_error(
+        connection, 34, "entry_not_found", {"kind": "drinks"}, ha_code=ws_api.ERR_NOT_FOUND
+    )
+
+
+def test_req_hom_127_measurement_and_wellbeing_codes(monkeypatch):
+    """`save_measurement`/`set_wellbeing` — Bereichs- und Zielcodes."""
+    _now(monkeypatch)
+    score_max = str(len(ws_api.WELLBEING_STATES))
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 35,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 300,
+                "dia": 80,
+            },
+        )
+    )
+    _assert_ws_error(
+        connection, 35, "bp_out_of_range", {"min": "40", "max": "260"}, ha_code="invalid_format"
+    )
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_save_measurement(
+            hass,
+            connection,
+            {
+                "id": 36,
+                "type": ws_api.COMMAND_SAVE_MEASUREMENT,
+                "entry_id": "e1",
+                "sys": 120,
+                "dia": 80,
+                "ts": "kaputt",
+            },
+        )
+    )
+    _assert_ws_error(connection, 36, "invalid_ts", {"value": "kaputt"})
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 37, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1"},
+        )
+    )
+    _assert_ws_error(connection, 37, "wellbeing_target_missing", {"max": score_max})
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 38, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "score": 99},
+        )
+    )
+    _assert_ws_error(connection, 38, "wellbeing_score_invalid", {"min": "1", "max": score_max})
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {"id": 39, "type": ws_api.COMMAND_SET_WELLBEING, "entry_id": "e1", "key": "bogus"},
+        )
+    )
+    allowed = ", ".join(state["key"] for state in ws_api.WELLBEING_STATES)
+    _assert_ws_error(connection, 39, "wellbeing_key_unknown", {"allowed": allowed})
+
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_set_wellbeing(
+            hass,
+            connection,
+            {
+                "id": 40,
+                "type": ws_api.COMMAND_SET_WELLBEING,
+                "entry_id": "e1",
+                "key": "good",
+                "ts": "kaputt",
+            },
+        )
+    )
+    _assert_ws_error(connection, 40, "invalid_ts", {"value": "kaputt"})
+
+
+@pytest.mark.parametrize(
+    ("payload", "translation_key", "placeholders"),
+    [
+        (
+            {"marker": "not_a_marker", "value": 1},
+            "unknown_marker",
+            {"marker": "not_a_marker"},
+        ),
+        (
+            {"marker": "urine_protein_creatinine_ratio", "value": 10},
+            "unit_required",
+            {"marker": "urine_protein_creatinine_ratio"},
+        ),
+        (
+            {"marker": "alt", "value": float("nan")},
+            "invalid_value",
+            {"marker": "alt"},
+        ),
+        (
+            {"marker": "alt", "value": 32, "unit": "furlong"},
+            "unsupported_unit",
+            {"marker": "alt", "unit": "furlong"},
+        ),
+        (
+            {"marker": "alt", "value": 32, "ts": "kaputt"},
+            "invalid_ts",
+            {"value": "kaputt"},
+        ),
+    ],
+)
+def test_req_hom_127_lab_value_ws_codes(payload, translation_key, placeholders):
+    """`add_lab_value` — Marker/Einheit/Wert/Zeitpunkt als Code + Parameter."""
+    connection = FakeConnection()
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 41,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                **payload,
+            },
+        )
+    )
+
+    assert connection.results == []
+    _assert_ws_error(connection, 41, translation_key, placeholders)
+    store.add_lab_reading.assert_not_awaited()
+
+
+def test_req_hom_127_lab_value_dedupe_carry_code(monkeypatch):
+    """`add_lab_value` — Store-Dedupe → `duplicate_marker` mit Marker-Param."""
+    _now(monkeypatch)
+    store = _write_store()
+    store.add_lab_reading.side_effect = ValueError("duplicate_marker")
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_add_lab_value(
+            hass,
+            connection,
+            {
+                "id": 42,
+                "type": ws_api.COMMAND_ADD_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "gpt",
+                "value": 32,
+            },
+        )
+    )
+
+    _assert_ws_error(connection, 42, "duplicate_marker", {"marker": "gpt"})
+
+
+def test_req_hom_127_remove_last_lab_value_carries_code(monkeypatch):
+    """`remove_last_lab_value` — kein aktiver Wert → `no_active_value`."""
+    _now(monkeypatch)
+    store = _write_store()
+    store.remove_last_lab_reading = AsyncMock(return_value=False)
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_remove_last_lab_value(
+            hass,
+            connection,
+            {
+                "id": 43,
+                "type": ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "gpt",
+            },
+        )
+    )
+
+    _assert_ws_error(connection, 43, "no_active_value", {"marker": "gpt"})
+
+
+def test_req_hom_127_admin_codes(monkeypatch):
+    """Admin-Rand: Settings, Export, Flow-Start, Löschen, Import."""
+    entry = _entry("e1", person="caro")
+    hass = _settings_hass(entry)
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_set_settings(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_SET_SETTINGS, entry_id="e1", audit_limit=-1),
+        )
+    )
+    _assert_ws_error(connection, 1, "invalid_setting", {"field": "audit_limit"})
+    assert hass.config_entries.updates == []
+
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1", dataset="pdf"),
+        )
+    )
+    _assert_ws_error(
+        connection,
+        1,
+        "unknown_dataset",
+        {"allowed": ", ".join(ws_api.EXPORT_DATASETS)},
+    )
+    hass.services.async_call.assert_not_called()
+
+    hass = _settings_hass(_entry("e1"))
+    hass.config_entries = SimpleNamespace()
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+    _assert_ws_error(connection, 1, "config_flow_unavailable", {})
+
+    hass = _settings_hass(_entry("e1"))
+    connection = _admin_connection()
+
+    async def _boom(domain, context=None):
+        raise RuntimeError("flow backend down")
+
+    hass.config_entries.async_init = _boom
+    asyncio.run(
+        ws_api.websocket_start_person_flow(
+            hass, connection, _settings_msg(ws_api.COMMAND_START_PERSON_FLOW)
+        )
+    )
+    _assert_ws_error(connection, 1, "config_flow_failed", {})
+    # Die Roh-Exception bleibt im Log, nie im Draht-Format (§14).
+    assert "flow backend down" not in connection.errors[-1][2]
+
+    hass = _settings_hass(_entry("e1", person="caro"))
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_delete_person(
+            hass,
+            connection,
+            _settings_msg(ws_api.COMMAND_DELETE_PERSON, entry_id="e1", confirm="falsch"),
+        )
+    )
+    _assert_ws_error(connection, 1, "confirm_mismatch", {})
+
+    called = AsyncMock(return_value=_import_result())
+    monkeypatch.setattr(_importer_module(), "async_import_csv", called)
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_import_csv(
+            _import_hass(), connection, _import_msg(filename="drinks.csv", content="a;b")
+        )
+    )
+    _assert_ws_error(connection, 1, "invalid_import_source", {})
+
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(content="\udcff"))
+    )
+    _assert_ws_error(connection, 1, "content_not_utf8", {})
+
+    connection = _admin_connection()
+    content = "x" * (ws_api.MAX_IMPORT_CONTENT_BYTES + 1)
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(content=content))
+    )
+    _assert_ws_error(
+        connection,
+        1,
+        "content_too_large",
+        {"max": str(ws_api.MAX_IMPORT_CONTENT_BYTES)},
+        ha_code=ws_api.ERR_CONTENT_TOO_LARGE,
+    )
+    called.assert_not_awaited()
+
+
+def test_req_hom_127_transport_errors_unchanged():
+    """Die vier Transport-/Berechtigungsstellen bleiben ohne `translation_*`."""
+    hass = _write_hass(_write_store(), [])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_book_drink(
+            hass,
+            connection,
+            {"id": 50, "type": ws_api.COMMAND_BOOK_DRINK, "entry_id": "nope", "ml": 250},
+        )
+    )
+    assert connection.errors[-1][1] == "not_found"
+    assert connection.error_kwargs == []
+
+    hass = _write_hass(_write_store(), [])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_panel_data(
+            hass, connection, {"id": 51, "type": ws_api.COMMAND_PANEL_DATA, "entry_id": "nope"}
+        )
+    )
+    assert connection.errors[-1][1] == "not_found"
+    assert connection.error_kwargs == []
+
+    connection = FakeConnection(user_id=None)
+    asyncio.run(ws_api.websocket_set_ui_settings(hass, connection, {"id": 52, "prefs": {}}))
+    assert connection.errors[-1][1] == "unauthorized"
+    assert connection.error_kwargs == []
+
+    hass = _settings_hass(_entry("e1"))
+    connection = FakeConnection(is_admin=False)
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1")
+        )
+    )
+    assert connection.errors[-1][1] == "unauthorized"
+    assert connection.error_kwargs == []
+
+
+def test_req_hom_127_relay_sites_forward_translation_fields(monkeypatch):
+    """Die vier Relais reichen die `translation_*`-Felder der Exception durch."""
+    boom = ServiceValidationError(
+        "detail",
+        translation_domain="health_o_mat",
+        translation_key="content_too_large",
+        translation_placeholders={"max": "2048"},
+    )
+
+    hass = _settings_hass(_entry("e1"))
+    hass.services.async_call = AsyncMock(side_effect=boom)
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1")
+        )
+    )
+    _assert_ws_error(
+        connection, 1, "content_too_large", {"max": "2048"}, ha_code=ws_api.ERR_EXPORT_FAILED
+    )
+
+    hass = _settings_hass(_entry("e1"))
+    hass.services.async_call = AsyncMock(side_effect=boom)
+    connection = _admin_connection()
+    asyncio.run(ws_api.websocket_backup(hass, connection, _settings_msg(ws_api.COMMAND_BACKUP)))
+    _assert_ws_error(
+        connection, 1, "content_too_large", {"max": "2048"}, ha_code=ws_api.ERR_BACKUP_FAILED
+    )
+
+    importer = _importer_module()
+    monkeypatch.setattr(importer, "async_import_csv", AsyncMock(side_effect=boom))
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_import_csv(_import_hass(), connection, _import_msg(filename="x.csv"))
+    )
+    _assert_ws_error(
+        connection, 1, "content_too_large", {"max": "2048"}, ha_code=ws_api.ERR_IMPORT_FAILED
+    )
+
+    restore = _restore_module()
+    monkeypatch.setattr(restore, "async_restore_command", AsyncMock(side_effect=boom))
+    connection = _admin_connection()
+    asyncio.run(
+        ws_api.websocket_restore_backup(
+            _settings_hass(_entry("e1")),
+            connection,
+            _settings_msg(ws_api.COMMAND_RESTORE_BACKUP, filename="backup.json"),
+        )
+    )
+    _assert_ws_error(
+        connection, 1, "content_too_large", {"max": "2048"}, ha_code=ws_api.ERR_RESTORE_FAILED
+    )
+
+
+def test_req_hom_127_relay_plain_exception_uses_transport_only():
+    """Ein Relais ohne `translation_*`-Felder sendet weiter den 3-Arg-Transport."""
+    hass = _settings_hass(_entry("e1"))
+    hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("plain boom"))
+    connection = _admin_connection()
+
+    asyncio.run(
+        ws_api.websocket_export_csv(
+            hass, connection, _settings_msg(ws_api.COMMAND_EXPORT_CSV, entry_id="e1")
+        )
+    )
+
+    assert connection.errors == [(1, ws_api.ERR_EXPORT_FAILED, "plain boom")]
+    assert connection.error_kwargs == []
+
+
+def test_req_hom_127_batch_envelope_has_no_translation_keys(monkeypatch):
+    """Batch bleibt `{ok, error: {code, params, message}}` — ohne `translation_*`."""
+    _now(monkeypatch)
+
+    store = _write_store()
+    store.add_lab_readings.side_effect = ValueError("duplicate_marker")
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_add_lab_report(
+            hass,
+            connection,
+            {
+                "id": 60,
+                "type": ws_api.COMMAND_ADD_LAB_REPORT,
+                "entry_id": "e1",
+                "values": [
+                    {"marker": "alt", "value": 32},
+                    {"marker": "creatinine", "value": 1.1, "unit": "mg/dL"},
+                ],
+            },
+        )
+    )
+    assert connection.errors == []
+    assert connection.error_kwargs == []
+    payload = connection.results[-1][1]
+    assert set(payload) == {"ok", "error"}
+    assert set(payload["error"]) == {"code", "params", "message"}
+    assert payload["error"]["code"] == "duplicate_marker"
+    assert payload["error"]["params"] == {"marker": "alt"}
+    assert payload["error"]["message"] == "duplicate_marker (marker=alt)"
+
+    store = _write_store()
+    store.void_lab_report = AsyncMock(return_value=[])
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+    asyncio.run(
+        ws_api.websocket_remove_lab_report(
+            hass,
+            connection,
+            {
+                "id": 61,
+                "type": ws_api.COMMAND_REMOVE_LAB_REPORT,
+                "entry_id": "e1",
+                "ts": "2026-10-14T09:15:00",
+            },
+        )
+    )
+    assert connection.errors == []
+    assert connection.error_kwargs == []
+    payload = connection.results[-1][1]
+    assert set(payload["error"]) == {"code", "params", "message"}
+    assert payload["error"]["code"] == "no_active_report"
+    assert set(payload["error"]["params"]) == {"ts"}

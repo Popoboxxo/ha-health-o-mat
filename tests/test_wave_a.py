@@ -6,6 +6,8 @@
 - Persistierte BP-Eingaben (InputNumber ↔ Store)
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib.util
 import inspect
@@ -393,16 +395,18 @@ def test_get_runtime_data_no_entries_raises():
         init.get_runtime_data(hass, _call())
 
 
-def test_get_runtime_data_multiple_without_person_lists_names():
-    """[N-8] Mehrere Personen ohne Auswahl → Fehler mit Namensliste."""
+def test_req_hom_127_ambiguous_person_reports_count():
+    """[N-8/REQ-HOM-127] Mehrere Personen ohne Auswahl: Code + Anzahl, keine Namen."""
     init = _load_init()
     hass = _runtime_hass([_cfg_entry("e1", "Max"), _cfg_entry("e2", "Caro")])
 
     with pytest.raises(init.ServiceValidationError) as exc:
         init.get_runtime_data(hass, _call())
 
+    assert exc.value.translation_key == "person_ambiguous"
+    assert exc.value.translation_placeholders == {"count": "2"}
     message = str(exc.value)
-    assert "max" in message and "caro" in message
+    assert "Max" not in message and "Caro" not in message
 
 
 def test_get_runtime_data_matches_case_insensitively():
@@ -415,13 +419,16 @@ def test_get_runtime_data_matches_case_insensitively():
     assert key == "e2"
 
 
-def test_get_runtime_data_unknown_person_raises():
-    """[N-8] Unbekannter Name → ServiceValidationError."""
+def test_req_hom_127_missing_person_reports_code():
+    """[N-8/REQ-HOM-127] Unbekannter Name → Code ohne Personen-Echo (PII-Guard)."""
     init = _load_init()
     hass = _runtime_hass([_cfg_entry("e1", "Max")])
 
-    with pytest.raises(init.ServiceValidationError):
+    with pytest.raises(init.ServiceValidationError) as exc:
         init.get_runtime_data(hass, _call({"person": "Niemand"}))
+
+    assert exc.value.translation_key == "person_not_found"
+    assert "Niemand" not in str(exc.value)
 
 
 def test_get_runtime_data_indexes_config_entries_once():
@@ -486,7 +493,8 @@ def test_remove_last_entry_blood_pressure_empty_raises():
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"kind": "blood_pressure"})))
 
-    assert "Blutdruck" in str(exc.value)
+    assert exc.value.translation_key == "nothing_to_remove"
+    assert exc.value.translation_placeholders == {"kind": "blood_pressure"}
 
 
 def test_remove_last_entry_drinks_empty_raises():
@@ -498,7 +506,8 @@ def test_remove_last_entry_drinks_empty_raises():
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"kind": "drinks"})))
 
-    assert "Getränke" in str(exc.value)
+    assert exc.value.translation_key == "nothing_to_remove"
+    assert exc.value.translation_placeholders == {"kind": "drinks"}
 
 
 def test_remove_last_entry_schema_rejects_unknown_kind():
@@ -757,7 +766,8 @@ def test_set_wellbeing_service_multiple_persons_without_selection_raises():
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"status": "good"})))
 
-    assert "Mehrere Personen" in str(exc.value)
+    assert exc.value.translation_key == "person_ambiguous"
+    assert exc.value.translation_placeholders == {"count": "2"}
     assert "wellbeing" not in store.entry("e1")
 
 
@@ -868,7 +878,8 @@ def test_remove_last_entry_kind_wellbeing_voids_last_report():
     # … danach gibt es nichts mehr zu entfernen.
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"kind": "wellbeing"})))
-    assert "Wohlbefinden" in str(exc.value)
+    assert exc.value.translation_key == "nothing_to_remove"
+    assert exc.value.translation_placeholders == {"kind": "wellbeing"}
 
 
 def test_remove_last_entry_schema_accepts_wellbeing():
@@ -907,7 +918,8 @@ def test_void_entry_service_unknown_id_raises():
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"kind": "drinks", "id": "nope"})))
 
-    assert "nicht gefunden" in str(exc.value)
+    assert exc.value.translation_key == "entry_not_found"
+    assert exc.value.translation_placeholders == {"kind": "drinks"}
 
 
 def test_void_entry_service_schema_requires_kind_and_id():
@@ -945,7 +957,8 @@ def test_restore_entry_service_restores_voided_entry():
 
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({"kind": "drinks", "id": drink_id})))
-    assert "nicht gelöscht" in str(exc.value)
+    assert exc.value.translation_key == "entry_not_found"
+    assert exc.value.translation_placeholders == {"kind": "drinks"}
 
 
 def test_service_registration_includes_void_and_restore():
@@ -1109,7 +1122,8 @@ def test_req_hom_120_services_reject_invalid_ts(monkeypatch, service, ts):
     with pytest.raises(init.ServiceValidationError) as exc:
         _run(func(_call({**payloads[service], "ts": ts})))
 
-    assert "Zeitpunkt" in str(exc.value)
+    assert exc.value.translation_key == "invalid_ts"
+    assert exc.value.translation_placeholders == {"value": ts}
     entry = store.entry("e1")
     assert entry["drinks"] == []
     assert entry["readings"] == []

@@ -156,11 +156,9 @@ ENTRY_TS_FUTURE_TOLERANCE = timedelta(minutes=5)
 # Zeitfenster-/Trend-Berechnungen nur Rauschen erzeugen).
 ENTRY_TS_MIN = datetime(1900, 1, 1, tzinfo=UTC)
 
-# Einheitliche Fehlermeldung für Services/WS (beide Schreibwege).
-ENTRY_TS_INVALID_MESSAGE = (
-    "Ungültiger Zeitpunkt '{value}' — erwartet ISO 8601 (z. B. 2026-10-24T18:30), "
-    "höchstens 5 Minuten in der Zukunft und nicht vor 1900."
-)
+# Fehlertexte für einen ungültigen Zeitpunkt kommen ausschließlich aus dem
+# Katalog (`build_error("invalid_ts", …)` + `exceptions.invalid_ts`) — eine
+# zweite Prosa-Konstante hier wäre eine widersprüchliche Quelle (REQ-HOM-127).
 
 
 def parse_entry_timestamp(
