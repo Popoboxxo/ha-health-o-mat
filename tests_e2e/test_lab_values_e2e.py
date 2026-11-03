@@ -19,6 +19,11 @@ Scenarios:
   canonical", locale-formatted factor, "unit required" badge).
 * REQ-HOM-126: `examples/dashboard-labs-card.yaml` renders the labs card in
   Lovelace.
+* REQ-HOM-127: the rejected duplicate report renders the **localized** error
+  contract — the `exceptions` catalog sentence with the marker interpolated
+  plus the `Row 2` hint, never the batch code and never the old German prose.
+  (`tests_e2e/test_i18n_e2e.py` proves the object shape and both languages;
+  this module proves the actual panel DOM.)
 
 Everything is asserted twice where it matters: the visible UI and the
 authoritative server payload (``panel_data`` / ``get_settings``), so a green
@@ -51,6 +56,7 @@ Deliberate scope notes:
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 import warnings
@@ -60,7 +66,7 @@ from typing import Any
 
 import pytest
 import yaml
-from e2e_helpers import ws_command
+from e2e_helpers import ALLOW_SHARED_ENV, is_shared_dev_instance, ws_command
 from playwright.sync_api import expect
 from test_card_config_e2e import CARD_TIMEOUT, _panel_data, _wait_for
 from test_panel_deeplink_e2e import open_panel, tab_keys, tile, wait_for_detail, wait_for_overview
@@ -68,6 +74,22 @@ from test_panel_deeplink_e2e import open_panel, tab_keys, tile, wait_for_detail,
 from scripts.e2e_bootstrap import _ws_command
 
 pytestmark = pytest.mark.e2e
+
+# Import-time guard, same pattern as `test_blueprints_e2e.py`: this module
+# writes lab reports into the instance's store and edits the person's lab
+# options. On the shared multi-repo dev instance that would land in another
+# project's data, so the module refuses (visible skip, not a silent pass).
+if (
+    is_shared_dev_instance(os.environ.get("HASS_BASE_URL", "http://localhost:8123"))
+    and os.environ.get(ALLOW_SHARED_ENV) != "1"
+):
+    pytest.skip(
+        "test_lab_values_e2e writes lab reports and lab options into the store — it"
+        " refuses to run against the shared dev instance (loopback:8123)."
+        " Point HASS_BASE_URL at the Compose stack (E2E_HA_PORT, default 8124)"
+        f" or set {ALLOW_SHARED_ENV}=1 if that really is a throwaway stack.",
+        allow_module_level=True,
+    )
 
 # --- selectors (panel data attributes, language-agnostic) -------------------
 
@@ -742,7 +764,10 @@ def test_req_hom_123_lab_report_dialog_writes_and_rejects_duplicates(
     assert crp_row.locator(LAB_ROW_VALUE).inner_text().strip() == f"{crp_value} mg/L"
 
     # 2. Duplicate: the same resolved marker twice → server refuses the WHOLE
-    # report, names row and marker, and the dialog keeps its input.
+    # report, names row and marker, and the dialog keeps its input. The rendered
+    # text is the LOCALIZED sentence from the `exceptions` catalog with the
+    # marker interpolated plus the row hint (REQ-HOM-127) — not the batch code
+    # and not the old German prose (`Zeile 2 (alt): duplicate_marker …`).
     before = _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CATALOG_MARKER)[
         "reported_value"
     ]
@@ -757,9 +782,18 @@ def test_req_hom_123_lab_report_dialog_writes_and_rejects_duplicates(
     error = panel.locator(LAB_REPORT_ERROR).first
     error.wait_for(state="visible", timeout=CARD_TIMEOUT)
     message = error.inner_text()
-    assert "Zeile 2" in message, f"the error must name the offending row: {message!r}"
-    assert CATALOG_MARKER in message, f"the error must name the marker: {message!r}"
-    assert "duplicate_marker" in message, f"the error must carry the code: {message!r}"
+    expected = f"Marker {CATALOG_MARKER} appears more than once in this report. (Row 2)"
+    assert message.strip() == expected, (
+        f"the panel must render the localized catalog text with the interpolated"
+        f" marker and the row hint: {message!r}"
+    )
+    assert "duplicate_marker" not in message, f"the raw code leaked into the UI: {message!r}"
+    assert "Zeile" not in message and "schon in Zeile" not in message, (
+        f"the old German prose leaked into the UI: {message!r}"
+    )
+    assert "{marker}" not in message and "{row}" not in message, (
+        f"an un-interpolated placeholder leaked into the UI: {message!r}"
+    )
     assert panel.locator(LAB_REPORT_VALUE % 0).input_value() == "33", (
         "a rejected report must keep the entered values"
     )
