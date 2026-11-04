@@ -1,6 +1,7 @@
 # Requirements & Roadmap — ha-health-o-mat
 
-**Stand:** 2026-11-02 · **Release-Stand `0.19.0`** (Releases `0.18.0` und `0.19.0` veröffentlicht; `manifest.json:22` = `0.19.0`, `CHANGELOG.md` §[0.18.0]/§[0.19.0]) · (Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s — **REQ-HOM-130 umgesetzt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md`, Branch `feat/entity-id-migration`, **Releases `0.17.0`/`0.17.1`/`0.17.2` veröffentlicht**; **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen; zuvor 2026-11-01 Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126/128/129 umgesetzt** — Batch-Erfassung (123), Admin-Umrechnungen (124), Panel-Disclaimer (125), Beispiel-Dashboard (126), Batch-Undo (128) und Labor-Retention (129), Branch `feat/lab-batch-visibility`, **Release 0.16.2 veröffentlicht**; **REQ-HOM-127** bleibt offen (Fehlervertrag/Umbau, eigener Plan); zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Entity-ID-Migration `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` + Audit `docs/reviews/entity-id-stability-audit.md`
+**Stand:** 2026-11-04 · **Release-Stand `0.21.0`** (Releases `0.18.0` und `0.19.0` veröffentlicht; **Release `0.21.0` veröffentlicht am 2026-11-04** — Tag `v0.21.0`, `manifest.json` = `0.21.0`, echtes GitHub-Release, `main` @ `640c94d`; die Zwischenversionen `0.19.1` und `0.20.0` wurden bewusst übersprungen und in `0.21.0` gebündelt. **Der echte HACS-Update-Test bleibt manuell und unverifiziert** — Prozedur in `docs/PLAN-AUDIT-2026-11-03.md` §WP-E) · (Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s — **REQ-HOM-130 umgesetzt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md`, Branch `feat/entity-id-migration`, **Releases `0.17.0`/`0.17.1`/`0.17.2` veröffentlicht**; **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen; zuvor 2026-11-01 Laborwerte — Batch-Erfassung & Sichtbarkeit, **REQ-HOM-123…126/128/129 umgesetzt** — Batch-Erfassung (123), Admin-Umrechnungen (124), Panel-Disclaimer (125), Beispiel-Dashboard (126), Batch-Undo (128) und Labor-Retention (129), Branch `feat/lab-batch-visibility`, **Release 0.16.2 veröffentlicht**; **REQ-HOM-127** damals noch offen (Fehlervertrag/Umbau, eigener Plan) —
+inzwischen umgesetzt und mit `0.21.0` veröffentlicht; zuvor 2026-10-31 Laborwerte/Blutwerte als vierte Datendomäne, **REQ-HOM-122**, Branch `feat/lab-values`; zuvor 2026-10-26 UX-P1: **REQ-HOM-115…120 umgesetzt** — Branch `feat/ux-p1`, **Release 0.14.0 veröffentlicht (2026-10-26)** (Version-Bump/Tag/GitHub-Release), Plan `docs/PLAN-UX-P1.md`; zuvor 2026-10-24 Wohlbefinden-Bestätigung vor Übernahme, REQ-HOM-114, `feat/wellbeing-confirm`; 2026-10-21 Konfigurierbare Karte, REQ-HOM-113, `feat/configurable-card`; 2026-10-19 Wohlbefinden-Score & Score-Chart, REQ-HOM-112, `feat/wellbeing-score` + Recorder-Einheiten-Fix `fix/recorder-unit-migration`; 2026-10-18 UI-Ausbau, `feat/ui-pro`) · **Quelle:** Detailliertes System-Review v0.4.0 (+ Vorbefunde AUDIT-2026-09-04), UI-Ausbau `docs/IDEATION-UI-PRO.md`, UX-P1 `docs/PLAN-UX-P1.md`, Laborwerte `docs/superpowers/specs/2026-10-30-lab-values-design.md` + `docs/superpowers/plans/2026-10-31-lab-values.md`, Laborwerte-Erweiterung `docs/superpowers/specs/2026-11-01-lab-values-batch-and-visibility-design.md`, Entity-ID-Migration `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` + Audit `docs/reviews/entity-id-stability-audit.md`
 **Status:** Neue Reqs dokumentiert (Kapitel 1) · Funde & Risiken priorisiert (Kapitel 2/3) ·
 **REQ-HOM-111** erledigt (Fix F10, Recorder-Statistik-Einheit „ml" → „mL") ·
 **REQ-HOM-112** erledigt (Feature, Wohlbefinden-Score & Score-Chart) ·
@@ -25,8 +26,8 @@ Sichtbarkeit, Spec
 Belege (REQ-HOM-123…126/128/129): **1500 Unit-Tests** (`pytest -q`, 0 failed),
 `ruff check .` + `ruff format --check .` clean; E2E-Suite `tests_e2e/` → **24 Tests**
 (19 bestehende + fünf neue Laborwert-Szenarien aus Task 19) ·
-**REQ-HOM-127 offen** (Fehlercode-/i18n-Umbau der bestehenden Pfade — eigenes
-Vorhaben mit eigenem Plan) ·
+**REQ-HOM-127 umgesetzt und mit `0.21.0` veröffentlicht** (Fehlercode-/i18n-Umbau
+der bestehenden Pfade — eigenes Vorhaben mit eigenem Plan) ·
 **REQ-HOM-130 umgesetzt** (Entity-ID-Migration auf sprachunabhängige,
 einheitliche `object_id`s — ConfigFlow `VERSION 2 → 3`, Härtungen A-1…A-4 in
 **REQ-HOM-131**, Spec
@@ -171,7 +172,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-006 — Automation-Blueprints
 - **Priorität:** P2 · **Aufwand:** S
-- **Status: Umgesetzt (noch kein Release)** — vier Blueprints
+- **Status: Umgesetzt und mit `0.21.0` veröffentlicht (2026-11-04)** — vier Blueprints
   (`evening_reminder`, `blood_pressure_warning`, `weekly_report`,
   `goal_reached`) unter `blueprints/automation/health_o_mat/`, strukturell
   getestet (`tests/test_blueprints.py`) und per **HA-eigenem** Import-/
@@ -351,8 +352,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ### REQ-HOM-010 — Mess-Notiz-Eingabe
 - **Priorität:** P3 · **Aufwand:** S
-- **Status: Umgesetzt (Branch `feat/010-measurement-note`, noch kein Release)** —
-  die **Text-Entity `measurement_note`** existiert je Person
+- **Status: Umgesetzt und mit `0.21.0` veröffentlicht (2026-11-04)** — die
+  **Text-Entity `measurement_note`** existiert je Person
   (`text.py:85-110`, `translation_key = "measurement_note"`,
   `has_entity_name`, nur bei aktivem Bereich **Blutdruck**
   `text.py:24-25`). Die angefangene Notiz liegt im bereits persistierten
@@ -426,7 +427,13 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   - [x] Quick-Drink ändern ohne Neu-Anlegen der Integration — Options-Flow „Getränke" (`config_flow.py:302-306,350-352,493`); Migration v1→v2 (`__init__.py:324-357`).
   - [x] Migration Unit-getestet (v0.4.0-Alt-Entry → Options gefüllt, data bereinigt) — `tests/test_wave_a.py:218-241` (v1→v3: `quick_drinks` aus `data` entfernt, nach `options` verschoben).
   - [x] `options.person` überschreibt Device-/Store-Anzeige ohne `entry.data`-Änderung — umgesetzt als `options.person_display` (`entity.py:61-67`, Formularfeld `config_flow.py:421-425`); `entry.data.person` bleibt der stabile Anker.
-  - [ ] E2E: Update mit Alt-Bestand, Button-Änderung wirksam nach Reload — **offen**: Unit-Migration belegt, ein E2E-Lauf mit Alt-Entry/Button-Änderung ist nicht vorhanden (`tests_e2e/` enthält keinen solchen Fall).
+  - [x] E2E: Update mit Alt-Bestand, Button-Änderung wirksam nach Reload — **belegt**
+    (WP-B): `tests_e2e/test_config_migration_e2e.py` — ein auf Version 1
+    zurückgeschriebener Alt-Entry wird von HA beim Neustart real migriert
+    (`options.quick_drinks` gefüllt, `data` bereinigt, vier Buttons unter den neuen
+    IDs, keine Duplikate, Bestandsbuchung erhalten); separat ändert der echte
+    Options-Flow einen Quick-Drink, nach dem Reload bleiben `unique_id`/`entity_id`
+    stabil und Label/Menge folgen dem neuen Optionswert.
 
 #### REQ-HOM-102 — Store-Migrationspfad (Fix F3)
 - **Priorität:** P1 · **Aufwand:** S
@@ -453,14 +460,24 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 - **Anforderung:** `inputs`-Dict je Person im Store (Schema via 102), Laden beim Setup,
   Schreiben bei `InputNumber._apply`, Leeren beim Save.
 - **Akzeptanzkriterien:**
-  - [ ] Halbfüllte Eingabe überlebt Neustart (E2E); Save leert Store + Entities
+  - [x] Halbfüllte Eingabe überlebt Neustart (E2E); Save leert Store + Entities —
+    **belegt** (WP-B): `tests_e2e/test_input_persistence_e2e.py` setzt die drei
+    Eingabe-Entities, startet den Compose-Container neu und liest die Werte aus
+    Entity-States und Store-Datei zurück; der echte Save-Button leert danach Store
+    **und** Entities und erzeugt genau eine Messung.
 
 #### REQ-HOM-105 — Diagnostics-Plattform (Fix F9)
 - **Priorität:** P2 · **Aufwand:** S
 - **Anforderung:** `async_get_config_entry_diagnostics`: Versionen, Entity-IDs, Options,
   Zähler — KEINE Gesundheitswerte, keine Personennamen (maskiert), keine Rohzeitstempel.
 - **Akzeptanzkriterien:**
-  - [ ] Redact-Unit-Test; E2E: Download liefert valides JSON — **teilweise**: Unit-Tests vollständig (`tests/test_diagnostics.py:101-711`, `diagnostics.py:108-140`); ein E2E-Download ist in `tests_e2e/` nicht vorhanden → bleibt offen.
+  - [x] Redact-Unit-Test; E2E: Download liefert valides JSON — **belegt**:
+    Unit-Tests vollständig (`tests/test_diagnostics.py:101-711`,
+    `diagnostics.py:108-140`); E2E (WP-B):
+    `tests_e2e/test_diagnostics_e2e.py` lädt über HA's eigenen Endpunkt
+    `GET /api/diagnostics/config_entry/<entry_id>` — Admin erhält **200** mit
+    gültigem JSON (Versionen, Entity-IDs, Options, Zähler, ohne Gesundheitswerte,
+    Personennamen und Rohzeitstempel), ein echter Nicht-Admin wird **abgewiesen**.
 
 #### REQ-HOM-106 — ruff-Linting in CI (Fix F8)
 - **Priorität:** P2 · **Aufwand:** S
@@ -1576,8 +1593,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 #### REQ-HOM-127 — Fehlercode-/i18n-Umbau der bestehenden Pfade (eigener Plan)
 - **Priorität:** P2 · **Aufwand:** M–L
-- **Status: Umgesetzt (Branch `feat/127-error-contract-impl`, noch kein
-  Release)** — Akzeptanzkriterien erfüllt; Belege am Kapitelende. Separat von
+- **Status: Umgesetzt und mit `0.21.0` veröffentlicht (2026-11-04)** — Akzeptanzkriterien
+  erfüllt; Belege am Kapitelende. Separat von
   der Batch-Erweiterung (REQ-HOM-123…129) mit eigenem Konzept und Plan.
 - **Spec:** `docs/superpowers/specs/2026-11-03-error-contract-design.md`
   (Vertrag §4/§5, Kanäle §5.2–5.5, Client-Lokalisierung §5.6, Frontend §7.5,
@@ -1629,7 +1646,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     und Batch-Envelope ohne `translation_*`.
   - **Bewusst nicht migriert** (Konzept §7.6): Entity-Aktionen in `button.py`/
     `text.py` (kein Service-/WS-Aufruf) — Folgekandidat ohne eigene REQ.
-  - **Kein Release:** `0.21.0` ist geplant, aber **nicht** geschnitten.
+  - **Release:** mit `0.21.0` veröffentlicht (2026-11-04, Tag `v0.21.0`,
+    `manifest.json` = `0.21.0`, echtes GitHub-Release).
 
 #### REQ-HOM-128 — Batch-Undo (`remove_lab_report`)
 - **Priorität:** P2 · **Aufwand:** S–M
@@ -1740,6 +1758,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
   Härtungen A-1…A-4 stehen in **REQ-HOM-131**. **Releases `0.17.0`, `0.17.1`
   und `0.17.2` veröffentlicht** (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
   danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`).
+  **Aktueller Release-Stand: `0.21.0`** (`0.19.1` und `0.20.0` wurden
+  übersprungen und in `0.21.0` gebündelt).
 - **Spec:** `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
   (§1 Ziel/Nicht-Ziele, §2 Ziel-Schemata, §3 Migration `VERSION 2 → 3`,
   §4 Härtungen A-1…A-4, §5 Release, §6 Teststrategie inkl. §6.3 Live-Test,
@@ -1858,7 +1878,8 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     (`docs/RELEASE-NOTES-0.17.1.md`, `docs/RELEASE-NOTES-0.17.2.md`);
     danach folgten `0.18.0` und `0.19.0` (`manifest.json:22` = `0.19.0`,
     `CHANGELOG.md` §[0.18.0]/§[0.19.0]); Release-Commit `19c61f0`
-    (`chore(release): 0.17.0`) gemergt.
+    (`chore(release): 0.17.0`) gemergt. **Aktueller Release-Stand: `0.21.0`**
+    (`0.19.1`/`0.20.0` übersprungen, in `0.21.0` gebündelt).
   - [ ] **HACS-Update-Test** — **teilweise**: Der **Update-Pfad 0.16.2 →
     0.19.0** ist auf dem **Compose-Stack (Port 8124)** **simuliert** belegt:
     Entry-Version **2 → 3**, **4 Quick-Drink-Renames**, **82 alte
@@ -1872,7 +1893,11 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
     verlangt einen interaktiven GitHub-Device-Flow. Der echte
     HACS-Install-/Update-Pfad bleibt offen.
     *Beleg:* Welle-1-Lauf auf dem Compose-Stack (Port 8124); das Laufprotokoll
-    liegt nicht im Repo.
+    liegt nicht im Repo. **Manuelle Betreiber-Prozedur** (8 Schritte,
+    Voraussetzungen, Abschlusskriterium): `docs/PLAN-AUDIT-2026-11-03.md` §WP-E.
+    **Stand 2026-11-04: weiterhin offen/teilweise** — auch das Release `0.21.0`
+    ändert daran nichts; bis zu einem grünen manuellen Lauf mit Belegdokument
+    bleibt dieser AK unverifiziert.
   - [x] **Folge-REQ aus Spec §9 O-1 — umgesetzt:** Repair-Issue
     (`ir.async_create_issue`, `translation_key="migration_blocked"`, stabile ID
     `migration_blocked_<entry_id>`, skalares `data` mit `entry_id`,
@@ -2099,6 +2124,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 | Datum | Änderung |
 |---|---|
+| 2026-11-04 | **Release `0.21.0` veröffentlicht** (Tag `v0.21.0`, `manifest.json` = `0.21.0`, echtes GitHub-Release — nicht Draft/Pre-Release, `main` @ `640c94d`). **Die Zwischenversionen `0.19.1` und `0.20.0` wurden bewusst übersprungen und in `0.21.0` gebündelt.** Enthalten: **REQ-HOM-010** (Mess-Notiz-Eingabe), **REQ-HOM-006** (vierter Blueprint `goal_reached` + Blueprint-E2E), **REQ-HOM-127** (Fehlercode-/i18n-Vertrag) sowie die Fixes und die **WP-B-E2E-Abdeckung**. **Neue E2E-Dateien** (alle grün, E2E-Suite `tests_e2e/` → **73 Tests**): `tests_e2e/e2e_helpers.py` (gemeinsame Helfer), `test_config_migration_e2e.py` (REQ-HOM-101 AK4: Legacy-Entry + Quick-Drink nach Reload), `test_diagnostics_e2e.py` (REQ-HOM-105: Admin 200, Nicht-Admin abgewiesen), `test_input_persistence_e2e.py` (REQ-HOM-104: Neustart) und `test_i18n_e2e.py` (REQ-HOM-127: Rendering). Damit **abgehakt:** REQ-HOM-101 AK4, REQ-HOM-104 und REQ-HOM-105. **REQ-HOM-130 (HACS-Update-Test) bleibt offen/teilweise:** die HACS-Mechanik ist weiterhin **nicht verifiziert** (manuelle Betreiber-Prozedur in `docs/PLAN-AUDIT-2026-11-03.md` §WP-E, kein automatisierter Beleg). Keine Code-/Teständerung in diesem Schritt. |
 | 2026-11-03 | **REQ-HOM-127 umgesetzt — Fehlercode-/i18n-Vertrag für bestehende Services und WS-Pfade** (Branch `feat/127-error-contract-impl`; Konzept `docs/superpowers/specs/2026-11-03-error-contract-design.md`, Plan `docs/superpowers/plans/2026-11-03-error-contract.md`): zentraler **35-Code-Katalog** `errors.ERROR_SPECS` (HA-frei in `logic.py`, `params`/`template`/`row_template`, `RAW_ECHO_CODES`) mit HA-Projektion ausschließlich in `errors.py` (`validation_error`, `send_ws_error`, `relay_error`; Invariante `code == translation_key`); **29 Service-** und **32 WS-Fehlerstellen** von Prosa/`send_error` auf den Katalog migriert; **4 Relais-Stellen** (`export_failed`, `backup_failed`, `import_failed`, `restore_failed`) reichen `translation_domain`/`translation_key`/`translation_placeholders` durch; **35 `exceptions`-Übersetzungen** in `strings.json`/`translations/de.json`/`translations/en.json` mit identischen Platzhalter-Sets; **Batch-Envelope unverändert** `{code, params, message}` **ohne** `translation_*` (Lokalisierung clientseitig aus `code` + `params`); Frontend löst ausschließlich **per Code** auf (`translation_key || code`, dann `translation_placeholders || params`, Unknown-Code-Fallback auf `message`, dann Code), ergänzter Key `ui_panel_lab_report_row_hint`. **Belege:** `pytest -q` → **1865 passed**, `ruff check .` clean, `compileall` OK; E2E `tests_e2e/` → **73 passed** auf dem Compose-Stack (8124), inkl. lokalisierter Darstellung de/en, Unknown-Code-Fallback und Batch-Envelope ohne `translation_*`. **Kein Release/Tag** — `0.21.0` ist geplant, aber nicht geschnitten. |
 | 2026-11-03 | **Welle 3 — REQ-HOM-006 Blueprint-E2E umgesetzt (noch kein Release):** vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Ziel-erreicht, Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer nötig); **echter Defekt behoben** — `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template, ohne es zu binden (HA substituiert nur `!input`), daher rendete der Personenname nie; beide binden jetzt `variables: {person: !input person_name}` und nutzen `person`, `weekly_report` braucht keine Bindung (kein Template); `tests/test_blueprints.py` um die Bindungs-Regression erweitert (schlägt auf dem Vorher-Stand fehl); `README.md`-Blueprint-Liste drei → vier. **Belege:** `pytest -q` → **1751 passed**; neu `tests_e2e/test_blueprints_e2e.py` → **19 Tests, 19 passed** auf dem Compose-Stack (8124) — Import über Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Automationsvalidierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration, also keine auslösbare Entity) — kein realer Notify-Aufruf. **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
 | 2026-11-02 | **Welle 2 — REQ-HOM-010 Mess-Notiz umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`):** neue Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, `mdi:note-text-outline`, max. 255 Zeichen, Gate `AREA_BP`); die angefangene Notiz liegt im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Schema-Bump/Migrator) und wird zentral in `HealthOMatStore.add_reading` geleert, sodass Button, Service, WS und CSV-Import denselben Choke-Point nutzen; `SaveReadingButton` reicht die Notiz mit; nach dem Validator-Befund fließt die angefangene Notiz auch über den Service `add_blood_pressure` und das WS-Kommando `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene); Note sichtbar in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (Spalten additiv, Bestandsimporte unverändert). **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean; E2E `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)) — frische Person, Identität (`unique_id`, englisch gepinnte `entity_id`, lokalisierter Anzeigename), Notiz an gespeicherter Messung, Feld danach leer, Notiz in `history_json` + CSV, Bereichs-Toggle behält `unique_id`/`entity_id`. Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, gepinnt durch Unit-Regressionstest. **Scope:** nur Blutdruck (`set_wellbeing` hat keinen `note`-Parameter). **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |

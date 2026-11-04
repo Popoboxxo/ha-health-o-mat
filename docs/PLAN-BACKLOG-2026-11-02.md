@@ -1,7 +1,7 @@
-# Backlog-Umsetzungsplan — 0.19.1 / 0.20.0 / 0.21.0
+# Backlog-Umsetzungsplan — 0.21.0 (0.19.1 / 0.20.0 übersprungen)
 
-**Status:** Wellen 0–4 umgesetzt — Welle 0 abgeschlossen (PR #74), Welle 1 gemergt (offen: Release 0.19.1), Wellen 2/3 gemergt (offen: Release 0.20.0), Welle 4 = REQ-HOM-127 umgesetzt (PR #84, offen: Release 0.21.0) · Welle 5 geschlossen: B5 bewusst nicht unterstützt, B6/B7 gestrichen, B9 erledigt, Vision E2–E6 bewusst geparkt · **Datum:** 2026-11-02, Fortschreibung 2026-11-04
-**Basis:** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean
+**Status:** Wellen 0–4 als **0.21.0** veröffentlicht (Tag `v0.21.0`, `manifest.version = 0.21.0`, echtes GitHub-Release, `main` @ `640c94d`) — Welle 0 (PR #74), Welle 1, Wellen 2/3 und Welle 4 (PR #84) sind darin enthalten; **0.19.1 und 0.20.0 bewusst übersprungen** · Welle 5 geschlossen: B5 bewusst nicht unterstützt, B6/B7 gestrichen, B9 erledigt, Vision E2–E6 bewusst geparkt · **Datum:** 2026-11-02, Fortschreibung 2026-11-04
+**Basis (Planstand):** `manifest.version = 0.19.0` (`custom_components/health_o_mat/manifest.json:22`), `main` @ `2f78dfc`, Tag `v0.19.0`, Arbeitsbaum clean · **Release-Stand heute:** `manifest.version = 0.21.0`, `main` @ `640c94d`, Tag `v0.21.0`
 **Vorgänger:** `docs/PLAN-OPEN-ISSUES.md` — abgeschlossen (alle drei Releases veröffentlicht)
 **Quellen:** GitHub (`gh issue list`/`gh pr list` = 0 offen, Stand 2026-11-02), `docs/REQUIREMENTS.md`, `docs/REVIEW-2026-10-14.md`, `docs/CONCEPT-UI.md`, `docs/IDEATION-UI-PRO.md`, `docs/IDEATION-VISION.md`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md`
 
@@ -14,9 +14,9 @@
 ## 1. Ausgangslage
 
 - **GitHub-Backlog leer heißt nicht dokumentierter Backlog leer.** `gh issue list` und `gh pr list` melden am 2026-11-02 jeweils 0 offene Einträge. Insgesamt sind 10 Issues geschlossen: #28, #29, #30, #31, #32, #33, #70, #71, #72, #73.
-- **Der Vorgängerplan ist abgearbeitet:** `docs/PLAN-OPEN-ISSUES.md` führte 0.17.3, 0.18.0 und 0.19.0; alle drei Releases sind veröffentlicht, `manifest.version` steht auf 0.19.0.
+- **Der Vorgängerplan ist abgearbeitet:** `docs/PLAN-OPEN-ISSUES.md` führte 0.17.3, 0.18.0 und 0.19.0; alle drei Releases sind veröffentlicht; `manifest.version` stand zum Planaufstellungszeitpunkt auf 0.19.0.
 - **Was der Vorgängerplan bewusst zurückgelassen hat:** B1 (REQ-HOM-127), B5, B6/B7 und B9 aus `docs/PLAN-OPEN-ISSUES.md:444-451`. B2, B3, B4, B8 und B10 sind dagegen erledigt.
-- **Was zusätzlich offen ist:** die Restpunkte von REQ-HOM-130 (HACS-Update-Test, Repair-Issue, Erfolgs-Notification). REQ-HOM-010 (Text-Entity `measurement_note`) war bei Planaufstellung offen und ist inzwischen in Welle 2 umgesetzt, REQ-HOM-006 AK 1 (Blueprint-E2E) in Welle 3 (jeweils offen nur Merge/Release 0.20.0).
+- **Was zusätzlich offen ist:** von REQ-HOM-130 nur noch der reale HACS-Update-Test — Repair-Issue und Erfolgs-Notification sind in Welle 1 umgesetzt. REQ-HOM-010 (Text-Entity `measurement_note`) war bei Planaufstellung offen und ist inzwischen in Welle 2 umgesetzt, REQ-HOM-006 AK 1 (Blueprint-E2E) in Welle 3 (beide mit 0.21.0 veröffentlicht; 0.20.0 übersprungen).
 - **Was den Blick verstellt:** Die Dokumentation nennt an mehreren Stellen Release-Stände und Erledigungsgrade, die seit 0.14.0 bis 0.19.0 überholt sind. Solange das so bleibt, ist jede Priorisierung auf falschem Status gebaut — deshalb steht Welle 0 vor allem anderen.
 
 ---
@@ -25,13 +25,13 @@
 
 ### 2.1 Echt offen
 
-> **Stand 2026-11-04:** REQ-HOM-127 ist umgesetzt (PR #84), B5/B6/B7/B9 sind entschieden. Die Zeilen bleiben als Beleg stehen; offen sind nur noch die Releases (0.19.1, 0.20.0, 0.21.0).
+> **Stand 2026-11-04:** REQ-HOM-127 ist umgesetzt (PR #84), B5/B6/B7/B9 sind entschieden. Die Zeilen bleiben als Beleg stehen; alle Releases sind mit **0.21.0** erfolgt (0.19.1/0.20.0 bewusst übersprungen und gebündelt).
 
 | Item | Inhalt | Prio | Beleg |
 |---|---|---|---|
-| REQ-HOM-127 | ~~Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen~~ — **umgesetzt (PR #84)**; offen nur Release 0.21.0 (MINOR + 💥) | P2 | `docs/REQUIREMENTS.md:1516-1538`, `docs/PLAN-AUDIT-2026-11-03.md` WP-A |
-| REQ-HOM-006 | ~~Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht"~~ — **in Welle 3 umgesetzt** (vierter Blueprint, Personen-Bindungs-Fix, Compose-E2E 19/19); der Import auf der geteilten Instanz bleibt manuelle Abnahme; offen nur Merge/Release 0.20.0 | P2 | `docs/REQUIREMENTS.md:172-211` |
-| REQ-HOM-010 | ~~Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`)~~ — **in Welle 2 umgesetzt** (Entity, zentrales Leeren, History-/CSV-Beleg); offen nur Merge/Release 0.20.0 | P3 | `docs/REQUIREMENTS.md:325-364` |
+| REQ-HOM-127 | ~~Fehlercode-/i18n-Umbau der Services/WS auf strukturierte `{code, params}` plus lokalisierte Meldungen~~ — **umgesetzt (PR #84) und mit 0.21.0 veröffentlicht** (MINOR + 💥) | P2 | `docs/REQUIREMENTS.md:1516-1538`, `docs/PLAN-AUDIT-2026-11-03.md` WP-A |
+| REQ-HOM-006 | ~~Blueprint-E2E-Import auf `ha-test` (AK1) und optionaler Blueprint „Ziel erreicht"~~ — **in Welle 3 umgesetzt** (vierter Blueprint, Personen-Bindungs-Fix, Compose-E2E 19/19); der Import auf der geteilten Instanz bleibt manuelle Abnahme; **mit 0.21.0 veröffentlicht** (0.20.0 übersprungen) | P2 | `docs/REQUIREMENTS.md:172-211` |
+| REQ-HOM-010 | ~~Text-Entity `measurement_note` fehlt (`text.py` kennt nur `freetext`)~~ — **in Welle 2 umgesetzt** (Entity, zentrales Leeren, History-/CSV-Beleg); **mit 0.21.0 veröffentlicht** (0.20.0 übersprungen) | P3 | `docs/REQUIREMENTS.md:325-364` |
 | REQ-HOM-130 Rest | HACS-Update-Test v0.16.2 nach v0.17.x; Repair-Issue und Erfolgs-Notification (Spec §9 O-1) | P1 | `docs/REQUIREMENTS.md:1766-1772`, `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md:1246-1254` |
 | B5 | **geschlossen — bewusst nicht unterstützt:** HbA1c in `%` (DCCT) verlangt eine nicht-lineare Umrechnung aus IFCC; das Risiko einer klinisch falschen Anzeige wiegt schwerer als der Nutzen. `unsupported_unit` bleibt das dokumentierte Verhalten. Reversibel: eigenes Issue bei Bedarf. | — | `docs/PLAN-OPEN-ISSUES.md:449` |
 | B6/B7 | **geschlossen — gestrichen:** nie mit Inhalt benannt; ohne belastbare Beschreibung wird nichts rekonstruiert. | — | `docs/PLAN-OPEN-ISSUES.md:450` |
@@ -89,7 +89,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 ## 3. Umsetzungswellen
 
-### Welle 0 — Doku-Wahrheit (0.19.1, ohne Produktionscode)
+### Welle 0 — Doku-Wahrheit (ausgeliefert in 0.21.0, ohne Produktionscode)
 
 **Ziel:** Die Dokumentation spiegelt 0.19.0. Danach bedeutet „offen" wieder „offen", und „erledigt" ist mit einem Beleg versehen.
 
@@ -122,7 +122,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 ---
 
-### Welle 1 — REQ-HOM-130 Restpunkte (0.19.1)
+### Welle 1 — REQ-HOM-130 Restpunkte (ausgeliefert in 0.21.0)
 
 **Ziel:** Die Migration meldet sich (Repair-Issue bei Skip, Erfolgs-Notification) und der HACS-Update-Pfad ist belegt.
 
@@ -151,15 +151,15 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Risiken:** Repair-Issue-Spam bei jedem Start. Gegenmaßnahme: `issue_id` an `entry_id` binden, Issue nur bei Abweichung erzeugen; Notification nur bei echtem Versionswechsel.
 
-**DoD:** `pytest -q` grün, `ruff check .` und `ruff format --check .` clean, REQUIREMENTS.md-Beleg ergänzt, Release 0.19.1 (PATCH).
+**DoD:** `pytest -q` grün, `ruff check .` und `ruff format --check .` clean, REQUIREMENTS.md-Beleg ergänzt, Release-Ziel 0.19.1 (PATCH) — ausgeliefert in 0.21.0.
 
 ---
 
-### Welle 2 — REQ-HOM-010 Mess-Notiz (0.20.0)
+### Welle 2 — REQ-HOM-010 Mess-Notiz (ausgeliefert in 0.21.0)
 
 **Ziel:** Die Text-Entity `measurement_note` ergänzt die BP- und Wohlbefinden-Erfassung, ohne Bestandsdaten zu brechen.
 
-**Stand Welle 2:** umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`) — Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, max. 255 Zeichen, Gate `AREA_BP`), angefangene Notiz im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Bump/Migrator), Leerung zentral in `HealthOMatStore.add_reading`, `SaveReadingButton` reicht die Notiz mit, nach dem Validator-Befund fließt die angefangene Notiz auch über Service `add_blood_pressure` und WS `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene), Note in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (additiv). Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, per Unit-Regressionstest gepinnt. **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean, `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)). **Scope:** nur Blutdruck — `set_wellbeing` hat keinen `note`-Parameter, Wohlbefinden ist bewusst nicht abgedeckt (das ursprüngliche Welle-Ziel nannte Wohlbefinden; die Anforderung selbst nur `save_measurement`). **Offen:** Merge und Release 0.20.0 (Welle 3 gehört ebenfalls zu 0.20.0).
+**Stand Welle 2:** umgesetzt (Branch `feat/010-measurement-note`, Plan `docs/superpowers/plans/2026-11-02-measurement-note.md`) — Text-Entity `{entry_id}_text_measurement_note` (`translation_key = "measurement_note"`, `has_entity_name`, max. 255 Zeichen, Gate `AREA_BP`), angefangene Notiz im bereits persistierten `store.inputs["note"]` (Store-Schema v2, kein Bump/Migrator), Leerung zentral in `HealthOMatStore.add_reading`, `SaveReadingButton` reicht die Notiz mit, nach dem Validator-Befund fließt die angefangene Notiz auch über Service `add_blood_pressure` und WS `health_o_mat/save_measurement` (`resolve_reading_note`: explizite Notiz gewinnt, sonst die angefangene), Note in `history_json` und in der Blutdruck-CSV-Spalte `notiz` (additiv). Der E2E-Lauf deckte einen Defekt auf: `async_set_value` stieß den Entity-State nicht — behoben via `async_write_ha_state()`, per Unit-Regressionstest gepinnt. **Belege:** `pytest -q` → **1741 passed**, `ruff check .` + `ruff format --check .` clean, `tests_e2e/test_measurement_note_e2e.py` um den Service-Pfad erweitert (**5 → 7 Szenarien**, **7 E2E-Tests, 7 passed** (Compose-Stack 8124, inkl. Service-Pfad)). **Scope:** nur Blutdruck — `set_wellbeing` hat keinen `note`-Parameter, Wohlbefinden ist bewusst nicht abgedeckt (das ursprüngliche Welle-Ziel nannte Wohlbefinden; die Anforderung selbst nur `save_measurement`). **Ausgeliefert:** mit **0.21.0** (0.20.0 bewusst übersprungen; Welle 3 gehört zum selben Release).
 
 **Scope/Dateien:** `text.py` (neue Entity), `const.py` (Key), `store.py`/`logic.py` (Persistenz und History), `sensor.py`/`binary_sensor.py` nur falls nötig, `strings.json`, `translations/de.json`, `translations/en.json`, `README.md`, `tests/test_text.py`, `tests/test_store.py`, `tests/test_import_backup.py`.
 
@@ -185,15 +185,15 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Risiken:** `unique_id`-Disziplin (nie ändern), Namens-Literal verboten, CSV-Spalten nur additiv ergänzen, damit Bestandsimporte nicht brechen.
 
-**DoD:** `pytest`/`ruff` grün, REQUIREMENTS.md aktualisiert, Release 0.20.0 (MINOR).
+**DoD:** `pytest`/`ruff` grün, REQUIREMENTS.md aktualisiert, Release-Ziel 0.20.0 (MINOR) — ausgeliefert in 0.21.0.
 
 ---
 
-### Welle 3 — REQ-HOM-006 Blueprint-E2E (0.20.0)
+### Welle 3 — REQ-HOM-006 Blueprint-E2E (ausgeliefert in 0.21.0)
 
 **Ziel:** Der Blueprint-Import auf `ha-test` ist automatisiert belegt; der optionale Blueprint „Ziel erreicht" ist ergänzt.
 
-**Stand Welle 3:** umgesetzt — vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer), `tests/test_blueprints.py` um die Personen-Bindungs-Regression erweitert, `README.md`-Liste drei → vier, neues `tests_e2e/test_blueprints_e2e.py`. Der E2E-Lauf deckte einen echten Defekt auf: `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template ohne Bindung (HA substituiert nur `!input`), der Personenname rendete nie — behoben via `variables: {person: !input person_name}` (`weekly_report` braucht das nicht, kein Template). **Belege:** `pytest -q` → **1751 passed**; E2E **19 Tests, 19 passed** (Compose-Stack 8124) — Import via Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Validierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Abweichung bei AK 1:** der automatisierte Import läuft per Entscheidung D8 (`docs/PLAN-OPEN-ISSUES.md:40`) auf Compose (8124), nicht auf der geteilten Instanz; dort bleibt der Import manuelle Abnahme. **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration → keine auslösbare Entity), also kein realer Notify-Aufruf. **Offen:** Merge und Release 0.20.0 (gemeinsam mit Welle 2).
+**Stand Welle 3:** umgesetzt — vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer), `tests/test_blueprints.py` um die Personen-Bindungs-Regression erweitert, `README.md`-Liste drei → vier, neues `tests_e2e/test_blueprints_e2e.py`. Der E2E-Lauf deckte einen echten Defekt auf: `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template ohne Bindung (HA substituiert nur `!input`), der Personenname rendete nie — behoben via `variables: {person: !input person_name}` (`weekly_report` braucht das nicht, kein Template). **Belege:** `pytest -q` → **1751 passed**; E2E **19 Tests, 19 passed** (Compose-Stack 8124) — Import via Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Validierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Abweichung bei AK 1:** der automatisierte Import läuft per Entscheidung D8 (`docs/PLAN-OPEN-ISSUES.md:40`) auf Compose (8124), nicht auf der geteilten Instanz; dort bleibt der Import manuelle Abnahme. **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration → keine auslösbare Entity), also kein realer Notify-Aufruf. **Ausgeliefert:** mit **0.21.0** (0.20.0 bewusst übersprungen; gemeinsam mit Welle 2).
 
 **Scope/Dateien:** `tests_e2e/` (neues Blueprint-E2E), `blueprints/automation/health_o_mat/` (optionaler Blueprint), `README.md` und Blueprint-Doku. Bestand: `weekly_report.yaml`, `evening_reminder.yaml`, `blood_pressure_warning.yaml`.
 
@@ -216,7 +216,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Risiken:** Geteilte Instanz — daher ausschließlich Compose. Blueprint-Format ist HA-versionsabhängig; gegen die gepinnte E2E-Version testen.
 
-**DoD:** E2E grün, README/REQUIREMENTS aktualisiert, Release 0.20.0 (gemeinsam mit Welle 2).
+**DoD:** E2E grün, README/REQUIREMENTS aktualisiert, Release-Ziel 0.20.0 (gemeinsam mit Welle 2) — ausgeliefert in 0.21.0.
 
 ---
 
@@ -224,7 +224,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Ziel:** Strukturierte Fehlercodes `{code, params}` plus lokalisierte Meldungen, additiv via `errors_detail`, ohne Bruch des D6-Vertrags aus REQ-HOM-132.
 
-**Stand Welle 4:** umgesetzt (PR #84) — Konzept APPROVED (`docs/superpowers/specs/2026-11-03-error-contract-design.md`), Transport per D-3 auf HA-native `translation_*` festgelegt (`errors_detail` verworfen), 35 Codes in `logic.ERROR_SPECS`, 29 Service- und 32 WS-Stellen migriert, 4 Relais, `exceptions`-Übersetzungen de/en; Belege `tests/test_error_contract.py`, `tests/test_errors.py`, `docs/SERVICE-RESPONSES.md`. **Offen:** Release 0.21.0 (MINOR + 💥).
+**Stand Welle 4:** umgesetzt (PR #84) — Konzept APPROVED (`docs/superpowers/specs/2026-11-03-error-contract-design.md`), Transport per D-3 auf HA-native `translation_*` festgelegt (`errors_detail` verworfen), 35 Codes in `logic.ERROR_SPECS`, 29 Service- und 32 WS-Stellen migriert, 4 Relais, `exceptions`-Übersetzungen de/en; Belege `tests/test_error_contract.py`, `tests/test_errors.py`, `docs/SERVICE-RESPONSES.md`. **Ausgeliefert:** mit **0.21.0** veröffentlicht (MINOR + 💥).
 
 **Scope/Dateien:** `custom_components/health_o_mat/__init__.py`, `ws_api.py`, `logic.py`, `strings.json`, `translations/de.json`, `translations/en.json`, betroffene Tests.
 
@@ -250,7 +250,7 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 **Risiken:** Vertragsbruch für Panel, Card und Automationen — daher nur additiv. i18n-Parität zwischen `strings.json`, `de.json` und `en.json` muss getestet sein.
 
-**DoD:** Konzept APPROVED vor Implementierung; 💥-Hinweis in den Release Notes, falls Meldungstexte wechseln; Release 0.21.0 (MINOR).
+**DoD:** Konzept APPROVED vor Implementierung; 💥-Hinweis in den Release Notes, falls Meldungstexte wechseln; Release 0.21.0 (MINOR) — veröffentlicht.
 
 ---
 
@@ -288,14 +288,14 @@ Drift ist kein Backlog-Item im engeren Sinn, blockiert aber jede Priorisierung �
 
 ## 4. Release-Plan
 
-| Release | Inhalt | Typ | Tag | `manifest.version` |
-|---|---|---|---|---|
-| 0.19.1 | Welle 0 und Welle 1 | PATCH | `v0.19.1` | `0.19.1` |
-| 0.20.0 | Welle 2 und Welle 3 | MINOR | `v0.20.0` | `0.20.0` |
-| 0.21.0 | Welle 4 | MINOR | `v0.21.0` | `0.21.0` |
-| kein Release | Welle 5 | — | — | — |
+| Release | Inhalt | Typ | Tag | `manifest.version` | Status |
+|---|---|---|---|---|---|
+| 0.19.1 | Welle 0 und Welle 1 | PATCH | — | — | **übersprungen** (in 0.21.0 enthalten) |
+| 0.20.0 | Welle 2 und Welle 3 | MINOR | — | — | **übersprungen** (in 0.21.0 enthalten) |
+| 0.21.0 | Wellen 0–4 (0.19.1/0.20.0 gebündelt) | MINOR + 💥 | `v0.21.0` | `0.21.0` | **veröffentlicht** (`main` @ `640c94d`) |
+| kein Release | Welle 5 | — | — | — | geschlossen |
 
-`v` nur im Tag, Manifest ohne `v`, zeichenidentisch; Promotion ist ein neuer Tag, nie eine Verschiebung; Tags und Releases sind unveränderlich. Release-Notes: Zusammenfassung, ✨ New features, 💥 Breaking/Verhaltensänderungen mit Migrationshinweis, Full-Changelog-Link. HACS-Update-Test jeweils **nach** dem Release-Dreiklang.
+`v` nur im Tag, Manifest ohne `v`, zeichenidentisch; Promotion ist ein neuer Tag, nie eine Verschiebung; Tags und Releases sind unveränderlich. Release-Notes: Zusammenfassung, ✨ New features, 💥 Breaking/Verhaltensänderungen mit Migrationshinweis, Full-Changelog-Link. HACS-Update-Test jeweils **nach** dem Release-Dreiklang. **Stand 2026-11-04:** Der Release-Dreiklang für 0.21.0 ist abgeschlossen; der reale HACS-Update-Test bleibt als manuelle Abnahme offen (`docs/PLAN-AUDIT-2026-11-03.md` WP-E) und ist nicht durch diesen Plan belegt.
 
 ---
 
