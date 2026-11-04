@@ -5,6 +5,64 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.21.0] — 2026-11-04
+
+### Added
+
+- **Measurement-note entity (REQ-HOM-010):** one `text.<person>_measurement_note`
+  entity per person with an active blood-pressure area. It holds a note for the
+  next reading, survives a restart (stored in the existing `store.inputs`), is
+  consumed by the save button, the `add_blood_pressure` service, the
+  `health_o_mat/save_measurement` WebSocket command and the CSV import, and
+  shows up in `history_json` and in the blood-pressure CSV `notiz` column.
+- **Fourth automation blueprint `goal_reached`:** notifies once per `off` → `on`
+  transition of the person's daily-goal binary sensor. No helper entity is
+  required.
+- **Structured error catalog (REQ-HOM-127):** **35 stable codes** replace
+  free-form error prose. **29 service** and **32 WebSocket** sites plus **4
+  relay helpers** now emit `code` + typed `params`; German and English
+  translations ship for all 35 codes, and the frontend resolves errors by
+  `code` instead of matching message text.
+
+### Changed
+
+- **Quick-drink option changes apply immediately.** Editing the quick-drink
+  amounts now reloads the buttons, so the new amount is booked on the next
+  press — previously the old amount was booked until a manual integration
+  reload.
+- **Error messages are neutral and localizable** instead of German prose; the
+  human-readable text is now produced from the code and its params (see
+  *Breaking changes*).
+
+### Fixed
+
+- **Blocking I/O moved off the event loop:** `list_import_files`,
+  `safe_import_path` (import path validation), `safe_restore_path` (restore
+  path validation) and the manifest-version read in diagnostics now run in the
+  executor instead of blocking the event loop.
+- **`goal_reached` blueprint never rendered `person_name`:** blueprint inputs
+  are not automatically available as template variables, so the person name was
+  always empty; it is now bound explicitly via a `variables:` block.
+- **E2E stack:** the E2E image ships `blueprints/`, and the E2E workflow now
+  triggers on blueprint changes as well.
+
+### Breaking changes
+
+- **Error texts are no longer prose.** Automations, scripts or templates that
+  parse German error messages must key on `code` (and `params`) instead. The
+  codes are stable and documented.
+- **WebSocket and service error objects additionally carry
+  `translation_domain`, `translation_key` and `translation_placeholders`.** The
+  **batch envelope is unchanged**.
+- **New `measurement_note` text entity per person** with an active
+  blood-pressure area; dashboards that auto-include entities will pick it up.
+
+### Notes
+
+- **No migration:** no `unique_id` change, no entity-registry migration, store
+  schema stays `5`, config-entry version stays `3` (no `async_migrate_entry`
+  step).
+
 ## [0.19.0] — 2026-11-02
 
 ### Added
