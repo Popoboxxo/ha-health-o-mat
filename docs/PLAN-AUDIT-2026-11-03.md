@@ -1,14 +1,15 @@
 # Umsetzungsplan aus dem System-Audit (2026-11-03)
 
-**Status:** WP-A umgesetzt (PR #84, Release 0.21.0 offen), WP-B umgesetzt (PR #82),
-WP-C entschieden (D-1 = B4, reversibel), WP-D Trigger T-1…T-5 definiert,
-WP-F abgeschlossen (reauth gehärtet, Auth wiederhergestellt) — **WP-E ist dokumentiert,
-aber manuell offen** (keine HACS-Verifikation) · **Datum:** 2026-11-03,
-Fortschreibung 2026-11-04 · **Basis:** `main` @ `184272e`; der Zahlenstand in §6 stammt
-weiterhin aus der Messung @ `1d6f832`
+**Status:** WP-A (PR #84), WP-B (PR #82), WP-C (D-1 = B4, reversibel), WP-D (Trigger
+T-1…T-5 definiert) und WP-F (reauth gehärtet, Auth wiederhergestellt) sind
+**abgeschlossen und mit 0.21.0 veröffentlicht** (Tag `v0.21.0`,
+`manifest.version = 0.21.0`, echtes GitHub-Release) — **einzige Ausnahme: WP-E bleibt
+manuell offen** (keine HACS-Verifikation) · **Datum:** 2026-11-03, Fortschreibung
+2026-11-04 · **Basis:** `main` @ `640c94d`; der Zahlenstand in §6 stammt weiterhin aus
+der Messung @ `1d6f832`
 **Quelle:** `docs/reviews/2026-11-03-system-audit.md` (+ Nachtrag 2026-11-03)
-**Abgrenzung:** `docs/PLAN-BACKLOG-2026-11-02.md` (Wellen 0–4 umgesetzt; Welle 5
-geschlossen)
+**Abgrenzung:** `docs/PLAN-BACKLOG-2026-11-02.md` (Wellen 0–4 mit 0.21.0
+veröffentlicht, 0.19.1/0.20.0 übersprungen; Welle 5 geschlossen)
 
 > **Kein `plan_ref`.** Dieses Dokument ist ein Portfolio-Plan über mehrere Arbeitspakete
 > und Releases. Es enthält bewusst **keine** `pipeline_stages`-Frontmatter und ist nicht
@@ -57,7 +58,7 @@ nur der Zählstand ohne erreichbaren Stack. Die im Audit genannten Funktionszahl
 | F-05 | Bewusste `_attr_name`-Ausnahmen (M-8) dokumentiert | **erledigt** (Status) | Audit §1; `button.py:67,83` | — |
 | F-06 | Kern-Dateien wachsen (`ws_api.py` 2406, `__init__.py` 1809, `store.py` 1582, `logic.py` 1422, `restore.py` 1266, `const.py` 658) | **entschieden** (Trigger T-1/T-2/T-5 definiert; kein Refactor) | `wc -l` @ `1d6f832` | WP-D |
 | F-07 | Frontend-Einzeldateien (`card.js` 3362, `panel.js` 2362, `labs-card.js` 1791) | **entschieden** (Trigger T-4 definiert; kein Refactor) | `wc -l custom_components/health_o_mat/www/*.js` | WP-D |
-| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **erledigt** (WP-A, PR #84; Release offen) | Umsetzung: `logic.ERROR_SPECS` (35 Codes), `errors.py`, 29 Service- + 32 WS-Stellen, 4 Relais, `exceptions`-Übersetzungen in `strings.json`/`de`/`en`; Beleg `tests/test_error_contract.py`, `tests/test_errors.py`; Doku `docs/SERVICE-RESPONSES.md` | WP-A |
+| F-08 | Zwei-Klassen-Fehlerbehandlung = REQ-HOM-127 | **erledigt** (WP-A, PR #84; mit 0.21.0 veröffentlicht) | Umsetzung: `logic.ERROR_SPECS` (35 Codes), `errors.py`, 29 Service- + 32 WS-Stellen, 4 Relais, `exceptions`-Übersetzungen in `strings.json`/`de`/`en`; Beleg `tests/test_error_contract.py`, `tests/test_errors.py`; Doku `docs/SERVICE-RESPONSES.md` | WP-A |
 | F-09 | Labor-Eingabe: Options-Doc mit veralteter Zahlenbasis (29 Marker, 9 Kategorien, 38 Entities), B1-vs-B4 unbeantwortet | **entschieden** (D-1 = B4, reversibel; Zahlenkorrektur Teil des WP) | `docs/superpowers/specs/2026-11-01-lab-entity-surface-options.md:20-54`; heute 41 Marker / 10 Kategorien / 51 Labor-Entities | WP-C |
 | F-10 | HACS-Update-Test nur simuliert, HACS-Mechanik ungeprüft | **dokumentiert, manuell offen** (Prozedur in WP-E; keine HACS-Verifikation) | `docs/REQUIREMENTS.md:1830-1841`; Simulation 0.16.2→0.19.0, kein HACS im gepinnten E2E-Image | WP-E |
 | F-11 | Spec §9 O-1 (Repair-Issue + Erfolgs-Notification) | **erledigt** (Audit-Aussage überholt) | PR #75; `__init__.py:235-236`, `tests/test_entry_migration.py` | — |
@@ -75,18 +76,16 @@ Sie bekommen kein eigenes Arbeitspaket; F-03 und F-16 sind Aussagen-Korrekturen,
 
 ## 2. Arbeitspakete
 
-### WP-A — REQ-HOM-127: Fehlercode-/i18n-Vertrag — **umgesetzt, Release offen**
+### WP-A — REQ-HOM-127: Fehlercode-/i18n-Vertrag — **umgesetzt und mit 0.21.0 veröffentlicht**
 
 **Stand (2026-11-04):** Schritte 1–6 sind abgeschlossen — Konzept APPROVED
 (`docs/superpowers/specs/2026-11-03-error-contract-design.md`), Task-Plan
 (`docs/superpowers/plans/2026-11-03-error-contract.md`), Katalog mit 35 Codes,
 29 Service- und 32 WS-Stellen migriert, 4 Relais, `exceptions`-Übersetzungen in
 `strings.json`/`de`/`en`; Schritt 7 (Frontend lokalisiert über `translation_key`)
-ist implementiert. Der E2E-Beleg (Task 7) läuft parallel und wird nach seinem
-Ergebnis hier nachgetragen; `docs/SERVICE-RESPONSES.md` ist aktualisiert,
-`docs/REQUIREMENTS.md` folgt über `requirements`. **Offen ist nur die
-Release-Entscheidung** (0.21.0, MINOR + 💥, §4) — dieser Branch hebt keine
-Version und erzeugt kein Release.
+ist implementiert. `docs/SERVICE-RESPONSES.md` ist aktualisiert,
+`docs/REQUIREMENTS.md` wird über `requirements` gepflegt. **Veröffentlicht:** 0.21.0
+(MINOR + 💥, §4), Tag `v0.21.0`, `main` @ `640c94d`.
 
 **Ziel:** Die bestehenden Services und WS-Kommandos liefern Fehler strukturiert als
 `{code, params}` und lokalisieren die Meldungstexte de/en — **additiv**, ohne den
@@ -193,9 +192,9 @@ viele Dateien), `tester`, `validator`, `documenter`, `git`.
 
 **DoD:** Konzept APPROVED, Task-Plan als `plan_ref`, Tests grün (laut
 `tester`-Lauf: 1865+ Unit-Tests, `ruff` clean), Akzeptanzkriterien unten erfüllt;
-`docs/SERVICE-RESPONSES.md` aktualisiert. **Offen:** Abhaken der
-REQ-HOM-127-AKs in `docs/REQUIREMENTS.md` (über `requirements`) und die
-**Release-Entscheidung 0.21.0 mit 💥-Hinweis** (§4).
+`docs/SERVICE-RESPONSES.md` aktualisiert. **Release:** mit 0.21.0 erfolgt
+(💥-Hinweis, §4); das Abhaken der REQ-HOM-127-AKs in `docs/REQUIREMENTS.md` liegt bei
+`requirements` und ist nicht Gegenstand dieses Plans.
 
 ---
 
@@ -270,8 +269,8 @@ Zählstand ohne erreichbaren Stack) plus vier neue Szenarien; Unit-Suite unverä
   die Originaldatei und stellt sie im `finally` wieder her.
 - E2E-Image ist read-only für die Integration → kein HACS in WP-B (das ist WP-E).
 
-**DoD:** E2E-Lauf dokumentiert, AKs abgehakt, Release 0.20.0 (Testbeleg, kein eigener
-Versionsgrund).
+**DoD:** E2E-Lauf dokumentiert, AKs abgehakt, mit 0.21.0 ausgeliefert (0.20.0
+übersprungen; Testbeleg, kein eigener Versionsgrund).
 
 ---
 
@@ -509,9 +508,10 @@ pytest-Szenario (HACS ist nicht im E2E-Image, `docs/REQUIREMENTS.md:1836-1840`).
 **DoD:** Belegdokument committed, REQUIREMENTS-AK abgehakt, kein Release durch dieses
 WP selbst. **Bis dahin: WP-E manuell offen.**
 
-**Abhängigkeit:** braucht ein veröffentlichtes Ziel-Release (aktuell 0.20.0/0.21.0) und
-einen Betreiber, der den Lauf ausführt. Der Lauf nach 0.21.0 entfällt nicht: WP-A ändert
-die Fehlertexte, deshalb ist er Teil der 0.21.0-Abnahme, sobald 0.21.0 veröffentlicht ist.
+**Abhängigkeit:** braucht ein veröffentlichtes Ziel-Release (**0.21.0 ist veröffentlicht**,
+0.19.1/0.20.0 übersprungen) und einen Betreiber, der den Lauf ausführt. Der Lauf entfällt
+nicht: WP-A ändert die Fehlertexte, deshalb ist er Teil der 0.21.0-Abnahme und bleibt bis
+zu seinem Lauf offen.
 
 ---
 
@@ -585,10 +585,9 @@ pytest.
 ## 3. Reihenfolge und Abhängigkeiten
 
 ```
-WP-C Schritt 1-3 (Zahlen) ──► Nutzerentscheidung ──► ggf. B1-Plan (eigenes Feature)
-WP-B ──► Release 0.20.0 ──► WP-E (0.19.0 → 0.20.0)
-                              │
-WP-A Konzept ──► Task-Plan ──► Implementierung ──► Release 0.21.0 ──► WP-E (0.20.0 → 0.21.0)
+WP-C Schritt 1-3 (Zahlen) ──► Nutzerentscheidung D-1 = B4 (kein B1-Feature)
+WP-B ──┐
+WP-A Konzept ──► Task-Plan ──► Implementierung ──┴──► Release 0.21.0 ──► WP-E (0.16.2 → 0.21.0, manuell)
 WP-D: parallel, nur Messung im Release-Review
 WP-F: unabhängig, extern
 ```
@@ -598,10 +597,10 @@ WP-F: unabhängig, extern
   beide `tests_e2e/` — erst B, dann A vermeidet Konflikte.
 - **WP-C ist unabhängig, aber nutzerblockiert.** Die Zahlenkorrektur (Schritte 1–3)
   kann sofort laufen; die Entscheidung wartet auf `main_chat`.
-- **WP-E nach dem jeweiligen Release:** Der reale Update-Pfad soll einmal belegt sein,
-  bevor die nächste verhaltensändernde Version ausgeliefert wird (Audit §4.4). Nach D-5
-  ist das kein Automatikschritt mehr: der Lauf erfolgt manuell durch einen Betreiber und
-  ist für 0.21.0 Teil der Abnahme — bis dahin bleibt WP-E offen.
+- **WP-E nach dem Release:** Der reale Update-Pfad soll einmal belegt sein, bevor die
+  nächste verhaltensändernde Version ausgeliefert wird (Audit §4.4). Nach D-5 ist das
+  kein Automatikschritt mehr: der Lauf erfolgt manuell durch einen Betreiber und ist für
+  0.21.0 Teil der Abnahme (0.19.1/0.20.0 übersprungen) — bis dahin bleibt WP-E offen.
 - **WP-D blockiert nichts.** Es ist eine Release-Review-Messung; ein ausgelöster
   Refactor würde die Reihenfolge brechen und vor der nächsten Feature-Welle laufen.
 - **WP-F blockiert nichts in diesem Repo**, wohl aber die Reproduzierbarkeit von
@@ -611,25 +610,27 @@ WP-F: unabhängig, extern
 
 ## 4. Release-Schnitt
 
-| Release | Inhalt | Typ | Begründung |
+| Release | Inhalt | Typ | Status |
 |---|---|---|---|
-| **0.20.0** | Backlog-Wellen 2/3 (bereits gemergt: `measurement_note`, Blueprints) + WP-B-Belege | MINOR | Die Features sind ohne Versionsbump auf `main`; WP-B ändert keinen Produktionscode |
-| **0.21.0** | WP-A (Fehlercode-/i18n-Vertrag) | MINOR + 💥 | Verhaltensänderung: Fehlertexte und -codes ändern sich, Antwort-Keys bleiben; 💥-Hinweis mit Migrationshinweis für Panel-/Card-Konsumenten |
-| **0.22.0** | nur falls B1 entschieden wird (WP-C) | MINOR | eigenes Feature, eigener Plan; hier nicht terminiert |
+| **0.21.0** | Backlog-Wellen 0–4 (`measurement_note`, Blueprints, Doku-Wahrheit, Migration-Repairs) + WP-A (Fehlercode-/i18n-Vertrag) + WP-B-Belege | MINOR + 💥 | **veröffentlicht** — Tag `v0.21.0`, `manifest.version = 0.21.0`, echtes GitHub-Release, `main` @ `640c94d` |
+| **0.19.1** | Welle 0 und Welle 1 | PATCH | **übersprungen** — Inhalt in 0.21.0 gebündelt |
+| **0.20.0** | Wellen 2/3 + WP-B-Belege | MINOR | **übersprungen** — Inhalt in 0.21.0 gebündelt |
+| **0.22.0** | nur falls B1 entschieden wird (WP-C) | MINOR | nicht terminiert; D-1 = B4, daher derzeit kein Anlass |
 | **kein Release** | WP-C (Doku/Entscheidung), WP-D, WP-E, WP-F | — | keine Produktionsänderung in diesem Repo |
-| **PATCH nach Bedarf** | Defekt aus WP-B/WP-E | PATCH | nur wenn ein Beleg einen echten Fehler zeigt; Fix + Regressionstest |
+| **PATCH nach Bedarf** | Defekt aus WP-E | PATCH | nur wenn ein Beleg einen echten Fehler zeigt; Fix + Regressionstest |
 
-**Abweichung vom Backlog-Plan:** `docs/PLAN-BACKLOG-2026-11-02.md:285-292` plante
-0.19.1 für Wellen 0/1 und 0.20.0 für Wellen 2/3. Welle 0 ist Doku, Welle 1 ist
-gemergt, aber nicht released; da 0.20.0 ohnehin MINOR-Inhalt trägt, entfällt 0.19.1 und
-0.20.0 bündelt beides. Diese Abweichung ist eine Entscheidung (§5, D-2), keine stille
-Änderung.
+**Abweichung vom Backlog-Plan:** `docs/PLAN-BACKLOG-2026-11-02.md` §4 plante 0.19.1 für
+Wellen 0/1, 0.20.0 für Wellen 2/3 und 0.21.0 für Welle 4. Ausgeliefert wurde stattdessen
+**ein** Release **0.21.0**, das alle vier Wellen sowie WP-A/WP-B enthält; **0.19.1 und
+0.20.0 wurden bewusst übersprungen**. Diese Bündelung ist die in §5 (D-2) getroffene
+Entscheidung, keine stille Änderung.
 
 **Release-Dreiklang:** Commit → Tag → echtes GitHub-Release mit Changelog; `v` nur im
 Tag, `manifest.version` zeichenidentisch ohne `v`; Tag/Release unveränderlich;
-HACS-Update-Test **nach** dem Release. Für 0.21.0 enthält die Release-Notes-Struktur
+HACS-Update-Test **nach** dem Release. Für 0.21.0 sieht die Release-Notes-Struktur
 Summary, ✨ New features, 💥 Breaking/Verhaltensänderung mit Hinweis für
-Automationen/Panel und den Full-Changelog-Link.
+Automationen/Panel und den Full-Changelog-Link vor; der reale HACS-Update-Test bleibt
+als manuelle Abnahme offen (WP-E) und ist durch diesen Plan nicht belegt.
 
 ---
 
@@ -638,7 +639,7 @@ Automationen/Panel und den Full-Changelog-Link.
 | ID | Entscheidung | Optionen | Entscheider | Wirkung/Blockade |
 |---|---|---|---|---|
 | D-1 | B1 (vier Eingabe-Entities) vs. B4 (Status quo + Doku) | **entschieden (2026-11-04): B4** (Status quo + Doku), reversibel | Nutzer (`main_chat`) | erledigt; ein B1-Feature bräuchte einen neuen Beschluss |
-| D-2 | 0.19.1 streichen und in 0.20.0 bündeln | bündeln / separates 0.19.1 | `orchestrator` mit Nutzer | bestimmt den Release-Schnitt in §4 |
+| D-2 | 0.19.1/0.20.0 streichen und in 0.21.0 bündeln | **entschieden (2026-11-04): bündeln** — beide übersprungen, Inhalt in 0.21.0 | `orchestrator` mit Nutzer | erledigt; Release-Schnitt in §4 umgesetzt |
 | D-3 | Fehler-Transport: HA-native Übersetzungsfelder vs. eigenes Envelope | **entschieden (2026-11-03, Konzept §8):** HA-native `translation_*` (`code == translation_key`), Batch bleibt `{code, params, message}` | `concept-reviewer` im WP-A-Konzept | erledigt; blockiert nicht mehr |
 | D-4 | `planner`-Rolle aktivieren | aktivieren / Fallback `documenter` beibehalten | Nutzer (Backlog §10, E-4) | beeinflusst nur den Prozess, nicht den Inhalt |
 | D-5 | HACS-Testinstanz provisionieren | **entschieden (2026-11-04):** kein neuer Container; manuelle Betreiber-Prozedur statt Automatisierung | `orchestrator` | erledigt; WP-E bleibt manuell offen, blockiert kein Release |
@@ -682,7 +683,7 @@ Zählstand ohne erreichbaren Stack.
 | F-05 `_attr_name`-Ausnahmen | — (erledigt) | `button.py:67,83` |
 | F-06 Kern-Dateien wachsen | WP-D | Baseline + Trigger T-1/T-2/T-5; kein Refactor ausgelöst |
 | F-07 Frontend-Größe | WP-D | Trigger T-4; kein Refactor ausgelöst |
-| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A (PR #84, Release offen) | `tests/test_error_contract.py`, `tests/test_errors.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression; `docs/SERVICE-RESPONSES.md` |
+| F-08 Zwei-Klassen-Fehler (REQ-HOM-127) | WP-A (PR #84, mit 0.21.0 veröffentlicht) | `tests/test_error_contract.py`, `tests/test_errors.py`, `tests_e2e/test_i18n_e2e.py`, REQ-HOM-132-Regression; `docs/SERVICE-RESPONSES.md` |
 | F-09 Labor-Eingabe/Zahlen | WP-C | Doc-Grep (41/10/51/41), Entscheidungsrecord D-1 = B4 |
 | F-10 HACS-Mechanik | WP-E (**manuell offen**) | Prozedur in WP-E (8 Schritte) + Abschlusskriterium; Belegdokument erst nach dem Lauf |
 | F-11 Spec §9 O-1 | — (erledigt) | PR #75, `tests/test_entry_migration.py` |
