@@ -24,6 +24,12 @@ Scenarios:
   plus the `Row 2` hint, never the batch code and never the old German prose.
   (`tests_e2e/test_i18n_e2e.py` proves the object shape and both languages;
   this module proves the actual panel DOM.)
+* REQ-HOM-134 (`docs/superpowers/specs/2026-11-05-lab-default-units-design.md`
+  §12.3): the person's `lab_default_units` override reaches the form select and
+  the panel/card display, while the sensor state, native unit and CSV export
+  stay canonical. The F4/N1 boundary pair (`106.0`/`106.1` µmol/L) proves that
+  value and reference bound share one decimal precision; F10 proves that
+  "Other …" with an empty text blocks the submit without a store write.
 
 Everything is asserted twice where it matters: the visible UI and the
 authoritative server payload (``panel_data`` / ``get_settings``), so a green
@@ -58,6 +64,8 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import urllib.parse
 import uuid
 import warnings
 from collections.abc import Iterator
@@ -65,6 +73,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 import yaml
 from e2e_helpers import ALLOW_SHARED_ENV, is_shared_dev_instance, ws_command
 from playwright.sync_api import expect
@@ -74,6 +83,8 @@ from test_panel_deeplink_e2e import open_panel, tab_keys, tile, wait_for_detail,
 from scripts.e2e_bootstrap import _ws_command
 
 pytestmark = pytest.mark.e2e
+
+DOMAIN = "health_o_mat"
 
 # Import-time guard, same pattern as `test_blueprints_e2e.py`: this module
 # writes lab reports into the instance's store and edits the person's lab
@@ -102,6 +113,7 @@ BACK = "[data-action='back']"
 LAB_REF_TABLE = "table.lab-ref-table"
 CUSTOM_NAME = "[data-field='lab-custom-name']"
 CUSTOM_UNIT = "[data-field='lab-custom-unit']"
+CUSTOM_UNIT_CUSTOM = "[data-field='lab-custom-unit-custom']"
 CUSTOM_CATEGORY = "[data-field='lab-custom-category']"
 CUSTOM_REF_MIN_FIELD = "[data-field='lab-custom-ref-min']"
 CUSTOM_REF_MAX_FIELD = "[data-field='lab-custom-ref-max']"
@@ -127,7 +139,10 @@ STATES = "get_states"
 ENTRY_FORM = "details.lab-entry-form"
 ENTRY_MARKER = "[data-field='lab-add-marker']"
 ENTRY_VALUE = "[data-field='lab-add-value']"
+ENTRY_UNIT = "[data-field='lab-add-unit']"
+ENTRY_UNIT_CUSTOM = "[data-field='lab-add-unit-custom']"
 ENTRY_SAVE = "[data-action='lab-add-value']"
+ENTRY_ERROR = ".msg.error"
 
 # Mehrzeilen-Dialog "Laborbericht" (REQ-HOM-123) — Panel-Zweitimplementierung
 # der Karte, gleiche `data-field`/`data-action`-Namen (§6.3).
@@ -139,7 +154,10 @@ LAB_REPORT_SAVE = "[data-action='lab-report-save']"
 LAB_REPORT_DISCARD = "[data-action='lab-report-discard']"
 LAB_REPORT_MARKER = "[data-field='lab-report-marker-%d']"
 LAB_REPORT_VALUE = "[data-field='lab-report-value-%d']"
-LAB_REPORT_UNIT = "[data-field='lab-report-unit-%d']"
+# 0.22.0 UI (§9.3/§9.4): the visible unit control is the picker; the sibling
+# `lab-report-unit-<n>` input only holds the "Other …" free text and is hidden
+# unless that branch is selected.
+LAB_REPORT_UNIT_PICK = "[data-field='lab-report-unit-pick-%d']"
 LAB_REPORT_MARKER_SELECT = "[data-field^='lab-report-marker-']"
 LAB_REPORT_ERROR = ".msg.error"
 
@@ -175,6 +193,36 @@ ALT_VALUE = 47  # inside 10–50 (catalog default), outside 5–45 (override)
 BADGE_OK = "\u2713"
 BADGE_WARN = "\u26a0"
 
+# --- REQ-HOM-134 display units (spec 2026-11-05-lab-default-units §12.3) ----
+
+# Creatinine: canonical µmol/L, catalog display default mg/dL (factor 88.4).
+CREATININE = "creatinine"
+CREATININE_CATEGORY = "kidney"
+CREATININE_CANONICAL_UNIT = "\u00b5mol/L"
+CREATININE_DISPLAY_UNIT = "mg/dL"
+CREATININE_LOW_VALUE = 0.9  # reported in mg/dL -> canonical 79.56 µmol/L
+CREATININE_LOW_CANONICAL = 79.56  # 0.9 * 88.4 (round(..., 6))
+
+# F4/N1 boundary pair: ref_max is 106 µmol/L. `106.0` sits exactly on the
+# bound (in_range), `106.1` is just above it (high). Both convert with 88.4.
+CREATININE_AT_MAX = 106.0  # canonical -> display 1.199 mg/dL (normal)
+CREATININE_ABOVE_MAX = 106.1  # canonical -> display 1.2 mg/dL (high)
+
+# A marker the E2E suite never writes: used to prove a blocked submit does not
+# create a reading (F10).
+UNUSED_MARKER = "hba1c"
+
+# Host view of HA's `/config` inside the Compose stack (bind mount). The
+# containerized E2E runner has no `/config` mount, so the CSV test reads the
+# file from the container as a fallback (see `_export_csv_text`).
+LAB_EXPORT_DIR = (
+    Path(__file__).resolve().parents[1] / "docker" / "ha_config_e2e" / "health_o_mat_export"
+)
+
+# Marker for "the option key did not exist before the test" — distinct from the
+# legitimate empty value `{}` (see `restore_lab_options`).
+_ABSENT = object()
+
 
 # --- helpers ----------------------------------------------------------------
 
@@ -190,6 +238,147 @@ def _settings(base_url: str, token: str, entry_id: str) -> dict[str, Any]:
 def _lab_marker(payload: dict[str, Any], marker_key: str) -> dict[str, Any]:
     """One marker entry of the `panel_data.labs` block ({} when absent)."""
     return ((payload.get("labs") or {}).get("markers") or {}).get(marker_key) or {}
+
+
+def _set_settings(base_url: str, token: str, entry_id: str, **payload: Any) -> dict[str, Any]:
+    """`health_o_mat/set_settings` (admin) and the full settings payload back."""
+    return (
+        ws_command(
+            base_url,
+            token,
+            {"type": "health_o_mat/set_settings", "entry_id": entry_id, **payload},
+        )
+        or {}
+    )
+
+
+def _add_lab_value(
+    base_url: str, token: str, entry_id: str, marker: str, value: float, unit: str
+) -> None:
+    """Write one lab reading through the authoritative WS command.
+
+    The explicit `unit` decides whether the server converts the value (mg/dL)
+    or stores it canonically (µmol/L). Used where the UI form would send the
+    displayed unit and the reading must stay canonical instead.
+    """
+    ws_command(
+        base_url,
+        token,
+        {
+            "type": "health_o_mat/add_lab_value",
+            "entry_id": entry_id,
+            "marker": marker,
+            "value": value,
+            "unit": unit,
+        },
+    )
+
+
+def _export_lab_values(base_url: str, token: str, person_slug: str) -> dict[str, Any]:
+    """Export the lab CSV through the real service and return its response."""
+    response = requests.post(
+        f"{base_url}/api/services/{DOMAIN}/export_csv?return_response",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"dataset": "lab_values", "person": person_slug},
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()["service_response"]
+
+
+def _config_container(base_url: str) -> str | None:
+    """Container publishing the HA port behind `base_url`, or None.
+
+    The exported CSV lives in the instance's `/config` (``hass.config.path``),
+    which is a bind mount on the host for both the Compose stack and the shared
+    dev instance. When that host path is not reachable (runner without the
+    mount), the file is read through `docker exec` from the container that
+    actually publishes the port — never from a hard-coded container name.
+    `HASS_CONFIG_CONTAINER` overrides the discovery.
+    """
+    override = os.environ.get("HASS_CONFIG_CONTAINER")
+    if override:
+        return override
+    try:
+        listing = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    wanted_port = urllib.parse.urlsplit(base_url).port or 8123
+    for line in listing.stdout.splitlines():
+        name, _, ports = line.partition("\t")
+        # e.g. "0.0.0.0:8123->8123/tcp, [::]:8123->8123/tcp"
+        if name and f":{wanted_port}->" in ports.replace(" ", ""):
+            return name
+    return None
+
+
+def _export_csv_text(base_url: str, filename: str) -> str | None:
+    """Read the exported CSV from the instance's `/config`.
+
+    Two paths, same file: the repo-relative Compose bind mount (host-side run)
+    first, then `docker exec <container> cat …` for an instance whose config
+    directory has no reachable host mount. `HASS_CONFIG_DIR` may name the host
+    mount explicitly. Returns None only when neither path can read it — the
+    caller turns that into a real failure (an export that silently vanished is
+    not a reason to skip).
+    """
+    basename = Path(filename).name
+    candidates: list[Path] = []
+    host_config = os.environ.get("HASS_CONFIG_DIR")
+    if host_config:
+        candidates.append(Path(host_config) / "health_o_mat_export" / basename)
+    candidates.append(LAB_EXPORT_DIR / basename)
+    for path in candidates:
+        if path.is_file():
+            return path.read_text(encoding="utf-8-sig")
+
+    container = _config_container(base_url)
+    if container is not None:
+        try:
+            result = subprocess.run(
+                ["docker", "exec", container, "cat", f"/config/health_o_mat_export/{basename}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8-sig",
+                timeout=60,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            result = None
+        if result is not None and result.returncode == 0:
+            return result.stdout
+    return None
+
+
+def _remove_export_csv(base_url: str, filename: str) -> None:
+    """Remove the exported file from the host mount or the container."""
+    basename = Path(filename).name
+    host_config = os.environ.get("HASS_CONFIG_DIR")
+    candidates = [LAB_EXPORT_DIR / basename]
+    if host_config:
+        candidates.append(Path(host_config) / "health_o_mat_export" / basename)
+    for path in candidates:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    container = _config_container(base_url)
+    if container is not None:
+        subprocess.run(
+            ["docker", "exec", container, "rm", "-f", f"/config/health_o_mat_export/{basename}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
 
 
 def _expected_lab_warning_count(payload: dict[str, Any]) -> int:
@@ -248,6 +437,27 @@ def _lab_entity(base_url: str, token: str, entry_id: str, marker_key: str) -> di
     }
 
 
+def _open_entry_form(panel) -> None:
+    """Open the collapsed single-value form (`<details>`) if it is closed."""
+    form = panel.locator(ENTRY_FORM).first
+    form.wait_for(state="attached", timeout=CARD_TIMEOUT)
+    if not form.evaluate("(el) => el.open"):
+        form.locator("summary").click()
+    panel.locator(ENTRY_MARKER).wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+
+def _select_entry_marker(panel, marker_key: str) -> None:
+    """Pick the marker in the single-value form.
+
+    The unit select is rebuilt by the panel on `change` (§9.3), so callers can
+    read the pre-selected unit afterwards.
+    """
+    _open_entry_form(panel)
+    marker_field = panel.locator(ENTRY_MARKER)
+    marker_field.select_option(marker_key)
+    panel.locator(ENTRY_UNIT).wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+
 def _record_lab_value(panel, marker_key: str, value: float) -> None:
     """Record one value through the lab tab's entry form.
 
@@ -260,14 +470,7 @@ def _record_lab_value(panel, marker_key: str, value: float) -> None:
     (which pierce it) — a `document.querySelector` page function would not find
     it at all.
     """
-    form = panel.locator(ENTRY_FORM).first
-    form.wait_for(state="attached", timeout=CARD_TIMEOUT)
-    if not form.evaluate("(el) => el.open"):
-        form.locator("summary").click()
-
-    marker_field = panel.locator(ENTRY_MARKER)
-    marker_field.wait_for(state="visible", timeout=CARD_TIMEOUT)
-    marker_field.select_option(marker_key)
+    _select_entry_marker(panel, marker_key)
     panel.locator(ENTRY_VALUE).fill(str(value))
     panel.locator(ENTRY_SAVE).click()
 
@@ -315,6 +518,14 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
     `lab_hide_panel_disclaimer` belongs to the same snapshot since REQ-HOM-125:
     the disclaimer test turns the note off and would otherwise leave the shared
     instance with a hidden disclaimer for every later run.
+
+    Fixture boundary: `lab_default_units` may be absent on a fresh entry. If a
+    test writes it, the restore can only send `{}` back — `set_settings` merges
+    into `entry.options` and has no delete operation, so an empty
+    `lab_default_units: {}` key stays behind. That empty key is behaviourally
+    identical to an absent one (`normalize_lab_default_units({}) == {}`) and is
+    the cleanest restore the public API allows; no production change is made
+    for it.
     """
     entry_id = panel_person["entry_id"]
     before = _settings(hass_base_url, hass_bearer_token, entry_id)
@@ -323,18 +534,29 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
         "lab_ref_overrides": before.get("lab_ref_overrides") or {},
         "lab_hidden_categories": before.get("lab_hidden_categories") or [],
         "lab_hide_panel_disclaimer": before.get("lab_hide_panel_disclaimer") is True,
+        # REQ-HOM-134: the display-unit overrides are options, too. Without
+        # this the instance would keep the test's mg/dL override forever.
+        # `_ABSENT` keeps a fresh entry from being written at all.
+        "lab_default_units": before.get("lab_default_units", _ABSENT),
     }
     try:
         yield snapshot
     finally:
         try:
             current = _settings(hass_base_url, hass_bearer_token, entry_id)
-            changed = any(current.get(key) != snapshot[key] for key in snapshot)
+            restore: dict[str, Any] = {
+                key: ({} if value is _ABSENT else value) for key, value in snapshot.items()
+            }
+            changed = any(
+                (value is _ABSENT and key in current)
+                or (value is not _ABSENT and current.get(key) != value)
+                for key, value in snapshot.items()
+            )
             if changed:
                 current = ws_command(
                     hass_base_url,
                     hass_bearer_token,
-                    {"type": "health_o_mat/set_settings", "entry_id": entry_id, **snapshot},
+                    {"type": "health_o_mat/set_settings", "entry_id": entry_id, **restore},
                 ) or _settings(hass_base_url, hass_bearer_token, entry_id)
             _remove_orphaned_lab_entities(hass_base_url, hass_bearer_token, entry_id, current)
         except Exception as exc:  # noqa: BLE001 - teardown must not mask the test result
@@ -344,6 +566,100 @@ def restore_lab_options(hass_base_url, hass_bearer_token, panel_person) -> Itera
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+
+class _LabsCardDashboard:
+    """Throwaway storage dashboard that hosts one labs card (REQ-HOM-134)."""
+
+    def __init__(self, base_url: str, token: str, url_path: str, dashboard_id: str) -> None:
+        self.base_url = base_url
+        self.token = token
+        self.url_path = url_path
+        self.dashboard_id = dashboard_id
+
+    def save_card(self, entry_id: str, **overrides: Any) -> None:
+        """Put one labs card on the dashboard, fixed to `entry_id`."""
+        card = {
+            "type": f"custom:{LABS_CARD_TAG}",
+            "entry_id": entry_id,
+            # Only the marker under test's category: no tab click needed and
+            # the row is guaranteed to be on screen.
+            "show_categories": [CREATININE_CATEGORY],
+            **overrides,
+        }
+        _ws_command(
+            self.base_url,
+            self.token,
+            {
+                "type": "lovelace/config/save",
+                "url_path": self.url_path,
+                "config": {
+                    "views": [
+                        {
+                            "path": "main",
+                            "title": "Health-O-Mat lab units E2E",
+                            "cards": [card],
+                        }
+                    ]
+                },
+            },
+        )
+
+
+@pytest.fixture
+def labs_card_dashboard(hass_base_url, hass_bearer_token) -> Iterator[_LabsCardDashboard]:
+    """Create a unique storage dashboard and guarantee its deletion.
+
+    Same pattern as `test_card_config_e2e.py`: a unique `url_path` keeps
+    parallel/shared instances conflict-free, and the `finally` block removes
+    the dashboard even when the test fails.
+    """
+    url_path = f"e2e-labs-units-{uuid.uuid4().hex[:10]}"
+    created = _ws_command(
+        hass_base_url,
+        hass_bearer_token,
+        {
+            "type": "lovelace/dashboards/create",
+            "url_path": url_path,
+            "title": "Health-O-Mat lab units E2E",
+            "mode": "storage",
+            "show_in_sidebar": False,
+            "require_admin": False,
+        },
+    )
+    dashboard = _LabsCardDashboard(hass_base_url, hass_bearer_token, url_path, str(created["id"]))
+    try:
+        yield dashboard
+    finally:
+        try:
+            _ws_command(
+                hass_base_url,
+                hass_bearer_token,
+                {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard.dashboard_id},
+            )
+        except Exception as exc:  # noqa: BLE001 - teardown must not mask the test result
+            warnings.warn(
+                f"could not delete E2E dashboard {url_path!r} "
+                f"(dashboard_id={dashboard.dashboard_id!r}): {exc} — delete it manually",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+
+def _open_labs_card(page, dashboard: _LabsCardDashboard, marker_key: str):
+    """Load the dashboard and return the mounted labs card with our row visible."""
+    page.goto(f"{dashboard.base_url}/{dashboard.url_path}")
+    page.locator(f"{LABS_CARD_TAG}, hui-error-card").first.wait_for(
+        state="attached", timeout=CARD_TIMEOUT
+    )
+    assert page.locator("hui-error-card").count() == 0, (
+        "Lovelace rendered hui-error-card instead of the labs card — is the card "
+        f"resource registered (frontend.py)? URL: {page.url}"
+    )
+    card = page.locator(LABS_CARD_TAG)
+    row = card.locator(f".labs-row[data-marker='{marker_key}']")
+    row.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    return card
 
 
 # --- the smoke test ---------------------------------------------------------
@@ -375,7 +691,11 @@ def test_req_hom_122_lab_values_smoke(
 
     # 2. Add a custom marker through the Admin UI.
     panel.locator(CUSTOM_NAME).fill(marker_name)
-    panel.locator(CUSTOM_UNIT).fill(CUSTOM_UNIT_VALUE)
+    # 0.22.0: the main unit is a select with an "Other …" branch. Pick that
+    # branch first (the change handler unhides the free-text field), then type
+    # the unit — a `fill()` on the select is not possible any more.
+    panel.locator(CUSTOM_UNIT).select_option("__custom__")
+    panel.locator(CUSTOM_UNIT_CUSTOM).fill(CUSTOM_UNIT_VALUE)
     panel.locator(CUSTOM_CATEGORY).select_option(CUSTOM_CATEGORY_KEY)
     panel.locator(CUSTOM_REF_MIN_FIELD).fill(str(CUSTOM_REF_MIN))
     panel.locator(CUSTOM_REF_MAX_FIELD).fill(str(CUSTOM_REF_MAX))
@@ -711,7 +1031,9 @@ def test_req_hom_123_lab_report_dialog_writes_and_rejects_duplicates(
     _report_type(panel, LAB_REPORT_VALUE % 0, str(alt_value))
     _report_field(panel, LAB_REPORT_MARKER % 1).select_option("crp")
     _report_type(panel, LAB_REPORT_VALUE % 1, str(crp_value))
-    _report_type(panel, LAB_REPORT_UNIT % 1, "mg/L")
+    # 0.22.0: the unit is a select; `lab-report-unit-1` is its hidden
+    # free-text sibling and is not interactable while "Other …" is off.
+    _report_field(panel, LAB_REPORT_UNIT_PICK % 1).select_option("mg/L")
     _report_field(panel, LAB_REPORT_SAVE).click()
 
     after = _wait_for(
@@ -986,3 +1308,289 @@ def test_req_hom_126_labs_card_example_dashboard_renders(
                 hass_bearer_token,
                 {"type": "lovelace/dashboards/delete", "dashboard_id": dashboard_id},
             )
+
+
+# --- REQ-HOM-134: display units (§12.3) -------------------------------------
+
+
+def test_req_hom_134_default_unit_display_and_canonical_sensor(
+    logged_in_page,
+    hass_base_url,
+    hass_bearer_token,
+    panel_person,
+    restore_lab_options,
+    labs_card_dashboard,
+):
+    """[REQ-HOM-134] §12.3 Nr.1/2/4: mg/dL display, canonical sensor, badge unchanged.
+
+    The person override reaches the form's unit select (pre-selected), the
+    recorded value is converted once on the way in (0.9 mg/dL -> 79.56 µmol/L),
+    and the sensor/CSV side stays canonical. The badge is the server's
+    canonical `in_range`, never the rounded display.
+    """
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+
+    # 1. Person override: display unit mg/dL for creatinine.
+    saved = _set_settings(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        lab_default_units={CREATININE: CREATININE_DISPLAY_UNIT},
+    )
+    assert saved.get("lab_default_units") == {CREATININE: CREATININE_DISPLAY_UNIT}
+
+    marker = _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CREATININE)
+    assert marker["unit"] == CREATININE_CANONICAL_UNIT
+    assert marker["default_unit"] == CREATININE_DISPLAY_UNIT
+    assert marker["allowed_units"][0] == CREATININE_CANONICAL_UNIT, (
+        "the canonical unit must stay first in the dropdown"
+    )
+    assert CREATININE_DISPLAY_UNIT in marker["allowed_units"]
+
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+
+    # 2. Nr.1: the entry form's unit select is pre-selected with the resolved
+    # display unit — no free-text typing, no missing unit on the wire.
+    _select_entry_marker(panel, CREATININE)
+    assert panel.locator(ENTRY_UNIT).input_value() == CREATININE_DISPLAY_UNIT
+
+    # 3. Nr.2: record 0.9 in mg/dL through the UI.
+    panel.locator(ENTRY_VALUE).fill(str(CREATININE_LOW_VALUE))
+    panel.locator(ENTRY_SAVE).click()
+    expect(panel.locator(ENTRY_SAVE)).to_be_enabled(timeout=CARD_TIMEOUT)
+
+    stored = _wait_for(
+        lambda: _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CREATININE),
+        lambda value: value.get("reported_value") == CREATININE_LOW_VALUE,
+        "the mg/dL reading to reach the store",
+    )
+    assert stored["unit"] == CREATININE_CANONICAL_UNIT
+    assert stored["value"] == pytest.approx(CREATININE_LOW_CANONICAL, abs=1e-6)
+    assert stored["reported_unit"] == CREATININE_DISPLAY_UNIT
+    assert stored["in_range"] is True, "79.56 µmol/L is inside 53–106"
+
+    # 4. Nr.4: the badge is canonical, the row displays the converted value.
+    panel.locator(LAB_CATEGORY_BUTTON % CREATININE_CATEGORY).click()
+    row = panel.locator(LAB_ROW % CREATININE)
+    row.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    row_text = row.locator(LAB_ROW_VALUE).inner_text().strip()
+    assert re.search(r"0[.,]9\s+mg/dL", row_text), (
+        f"the panel must display the converted value in mg/dL, got {row_text!r}"
+    )
+    badge_ok = row.locator(LAB_ROW_OK)
+    badge_ok.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert badge_ok.inner_text().strip() == BADGE_OK
+    assert row.locator(LAB_ROW_WARN).count() == 0
+
+    # 5. Nr.2: the entity layer stays canonical (state + native unit).
+    entity = _wait_for(
+        lambda: _lab_entity(hass_base_url, hass_bearer_token, entry_id, CREATININE),
+        lambda value: (
+            value["state"] is not None
+            and value["state"].get("state") not in (None, "unknown", "unavailable")
+        ),
+        "the creatinine sensor to mirror the UI write",
+    )
+    assert float(entity["state"]["state"]) == pytest.approx(CREATININE_LOW_CANONICAL, abs=1e-6), (
+        "the sensor state must stay canonical, not switch to the display unit"
+    )
+    sensor_attributes = entity["state"]["attributes"] or {}
+    assert sensor_attributes.get("unit_of_measurement") == CREATININE_CANONICAL_UNIT
+
+    # 6. Nr.2: the card shows the same converted value.
+    labs_card_dashboard.save_card(entry_id)
+    card = _open_labs_card(page, labs_card_dashboard, CREATININE)
+    card_row = card.locator(f".labs-row[data-marker='{CREATININE}']")
+    card_text = card_row.locator(".labs-value").inner_text().strip()
+    assert re.search(r"0[.,]9\s+mg/dL", card_text), (
+        f"the card must display the converted value in mg/dL, got {card_text!r}"
+    )
+    card_row.locator(".labs-badge .status.good").wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+
+def test_req_hom_134_lab_csv_stays_canonical(
+    hass_base_url, hass_bearer_token, panel_person, restore_lab_options
+):
+    """[REQ-HOM-134] §12.3 Nr.3: the CSV export keeps the canonical value/unit.
+
+    The display conversion is a UI concern only (D1). The exported row must
+    carry the canonical `wert`/`einheit` (79.56 / µmol/L) and keep the reported
+    pair (0.9 / mg/dL) in its own columns.
+    """
+    entry_id = panel_person["entry_id"]
+    _set_settings(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        lab_default_units={CREATININE: CREATININE_DISPLAY_UNIT},
+    )
+    _add_lab_value(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        CREATININE,
+        CREATININE_LOW_VALUE,
+        CREATININE_DISPLAY_UNIT,
+    )
+    _wait_for(
+        lambda: _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CREATININE),
+        lambda value: value.get("value") == pytest.approx(CREATININE_LOW_CANONICAL),
+        "the canonical value to reach the store before exporting",
+    )
+
+    exported = _export_lab_values(hass_base_url, hass_bearer_token, panel_person["slug"])
+    filename = str(exported.get("filename") or "")
+    if not filename:
+        pytest.skip(
+            "the export service returned no filename — CSV export is disabled on"
+            f" this instance (response={exported!r})"
+        )
+    try:
+        text = _export_csv_text(hass_base_url, filename)
+        assert text is not None, (
+            f"exported CSV {filename!r} is not readable: no host mount at"
+            f" {LAB_EXPORT_DIR} / $HASS_CONFIG_DIR and `docker exec` could not read"
+            f" /config/health_o_mat_export/{Path(filename).name} (response={exported!r})"
+        )
+        lines = [line for line in text.splitlines() if line.strip()]
+        header = lines[0].split(";")
+        rows = [dict(zip(header, line.split(";"), strict=False)) for line in lines[1:]]
+        matching = [
+            row
+            for row in rows
+            if row.get("marker") == CREATININE and row.get("wert") == str(CREATININE_LOW_CANONICAL)
+        ]
+        assert matching, f"the canonical creatinine row is missing from {filename}: {rows!r}"
+        row = matching[-1]
+        assert row["einheit"] == CREATININE_CANONICAL_UNIT, row
+        assert row["eingegeben_als_wert"] == str(CREATININE_LOW_VALUE), row
+        assert row["eingegeben_als_einheit"] == CREATININE_DISPLAY_UNIT, row
+    finally:
+        _remove_export_csv(hass_base_url, filename)
+
+
+def test_req_hom_134_boundary_value_and_reference_share_decimals(
+    logged_in_page,
+    hass_base_url,
+    hass_bearer_token,
+    panel_person,
+    restore_lab_options,
+    labs_card_dashboard,
+):
+    """[REQ-HOM-134] §12.3 Nr.5 (F4/N1): 106.1 -> `1,2` vs bound `1,199`, badge high.
+
+    Value, reference bound and chart band use ONE `d = min(base_d + 1, 3)`.
+    The canonical server value is just above `ref_max`, so the badge stays
+    "high" while the display rounds the value to `1,2` and the bound to
+    `1,199` — same rounding grid, no contradiction.
+    """
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+    _set_settings(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        lab_default_units={CREATININE: CREATININE_DISPLAY_UNIT},
+    )
+    # Two canonical values so the panel's chart (and its reference tooltip)
+    # is rendered; the second one is the latest value under test.
+    _add_lab_value(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        CREATININE,
+        CREATININE_AT_MAX,
+        CREATININE_CANONICAL_UNIT,
+    )
+    _add_lab_value(
+        hass_base_url,
+        hass_bearer_token,
+        entry_id,
+        CREATININE,
+        CREATININE_ABOVE_MAX,
+        CREATININE_CANONICAL_UNIT,
+    )
+    stored = _wait_for(
+        lambda: _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), CREATININE),
+        lambda value: value.get("value") == CREATININE_ABOVE_MAX,
+        "the above-range creatinine value to reach the store",
+    )
+    assert stored["in_range"] is False, "the badge is always the canonical server result"
+    assert stored["unit"] == CREATININE_CANONICAL_UNIT
+
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+    panel.locator(LAB_CATEGORY_BUTTON % CREATININE_CATEGORY).click()
+    row = panel.locator(LAB_ROW % CREATININE)
+    row.wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+    value_text = row.locator(LAB_ROW_VALUE).inner_text().strip()
+    assert re.search(r"1[.,]2\s+mg/dL", value_text), (
+        f"106.1 µmol/L must display as 1,2 mg/dL, got {value_text!r}"
+    )
+
+    # The same `d` gives the reference bound 1.199 (not 1.2), rendered in the
+    # chart tooltip for both bounds.
+    chart_title = row.locator("svg.lab-chart title")
+    chart_title.wait_for(state="attached", timeout=CARD_TIMEOUT)
+    tooltip = chart_title.text_content() or ""
+    assert re.search(r"1[.,]199", tooltip), (
+        f"the reference bound must be formatted with the same d as the value: {tooltip!r}"
+    )
+
+    badge_warn = row.locator(LAB_ROW_WARN)
+    badge_warn.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert BADGE_WARN in badge_warn.inner_text()
+    assert row.locator(LAB_ROW_OK).count() == 0
+
+    # The card derives the same value and bound from the same display unit.
+    labs_card_dashboard.save_card(entry_id)
+    card = _open_labs_card(page, labs_card_dashboard, CREATININE)
+    card_row = card.locator(f".labs-row[data-marker='{CREATININE}']")
+    card_text = card_row.locator(".labs-value").inner_text().strip()
+    assert re.search(r"1[.,]2\s+mg/dL", card_text), (
+        f"the card must display 1,2 mg/dL, got {card_text!r}"
+    )
+    card_title = card_row.get_attribute("title") or ""
+    assert re.search(r"1[.,]199", card_title), (
+        f"the card's reference line must use the same d as the value: {card_title!r}"
+    )
+    card_row.locator(".labs-badge .status.bad").wait_for(state="visible", timeout=CARD_TIMEOUT)
+
+
+def test_req_hom_134_empty_custom_unit_blocks_submit(
+    logged_in_page, hass_base_url, hass_bearer_token, panel_person, restore_lab_options
+):
+    """[REQ-HOM-134] §12.3 Nr.6 (F10): "Other …" + empty text never reaches the store.
+
+    The single-value form must show a visible error instead of sending an
+    empty unit (which the server would read as canonical, silently converting
+    the number a second time). No `add_lab_value` round-trip happens.
+    """
+    page = logged_in_page
+    entry_id = panel_person["entry_id"]
+
+    before = _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), UNUSED_MARKER)
+    before_value = before.get("value")
+    before_history = len(before.get("history") or [])
+
+    panel = _open_labs_tab(page, hass_base_url, panel_person["slug"])
+    _select_entry_marker(panel, UNUSED_MARKER)
+    panel.locator(ENTRY_VALUE).fill("5.5")
+    panel.locator(ENTRY_UNIT).select_option("__custom__")
+    custom_unit = panel.locator(ENTRY_UNIT_CUSTOM)
+    custom_unit.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert custom_unit.input_value() == ""
+    panel.locator(ENTRY_SAVE).click()
+
+    error = panel.locator(ENTRY_ERROR).first
+    error.wait_for(state="visible", timeout=CARD_TIMEOUT)
+    assert "unit required" in error.inner_text().lower(), (
+        f"the form must show the localized 'unit required' error: {error.inner_text()!r}"
+    )
+
+    after = _lab_marker(_panel_data(hass_base_url, hass_bearer_token, entry_id), UNUSED_MARKER)
+    assert after.get("value") == before_value, "a blocked submit must not write a lab reading"
+    assert len(after.get("history") or []) == before_history, (
+        "a blocked submit must not add a lab reading to the store"
+    )

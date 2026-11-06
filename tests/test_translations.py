@@ -568,6 +568,13 @@ _REQ_HOM_122_UI_KEYS = (
     "ui_panel_lab_report_discard_confirm",
     # REQ-HOM-125: Karten-Disclaimer lokalisiert (Task 16).
     "ui_card_lab_disclaimer",
+    # REQ-HOM-134: Anzeige-Einheiten + „Andere …"-Zweige.
+    "ui_admin_lab_default_unit",
+    "ui_admin_lab_default_unit_standard",
+    "ui_admin_lab_unit_other",
+    "ui_admin_lab_custom_unit_add",
+    "ui_admin_lab_custom_unit_remove",
+    "ui_panel_lab_unit_label",
 )
 
 
@@ -765,3 +772,34 @@ def test_req_hom_127_lab_report_row_hint_exists() -> None:
         assert set(_EXCEPTION_PLACEHOLDER.findall(hint)) == {"row"}, (
             f"{path}: Zeilen-Hinweis muss genau {{row}} nutzen"
         )
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten ----------------------------------------
+
+_REQ_HOM_134_PLACEHOLDER_KEYS = ("ui_admin_lab_default_unit_standard",)
+
+
+@pytest.mark.parametrize("key", _REQ_HOM_134_PLACEHOLDER_KEYS)
+def test_req_hom_134_default_unit_placeholder_parity(key: str) -> None:
+    """[REQ-HOM-134] `{unit}` steht in Master, de und en exakt einmal."""
+    for path in (_MASTER, *_TRANSLATIONS.values()):
+        common = _common(path)
+        assert key in common, f"{path}: {key} fehlt"
+        assert _placeholders(common[key]) == {"unit"}, (
+            f"{path}: {key} erwartet {{{{'unit'}}}}, ist {common[key]!r}"
+        )
+
+
+def test_req_hom_134_display_unit_labels_are_translated() -> None:
+    """[REQ-HOM-134] Die neuen Labels tragen in de/en unterschiedliche Texte."""
+    de = _common(_TRANSLATIONS["de"])
+    en = _common(_TRANSLATIONS["en"])
+
+    assert de["ui_admin_lab_default_unit"] == "Anzeige-Einheit"
+    assert en["ui_admin_lab_default_unit"] == "Display unit"
+    assert de["ui_admin_lab_unit_other"] == "Andere …"
+    assert en["ui_admin_lab_unit_other"] == "Other …"
+    assert de["ui_admin_lab_custom_unit_add"] == "Weitere Einheit hinzufügen"
+    assert en["ui_admin_lab_custom_unit_add"] == "Add another unit"
+    assert de["ui_panel_lab_unit_label"] == "Einheit"
+    assert en["ui_panel_lab_unit_label"] == "Unit"

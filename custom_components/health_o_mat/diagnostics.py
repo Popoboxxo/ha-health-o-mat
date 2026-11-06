@@ -54,6 +54,7 @@ from .const import (
     LAB_CATEGORY_OTHER,
     LAB_MARKERS,
     OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_HIDE_PANEL_DISCLAIMER,
     OPTION_LAB_REF_OVERRIDES,
@@ -93,12 +94,14 @@ _REASON_NOT_PROVIDED = "not_provided"
 
 #: Lab-Options mit Freitext/Gesundheitsbezug: nur als reiner Zähler ausgeben.
 #: ``lab_custom_markers`` enthält frei wählbare Namen (potenziell Diagnosen),
-#: ``lab_ref_overrides``/``lab_hidden_categories`` Marker-Identitäten.
+#: ``lab_ref_overrides``/``lab_hidden_categories`` Marker-Identitäten und
+#: ``lab_default_units`` Marker-Keys (inkl. Custom-Slugs) — deshalb count-only.
 _LAB_OPTION_KEYS = frozenset(
     {
         OPTION_LAB_CUSTOM_MARKERS,
         OPTION_LAB_HIDDEN_CATEGORIES,
         OPTION_LAB_REF_OVERRIDES,
+        OPTION_LAB_DEFAULT_UNITS,
         OPTION_LAB_HIDE_PANEL_DISCLAIMER,
         OPTION_LAB_RETENTION_MONTHS,
     }

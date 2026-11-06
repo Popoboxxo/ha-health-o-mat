@@ -692,6 +692,9 @@ export const PANEL_CSS = `
   .lab-custom-list li:last-child { border-bottom: none; }
   .lab-custom-list .btn { margin-left: auto; min-height: 44px; min-width: 44px;
     padding: 8px 12px; }
+  /* Anzeige-/Einheiten-Selects der Custom-Marker-Zeile nutzen die volle
+   * Zeilenbreite (REQ-HOM-134). */
+  .lab-custom-list .settings-grid { flex: 1 1 100%; margin-top: 4px; }
 
   .lab-ref-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   .lab-ref-table th, .lab-ref-table td {
@@ -701,6 +704,12 @@ export const PANEL_CSS = `
   .lab-ref-table th { color: var(--secondary-text-color, #727272); font-weight: 600; }
   .lab-ref-table td input[type="number"] {
     width: 76px; min-height: 40px; padding: 6px 8px; font: inherit;
+    border-radius: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
+    background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
+  }
+  /* Anzeige-Einheit-Select der Referenztabelle (REQ-HOM-134). */
+  .lab-ref-table td select {
+    min-height: 40px; padding: 6px 8px; font: inherit; max-width: 100%;
     border-radius: 8px; border: 1px solid var(--divider-color, rgba(0,0,0,.2));
     background: var(--card-background-color, #fff); color: var(--primary-text-color, #212121);
   }
@@ -1472,6 +1481,128 @@ export function bpHistoryChartHtml(entries, opts) {
  * Views (Panel-Tab, Übersicht-Tile, Lovelace-Card) entscheiden, was sie
  * zeigen. */
 
+/* ---- Anzeige-Einheiten (REQ-HOM-134 — Spec `2026-11-05-lab-default-units`) --
+ *
+ * Der Server speichert und liefert Laborwerte KANONISCH (§4 der Spec: keine
+ * Sensor-/Store-/CSV-Änderung). Die Umrechnung in die Anzeige-Einheit passiert
+ * ausschließlich hier: `panel_data.labs.markers[*].default_unit` +
+ * `alt_units{unit: faktor}` (Faktor gemeldet -> kanonisch, §7.1).
+ *
+ * Die Karte (health-o-mat-labs-card.js) führt bewusst eine eigene Kopie dieser
+ * Helfer — die beiden Modul-Graphen dürfen sich nicht importieren (§6 der
+ * Spec). Oracle für beide Kopien ist `logic.lab_display_decimals` /
+ * `logic.convert_lab_display_value`. */
+
+/* Superscript-Exponenten VOR `NFKC` (NFKC faltet 10¹² zu 1012), vgl.
+ * `logic._SUPERSCRIPT_EXPONENT_RE`. */
+const LAB_SUPERSCRIPT_DIGITS = {
+  "\u2070": "0",
+  "\u00b9": "1",
+  "\u00b2": "2",
+  "\u00b3": "3",
+  "\u2074": "4",
+  "\u2075": "5",
+  "\u2076": "6",
+  "\u2077": "7",
+  "\u2078": "8",
+  "\u2079": "9",
+};
+const LAB_SUPERSCRIPT_EXPONENT_RE = /[\u00d7xX]?\s*10([\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+)/g;
+/* ASCII-`u` als Mikro-Präfix — nur vor einer bekannten Mikro-Einheit, damit
+ * `U/L` (Enzym) nicht zu `µ/L` wird. Ohne Lookbehind (Safari-Kompatibilität):
+ * das Zeichen VOR dem `u` wird als Gruppe mitgeschluckt und zurückgegeben. */
+const LAB_MICRO_PREFIX_RE = /(^|[^a-z])u(?=(?:mol|kat|g|l)\b)/g;
+
+/* JS-Pendant zu `logic._norm_unit`: NFKC + Case-/Whitespace-/Mikro-Faltung +
+ * ASCII-`u` + „Prozent" -> „%". Nur für den VERGLEICH — angezeigt/gesendet
+ * wird immer die Katalogschreibweise (§5.3). */
+export function labNormalizeUnit(unit) {
+  const raw = unit == null ? "" : String(unit).trim();
+  if (!raw) return "";
+  const withExponent = raw.replace(LAB_SUPERSCRIPT_EXPONENT_RE, (_match, digits) =>
+    `10^${String(digits)
+      .split("")
+      .map((char) => LAB_SUPERSCRIPT_DIGITS[char] || char)
+      .join("")}`
+  );
+  let text = withExponent;
+  try {
+    text = text.normalize("NFKC");
+  } catch (_error) {
+    // Kein Unicode-Normalizer (Alt-Browser): Rohform weiterverwenden.
+  }
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(LAB_MICRO_PREFIX_RE, (_match, prefix) => `${prefix}\u03bc`)
+    .replace(/prozent/g, "%");
+}
+
+/* Faktor `gemeldet -> kanonisch` aus `alt_units` (§8.1): 1 für die kanonische
+ * (oder eine fehlende) Einheit, `null` für eine unbekannte Einheit — dann gilt
+ * defensiv die kanonische Zahl (Präzedenz-Stufe 4, §5.3). */
+export function labDisplayFactor(marker, unit) {
+  const target = unit == null ? "" : String(unit).trim();
+  const canonical = marker && marker.unit != null ? String(marker.unit) : "";
+  if (!target) return 1;
+  if (labNormalizeUnit(target) === labNormalizeUnit(canonical)) return 1;
+  const altUnits =
+    marker && marker.alt_units && typeof marker.alt_units === "object" ? marker.alt_units : {};
+  for (const [altUnit, rawFactor] of Object.entries(altUnits)) {
+    if (labNormalizeUnit(altUnit) !== labNormalizeUnit(target)) continue;
+    const factor = toNumber(rawFactor, NaN);
+    return Number.isFinite(factor) && factor > 0 ? factor : null;
+  }
+  return null;
+}
+
+/* Kanonischer Wert -> Anzeigewert (`anzeige = kanonisch / faktor`, §8.1).
+ * `null` wenn der Wert nicht numerisch ist. */
+export function labConvertDisplayValue(marker, value, unit) {
+  const number = toNumber(value, NaN);
+  if (!Number.isFinite(number)) return null;
+  const factor = labDisplayFactor(marker, unit);
+  return factor == null ? number : number / (factor || 1);
+}
+
+/* Anzeigewert eines Markers in der übergebenen Einheit (§8.1). */
+export function labDisplayValue(marker, unit) {
+  return labConvertDisplayValue(marker, marker && marker.value, unit);
+}
+
+/* Dezimal-Policy (§8.2 N2–N4): `base_d` aus dem BETRAG des konvertierten
+ * Anzeigewerts, dann EINMAL `d = min(base_d + 1, 3)`. Dieses `d` gilt
+ * identisch für Messwert, `ref_min`/`ref_max` und Chart-Band/-Achse (N4) —
+ * es gibt keinen zweiten `d+1`-Pfad für Grenzen. Oracle:
+ * `logic.lab_display_decimals`. */
+export function labDisplayDecimals(value) {
+  const number = Math.abs(toNumber(value, NaN));
+  if (!Number.isFinite(number)) return 3;
+  let base = 3;
+  if (number >= 100) base = 0;
+  else if (number >= 10) base = 1;
+  else if (number >= 1) base = 2;
+  return Math.min(base + 1, 3);
+}
+
+/* Formatiert einen Anzeigewert mit der gemeinsamen Obergrenze `decimals`
+ * (§8.2 N3: `maximumFractionDigits`, keine erfundene Präzision; N3a: für
+ * `0 < |v| < 0.1` zwei signifikante Stellen statt „0"). */
+export function labFormatDisplayValue(value, decimals) {
+  const number = toNumber(value, NaN);
+  if (!Number.isFinite(number)) return "";
+  const limit = Number.isInteger(decimals) ? clamp(decimals, 0, 3) : labDisplayDecimals(number);
+  const formatOptions =
+    number !== 0 && Math.abs(number) < 0.1
+      ? { maximumSignificantDigits: 2 }
+      : { maximumFractionDigits: limit };
+  try {
+    return new Intl.NumberFormat(intlLocale(), formatOptions).format(number);
+  } catch (_error) {
+    return String(number);
+  }
+}
+
 /* Sprachabhängiger Katalog-Name aus dem `labs`-Block (REQ-HOM-122): bei
  * englischer UI `name_en`, sonst `name_de`. `name` bleibt als Rückfall für
  * ältere Payloads bzw. Custom-Marker ohne Sprachvarianten. */
@@ -1492,10 +1623,17 @@ export function labBadge(inRange) {
 }
 
 /* Dezente Subzeile "↷ eingegeben als <reported_value> <reported_unit>" — nur
- * wenn die Eingabe-Einheit von der kanonischen Einheit abweicht (§7.1 der
- * Spec). Entfällt komplett bei Gleichheit, kein Rauschen im Normalfall. */
-export function labReportedSubline(marker) {
-  if (!marker || marker.reported_unit == null || marker.reported_unit === marker.unit) {
+ * wenn die Eingabe-Einheit von der ANZEIGE-Einheit abweicht (§8.1). Der
+ * Vergleich läuft normalisiert (F8): `reported_unit` wird roh gespeichert
+ * (`logic.py:1520`, `importer.py`), deshalb würde `===` bei Schreibweisen wie
+ * `umol/L` vs. `µmol/L` fälschlich eine Subzeile zeigen. Gleichheit entfällt
+ * komplett — kein Rauschen im Normalfall. */
+export function labReportedSubline(marker, displayUnit) {
+  if (!marker || marker.reported_unit == null) {
+    return "";
+  }
+  const shownUnit = displayUnit != null ? displayUnit : marker.unit;
+  if (labNormalizeUnit(marker.reported_unit) === labNormalizeUnit(shownUnit)) {
     return "";
   }
   return `<div class="lab-subline muted">↷ ${escapeHtml(
@@ -1535,9 +1673,18 @@ export function labSparklineHtml(history, opts) {
 
 /* Vollwertiger SVG-Chart (Panel): Referenzbereich als Band + Werte-Linie,
  * analog zum bestehenden BD-Verlaufsgraph (bpHistoryChartHtml) — Y-Achse
- * = Referenzbereich ± Puffer statt Blutdruck-Kategorien. */
+ * = Referenzbereich ± Puffer statt Blutdruck-Kategorien.
+ *
+ * Der Helper bleibt einheitenblind (§8.1): der Aufrufer übergibt bereits
+ * konvertierte `history[*].value` SOWIE `refMin`/`refMax` und das gemeinsame
+ * `decimals` (§8.2 N4) — Achsen-/Tooltip-Einheitenlabel ist `options.unit`
+ * (`default_unit`, F15). Sparkline bleibt relativ und damit unverändert. */
 export function labChartHtml(history, opts) {
   const options = opts || {};
+  /* Gemeinsames `d` vom Aufrufer (§8.2 N4) — hier nur als Obergrenze für die
+   * Referenz-/Achsenbeschriftung; ohne Angabe maximal präzise (3). */
+  const decimals = Number.isInteger(options.decimals) ? options.decimals : 3;
+  const unitLabel = options.unit ? String(options.unit) : "";
   const points = (Array.isArray(history) ? history : []).filter((p) =>
     Number.isFinite(toNumber(p && p.value, NaN))
   );
@@ -1570,10 +1717,31 @@ export function labChartHtml(history, opts) {
     refMin != null && refMax != null
       ? `<rect x="0" y="${toY(refMax).toFixed(1)}" width="${width}" height="${(toY(refMin) - toY(refMax)).toFixed(1)}" fill="var(--primary-color)" opacity="0.1" />`
       : "";
+  /* Tooltip + Achsenlabel tragen dasselbe `d` wie der Messwert (N4) und die
+   * Anzeige-Einheit (F15). */
+  const rangeParts = [];
+  if (refMin != null) rangeParts.push(labFormatDisplayValue(refMin, decimals));
+  if (refMax != null) rangeParts.push(labFormatDisplayValue(refMax, decimals));
+  const rangeText = rangeParts.join("–");
+  // Wiederverwendung von `ui_admin_lab_range` („Referenz") statt eines neuen
+  // Keys — §11 erlaubt ausdrücklich das Wiederbenutzen bestehender Labels.
+  const rangeHint = rangeText
+    ? `${t("ui_admin_lab_range", "Referenz")}: ${rangeText}${
+        unitLabel ? ` ${unitLabel}` : ""
+      }`
+    : "";
+  const tooltip = rangeHint ? `<title>${escapeHtml(rangeHint)}</title>` : "";
+  const axisLabel = unitLabel
+    ? `<text x="${width}" y="10" text-anchor="end" font-size="9" fill="var(--secondary-text-color)">${escapeHtml(
+        unitLabel
+      )}</text>`
+    : "";
   return `<div class="card">${head}
       <svg class="lab-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="${height}">
+        ${tooltip}
         ${band}
         <polyline points="${coords}" fill="none" stroke="var(--primary-color)" stroke-width="2" />
+        ${axisLabel}
       </svg>
     </div>`;
 }

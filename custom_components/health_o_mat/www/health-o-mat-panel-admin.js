@@ -26,11 +26,12 @@ import {
   datasetLabel,
   formatNumber,
   labDisplayName,
+  labNormalizeUnit,
   normalizeAreas,
   personSlug,
   messageHtml,
   t,
-} from "./health-o-mat-panel-base.js?v=0.21.0";
+} from "./health-o-mat-panel-base.js?v=0.22.0";
 
 /* ---- Settings view ------------------------------------------------------- */
 
@@ -329,6 +330,102 @@ function quickSlotsHtml(panel) {
 
 /* ---- Laborwerte (REQ-HOM-122) ------------------------------------------- */
 
+/* UI-Cap der Zusatz-Einheiten je Custom-Marker (§9.2). */
+export const LAB_CUSTOM_ALT_MAX = 4;
+
+/* Anzeige-Einheiten eines Markers. F11: ausschließlich
+ * `settings.lab_allowed_units[key]` vom Server — das JS bildet die Auflösung
+ * NICHT nach. Der Fallback (kanonisch + `alt_units`-Keys) greift nur für
+ * ältere Payloads ohne die neuen Keys, damit die Maske nicht leer bleibt. */
+function labAllowedUnits(settings, key, marker) {
+  const configured =
+    settings && settings.lab_allowed_units && key
+      ? settings.lab_allowed_units[key]
+      : null;
+  if (Array.isArray(configured) && configured.length) {
+    return configured.filter((unit) => typeof unit === "string" && unit);
+  }
+  const canonical = String((marker && (marker.canonical_unit || marker.unit)) || "");
+  const alt = Object.keys((marker && marker.alt_units) || {});
+  return [canonical, ...alt].filter((unit, index, all) => unit && all.indexOf(unit) === index);
+}
+
+/* Umrechnungspaare eines Markers (F6): die `alt_units`-Map gewinnt, ein
+ * Legacy-`alt_unit`-Einzelpaar wird als Ein-Paar-Map gelesen. Ohne diesen
+ * Zweig wäre die REQ-HOM-124-Umrechnungsspalte bei Custom-Markern leer. */
+function labConversionPairs(marker) {
+  const source = marker && typeof marker === "object" ? marker : {};
+  const map = source.alt_units && typeof source.alt_units === "object" ? source.alt_units : {};
+  const pairs = [];
+  Object.entries(map).forEach(([unit, factor]) => {
+    if (unit && factor != null && Number.isFinite(Number(factor))) pairs.push([unit, factor]);
+  });
+  const legacy = source.alt_unit && typeof source.alt_unit === "object" ? source.alt_unit : null;
+  if (legacy && legacy.unit && Number.isFinite(Number(legacy.factor_to_canonical))) {
+    const known = pairs.some(([unit]) => unit === legacy.unit);
+    if (!known) pairs.push([legacy.unit, legacy.factor_to_canonical]);
+  }
+  return pairs;
+}
+
+/* Einheiten-Select mit „Andere …"-Zweig (F3): `LAB_UNITS` ist eine
+ * Komfortliste, keine Validierung. Steht der gespeicherte Wert nicht im
+ * Vokabular, wird `__custom__` ausgewählt und der Freitext mit dem Wert
+ * vorbefüllt — kein stiller Datenverlust beim bloßen Öffnen/Speichern. */
+function unitSelect(vocabulary, dataField, customField, selected, placeholder) {
+  const units = (Array.isArray(vocabulary) ? vocabulary : []).filter(
+    (unit) => typeof unit === "string" && unit
+  );
+  const chosen = selected == null ? "" : String(selected).trim();
+  const isKnown =
+    !!chosen && units.some((unit) => labNormalizeUnit(unit) === labNormalizeUnit(chosen));
+  const isCustom = !!chosen && !isKnown;
+  const placeholderOption = placeholder
+    ? `<option value=""${chosen ? "" : " selected"}>${escapeHtml(placeholder)}</option>`
+    : "";
+  const options = units
+    .map(
+      (unit) =>
+        `<option value="${escapeHtml(unit)}"${
+          !isCustom && labNormalizeUnit(unit) === labNormalizeUnit(chosen) ? " selected" : ""
+        }>${escapeHtml(unit)}</option>`
+    )
+    .join("");
+  return `<select data-field="${escapeHtml(dataField)}">${placeholderOption}${options}<option value="__custom__"${
+    isCustom ? " selected" : ""
+  }>${escapeHtml(t("ui_admin_lab_unit_other", "Andere …"))}</option></select>
+    <input type="text" data-field="${escapeHtml(customField)}" value="${attrValue(
+      isCustom ? chosen : ""
+    )}" autocomplete="off"${isCustom ? "" : " hidden"} />`;
+}
+
+/* Eine Zusatz-Einheiten-Zeile des Custom-Marker-Formulars (§9.2). `index` ist
+ * eine stabile Zeilen-ID (`data-alt-row`), damit Hinzufügen/Entfernen ohne
+ * Neu-Nummerierung und ohne Re-Render funktioniert. */
+export function labCustomAltRowHtml(index, vocabulary, placeholder) {
+  const id = String(index);
+  return `<div class="settings-grid" data-alt-row="${escapeHtml(id)}">
+      <label class="field">${escapeHtml(t("ui_admin_lab_custom_alt_unit_name", "Einheit"))}
+        ${unitSelect(
+          vocabulary,
+          `lab-custom-alt-unit-${id}`,
+          `lab-custom-alt-unit-custom-${id}`,
+          "",
+          placeholder
+        )}
+      </label>
+      <label class="field">${escapeHtml(
+        t("ui_admin_lab_custom_alt_factor", "Faktor → Haupteinheit")
+      )}
+        <input type="number" step="any" data-field="lab-custom-alt-factor-${escapeHtml(id)}" />
+      </label>
+      <button class="btn ghost" type="button" data-action="lab-custom-alt-remove"
+        data-row="${escapeHtml(id)}" title="${escapeHtml(
+          t("ui_admin_lab_custom_unit_remove", "Einheit entfernen")
+        )}">\u2715</button>
+    </div>`;
+}
+
 /* Reference ranges / category visibility / custom markers (admin only).
  *
  * `settings.lab_catalog` is read-only (built from `const.py`) and carries the
@@ -351,37 +448,49 @@ export function labSettingsSection(panel, settings, entryId) {
     : Array.isArray(s.lab_custom_markers)
       ? s.lab_custom_markers
       : [];
+  /* Anzeige-Einheiten (§7.2): `lab_default_units` = Overrides der Person,
+   * `lab_default_units_factory` = Werkseinstellungen (nur lesen),
+   * `lab_units` = Komfortliste AUSSCHLIESSLICH für das Custom-Marker-
+   * Formular (F11). */
+  const displayUnits =
+    s.lab_default_units && typeof s.lab_default_units === "object" ? s.lab_default_units : {};
+  const factoryUnits =
+    s.lab_default_units_factory && typeof s.lab_default_units_factory === "object"
+      ? s.lab_default_units_factory
+      : {};
+  const unitVocabulary = Array.isArray(s.lab_units)
+    ? s.lab_units.filter((unit) => typeof unit === "string" && unit)
+    : [];
+  const configuredAltRows =
+    panel &&
+    panel._labCustomAltRows &&
+    Number.isInteger(panel._labCustomAltRows[entryId])
+      ? panel._labCustomAltRows[entryId]
+      : 1;
+  const altRowCount = Math.min(Math.max(configuredAltRows, 1), LAB_CUSTOM_ALT_MAX);
 
   // Catalog markers use `name_de`/`name_en` + `alt_units` (unit -> factor);
-  // a custom marker carries a single `alt_unit` object instead.
+  // a custom marker carries the same map (legacy `alt_unit` stays readable).
   const categoryName = (key) => {
     const hit = categories.find((category) => category.key === key);
     return hit ? labDisplayName(hit, hit.key) : String(key == null ? "" : key);
-  };
-  const altUnitText = (marker) => {
-    const altUnit = marker && marker.alt_unit;
-    if (!altUnit || !altUnit.unit) return "";
-    const factor = altUnit.factor_to_canonical;
-    return factor == null
-      ? String(altUnit.unit)
-      : `${String(altUnit.unit)} × ${formatNumber(factor)}`;
   };
 
   // Umrechnung je Alt-Einheit: "Alt × Faktor → kanonisch". Der Faktor kommt
   // aus `formatNumber` (locale-fähig) — kein hartkodiertes Komma, keine
   // String-Konkatenation des Rohwerts (§7.1).
   const conversionText = (marker) => {
-    const altUnits =
-      marker && typeof marker.alt_units === "object" ? marker.alt_units : {};
-    const pairs = Object.entries(altUnits).filter(
-      ([unit, factor]) => unit && factor != null && Number.isFinite(Number(factor))
-    );
+    const pairs = labConversionPairs(marker);
     if (!pairs.length) {
       return `<span class="muted">${escapeHtml(
         t("ui_admin_lab_conversion_none", "—")
       )}</span>`;
     }
-    const canonical = String(marker.canonical_unit || "");
+    // Kanonische Ziel-Einheit: Custom-Marker tragen `unit`, Katalog-Marker
+    // `canonical_unit` (F6).
+    const canonical = String(
+      (marker && (marker.canonical_unit || marker.unit)) || ""
+    );
     return pairs
       .map(
         ([unit, factor]) =>
@@ -398,6 +507,33 @@ export function labSettingsSection(panel, settings, entryId) {
         )}</div>`
       : "";
 
+  /* Anzeige-Spalte (§9.1): leere Option = „Standard (<Werkseinstellung>)",
+   * d. h. Override entfernen. Die Optionen kommen aus `lab_allowed_units`. */
+  const displayUnitSelect = (key, units, marker) => {
+    const selected = String(displayUnits[key] || "");
+    const standard = String(
+      factoryUnits[key] ||
+        units[0] ||
+        (marker && (marker.canonical_unit || marker.unit)) ||
+        ""
+    );
+    const options = units
+      .map(
+        (unit) =>
+          `<option value="${escapeHtml(unit)}"${
+            labNormalizeUnit(unit) === labNormalizeUnit(selected) ? " selected" : ""
+          }>${escapeHtml(unit)}</option>`
+      )
+      .join("");
+    return `<select data-field="lab-default-unit-${escapeHtml(
+      key
+    )}" aria-label="${escapeHtml(t("ui_admin_lab_default_unit", "Anzeige-Einheit"))}">
+        <option value=""${selected ? "" : " selected"}>${escapeHtml(
+          t("ui_admin_lab_default_unit_standard", "Standard ({unit})", { unit: standard })
+        )}</option>${options}
+      </select>`;
+  };
+
   const refRows = Object.entries(markers)
     .map(([key, marker]) => {
       const definition = marker && typeof marker === "object" ? marker : {};
@@ -408,6 +544,11 @@ export function labSettingsSection(panel, settings, entryId) {
           <td>${escapeHtml(categoryName(definition.category))}</td>
           <td>${escapeHtml(labDisplayName(definition, key))}</td>
           <td>${escapeHtml(definition.canonical_unit || "")}</td>
+          <td>${displayUnitSelect(
+            key,
+            labAllowedUnits(s, key, definition),
+            definition
+          )}</td>
           <td>${conversionText(definition)}${requiredBadge(definition)}</td>
           <td>
             <input type="number" step="any" data-field="lab-ref-min-${escapeHtml(key)}"
@@ -436,17 +577,40 @@ export function labSettingsSection(panel, settings, entryId) {
     )
     .join("");
 
+  /* Gespeicherte Custom-Marker (§9.1/§9.2): dieselbe Anzeige-Spalte wie im
+   * Katalog (F5). Zusätzlich bleibt die Haupteinheit editierbar — steht sie
+   * nicht in `LAB_UNITS`, zeigt das Select `__custom__` mit vorbefülltem
+   * Freitext (F3) statt still den ersten Eintrag. */
   const customRows = custom
-    .map(
-      (marker, index) => `<li>
-          ${escapeHtml(marker.name || "")} (${escapeHtml(marker.key || "?")}) —
-          ${escapeHtml(marker.unit || "")} · ${escapeHtml(categoryName(marker.category))}${
-        altUnitText(marker) ? ` · alt: ${escapeHtml(altUnitText(marker))}` : ""
-      }
+    .map((marker, index) => {
+      const entry = marker && typeof marker === "object" ? marker : {};
+      const key = entry.key ? String(entry.key) : "";
+      const unitField = unitSelect(
+        unitVocabulary,
+        `lab-custom-unit-${index}`,
+        `lab-custom-unit-custom-${index}`,
+        entry.unit,
+        ""
+      );
+      const displayField = key
+        ? `<label class="field">${escapeHtml(
+            t("ui_admin_lab_default_unit", "Anzeige-Einheit")
+          )}${displayUnitSelect(key, labAllowedUnits(s, key, entry), entry)}</label>`
+        : "";
+      return `<li data-custom-index="${index}">
+          ${escapeHtml(entry.name || "")} (${escapeHtml(key || "?")}) —
+          ${escapeHtml(entry.unit || "")} · ${escapeHtml(categoryName(entry.category))}
+          <div class="muted">${conversionText(entry)}</div>
+          <div class="settings-grid">
+            <label class="field">${escapeHtml(
+              t("ui_admin_lab_unit", "Einheit")
+            )}${unitField}</label>
+            ${displayField}
+          </div>
           <button class="btn ghost" type="button" data-action="lab-custom-remove"
             data-index="${index}">\u2715</button>
-        </li>`
-    )
+        </li>`;
+    })
     .join("");
 
   const categoryOptions = categories
@@ -458,6 +622,11 @@ export function labSettingsSection(panel, settings, entryId) {
     )
     .join("");
 
+  const altRowPlaceholder = t("ui_panel_lab_marker_choose", "— bitte wählen —");
+  const altRowsHtml = Array.from({ length: altRowCount }, (_unused, index) =>
+    labCustomAltRowHtml(index, unitVocabulary, altRowPlaceholder)
+  ).join("");
+
   return `<div class="card">
       <div class="card-title">${escapeHtml(t("ui_admin_lab_title", "Laborwerte"))}</div>
       <div class="muted">${escapeHtml(
@@ -468,6 +637,7 @@ export function labSettingsSection(panel, settings, entryId) {
           <th>${escapeHtml(t("ui_admin_lab_category", "Kategorie"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_marker", "Marker"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_unit", "Einheit"))}</th>
+          <th>${escapeHtml(t("ui_admin_lab_default_unit", "Anzeige-Einheit"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_conversion", "Umrechnung"))}</th>
           <th>${escapeHtml(t("ui_admin_lab_range", "Referenz"))}</th>
           <th></th>
@@ -500,7 +670,13 @@ export function labSettingsSection(panel, settings, entryId) {
           <input type="text" data-field="lab-custom-name" autocomplete="off" />
         </label>
         <label class="field">${escapeHtml(t("ui_admin_lab_custom_unit", "Einheit"))}
-          <input type="text" data-field="lab-custom-unit" autocomplete="off" />
+          ${unitSelect(
+            unitVocabulary,
+            "lab-custom-unit",
+            "lab-custom-unit-custom",
+            "",
+            altRowPlaceholder
+          )}
         </label>
         <label class="field">${escapeHtml(t("ui_admin_lab_custom_category", "Kategorie"))}
           <select data-field="lab-custom-category">${categoryOptions}</select>
@@ -513,18 +689,14 @@ export function labSettingsSection(panel, settings, entryId) {
       </div>
       <details>
         <summary>${escapeHtml(
-          t("ui_admin_lab_custom_alt_unit", "Alternative Einheit (optional)")
+          t("ui_admin_lab_custom_alt_unit", "Alternative Einheiten (optional)")
         )}</summary>
-        <div class="settings-grid">
-          <label class="field">${escapeHtml(t("ui_admin_lab_custom_alt_unit_name", "Einheit"))}
-            <input type="text" data-field="lab-custom-alt-unit" autocomplete="off" />
-          </label>
-          <label class="field">${escapeHtml(
-            t("ui_admin_lab_custom_alt_factor", "Faktor → Haupteinheit")
-          )}
-            <input type="number" step="any" data-field="lab-custom-alt-factor" />
-          </label>
-        </div>
+        <div data-role="lab-custom-alt-rows">${altRowsHtml}</div>
+        <button class="btn ghost" type="button" data-action="lab-custom-alt-add"${
+          altRowCount >= LAB_CUSTOM_ALT_MAX ? " disabled" : ""
+        }>
+          \uFF0B ${escapeHtml(t("ui_admin_lab_custom_unit_add", "Weitere Einheit hinzufügen"))}
+        </button>
       </details>
       <button class="btn ghost" type="button" data-action="lab-custom-add">
         \uFF0B ${escapeHtml(t("ui_admin_lab_custom_submit", "Hinzufügen"))}

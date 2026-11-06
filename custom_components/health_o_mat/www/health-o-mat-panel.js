@@ -73,28 +73,32 @@ import {
   setUiTranslator,
   setUiErrorTranslator,
   setUiLanguage,
-} from "./health-o-mat-panel-base.js?v=0.21.0";
+} from "./health-o-mat-panel-base.js?v=0.22.0";
 import {
   loadUiTranslations,
   t as uiTranslate,
   tError as uiErrorTranslate,
   currentLanguage as uiCurrentLanguage,
-} from "./health-o-mat-i18n.js?v=0.21.0";
+} from "./health-o-mat-i18n.js?v=0.22.0";
 import {
   renderOverview,
   renderDetail,
   handleLabReportChange,
-} from "./health-o-mat-panel-views.js?v=0.21.0";
+  refreshLabEntryUnit,
+  syncLabUnitCustomField,
+} from "./health-o-mat-panel-views.js?v=0.22.0";
 import {
   renderSettings,
   settingsStatusHtml,
   exportResultHtml,
   exportResultText,
   collectRestorePayload,
-} from "./health-o-mat-panel-admin.js?v=0.21.0";
+  labCustomAltRowHtml,
+  LAB_CUSTOM_ALT_MAX,
+} from "./health-o-mat-panel-admin.js?v=0.22.0";
 
 const PANEL_TAG = "health-o-mat-panel";
-const PANEL_VERSION = "0.21.0";
+const PANEL_VERSION = "0.22.0";
 
 /* Single translation source: the i18n module owns the cache, the base module
  * owns the `t()` used by every renderer. Injecting once at module load keeps
@@ -143,6 +147,7 @@ class HealthOMatPanel extends HTMLElement {
     this._settingsErrors = {}; // entry_id -> load error text
     this._quickDraft = []; // working copy of the 4 quick-drink slots
     this._labCustomDraft = {}; // entry_id -> working copy of custom lab markers
+    this._labCustomAltRows = {}; // entry_id -> number of alt-unit rows in the form
     this._labReportDraft = {}; // entry_id -> working copy of a lab report dialog
     this._labReportOpen = {}; // entry_id -> report dialog stays open across re-renders
     this._settingsBusy = false;
@@ -875,6 +880,7 @@ class HealthOMatPanel extends HTMLElement {
     this._adminStatus = null;
     this._deleteTarget = "";
     this._syncQuickDrafts(this._settings[entryId]);
+    delete this._labCustomAltRows[entryId];
     if (!this._settings[entryId]) {
       this._loadSettings(entryId).then(() => {
         if (this._view === "settings") this._render();
@@ -893,6 +899,7 @@ class HealthOMatPanel extends HTMLElement {
         if (this._settingsEntry === entryId) this._syncQuickDrafts(res);
         // Custom lab markers re-seed from the authoritative server list.
         delete this._labCustomDraft[entryId];
+        delete this._labCustomAltRows[entryId];
       } else {
         this._settingsErrors[entryId] = t(
           "ui_panel_empty_settings",
@@ -984,6 +991,47 @@ class HealthOMatPanel extends HTMLElement {
     const el = this.shadowRoot.querySelector(`[data-field="${name}"]`);
     if (!el) return fallback;
     return el.value == null ? fallback : el.value;
+  }
+
+  /* Einheiten-Select mit „Andere …"-Zweig (F3/F10): der Freitext gilt nur,
+   * wenn `__custom__` gewählt ist; fehlt das Feld, bleibt `""`. */
+  _readCustomUnitField(pickField, customField) {
+    const pick = String(this._readField(pickField, "") || "").trim();
+    if (pick !== "__custom__") return pick;
+    return String(this._readField(customField, "") || "").trim();
+  }
+
+  /* Nächste freie Zeilen-ID (`data-alt-row`) der Zusatz-Einheiten. Bewusst
+   * NICHT der Zeilen-Zähler: nach dem Entfernen einer mittleren Zeile bleiben
+   * Lücken, und ein dekrementierter Zähler würde eine noch belegte ID erneut
+   * vergeben (die Einheit/Faktor-Zuordnung ginge verloren). */
+  _nextLabCustomAltRowId() {
+    let highest = -1;
+    this.shadowRoot.querySelectorAll("[data-alt-row]").forEach((rowEl) => {
+      const rowId = Number.parseInt(rowEl.getAttribute("data-alt-row") || "", 10);
+      if (Number.isInteger(rowId) && rowId > highest) highest = rowId;
+    });
+    return highest + 1;
+  }
+
+  /* Alle Zusatz-Einheiten-Zeilen des Custom-Marker-Formulars als Map
+   * `{unit: faktor}` (§9.2). Leere/ungültige Zeilen fallen einzeln weg. */
+  _readLabCustomAltUnits() {
+    const out = {};
+    this.shadowRoot.querySelectorAll("[data-alt-row]").forEach((rowEl) => {
+      const rowId = rowEl.getAttribute("data-alt-row") || "";
+      if (!rowId) return;
+      const unit = this._readCustomUnitField(
+        `lab-custom-alt-unit-${rowId}`,
+        `lab-custom-alt-unit-custom-${rowId}`
+      );
+      const factor = toNumber(
+        this._readField(`lab-custom-alt-factor-${rowId}`, ""),
+        NaN
+      );
+      if (unit && Number.isFinite(factor) && factor > 0) out[unit] = factor;
+    });
+    return out;
   }
 
   _readAreaCheckboxes() {
@@ -1171,7 +1219,33 @@ class HealthOMatPanel extends HTMLElement {
       this._labCustomDraft[this._settingsEntry] ||
       labSettings.lab_custom_markers ||
       []
-    ).slice();
+    )
+      .slice()
+      // Haupteinheit je Zeile aus dem Select (F3: „Andere …" = Freitext). Ein
+      // leerer Freitext lässt die gespeicherte Einheit stehen — kein
+      // Datenverlust beim bloßen Speichern.
+      .map((marker, index) => {
+        const saved = marker && marker.unit ? String(marker.unit) : "";
+        const unit = this._readCustomUnitField(
+          `lab-custom-unit-${index}`,
+          `lab-custom-unit-custom-${index}`
+        );
+        if (!unit || !marker || unit === saved) return marker;
+        return { ...marker, unit };
+      });
+
+    /* Anzeige-Einheiten (REQ-HOM-134, §9.1): nur Selects mit nicht-leerem
+     * Wert werden ein Override; eine leere Auswahl entfernt den Override
+     * („Standard (…)" = Werkseinstellung). */
+    const labDefaultUnits = {};
+    this.shadowRoot
+      .querySelectorAll('[data-field^="lab-default-unit-"]')
+      .forEach((el) => {
+        const field = el.getAttribute("data-field") || "";
+        const key = field.slice("lab-default-unit-".length);
+        const value = el.value == null ? "" : String(el.value).trim();
+        if (key && value) labDefaultUnits[key] = value;
+      });
 
     return {
       errors,
@@ -1192,6 +1266,7 @@ class HealthOMatPanel extends HTMLElement {
         lab_ref_overrides: labRefOverrides,
         lab_hidden_categories: labHiddenCategories,
         lab_custom_markers: labCustomMarkers,
+        lab_default_units: labDefaultUnits,
         lab_hide_panel_disclaimer: labHidePanelDisclaimer,
       },
     };
@@ -1259,6 +1334,9 @@ class HealthOMatPanel extends HTMLElement {
     if (stableJson(current.lab_custom_markers) !== stableJson(payload.lab_custom_markers)) {
       out.lab_custom_markers = payload.lab_custom_markers;
     }
+    if (stableJson(current.lab_default_units) !== stableJson(payload.lab_default_units)) {
+      out.lab_default_units = payload.lab_default_units;
+    }
     if (!!current.lab_hide_panel_disclaimer !== payload.lab_hide_panel_disclaimer) {
       out.lab_hide_panel_disclaimer = payload.lab_hide_panel_disclaimer;
     }
@@ -1298,6 +1376,7 @@ class HealthOMatPanel extends HTMLElement {
       }
       this._syncQuickDrafts(this._settings[entryId]);
       delete this._labCustomDraft[entryId];
+      delete this._labCustomAltRows[entryId];
       await this._reloadPersons();
       this._settingsBusy = false;
       this._settingsStatus = {
@@ -2080,27 +2159,71 @@ class HealthOMatPanel extends HTMLElement {
           const entryId = this._settingsEntry;
           if (!entryId) break;
           const name = String(this._readField("lab-custom-name", "") || "").trim();
-          const unit = String(this._readField("lab-custom-unit", "") || "").trim();
+          // F3/F10: Haupteinheit ist ein Select mit „Andere …"-Zweig; ohne
+          // Einheit wird nichts angelegt (der Server verlangt sie).
+          const unit = this._readCustomUnitField(
+            "lab-custom-unit",
+            "lab-custom-unit-custom"
+          );
           if (!name || !unit) break;
           const category = String(
             this._readField("lab-custom-category", "") || "other"
           ).trim() || "other";
           const refMin = toNumber(this._readField("lab-custom-ref-min", ""), NaN);
           const refMax = toNumber(this._readField("lab-custom-ref-max", ""), NaN);
-          const altUnit = String(this._readField("lab-custom-alt-unit", "") || "").trim();
-          const altFactor = toNumber(this._readField("lab-custom-alt-factor", ""), NaN);
           const marker = { name, unit, category };
           if (Number.isFinite(refMin)) marker.ref_min = refMin;
           if (Number.isFinite(refMax)) marker.ref_max = refMax;
-          if (altUnit && Number.isFinite(altFactor)) {
-            marker.alt_unit = { unit: altUnit, factor_to_canonical: altFactor };
-          }
+          // §9.2: mehrere Alt-Einheiten als `alt_units`-Map (additiv, D2).
+          const altUnits = this._readLabCustomAltUnits();
+          if (Object.keys(altUnits).length) marker.alt_units = altUnits;
           const list =
             this._labCustomDraft[entryId] ||
             (this._settings[entryId] || {}).lab_custom_markers ||
             [];
           this._labCustomDraft[entryId] = list.concat([marker]);
+          this._labCustomAltRows[entryId] = 1;
           this._render();
+          break;
+        }
+        case "lab-custom-alt-add": {
+          const entryId = this._settingsEntry;
+          if (!entryId) break;
+          // Zeilenzahl und Zeilen-ID sind getrennte Größen: der Zähler dient
+          // nur dem UI-Cap/Default, die ID kommt monoton aus dem DOM.
+          const count = this.shadowRoot.querySelectorAll("[data-alt-row]").length;
+          if (count >= LAB_CUSTOM_ALT_MAX) break;
+          const container = this.shadowRoot.querySelector(
+            '[data-role="lab-custom-alt-rows"]'
+          );
+          if (!container) break;
+          const vocabulary = (this._settings[entryId] || {}).lab_units;
+          // DOM-Ergänzung statt Re-Render: bereits eingetippte Zeilen bleiben
+          // erhalten (der Zeilen-Zähler ist der einzige Formular-State).
+          container.insertAdjacentHTML(
+            "beforeend",
+            labCustomAltRowHtml(
+              this._nextLabCustomAltRowId(),
+              vocabulary,
+              t("ui_panel_lab_marker_choose", "— bitte wählen —")
+            )
+          );
+          this._labCustomAltRows[entryId] = count + 1;
+          break;
+        }
+        case "lab-custom-alt-remove": {
+          const entryId = this._settingsEntry;
+          if (!entryId) break;
+          const rowId = el.getAttribute("data-row") || "";
+          const rowEl = rowId
+            ? this.shadowRoot.querySelector(`[data-alt-row="${rowId}"]`)
+            : null;
+          if (!rowEl) break;
+          rowEl.remove();
+          // Zähler = tatsächlich verbleibende Zeilen; ein Absenken unter die
+          // verbleibende Anzahl würde beim nächsten Add IDs doppelt vergeben.
+          this._labCustomAltRows[entryId] =
+            this.shadowRoot.querySelectorAll("[data-alt-row]").length;
           break;
         }
         case "lab-custom-remove": {
@@ -2239,6 +2362,29 @@ class HealthOMatPanel extends HTMLElement {
     const el = ev.target;
     if (!el || !el.getAttribute) return;
     const field = el.getAttribute("data-field") || "";
+    if (field === "lab-add-marker") {
+      // §9.3: das Einheiten-Select hängt am Marker — gezielt im DOM neu
+      // aufbauen (kein Re-Render, damit der getippte Wert stehen bleibt).
+      refreshLabEntryUnit(this);
+      return;
+    }
+    if (field === "lab-add-unit") {
+      syncLabUnitCustomField(this, "lab-add-unit", "lab-add-unit-custom");
+      return;
+    }
+    // Admin: Haupteinheit-/Zusatz-Einheiten-Selects des Custom-Marker-
+    // Formulars blenden ihren „Andere …"-Freitext ein/aus (F3/§9.2).
+    const customUnitSelect = /^lab-custom-(alt-)?unit(?:-(\d+))?$/.exec(field);
+    if (customUnitSelect) {
+      const kind = customUnitSelect[1] ? "lab-custom-alt-unit" : "lab-custom-unit";
+      const index = customUnitSelect[2] || "";
+      syncLabUnitCustomField(
+        this,
+        field,
+        index ? `${kind}-custom-${index}` : `${kind}-custom`
+      );
+      return;
+    }
     if (field.startsWith("lab-report-")) {
       const rerender = handleLabReportChange(
         this,

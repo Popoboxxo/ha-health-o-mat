@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_AUDIT_LIMIT,
     LAB_CATEGORIES,
     LAB_CATEGORY_OTHER,
+    LAB_DEFAULT_UNITS,
     LAB_MARKER_ALIASES,
     LAB_MARKERS,
     LAB_REPORT_MAX_ROWS,
@@ -1037,6 +1038,39 @@ def _previous_marker_keys(previous: Any) -> dict[str, str]:
     return keys
 
 
+def _collect_alt_unit(
+    target: dict[str, float],
+    seen: set[str],
+    canonical_unit: str,
+    raw_unit: Any,
+    raw_factor: Any,
+) -> None:
+    """Ein (Einheit, Faktor)-Paar prüfen und ggf. in *target* aufnehmen (§5.4).
+
+    Ungültige Paare fallen einzeln weg (kein Abbruch): leere Einheit,
+    Selbstumrechnung auf die kanonische Einheit, Duplikat nach `_norm_unit`
+    (erster Key gewinnt) oder ein Faktor, der nicht positiv/endlich ist.
+    """
+    unit_text = str(raw_unit if raw_unit is not None else "").strip()
+    if not unit_text:
+        return
+    normalized = _norm_unit(unit_text)
+    # Selbstumrechnung mit Faktor 1 ist kein Alt-Paar.
+    if not normalized or normalized == _norm_unit(canonical_unit):
+        return
+    # Duplikate nach Normalisierung kollabieren auf den ERSTEN Key.
+    if normalized in seen:
+        return
+    try:
+        factor = float(raw_factor)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(factor) or factor <= 0:
+        return
+    seen.add(normalized)
+    target[unit_text] = factor
+
+
 def normalize_lab_custom_markers(raw: Any, previous: Any = None) -> list[dict]:
     """`entry.options["lab_custom_markers"]` normalisieren (HA-frei, §2.2).
 
@@ -1087,19 +1121,28 @@ def normalize_lab_custom_markers(raw: Any, previous: Any = None) -> list[dict]:
                     entry[bound] = float(item[bound])
                 except (TypeError, ValueError):
                     pass
-        alt_unit = item.get("alt_unit")
-        if (
-            isinstance(alt_unit, dict)
-            and alt_unit.get("unit")
-            and alt_unit.get("factor_to_canonical") is not None
-        ):
-            try:
-                entry["alt_unit"] = {
-                    "unit": str(alt_unit["unit"]).strip(),
-                    "factor_to_canonical": float(alt_unit["factor_to_canonical"]),
-                }
-            except (TypeError, ValueError):
-                pass
+        alt_units: dict[str, float] = {}
+        seen_alt_units: set[str] = set()
+
+        # Neu: `alt_units`-Map (gewinnt pro Einheit).
+        raw_alt_units = item.get("alt_units")
+        if isinstance(raw_alt_units, Mapping):
+            for raw_unit, raw_factor in raw_alt_units.items():
+                _collect_alt_unit(alt_units, seen_alt_units, unit, raw_unit, raw_factor)
+        # Legacy `alt_unit` bleibt lesbar und füllt nur fehlende Keys.
+        legacy_alt_unit = item.get("alt_unit")
+        if isinstance(legacy_alt_unit, Mapping):
+            _collect_alt_unit(
+                alt_units,
+                seen_alt_units,
+                unit,
+                legacy_alt_unit.get("unit"),
+                legacy_alt_unit.get("factor_to_canonical"),
+            )
+        # Gespeichert wird ausschließlich die Map — `alt_unit` wird nie mehr
+        # geschrieben (§5.4 Nr. 4); bestehende Einträge formen sich idempotent um.
+        if alt_units:
+            entry["alt_units"] = alt_units
         # REQ-HOM-133/B3: Custom-Marker dürfen die Einheiten-Pflicht selbst
         # setzen. Default False — bestehende Marker bleiben unverändert (der
         # Key wird nur bei `True` geschrieben, damit der Bestands-Shape stabil
@@ -1130,11 +1173,10 @@ def effective_lab_markers(custom_markers: Any = None) -> dict[str, dict]:
             "canonical_unit": custom["unit"],
             "ref_min": custom.get("ref_min"),
             "ref_max": custom.get("ref_max"),
-            "alt_units": (
-                {custom["alt_unit"]["unit"]: custom["alt_unit"]["factor_to_canonical"]}
-                if custom.get("alt_unit")
-                else {}
-            ),
+            # Custom-Marker tragen die Map (nicht mehr das Einzelpaar) — damit
+            # arbeiten `lab_allowed_units`/`resolve_lab_display_unit` für
+            # Katalog und Custom identisch (§6).
+            "alt_units": dict(custom.get("alt_units") or {}),
             "require_explicit_unit": bool(custom.get("require_explicit_unit")),
             "is_custom": True,
         }
@@ -1174,6 +1216,163 @@ def convert_lab_value(marker_def: dict, value: float, unit: str | None) -> tuple
         if _norm_unit(alt_unit) == _norm_unit(unit):
             return round(float(value) * float(factor), 6), canonical_unit
     raise ValueError("unsupported_unit")
+
+
+def _match_allowed_unit(value: Any, allowed: Iterable[str]) -> str | None:
+    """Nutzereingabe gegen die erlaubten Einheiten auflösen -> Katalogschreibweise."""
+    normalized = _norm_unit(value)
+    if not normalized:
+        return None
+    for unit in allowed:
+        if _norm_unit(unit) == normalized:
+            return unit
+    return None
+
+
+def lab_allowed_units(marker_def: dict) -> list[str]:
+    """Alle zulässigen Einheiten eines Markers — kanonisch zuerst (§6).
+
+    `[canonical_unit]` + `alt_units`-Keys, dedupliziert über `_norm_unit`.
+    Leere/fehlende `canonical_unit` -> `[]`. Enthält damit jeden gültigen
+    Anzeige-Default.
+    """
+    if not isinstance(marker_def, Mapping):
+        return []
+    canonical_unit = str(marker_def.get("canonical_unit") or "").strip()
+    if not canonical_unit:
+        return []
+    allowed: list[str] = [canonical_unit]
+    seen = {_norm_unit(canonical_unit)}
+    alt_units = marker_def.get("alt_units")
+    if isinstance(alt_units, Mapping):
+        for raw_unit in alt_units:
+            unit_text = str(raw_unit if raw_unit is not None else "").strip()
+            if not unit_text:
+                continue
+            normalized = _norm_unit(unit_text)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            allowed.append(unit_text)
+    return allowed
+
+
+def resolve_lab_display_unit(marker_key: str, marker_def: dict, defaults: Any) -> str:
+    """Aufgelöste Anzeige-Einheit eines Markers nach Präzedenz §5.3.
+
+    Stufe 1: `defaults` (Personen-Overrides, normalisiert) — in
+    Katalogschreibweise. Stufe 2: `LAB_DEFAULT_UNITS` (Werkseinstellung).
+    Stufe 3: kanonische Einheit. Defensiv, wirft nie.
+    """
+    allowed = lab_allowed_units(marker_def)
+    if not allowed:
+        return ""
+    canonical_unit = allowed[0]
+    if isinstance(defaults, Mapping):
+        matched = _match_allowed_unit(defaults.get(marker_key), allowed)
+        if matched is not None:
+            return matched
+    factory_unit = LAB_DEFAULT_UNITS.get(str(marker_key))
+    if factory_unit is not None:
+        matched = _match_allowed_unit(factory_unit, allowed)
+        if matched is not None:
+            return matched
+    return canonical_unit
+
+
+def normalize_lab_default_units(raw: Any, custom_markers: Any = None) -> dict[str, str]:
+    """`entry.options["lab_default_units"]` normalisieren (HA-frei, §6).
+
+    Kein Objekt -> `{}` (kein Fehler). Marker-Key über Alias/Alias-Auflösung
+    gegen die effektiven Marker; unbekannte Marker fallen weg. Einheit wird
+    gegen `lab_allowed_units` aufgelöst und in Katalogschreibweise gespeichert;
+    nicht auflösbar -> kanonische Einheit (D4, nie ein Fehler). Key-Reihenfolge
+    bleibt die Eingabereihenfolge.
+    """
+    if not isinstance(raw, Mapping):
+        return {}
+    markers = effective_lab_markers(custom_markers)
+    normalized_defaults: dict[str, str] = {}
+    for raw_key, raw_unit in raw.items():
+        key_text = str(raw_key if raw_key is not None else "").strip().lower()
+        if not key_text:
+            continue
+        marker_key = LAB_MARKER_ALIASES.get(key_text, key_text)
+        marker_def = markers.get(marker_key)
+        if marker_def is None:
+            continue
+        allowed = lab_allowed_units(marker_def)
+        if not allowed:
+            continue
+        matched = _match_allowed_unit(raw_unit, allowed)
+        if matched is None:
+            matched = allowed[0]
+        normalized_defaults[marker_key] = matched
+    return normalized_defaults
+
+
+def convert_lab_display_value(
+    marker_def: dict, value: Any, unit: str | None
+) -> tuple[float, str] | None:
+    """Kanonischer Wert -> (Anzeigewert, Anzeige-Einheit) (Referenz-Oracle, §8.1).
+
+    `factor = alt_units[unit]` (bzw. 1 bei kanonisch/`None`); Anzeige =
+    kanonischer Wert / Faktor, gerundet auf 6 Stellen. Die zurückgegebene
+    Einheit ist die aufgelöste Anzeige-Einheit in Katalogschreibweise (§6),
+    nicht die kanonische Einheit. Nicht-numerischer Wert -> `None`.
+    Unbekannte/fehlende Einheit -> `(value, canonical_unit)` (Faktor 1,
+    defensiv). Kein Produktionsaufrufer (D1).
+    """
+    if not isinstance(marker_def, Mapping):
+        return None
+    try:
+        canonical_value = float(value)
+    except (TypeError, ValueError):
+        return None
+    canonical_unit = str(marker_def.get("canonical_unit") or "")
+    # Zweites Rückgabeelement ist die aufgelöste ANZEIGE-Einheit in
+    # Katalogschreibweise (§6) — nicht die kanonische Einheit.
+    display_unit = _match_allowed_unit(unit, lab_allowed_units(marker_def))
+    if display_unit is None:
+        display_unit = canonical_unit
+    factor = 1.0
+    if unit is not None and _norm_unit(unit) != _norm_unit(canonical_unit):
+        alt_units = marker_def.get("alt_units")
+        if isinstance(alt_units, Mapping):
+            for alt_unit, alt_factor in alt_units.items():
+                if _norm_unit(alt_unit) != _norm_unit(unit):
+                    continue
+                try:
+                    candidate = float(alt_factor)
+                except (TypeError, ValueError):
+                    candidate = 0.0
+                if candidate > 0:
+                    factor = candidate
+                break
+    display_value = round(canonical_value / factor, 6)
+    return display_value, display_unit
+
+
+def lab_display_decimals(value: float) -> int:
+    """Formatierungs-Dezimalstellen nach Betrag des Anzeigewerts (§8.2, N2/N4).
+
+    `base_d`: >=100 -> 0, >=10 -> 1, >=1 -> 2, sonst 3; final
+    `d = min(base_d + 1, 3)`. Obergrenze für `maximumFractionDigits`, keine
+    feste Stellenzahl. Referenz-Oracle, kein Produktionsaufrufer.
+    """
+    try:
+        magnitude = abs(float(value))
+    except (TypeError, ValueError):
+        return 3
+    if magnitude >= 100:
+        base_d = 0
+    elif magnitude >= 10:
+        base_d = 1
+    elif magnitude >= 1:
+        base_d = 2
+    else:
+        base_d = 3
+    return min(base_d + 1, 3)
 
 
 # --- Fehlerkatalog (REQ-HOM-127) --------------------------------------------
