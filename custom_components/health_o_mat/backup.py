@@ -22,6 +22,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_HIDE_PANEL_DISCLAIMER,
     OPTION_LAB_REF_OVERRIDES,
@@ -120,8 +121,10 @@ def build_backup_document(
 
     - ``counts[entry_id]["lab_readings"]``: wie die übrigen Datensatz-Zähler.
     - ``lab_options``: ``{entry_id: {lab_custom_markers, lab_ref_overrides,
-      lab_hidden_categories}}`` — liegt in ``entry.options``, nicht im Store,
-      deshalb als separater Parameter statt aus ``raw_data`` abgeleitet.
+      lab_hidden_categories, lab_default_units}}`` — liegt in ``entry.options``,
+      nicht im Store, deshalb als separater Parameter statt aus ``raw_data``
+      abgeleitet. ``lab_default_units`` ist additiv (Datenvollständigkeit); der
+      Restore wendet es in v1 bewusst nicht an (F14, wie ``lab_ref_overrides``).
     """
     entries = raw_data.get("entries", {}) if isinstance(raw_data, dict) else {}
     persons: dict[str, Any] = {}
@@ -216,6 +219,9 @@ async def async_backup(
             OPTION_LAB_CUSTOM_MARKERS: entry.options.get(OPTION_LAB_CUSTOM_MARKERS, []),
             OPTION_LAB_REF_OVERRIDES: entry.options.get(OPTION_LAB_REF_OVERRIDES, {}),
             OPTION_LAB_HIDDEN_CATEGORIES: entry.options.get(OPTION_LAB_HIDDEN_CATEGORIES, []),
+            # Anzeige-Einheiten (additiv, §7.3): Backup enthält den Key zur
+            # Datenvollständigkeit; `restore.py` wendet ihn in v1 nicht an (F14).
+            OPTION_LAB_DEFAULT_UNITS: entry.options.get(OPTION_LAB_DEFAULT_UNITS, {}),
             OPTION_LAB_HIDE_PANEL_DISCLAIMER: bool(
                 entry.options.get(OPTION_LAB_HIDE_PANEL_DISCLAIMER, False)
             ),

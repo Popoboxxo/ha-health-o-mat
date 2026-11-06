@@ -23,7 +23,7 @@
 
 const CARD_TAG = "health-o-mat-labs-card";
 const EDITOR_TAG = "health-o-mat-labs-card-editor";
-const CARD_VERSION = "0.21.0";
+const CARD_VERSION = "0.22.0";
 
 const PERSON_MODES = ["selector", "fixed"];
 
@@ -98,11 +98,17 @@ const CARD_TEXT = {
       "⚠️ Hinweis: keine medizinische Beratung — Richtwerte, keine Diagnose. Referenzbereiche in den Einstellungen anpassen.",
     // REQ-HOM-133 (#73): Warnung im Einheiten-Dropdown (Pflicht-Marker).
     ui_panel_lab_unit_required: "Einheit erforderlich",
+    // REQ-HOM-134: „Andere …"-Zweig des Einheiten-Dropdowns.
+    ui_panel_lab_unit_custom: "Andere …",
+    // REQ-HOM-134: die Einheit ist Pflicht — kein „(optional)" im Placeholder.
+    ui_panel_lab_unit_field: "Einheit",
   },
   en: {
     ui_card_lab_disclaimer:
       "⚠️ Note: not medical advice — reference values, not a diagnosis. Adjust reference ranges in the settings.",
     ui_panel_lab_unit_required: "Unit required",
+    ui_panel_lab_unit_custom: "Other …",
+    ui_panel_lab_unit_field: "Unit",
   },
 };
 
@@ -246,10 +252,100 @@ function labBadge(inRange) {
   return `<span class="muted" aria-hidden="true">–</span>`;
 }
 
+/* ---- Anzeige-Einheiten (REQ-HOM-134 — Spec `2026-11-05-lab-default-units`) --
+ *
+ * Bewusste Kopie der Panel-Helfer (`panel-base.js`): die Karte darf das
+ * Panel-Modul nicht importieren (§6 der Spec). Oracle für beide Kopien ist
+ * `logic.lab_display_decimals` / `logic.convert_lab_display_value`. */
+
+const LAB_SUPERSCRIPT_DIGITS = {
+  "\u2070": "0",
+  "\u00b9": "1",
+  "\u00b2": "2",
+  "\u00b3": "3",
+  "\u2074": "4",
+  "\u2075": "5",
+  "\u2076": "6",
+  "\u2077": "7",
+  "\u2078": "8",
+  "\u2079": "9",
+};
+const LAB_SUPERSCRIPT_EXPONENT_RE = /[\u00d7xX]?\s*10([\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+)/g;
+const LAB_MICRO_PREFIX_RE = /(^|[^a-z])u(?=(?:mol|kat|g|l)\b)/g;
+
+/* JS-Pendant zu `logic._norm_unit` (NFKC + Mikro-/Case-/Whitespace-Faltung). */
+function labNormalizeUnit(unit) {
+  const raw = unit == null ? "" : String(unit).trim();
+  if (!raw) return "";
+  const withExponent = raw.replace(LAB_SUPERSCRIPT_EXPONENT_RE, (_match, digits) =>
+    `10^${String(digits)
+      .split("")
+      .map((char) => LAB_SUPERSCRIPT_DIGITS[char] || char)
+      .join("")}`
+  );
+  let text = withExponent;
+  try {
+    text = text.normalize("NFKC");
+  } catch (_error) {
+    // Kein Unicode-Normalizer (Alt-Browser): Rohform weiterverwenden.
+  }
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(LAB_MICRO_PREFIX_RE, (_match, prefix) => `${prefix}\u03bc`)
+    .replace(/prozent/g, "%");
+}
+
+/* Faktor `gemeldet -> kanonisch` (§8.1): 1 für die kanonische Einheit, `null`
+ * für eine unbekannte Einheit (dann gilt defensiv die kanonische Zahl). */
+function labDisplayFactor(marker, unit) {
+  const target = unit == null ? "" : String(unit).trim();
+  const canonical = marker && marker.unit != null ? String(marker.unit) : "";
+  if (!target) return 1;
+  if (labNormalizeUnit(target) === labNormalizeUnit(canonical)) return 1;
+  const altUnits =
+    marker && marker.alt_units && typeof marker.alt_units === "object" ? marker.alt_units : {};
+  for (const [altUnit, rawFactor] of Object.entries(altUnits)) {
+    if (labNormalizeUnit(altUnit) !== labNormalizeUnit(target)) continue;
+    const factor = toNumber(rawFactor, NaN);
+    return Number.isFinite(factor) && factor > 0 ? factor : null;
+  }
+  return null;
+}
+
+/* Kanonischer Wert -> Anzeigewert (`anzeige = kanonisch / faktor`, §8.1). */
+function labConvertDisplayValue(marker, value, unit) {
+  const number = toNumber(value, NaN);
+  if (!Number.isFinite(number)) return null;
+  const factor = labDisplayFactor(marker, unit);
+  return factor == null ? number : number / (factor || 1);
+}
+
+function labDisplayValue(marker, unit) {
+  return labConvertDisplayValue(marker, marker && marker.value, unit);
+}
+
+/* Dezimal-Policy (§8.2 N2–N4): `base_d` aus dem BETRAG des Anzeigewerts,
+ * dann EINMAL `d = min(base_d + 1, 3)` — dasselbe `d` für Wert und Grenzen. */
+function labDisplayDecimals(value) {
+  const number = Math.abs(toNumber(value, NaN));
+  if (!Number.isFinite(number)) return 3;
+  let base = 3;
+  if (number >= 100) base = 0;
+  else if (number >= 10) base = 1;
+  else if (number >= 1) base = 2;
+  return Math.min(base + 1, 3);
+}
+
 /* Subzeile "↷ eingegeben als <value> <unit>" — nur bei abweichender
- * Eingabe-Einheit (§7.1), kein Rauschen im Normalfall. */
-function labReportedSubline(marker) {
-  if (!marker || marker.reported_unit == null || marker.reported_unit === marker.unit) {
+ * Eingabe-Einheit (§8.1). Der Vergleich läuft normalisiert (F8), weil
+ * `reported_unit` roh gespeichert wird. */
+function labReportedSubline(marker, displayUnit) {
+  if (!marker || marker.reported_unit == null) {
+    return "";
+  }
+  const shownUnit = displayUnit != null ? displayUnit : marker.unit;
+  if (labNormalizeUnit(marker.reported_unit) === labNormalizeUnit(shownUnit)) {
     return "";
   }
   return `<div class="lab-subline muted">↷ eingegeben als ${escapeHtml(
@@ -281,27 +377,39 @@ function labSparkline(history) {
   return `<svg class="lab-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="${width}" height="${height}" aria-hidden="true"><polyline points="${coords}" fill="none" stroke="var(--primary-color)" stroke-width="1.5" /></svg>`;
 }
 
-function formatLabValue(value) {
+/* Anzeigewert mit der gemeinsamen Obergrenze `decimals` (§8.2 N3/N3a):
+ * `maximumFractionDigits` erfindet keine Präzision; für `0 < |v| < 0.1`
+ * zwei signifikante Stellen statt „0". Locale bleibt hart `de-DE` (§4). */
+function formatLabValue(value, decimals) {
   const number = toNumber(value, NaN);
   if (!Number.isFinite(number)) return "";
+  const limit = Number.isInteger(decimals) ? Math.min(Math.max(decimals, 0), 3) : 3;
+  const formatOptions =
+    number !== 0 && Math.abs(number) < 0.1
+      ? { maximumSignificantDigits: 2 }
+      : { maximumFractionDigits: limit };
   try {
-    return new Intl.NumberFormat("de-DE", { maximumFractionDigits: 3 }).format(number);
+    return new Intl.NumberFormat("de-DE", formatOptions).format(number);
   } catch (_error) {
     return String(number);
   }
 }
 
-function referenceText(marker) {
+/* Referenzzeile in der ANZEIGE-Einheit (§8.1): Grenzen werden mit demselben
+ * Faktor UND demselben `d` wie der Messwert formatiert (F4/N1) — es gibt
+ * keinen `d+1`-Sonderpfad für Grenzen. `null` bleibt `null`. */
+function referenceText(marker, displayUnit, decimals) {
   if (!marker) return "";
-  const min = marker.ref_min;
-  const max = marker.ref_max;
+  const min = labConvertDisplayValue(marker, marker.ref_min, displayUnit);
+  const max = labConvertDisplayValue(marker, marker.ref_max, displayUnit);
   if (min == null && max == null) return "";
-  const unit = marker.unit ? ` ${marker.unit}` : "";
+  const d = Number.isInteger(decimals) ? decimals : 3;
+  const unit = displayUnit ? ` ${displayUnit}` : "";
   if (min != null && max != null) {
-    return `Referenz: ${formatLabValue(min)}–${formatLabValue(max)}${unit}`;
+    return `Referenz: ${formatLabValue(min, d)}–${formatLabValue(max, d)}${unit}`;
   }
-  if (min != null) return `Referenz: ≥ ${formatLabValue(min)}${unit}`;
-  return `Referenz: ≤ ${formatLabValue(max)}${unit}`;
+  if (min != null) return `Referenz: ≥ ${formatLabValue(min, d)}${unit}`;
+  return `Referenz: ≤ ${formatLabValue(max, d)}${unit}`;
 }
 
 /* 🔗-Icon für `report_ref`: URL -> klickbarer Link (neuer Tab), sonst
@@ -344,7 +452,7 @@ function labMarkerOptionsHtml(markers, selectedKey) {
     .map(
       ([key, marker]) =>
         `<option value="${escapeHtml(key)}" data-unit="${escapeHtml(
-          marker && marker.unit
+          (marker && (marker.default_unit || marker.unit)) || ""
         )}"${key === selectedKey ? " selected" : ""}>${escapeHtml(
           labDisplayName(marker, key)
         )}${marker && marker.unit ? ` (${escapeHtml(marker.unit)})` : ""}</option>`
@@ -786,17 +894,24 @@ class HealthOMatLabsCard extends HTMLElement {
 
   _markerRow(key, marker, cfg) {
     const hasValue = marker.value != null && Number.isFinite(toNumber(marker.value, NaN));
+    // Anzeige-Konvertierung (§8.1): Wert, Referenzgrenzen und Subline teilen
+    // sich die Anzeige-Einheit und EIN `d` aus dem konvertierten Wert (N4).
+    const displayUnit =
+      (marker && marker.default_unit) || (marker && marker.unit) || "";
+    const displayValue = labDisplayValue(marker, displayUnit);
+    const decimals = labDisplayDecimals(displayValue);
+    const shownValue = displayValue == null ? marker.value : displayValue;
     const valueText = hasValue
-      ? `${formatLabValue(marker.value)}${
-          marker.unit ? ` ${escapeHtml(marker.unit)}` : ""
+      ? `${formatLabValue(shownValue, decimals)}${
+          displayUnit ? ` ${escapeHtml(displayUnit)}` : ""
         }`
       : `<span class="muted">—</span>`;
     const badge = hasValue ? labBadge(marker.in_range) : "";
     const trend = cfg.showTrend ? labSparkline(marker.history) : "";
     const when = hasValue ? formatRelativeTs(marker.ts) : "noch nie erfasst";
-    const subline = labReportedSubline(marker);
+    const subline = labReportedSubline(marker, displayUnit);
     const refLink = reportRefHtml(marker.report_ref);
-    const range = referenceText(marker);
+    const range = referenceText(marker, displayUnit, decimals);
     return `<div class="labs-row" data-marker="${escapeHtml(key)}"${
       range ? ` title="${escapeHtml(range)}"` : ""
     }>
@@ -858,14 +973,23 @@ class HealthOMatLabsCard extends HTMLElement {
     if (!Object.keys(markers).length) return "";
     const selectedKey = this._selectedMarkerKey();
     const selectedMarker = markers[selectedKey];
+    /* F11: Optionen ausschließlich aus `marker.allowed_units`; Vorauswahl ist
+     * `_draft.unit || default_unit || unit` (§9.3). */
+    const allowedUnits = this._markerUnits(selectedMarker);
+    const fallbackUnit =
+      (selectedMarker && selectedMarker.default_unit) ||
+      (selectedMarker && selectedMarker.unit) ||
+      "";
+    const currentUnit = String(this._draft.unit || "").trim() || fallbackUnit;
+    const customUnit = !allowedUnits.some(
+      (unit) => labNormalizeUnit(unit) === labNormalizeUnit(currentUnit)
+    );
     // REQ-HOM-133 (#73): Bei Pflicht-Markern ist die Einheit kein optionales
-    // Feld — das Placeholder sagt das, bevor der Server ablehnt.
+    // Feld — der Hinweis steht im Dropdown UND im Platzhalter des Freitexts.
     const unitPlaceholder =
       selectedMarker && selectedMarker.require_explicit_unit
         ? cardText("ui_panel_lab_unit_required")
-        : selectedMarker && selectedMarker.unit
-          ? `${selectedMarker.unit} (optional)`
-          : "Einheit (optional)";
+        : currentUnit || "Einheit";
     return `<div class="labs-entry">
       <div class="labs-entry-title">Neuen Wert erfassen</div>
       <div class="labs-form-grid">
@@ -881,9 +1005,15 @@ class HealthOMatLabsCard extends HTMLElement {
           )}" placeholder="Wert" />
         </label>
         <label>Einheit
-          <input type="text" data-field="lab-unit" aria-label="Einheit" value="${escapeHtml(
+          <select data-field="lab-unit" aria-label="Einheit">${this._unitOptions(
+            selectedMarker,
             this._draft.unit
-          )}" placeholder="${escapeHtml(unitPlaceholder)}" />
+          )}</select>
+          <input type="text" data-field="lab-unit-custom" aria-label="Einheit (Freitext)"
+            value="${escapeHtml(customUnit ? currentUnit : "")}"
+            placeholder="${escapeHtml(unitPlaceholder)}" autocomplete="off"${
+              customUnit ? "" : " hidden"
+            } />
         </label>
         <label>Zeitpunkt
           <input type="datetime-local" data-field="lab-ts" aria-label="Zeitpunkt" value="${escapeHtml(
@@ -910,14 +1040,17 @@ class HealthOMatLabsCard extends HTMLElement {
     const marker = read("lab-marker");
     if (marker) this._draft.marker = marker;
     this._draft.value = read("lab-value");
-    this._draft.unit = read("lab-unit");
+    // F10/§8.1: die Einheit wird IMMER explizit gesendet — „Andere …" liest
+    // den Freitext, sonst gilt der Select-Wert.
+    const pick = read("lab-unit").trim();
+    this._draft.unit = pick === "__custom__" ? read("lab-unit-custom").trim() : pick;
     this._draft.ts = read("lab-ts");
     this._draft.reportRef = read("lab-report-ref");
   }
 
   _updateUnitPlaceholder() {
     const markerEl = this.shadowRoot.querySelector('[data-field="lab-marker"]');
-    const unitEl = this.shadowRoot.querySelector('[data-field="lab-unit"]');
+    const unitEl = this.shadowRoot.querySelector('[data-field="lab-unit-custom"]');
     if (!markerEl || !unitEl) return;
     const key = markerEl.value != null ? String(markerEl.value) : "";
     const markers = this._markers();
@@ -928,7 +1061,25 @@ class HealthOMatLabsCard extends HTMLElement {
     }
     const option = markerEl.options ? markerEl.options[markerEl.selectedIndex] : null;
     const unit = option && option.dataset ? option.dataset.unit || "" : "";
-    unitEl.placeholder = unit ? `${unit} (optional)` : "Einheit (optional)";
+    unitEl.placeholder = unit || cardText("ui_panel_lab_unit_field");
+  }
+
+  /* Marker-Wechsel (§9.3): Einheiten-Select und Freitext-Feld im DOM neu
+   * aufbauen — kein Re-Render, damit ein bereits getippter Wert bleibt. */
+  _refreshUnitFields(marker) {
+    const select = this.shadowRoot.querySelector('[data-field="lab-unit"]');
+    if (select) select.innerHTML = this._unitOptions(marker, this._draft.unit);
+    const input = this.shadowRoot.querySelector('[data-field="lab-unit-custom"]');
+    const allowed = this._markerUnits(marker);
+    const current = String(this._draft.unit || "").trim();
+    const isCustom =
+      !!current &&
+      !allowed.some((unit) => labNormalizeUnit(unit) === labNormalizeUnit(current));
+    if (input) {
+      input.hidden = !isCustom;
+      input.value = isCustom ? current : "";
+    }
+    this._updateUnitPlaceholder();
   }
 
   _readEntryTs() {
@@ -962,15 +1113,22 @@ class HealthOMatLabsCard extends HTMLElement {
       this._render();
       return;
     }
+    // F10/§8.1: die Einheit wird IMMER explizit gesendet. Ein leerer
+    // „Andere …"-Freitext blockiert den Submit statt eine leere Einheit zu
+    // schicken (der Server läse den Wert sonst als kanonisch).
+    const unit = String(this._draft.unit || "").trim();
+    if (!unit) {
+      this._actionError = cardText("ui_panel_lab_unit_required");
+      this._render();
+      return;
+    }
     const payload = {
       type: "health_o_mat/add_lab_value",
       entry_id: entryId,
       marker: markerKey,
       value: Number(rawValue),
+      unit,
     };
-    if (String(this._draft.unit || "").trim()) {
-      payload.unit = String(this._draft.unit).trim();
-    }
     if (ts.iso) payload.ts = ts.iso;
     if (String(this._draft.reportRef || "").trim()) {
       payload.report_ref = String(this._draft.reportRef).trim();
@@ -1002,28 +1160,53 @@ class HealthOMatLabsCard extends HTMLElement {
     return `${placeholder}${labMarkerOptionsHtml(markers, selectedKey)}`;
   }
 
-  _unitOptions(marker, selectedUnit) {
+  /* Optionen der Anzeige-Einheit (§9.3/F11): ausschließlich die vom Server
+   * gelieferten `allowed_units`; der Fallback (kanonisch + `alt_units`-Keys)
+   * gilt nur für ältere Payloads ohne die neuen Keys. */
+  _markerUnits(marker) {
     const canonical = (marker && marker.unit) || "";
-    const altUnits = Object.keys((marker && marker.alt_units) || {});
-    const known = [canonical, ...altUnits].filter(
-      (unit, index, all) => unit && all.indexOf(unit) === index
+    const configured =
+      marker && Array.isArray(marker.allowed_units) ? marker.allowed_units : [];
+    return (
+      configured.length
+        ? configured
+        : [canonical, ...Object.keys((marker && marker.alt_units) || {})]
+    ).filter((unit, index, all) => unit && all.indexOf(unit) === index);
+  }
+
+  /* Der Freitext ist genau dann sichtbar, wenn die wirksame Einheit keine
+   * Katalogschreibweise ist (normalisierter Vergleich). Die Truthiness von
+   * `row.unit` reicht nicht: ein eingetippter Custom-Wert muss auch nach einem
+   * Re-Render sichtbar und editierbar bleiben (§9.3/§9.4). */
+  _unitIsCustom(marker, unit) {
+    const fallback = (marker && marker.default_unit) || (marker && marker.unit) || "";
+    const current = String(unit == null ? "" : unit).trim() || fallback;
+    return !this._markerUnits(marker).some(
+      (known) => labNormalizeUnit(known) === labNormalizeUnit(current)
     );
-    const current = selectedUnit
-      ? known.includes(selectedUnit)
-        ? selectedUnit
-        : "__custom__"
-      : canonical;
+  }
+
+  _unitOptions(marker, selectedUnit) {
+    const known = this._markerUnits(marker);
+    // Vorauswahl: gewählte Einheit, sonst die Anzeige-Einheit des Markers
+    // (`default_unit`), sonst kanonisch (§9.3).
+    const fallback = (marker && marker.default_unit) || (marker && marker.unit) || "";
+    const chosen = selectedUnit == null ? "" : String(selectedUnit).trim();
+    const current = chosen || fallback;
+    // F3: ein Wert außerhalb der Liste bleibt als „Andere …" erhalten statt
+    // still auf den ersten Eintrag zu springen.
+    const isCustom = this._unitIsCustom(marker, selectedUnit);
     const options = known
       .map(
         (unit) =>
           `<option value="${escapeHtml(unit)}"${
-            unit === current ? " selected" : ""
+            labNormalizeUnit(unit) === labNormalizeUnit(current) ? " selected" : ""
           }>${escapeHtml(unit)}</option>`
       )
       .join("");
     // REQ-HOM-133 (#73): Pflicht-Marker warnen im Dropdown, bevor der Server
-    // `unit_required` meldet. Deaktivierte Hinweiszeile — die kanonische
-    // Einheit bleibt vorausgewählt und damit ein gültiger Wert.
+    // `unit_required` meldet. Deaktivierte Hinweiszeile — die Anzeige-Einheit
+    // bleibt vorausgewählt und damit ein gültiger Wert.
     const requiredHint =
       marker && marker.require_explicit_unit
         ? `<option value="" disabled>${escapeHtml(
@@ -1031,13 +1214,17 @@ class HealthOMatLabsCard extends HTMLElement {
           )}</option>`
         : "";
     return `${requiredHint}${options}<option value="__custom__"${
-      current === "__custom__" ? " selected" : ""
-    }>Andere …</option>`;
+      isCustom ? " selected" : ""
+    }>${escapeHtml(cardText("ui_panel_lab_unit_custom"))}</option>`;
   }
 
   _reportRow(row, index, markers) {
     const marker = markers[row.marker];
     const disabled = this._saving ? " disabled" : "";
+    // Der Freitext steht IMMER im DOM; `hidden` wird beim Wechsel auf
+    // „Andere …" nur umgeschaltet (§9.4). Sichtbar ist er genau dann, wenn die
+    // wirksame Einheit keine Katalogschreibweise ist (normalisierter Vergleich).
+    const customHidden = this._unitIsCustom(marker, row.unit) ? "" : " hidden";
     return `<div class="labs-report-row" data-role="lab-report-row">
       <select data-field="lab-report-marker-${index}" aria-label="Marker"${disabled}>${this._reportMarkerOptions(
         markers,
@@ -1051,8 +1238,8 @@ class HealthOMatLabsCard extends HTMLElement {
       )}</select>
       <input type="text" data-field="lab-report-unit-${index}" aria-label="Einheit (Freitext)"
         value="${escapeHtml(row.unit)}" placeholder="${escapeHtml(
-          (marker && marker.unit) || "Einheit"
-        )}" autocomplete="off"${disabled} />
+          (marker && (marker.default_unit || marker.unit)) || "Einheit"
+        )}" autocomplete="off"${customHidden}${disabled} />
       <button type="button" class="labs-tab" data-action="lab-report-remove" data-index="${index}"
         aria-label="Zeile entfernen"${disabled}>✕</button>
     </div>`;
@@ -1107,11 +1294,16 @@ class HealthOMatLabsCard extends HTMLElement {
     };
     this._reportDraft.ts = read("lab-report-ts");
     this._reportDraft.reportRef = read("lab-report-ref");
-    this._reportDraft.rows = this._reportDraft.rows.map((_row, index) => ({
-      marker: read(`lab-report-marker-${index}`),
-      value: read(`lab-report-value-${index}`),
-      unit: read(`lab-report-unit-${index}`),
-    }));
+    this._reportDraft.rows = this._reportDraft.rows.map((_row, index) => {
+      // Einheit IMMER explizit (§8.1): Select gewinnt, „Andere …" den Freitext.
+      const pick = read(`lab-report-unit-pick-${index}`).trim();
+      const custom = read(`lab-report-unit-${index}`).trim();
+      return {
+        marker: read(`lab-report-marker-${index}`),
+        value: read(`lab-report-value-${index}`),
+        unit: pick === "__custom__" ? custom : pick,
+      };
+    });
   }
 
   _fillReportDraft(mode) {
@@ -1133,13 +1325,20 @@ class HealthOMatLabsCard extends HTMLElement {
     let limitHit = false;
     for (const key of keys) {
       if (used.has(key)) continue;
+      // F2: „leer" heißt ohne Marker UND ohne Wert — nicht „ohne Einheit".
+      // Sonst gilt jede Zeile mit vorausgewählter Anzeige-Einheit als belegt
+      // und die Füll-Buttons legen keine Zeilen mehr an.
       const empty = this._reportDraft.rows.find(
-        (row) => !row.marker && !row.value && !row.unit
+        (row) => !row.marker && !row.value
       );
+      const unit = markers[key].default_unit || "";
       if (empty) {
+        // N2: Marker UND Anzeige-Einheit setzen — sonst erbt die Zeile die
+        // Einheit des vorherigen Markers (stille Fehlkonvertierung).
         empty.marker = key;
+        empty.unit = unit;
       } else if (this._reportDraft.rows.length < LAB_REPORT_MAX_ROWS_UI) {
-        this._reportDraft.rows.push({ marker: key, value: "", unit: "" });
+        this._reportDraft.rows.push({ marker: key, value: "", unit });
       } else {
         limitHit = true;
         break;
@@ -1184,9 +1383,14 @@ class HealthOMatLabsCard extends HTMLElement {
   _onUnitPick(index, value) {
     const row = this._reportDraft.rows[index];
     if (!row) return;
+    // „Andere …" = leerer Wert; der Freitext wird direkt ein-/ausgeblendet,
+    // ohne die Auswahl durch einen Re-Render zu verlieren (§9.4).
     row.unit = value === "__custom__" ? "" : value;
     const input = this.shadowRoot.querySelector(`[data-field="lab-report-unit-${index}"]`);
-    if (input) input.value = row.unit;
+    if (input) {
+      input.value = row.unit;
+      input.hidden = value !== "__custom__";
+    }
   }
 
   _validateTs(rawInput) {
@@ -1229,7 +1433,7 @@ class HealthOMatLabsCard extends HTMLElement {
       const marker = String(row.marker || "").trim();
       const rawValue = String(row.value || "").trim().replace(",", ".");
       const unit = String(row.unit || "").trim();
-      if (!marker && !rawValue && !unit) continue;
+      if (!marker && !rawValue) continue;
       if (!marker) {
         this._actionError = "Bitte für jede befüllte Zeile einen Marker auswählen.";
         this._render();
@@ -1240,11 +1444,13 @@ class HealthOMatLabsCard extends HTMLElement {
         this._render();
         return;
       }
-      values.push(
-        unit
-          ? { marker, value: Number(rawValue), unit }
-          : { marker, value: Number(rawValue) }
-      );
+      // F10: „Andere …" mit leerem Freitext blockiert den Submit.
+      if (!unit) {
+        this._actionError = cardText("ui_panel_lab_unit_required");
+        this._render();
+        return;
+      }
+      values.push({ marker, value: Number(rawValue), unit });
     }
     if (!values.length) {
       this._actionError = "Bitte mindestens einen Wert erfassen.";
@@ -1386,7 +1592,7 @@ class HealthOMatLabsCard extends HTMLElement {
       return;
     }
     if (field === "lab-value") this._draft.value = String(el.value || "");
-    else if (field === "lab-unit") this._draft.unit = String(el.value || "");
+    else if (field === "lab-unit-custom") this._draft.unit = String(el.value || "");
     else if (field === "lab-report-ref") this._draft.reportRef = String(el.value || "");
   }
 
@@ -1405,7 +1611,9 @@ class HealthOMatLabsCard extends HTMLElement {
       const row = this._reportDraft.rows[Number(markerMatch[1])];
       if (row) {
         row.marker = String(el.value || "");
-        row.unit = ""; // Einheiten-Dropdown hängt am Marker
+        // §9.4: die Einheit hängt am Marker — Anzeige-Einheit mitziehen.
+        const marker = this._markers()[row.marker];
+        row.unit = (marker && marker.default_unit) || "";
       }
       this._render();
       return;
@@ -1421,10 +1629,23 @@ class HealthOMatLabsCard extends HTMLElement {
     }
     if (field === "lab-marker") {
       this._draft.marker = String(el.value || "");
-      this._updateUnitPlaceholder();
+      // Das Einheiten-Select hängt am Marker: Anzeige-Einheit übernehmen und
+      // die Felder gezielt im DOM neu aufbauen (kein Re-Render, damit der
+      // getippte Wert stehen bleibt, §9.3).
+      const marker = this._markers()[this._draft.marker];
+      this._draft.unit = (marker && marker.default_unit) || "";
+      this._refreshUnitFields(marker);
     } else if (field === "lab-value") this._draft.value = String(el.value || "");
-    else if (field === "lab-unit") this._draft.unit = String(el.value || "");
-    else if (field === "lab-ts") this._draft.ts = String(el.value || "");
+    else if (field === "lab-unit") {
+      // „Andere …" blendet den Freitext ein, jede andere Auswahl aus (F10).
+      const isCustom = String(el.value || "") === "__custom__";
+      this._draft.unit = isCustom ? "" : String(el.value || "");
+      const input = this.shadowRoot.querySelector('[data-field="lab-unit-custom"]');
+      if (input) {
+        input.hidden = !isCustom;
+        if (!isCustom) input.value = "";
+      }
+    } else if (field === "lab-ts") this._draft.ts = String(el.value || "");
     else if (field === "lab-report-ref") this._draft.reportRef = String(el.value || "");
   }
 

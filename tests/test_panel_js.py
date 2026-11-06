@@ -4123,6 +4123,17 @@ const settings = {
       },
     },
   },
+  // F6: Custom-Marker mit neuer Map und Legacy-Einzelpaar.
+  lab_custom_markers: [
+    {
+      key: "map_marker", name: "Map", category: "other", unit: "ng/mL",
+      alt_units: { "µmol/L": 2.5 },
+    },
+    {
+      key: "legacy_marker", name: "Legacy", category: "other", unit: "pg",
+      alt_unit: { unit: "µg/L", factor_to_canonical: 0.001 },
+    },
+  ],
 };
 const out = {};
 for (const language of ["de", "en"]) {
@@ -4168,6 +4179,9 @@ def test_req_hom_124_admin_conversion_column_is_locale_aware(tmp_path):
     assert "g/g × 1.000 → mg/g" in rendered["de"]
     assert "—" in rendered["de"]
     assert "Einheit Pflicht" in rendered["de"]
+    # F6: dieselbe Umrechnungsspalte liest die Custom-Map UND das Legacy-Paar.
+    assert "µmol/L × 2,5 → ng/mL" in rendered["de"]
+    assert "µg/L × 0,001 → pg" in rendered["de"]
 
 
 def test_req_hom_124_admin_conversion_uses_format_number():
@@ -4181,3 +4195,643 @@ def test_req_hom_124_admin_conversion_uses_format_number():
     assert "ui_admin_lab_conversion_none" in body
     assert "toFixed(" not in body
     assert "formatNumber" in imports
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten im Panel --------------------------------
+
+_NODE_ADMIN_DISPLAY_UNITS_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const admin = await import(pathToFileURL(process.argv[3]).href);
+base.setUiLanguage("de");
+
+const settings = {
+  lab_catalog: {
+    categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney" }],
+    markers: {
+      creatinine: {
+        category: "kidney", name_de: "Kreatinin", name_en: "Creatinine",
+        canonical_unit: "\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+        require_explicit_unit: false, ref_min: 53, ref_max: 106,
+      },
+    },
+  },
+  lab_custom_markers: [
+    {
+      key: "vitamin_d", name: "Vitamin D", category: "other", unit: "nmol/L",
+      alt_units: { "nmol/L": 0.4 },
+    },
+    {
+      key: "legacy_marker", name: "Legacy", category: "other", unit: "pg",
+      alt_unit: { unit: "\u00b5g/L", factor_to_canonical: 0.001 },
+    },
+    {
+      key: "map_marker", name: "Map", category: "other", unit: "ng/mL",
+      alt_units: { "\u00b5mol/L": 2.5 },
+    },
+  ],
+  lab_default_units: { creatinine: "mg/dL" },
+  lab_default_units_factory: { creatinine: "mg/dL" },
+  lab_allowed_units: {
+    creatinine: ["\u00b5mol/L", "mg/dL"],
+    vitamin_d: ["ng/mL", "nmol/L"],
+    legacy_marker: ["pg", "\u00b5g/L"],
+    map_marker: ["ng/mL", "\u00b5mol/L"],
+  },
+  // Komfortliste NUR fuer das Custom-Marker-Formular: `nmol/L` fehlt hier
+  // absichtlich (F3), `fl` darf in keinem Anzeige-Select auftauchen (F11).
+  lab_units: ["mg/dL", "\u00b5mol/L", "fl", "ng/mL", "pg"],
+};
+
+process.stdout.write(JSON.stringify({ html: admin.labSettingsSection({}, settings, "entry-1") }));
+"""
+
+
+def _render_admin_with_runner(tmp_path, runner_source: str, name: str) -> str:
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+    (tmp_path / "health-o-mat-panel-base.js").write_bytes(
+        (_WWW_DIR / "health-o-mat-panel-base.js").read_bytes()
+    )
+    admin_source = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    patched, count = re.subn(
+        r'"\./health-o-mat-panel-base\.js\?v=[^"]+"',
+        '"./health-o-mat-panel-base.js"',
+        admin_source,
+    )
+    assert count == 1, "der Import-Specifier des Basis-Moduls wurde nicht gefunden"
+    admin_path = tmp_path / "health-o-mat-panel-admin.js"
+    admin_path.write_text(patched, encoding="utf-8")
+    return _run_node(
+        tmp_path,
+        runner_source,
+        [str(tmp_path / "health-o-mat-panel-base.js"), str(admin_path)],
+        name,
+    )
+
+
+def _select_block(html: str, field: str) -> str:
+    match = re.search(rf'<select data-field="{re.escape(field)}".*?</select>', html, re.S)
+    assert match is not None, f"Select {field!r} fehlt"
+    return match.group(0)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_admin_display_selects_at_both_places(tmp_path):
+    """[REQ-HOM-134/F5] Katalogzeile UND Custom-Marker tragen die Anzeige-Spalte."""
+    out = json.loads(
+        _render_admin_with_runner(
+            tmp_path,
+            _NODE_ADMIN_DISPLAY_UNITS_RUNNER,
+            "runner_admin_display_units",
+        )
+    )
+    html = out["html"]
+
+    catalog_select = _select_block(html, "lab-default-unit-creatinine")
+    custom_select = _select_block(html, "lab-default-unit-vitamin_d")
+
+    # Optionen ausschliesslich aus `lab_allowed_units`, nicht aus `lab_units`.
+    assert '<option value="mg/dL" selected>mg/dL</option>' in catalog_select
+    assert '<option value="\u00b5mol/L">\u00b5mol/L</option>' in catalog_select
+    assert 'value="fl"' not in catalog_select, "lab_units floss in den Anzeige-Select"
+    assert "Standard (mg/dL)" in catalog_select
+
+    # Custom-Marker: Standard = kanonische Marker-Einheit, Alt-Einheit aus allowed.
+    assert '<option value="nmol/L">nmol/L</option>' in custom_select
+    assert "Standard (ng/mL)" in custom_select
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_admin_custom_unit_outside_vocabulary_keeps_value(tmp_path):
+    """[REQ-HOM-134/F3] `nmol/L` (nicht in `LAB_UNITS`) -> `__custom__` + Prefill."""
+    out = json.loads(
+        _render_admin_with_runner(
+            tmp_path,
+            _NODE_ADMIN_DISPLAY_UNITS_RUNNER,
+            "runner_admin_custom_unit",
+        )
+    )
+    html = out["html"]
+
+    select = _select_block(html, "lab-custom-unit-0")
+    assert '<option value="__custom__" selected>Andere …</option>' in select
+    assert re.search(
+        r'<input type="text" data-field="lab-custom-unit-custom-0" value="nmol/L"',
+        html,
+    ), "der gespeicherte Wert fehlt im Freitextfeld (Datenverlust beim Speichern)"
+
+
+_NODE_PANEL_DEFAULT_UNITS_COLLECT_RUNNER = """import { pathToFileURL } from "node:url";
+
+class FakeShadowRoot {
+  constructor() {
+    this.innerHTML = "";
+    this._fields = {};
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    return match ? this._fields[match[1]] || null : null;
+  }
+  querySelectorAll(selector) {
+    const prefix = '[data-field^="lab-default-unit-"]';
+    if (String(selector) === prefix) {
+      return Object.entries(this._fields)
+        .filter(([field]) => field.startsWith("lab-default-unit-"))
+        .map(([field, value]) => ({
+          getAttribute: () => field,
+          value: value.value,
+        }));
+    }
+    return [];
+  }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = { get: () => undefined, define: (_n, cls) => { PanelClass = cls; } };
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+const baseline = {
+  daily_goal_ml: 2000,
+  daily_reset_hour: 0,
+  person_display: "Alex",
+  quick_drinks: [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi:cup" }],
+  drink_lexicon: "wasser=Wasser,250",
+  wellbeing_images: {},
+  sys_threshold: 140,
+  dia_threshold: 90,
+  retention_months: 0,
+  audit_limit: 1000,
+  enable_sidebar_panel: false,
+  wellbeing_confirm: false,
+  areas: { drink: true, bp: true, wellbeing: true, labs: true },
+  lab_catalog: { categories: [], markers: {} },
+  lab_custom_markers: [],
+  lab_ref_overrides: {},
+  lab_hidden_categories: [],
+  lab_default_units: {},
+  lab_hide_panel_disclaimer: false,
+};
+
+function makePanel(currentDefaults) {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._settingsEntry = "entry-1";
+  panel._view = "settings";
+  panel._quickDraft = [{ key: "slot_0", label: "Wasser", ml: 250, icon: "mdi:cup" }];
+  panel._settings = {
+    "entry-1": { ...baseline, lab_default_units: currentDefaults },
+  };
+  panel._render = () => {};
+  panel.shadowRoot._fields = {
+    daily_goal_ml: { value: "2000" },
+    daily_reset_hour: { value: "0" },
+    person_display: { value: "Alex" },
+    sys_threshold: { value: "140" },
+    dia_threshold: { value: "90" },
+    retention_months: { value: "0" },
+    audit_limit: { value: "1000" },
+    drink_lexicon: { value: "wasser=Wasser,250" },
+    enable_sidebar_panel: { checked: false },
+    wellbeing_confirm: { checked: false },
+    "area-drink": { checked: true },
+    "area-bp": { checked: true },
+    "area-wellbeing": { checked: true },
+    "area-labs": { checked: true },
+    "lab-default-unit-creatinine": { value: "mg/dL" },
+    "lab-default-unit-alt": { value: "" },
+  };
+  return panel;
+}
+
+function run(currentDefaults) {
+  const panel = makePanel(currentDefaults);
+  const collected = panel._collectSettingsPayload();
+  return {
+    errors: collected.errors,
+    defaults: collected.payload.lab_default_units,
+    changes: panel._changedSettings("entry-1", collected.payload),
+  };
+}
+
+process.stdout.write(
+  JSON.stringify({ changed: run({}), unchanged: run({ creatinine: "mg/dL" }) })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_panel_collects_display_unit_overrides(tmp_path):
+    """[REQ-HOM-134] Nicht-leere Selects werden Override, leere entfernen ihn."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_DEFAULT_UNITS_COLLECT_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_default_units_collect",
+        )
+    )
+
+    changed = out["changed"]
+    assert changed["errors"] == []
+    assert changed["defaults"] == {"creatinine": "mg/dL"}
+    assert changed["changes"] == {"lab_default_units": {"creatinine": "mg/dL"}}
+
+    unchanged = out["unchanged"]
+    assert unchanged["defaults"] == {"creatinine": "mg/dL"}
+    assert "lab_default_units" not in unchanged["changes"]
+
+
+_NODE_PANEL_FILL_DEFAULT_UNITS_RUNNER = """import { pathToFileURL } from "node:url";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+base.setUiLanguage("de");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    return match ? this._fields[match[1]] || null : null;
+  }
+  querySelectorAll() { return []; }
+}
+const root = new FakeShadowRoot();
+root._fields = {
+  "lab-report-ts": { value: "" },
+  "lab-report-ref": { value: "" },
+  "lab-report-marker-0": { value: "" },
+  "lab-report-value-0": { value: "" },
+  "lab-report-unit-pick-0": { value: "\u00b5mol/L" },
+  "lab-report-unit-0": { value: "\u00b5mol/L" },
+};
+
+const panel = {
+  shadowRoot: root,
+  _busy: false,
+  _formError: null,
+  _labReportOpen: {},
+  _labReportDraft: {
+    "entry-1": { ts: "", reportRef: "", rows: [{ marker: "", value: "", unit: "\u00b5mol/L" }] },
+  },
+  _data: {
+    "entry-1": {
+      lab_hide_panel_disclaimer: true,
+      labs: {
+        categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney", hidden: false }],
+        markers: {
+          creatinine: {
+            category: "kidney", name_de: "Kreatinin", name_en: "Creatinine",
+            unit: "\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+            default_unit: "mg/dL", allowed_units: ["\u00b5mol/L", "mg/dL"],
+            value: 106.1, ref_min: 53, ref_max: 106, in_range: false,
+            history: [], require_explicit_unit: false,
+          },
+        },
+      },
+    },
+  },
+  _render: () => {},
+};
+
+views.fillLabReportDraft(panel, "entry-1", "visible");
+const entryHtml = views.labsTab(panel, panel._data["entry-1"], "entry-1");
+process.stdout.write(
+  JSON.stringify({ rows: panel._labReportDraft["entry-1"].rows, html: entryHtml })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_panel_report_fill_sets_marker_and_default_unit(tmp_path):
+    """[REQ-HOM-134/F2/N2] Vorausgewaehlte Einheit gilt nicht als belegte Zeile."""
+    views_copy = _prepare_views_copy(tmp_path)
+
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_FILL_DEFAULT_UNITS_RUNNER,
+            [str(tmp_path / "health-o-mat-panel-base.js"), str(views_copy)],
+            "runner_panel_fill_default_units",
+        )
+    )
+
+    rows = out["rows"]
+    assert len(rows) == 1, "die Zeile mit vorausgewaehlter Einheit wurde nicht wiederverwendet"
+    assert rows[0]["marker"] == "creatinine"
+    # N2: Die Anzeige-Einheit des neuen Markers gewinnt, nicht die geerbte.
+    assert rows[0]["unit"] == "mg/dL"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_panel_entry_form_preselects_default_unit(tmp_path):
+    """[REQ-HOM-134/§9.3] Einzel-Formular: Select vorausgewaehlt, Freitext versteckt."""
+    views_copy = _prepare_views_copy(tmp_path)
+
+    runner = """import { pathToFileURL } from "node:url";
+const base = await import(pathToFileURL(process.argv[2]).href);
+const views = await import(pathToFileURL(process.argv[3]).href);
+base.setUiLanguage("de");
+const panel = {
+  shadowRoot: {
+    addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+  },
+  _busy: false, _formError: null, _labCategory: "kidney", _labReportOpen: {},
+  _labReportDraft: {
+    "entry-1": { ts: "", reportRef: "", rows: [{ marker: "", value: "", unit: "" }] },
+  },
+  _render: () => {},
+};
+const data = { lab_hide_panel_disclaimer: true, labs: {
+  categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney", hidden: false }],
+  markers: { creatinine: {
+    category: "kidney", name_de: "Kreatinin", name_en: "Creatinine",
+    unit: "\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+    default_unit: "mg/dL", allowed_units: ["\u00b5mol/L", "mg/dL"],
+    value: 106.1, ref_min: 53, ref_max: 106, in_range: false,
+    history: [
+      { ts: "2026-10-01T09:00:00+02:00", value: 100.0 },
+      { ts: "2026-10-02T09:00:00+02:00", value: 106.1 },
+    ],
+    require_explicit_unit: false,
+  } },
+} };
+process.stdout.write(JSON.stringify({ html: views.labsTab(panel, data, "entry-1") }));
+"""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            runner,
+            [str(tmp_path / "health-o-mat-panel-base.js"), str(views_copy)],
+            "runner_panel_entry_form",
+        )
+    )
+    html = out["html"]
+
+    unit_select = _select_block(html, "lab-add-unit")
+    assert '<option value="mg/dL" selected>mg/dL</option>' in unit_select
+    assert re.search(r'<label class="field" data-role="lab-add-unit-custom-wrap" hidden>', html), (
+        "der Freitext muss bei bekannter Einheit versteckt sein"
+    )
+    # F4/N1: Wert und Grenze teilen dasselbe `d` (3) — Grenze 1,199, Wert 1,2.
+    assert "1,2 mg/dL" in html
+    assert "1,199 mg/dL" in html
+    assert ">mg/dL</text>" in html, "Chart-Achsenlabel ist nicht die Anzeige-Einheit (F15)"
+    assert 'class="status bad"' in html
+
+
+def test_req_hom_134_panel_empty_row_rule_and_reuse_set_default_unit():
+    """[REQ-HOM-134/F2/N2] Source-Assertions in `panel-views.js`."""
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "fillLabReportDraft")
+
+    assert "!row.marker && !row.value" in body
+    assert "!row.unit" not in body, "`!row.unit` darf nicht mehr als Leer-Kriterium dienen"
+    assert "empty.marker = key" in body
+    assert "markers[key].default_unit" in body
+    assert "empty.unit =" in body
+
+
+def test_req_hom_134_panel_submit_blocks_empty_custom_unit():
+    """[REQ-HOM-134/F10] Beide Submit-Pfade blockieren eine leere Einheit."""
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+
+    for name in ("submitLabValue", "submitLabReport"):
+        body = _js_function_block(views, name)
+        assert "ui_panel_lab_unit_required" in body, name
+        assert re.search(r"if \(!unit\)", body), name
+
+
+def test_req_hom_134_panel_marker_row_uses_one_decimal_source():
+    """[REQ-HOM-134/F4/N1] Wert, Grenzen und Chart teilen EIN `d`."""
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "labMarkerRow")
+
+    assert "const decimals = labDisplayDecimals(displayValue);" in body
+    assert "labFormatDisplayValue(displayValue, decimals)" in body
+    assert "refMin: labConvertDisplayValue(marker, marker.ref_min, displayUnit)" in body
+    assert "refMax: labConvertDisplayValue(marker, marker.ref_max, displayUnit)" in body
+    assert re.search(r"\bdecimals,\s*\n\s*unit: displayUnit", body)
+    assert "d + 1" not in body and "decimals + 1" not in body
+
+
+def test_req_hom_134_admin_custom_form_has_unit_select_and_alt_add_remove():
+    """[REQ-HOM-134/§9.2] Custom-Formular: Select + „Andere …" + Add/Remove (Cap 4)."""
+    admin = (_WWW_DIR / "health-o-mat-panel-admin.js").read_text(encoding="utf-8")
+    entry = (_WWW_DIR / "health-o-mat-panel.js").read_text(encoding="utf-8")
+
+    assert "export const LAB_CUSTOM_ALT_MAX = 4" in admin
+    assert 'data-action="lab-custom-alt-add"' in admin
+    assert 'data-action="lab-custom-alt-remove"' in admin
+    assert "lab-custom-unit-custom" in admin
+    assert "ui_admin_lab_unit_other" in admin
+    assert "lab-custom-alt-unit-" in admin
+    # Der Zeilen-Zaehler ist reiner Formular-State (kein Objekt-Draft).
+    assert re.search(r"this\._labCustomAltRows\s*=\s*\{\s*\}", entry)
+    assert 'case "lab-custom-alt-add"' in entry
+    assert 'case "lab-custom-alt-remove"' in entry
+    assert "_readLabCustomAltUnits()" in entry
+
+
+def test_req_hom_134_panel_marker_row_uses_lab_display_value():
+    """[REQ-HOM-134/§9.5] `labMarkerRow` nutzt den `labDisplayValue`-Helfer."""
+    views = (_WWW_DIR / "health-o-mat-panel-views.js").read_text(encoding="utf-8")
+    body = _js_function_block(views, "labMarkerRow")
+
+    assert "labDisplayValue(marker, displayUnit)" in body
+    assert "labReportedSubline(marker, displayUnit)" in body
+
+
+# --- REQ-HOM-134: Alt-Einheiten-Zeilen behalten stabile, eindeutige IDs ------
+
+_NODE_PANEL_ALT_ROW_IDS_RUNNER = """import { pathToFileURL } from "node:url";
+
+/* Minimal-DOM: nur die von Add/Remove/Read benutzten APIs. Die Zeilen selbst
+ * entstehen aus dem ECHTEN `labCustomAltRowHtml`-Markup; die Felder werden aus
+ * dessen `data-field`-Attributen abgeleitet (wie im Browser). */
+class FakeShadowRoot {
+  constructor() {
+    this._rows = [];
+    this._fields = {};
+    const self = this;
+    this._container = {
+      insertAdjacentHTML(_where, html) {
+        const rowMatch = /data-alt-row="([^"]+)"/.exec(html);
+        if (!rowMatch) throw new Error("Zeilen-Markup ohne data-alt-row");
+        const id = rowMatch[1];
+        for (const fieldMatch of html.matchAll(/data-field="([^"]+)"/g)) {
+          const name = fieldMatch[1];
+          if (!(name in self._fields)) self._fields[name] = { value: "" };
+        }
+        const row = {
+          id,
+          getAttribute: (name) => (name === "data-alt-row" ? id : null),
+          remove() {
+            self._rows = self._rows.filter((item) => item !== row);
+            for (const name of Object.keys(self._fields)) {
+              if (name.endsWith(`-${id}`)) delete self._fields[name];
+            }
+          },
+        };
+        self._rows.push(row);
+      },
+    };
+  }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const alt = /^\\[data-alt-row="([^"]+)"\\]$/.exec(selector);
+    if (alt) return this._rows.find((row) => row.id === alt[1]) || null;
+    const field = /^\\[data-field="([^"]+)"\\]$/.exec(selector);
+    if (field) return this._fields[field[1]] || null;
+    if (selector === '[data-role="lab-custom-alt-rows"]') return this._container;
+    return null;
+  }
+  querySelectorAll(selector) {
+    return selector === "[data-alt-row]" ? this._rows.slice() : [];
+  }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = null; }
+  attachShadow() { this._shadow = new FakeShadowRoot(); return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+function makePanel() {
+  const panel = new PanelClass();
+  panel._selectedEntry = "entry-1";
+  panel._settingsEntry = "entry-1";
+  panel._view = "settings";
+  panel._settings = {
+    "entry-1": { lab_units: ["mg/dL", "\\u00b5mol/L", "g/L", "mg/L"] },
+  };
+  panel._labCustomDraft = { "entry-1": [] };
+  panel._render = () => {};
+  return panel;
+}
+
+function dispatch(panel, attrs) {
+  panel._onClick({
+    target: {
+      closest: () => ({
+        getAttribute: (name) => (name in attrs ? attrs[name] : null),
+      }),
+    },
+  });
+}
+
+const addRow = (panel) =>
+  dispatch(panel, { "data-action": "lab-custom-alt-add" });
+const removeRow = (panel, id) =>
+  dispatch(panel, {
+    "data-action": "lab-custom-alt-remove",
+    "data-row": id,
+  });
+
+function setRow(panel, id, unit, factor) {
+  panel.shadowRoot.querySelector(
+    `[data-field="lab-custom-alt-unit-${id}"]`
+  ).value = unit;
+  panel.shadowRoot.querySelector(
+    `[data-field="lab-custom-alt-factor-${id}"]`
+  ).value = factor;
+}
+
+function rowIds(panel) {
+  return panel.shadowRoot
+    .querySelectorAll("[data-alt-row]")
+    .map((row) => row.getAttribute("data-alt-row"));
+}
+
+const panel = makePanel();
+addRow(panel);
+addRow(panel);
+addRow(panel);
+const afterThreeAdds = rowIds(panel);
+
+setRow(panel, "0", "mg/dL", "88.4");
+setRow(panel, "1", "\\u00b5mol/L", "2.5");
+setRow(panel, "2", "g/L", "0.01");
+
+// Mittlere Zeile entfernen -> Luecke (0,2), keine Neu-Nummerierung.
+removeRow(panel, "1");
+const afterRemove = rowIds(panel);
+
+// Neue Zeile: die hoechste belegte ID + 1, NICHT der Zeilen-Zaehler.
+addRow(panel);
+const afterReAdd = rowIds(panel);
+// Die neu angelegte Zeile ist immer die letzte des DOM.
+const newRowId = afterReAdd[afterReAdd.length - 1];
+setRow(panel, newRowId, "mg/L", "0.001");
+
+process.stdout.write(
+  JSON.stringify({
+    afterThreeAdds,
+    afterRemove,
+    afterReAdd,
+    pairs: panel._readLabCustomAltUnits(),
+    actionError: panel._actionError,
+  })
+);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_alt_rows_keep_unique_monotonic_ids_after_removal(tmp_path):
+    """[REQ-HOM-134/§9.2] Add/Remove vergibt keine belegte `data-alt-row`-ID erneut.
+
+    Reale Sequenz gegen `health-o-mat-panel.js`: 3 Zeilen (0,1,2) -> mittlere
+    entfernen -> erneut hinzufuegen. Erwartet 0,2,3. Die alte Zaehler-Logik
+    vergab 2 erneut; die Einheit/Faktor-Paare der beiden Zeilen kollidierten
+    ueber die gleichnamigen `data-field`-Felder.
+    """
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_PANEL_ALT_ROW_IDS_RUNNER,
+            [str(panel_copy)],
+            "runner_panel_alt_row_ids",
+        )
+    )
+
+    assert out["actionError"] is None, out["actionError"]
+    assert out["afterThreeAdds"] == ["0", "1", "2"]
+    assert out["afterRemove"] == ["0", "2"], "Entfernen darf die ID der Restzeilen nicht aendern"
+    assert out["afterReAdd"] == ["0", "2", "3"], (
+        "die neue Zeile vergibt eine noch belegte data-alt-row-ID erneut"
+    )
+
+    ids = [int(value) for value in out["afterReAdd"]]
+    assert len(ids) == len(set(ids)), f"data-alt-row-IDs nicht eindeutig: {ids}"
+    assert ids == sorted(ids), f"data-alt-row-IDs nicht monoton: {ids}"
+
+    assert out["pairs"] == {"mg/dL": 88.4, "g/L": 0.01, "mg/L": 0.001}, (
+        "`_readLabCustomAltUnits` verliert oder mischt Einheit/Faktor-Paare"
+    )
+    assert "\u00b5mol/L" not in out["pairs"], "die entfernte Zeile liefert noch eine Einheit"

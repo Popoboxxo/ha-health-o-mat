@@ -39,13 +39,18 @@ import {
   labChartHtml,
   labMarkerOptionsHtml,
   labDisplayName,
+  labConvertDisplayValue,
+  labDisplayValue,
+  labDisplayDecimals,
+  labFormatDisplayValue,
+  labNormalizeUnit,
   t,
   tError,
   withRowHint,
   wsErrorText,
   WS,
   errMsg,
-} from "./health-o-mat-panel-base.js?v=0.21.0";
+} from "./health-o-mat-panel-base.js?v=0.22.0";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 
@@ -929,12 +934,36 @@ function labCategoryBar(labs, activeCategory) {
     </div>`;
 }
 
+/* Verlauf für den Chart in die ANZEIGE-Einheit umrechnen (§8.1): der
+ * Chart-Helper bleibt einheitenblind, der Aufrufer liefert konvertierte
+ * Werte. Unbekannte Einheit/Grenze -> kanonisch (defensiv). */
+function labDisplayHistory(marker, displayUnit) {
+  const history = Array.isArray(marker && marker.history) ? marker.history : [];
+  return history.map((point) => ({
+    ...point,
+    value: labConvertDisplayValue(marker, point && point.value, displayUnit),
+  }));
+}
+
 /* Ein Marker mit Wert, Badge, Eingabe-Subzeile und Verlaufsgraph. `value`
- * und `unit` sind Nutzerdaten und laufen durch `escapeHtml`. */
+ * und `unit` sind Nutzerdaten und laufen durch `escapeHtml`.
+ *
+ * Anzeige-Konvertierung (REQ-HOM-134, §8.1): Wert, Referenzgrenzen und
+ * Chart-Band teilen sich EIN `d = min(base_d + 1, 3)` aus dem konvertierten
+ * Anzeigewert (§8.2 N4); `in_range`/Badge bleiben kanonisch vom Server. */
 function labMarkerRow(marker, markerKey) {
+  const displayUnit =
+    (marker && marker.default_unit) || (marker && marker.unit) || "";
+  const displayValue = labDisplayValue(marker, displayUnit);
+  const decimals = labDisplayDecimals(displayValue);
   const value =
     marker && marker.value != null
-      ? `${escapeHtml(marker.value)} ${escapeHtml(marker.unit)}`
+      ? displayValue == null
+        ? // Defensiv: nicht-numerischer Wert -> kanonische Rohdarstellung.
+          `${escapeHtml(marker.value)} ${escapeHtml(marker.unit)}`
+        : `${escapeHtml(labFormatDisplayValue(displayValue, decimals))} ${escapeHtml(
+            displayUnit
+          )}`
       : "\u2013";
   return `<div class="lab-row" data-marker="${escapeHtml(markerKey)}">
       <div class="lab-row-main">
@@ -942,13 +971,24 @@ function labMarkerRow(marker, markerKey) {
         <span class="lab-row-value">${value}</span>
         ${labBadge(marker.in_range)}
       </div>
-      ${labReportedSubline(marker)}
-      ${labChartHtml(marker.history, {
+      ${labReportedSubline(marker, displayUnit)}
+      ${labChartHtml(labDisplayHistory(marker, displayUnit), {
         title: "",
-        refMin: marker.ref_min,
-        refMax: marker.ref_max,
+        refMin: labConvertDisplayValue(marker, marker.ref_min, displayUnit),
+        refMax: labConvertDisplayValue(marker, marker.ref_max, displayUnit),
+        decimals,
+        unit: displayUnit,
       })}
     </div>`;
+}
+
+/* Einheit eines Einzel-Erfassungs-Feldes auflösen (F10, §9.3): der Select
+ * liefert die Katalogschreibweise, „Andere …" den Freitext. Beide Felder
+ * stehen immer im DOM; `hidden` wird nur umgeschaltet. */
+function resolveUnitField(read, pickField, customField) {
+  const pick = read(pickField);
+  if (pick !== "__custom__") return pick;
+  return read(customField);
 }
 
 /* Speichern des Erfassungs-Formulars. Der Tab liegt in diesem Modul, der
@@ -971,7 +1011,15 @@ async function submitLabValue(panel, entryId) {
     panel._render();
     return;
   }
-  const unit = read("lab-add-unit");
+  // F10/§8.1: die Einheit wird IMMER explizit gesendet. Ein leerer
+  // „Andere …"-Freitext blockiert den Submit statt eine leere Einheit zu
+  // schicken (der Server würde den Wert sonst als kanonisch lesen).
+  const unit = resolveUnitField(read, "lab-add-unit", "lab-add-unit-custom");
+  if (!unit) {
+    panel._formError = t("ui_panel_lab_unit_required", "Einheit erforderlich");
+    panel._render();
+    return;
+  }
   const reportRef = read("lab-add-report-ref");
 
   panel._busy = true;
@@ -979,8 +1027,13 @@ async function submitLabValue(panel, entryId) {
   panel._formError = null;
   panel._render();
   try {
-    const message = { type: WS.addLabValue, entry_id: entryId, marker, value };
-    if (unit) message.unit = unit;
+    const message = {
+      type: WS.addLabValue,
+      entry_id: entryId,
+      marker,
+      value,
+      unit,
+    };
     if (reportRef) message.report_ref = reportRef;
     await panel._ws(message);
     await panel._reloadEntry(entryId);
@@ -1000,8 +1053,19 @@ async function submitLabValue(panel, entryId) {
 
 const LAB_REPORT_MAX_ROWS_UI = 60;
 
-function emptyLabReportRow() {
-  return { marker: "", value: "", unit: "" };
+/* Leere Zeile (§9.4): `unit` ist die vorausgewählte Anzeige-Einheit des
+ * Markers (`default_unit`) — der Aufrufer setzt sie beim Anlegen/Füllen. */
+function emptyLabReportRow(unit) {
+  return { marker: "", value: "", unit: unit == null ? "" : String(unit) };
+}
+
+/* Anzeige-Einheit eines Markers aus `panel_data` (§7.1). Defensiv: fehlt der
+ * Block (Panel ohne geladene Daten), bleibt die Zeile ohne Einheit. */
+function labMarkerDefaultUnit(panel, entryId, markerKey) {
+  const data = (panel && panel._data && panel._data[entryId]) || {};
+  const markers = (data.labs && data.labs.markers) || {};
+  const marker = markers[markerKey];
+  return (marker && marker.default_unit) || "";
 }
 
 function labReportDraft(panel, entryId) {
@@ -1011,6 +1075,16 @@ function labReportDraft(panel, entryId) {
   if (!panel._labReportDraft) panel._labReportDraft = {};
   panel._labReportDraft[entryId] = { ts: "", reportRef: "", rows: [emptyLabReportRow()] };
   return panel._labReportDraft[entryId];
+}
+
+/* Einheit einer Berichtszeile aus dem DOM (§9.3/§9.4): Select gewinnt,
+ * „Andere …" liest den Freitext. Leerer Freitext = "" (F10-Block). */
+function readLabReportUnit(panel, index) {
+  const read = (field) => {
+    const el = panel.shadowRoot.querySelector(`[data-field="${field}"]`);
+    return el && el.value != null ? String(el.value).trim() : "";
+  };
+  return resolveUnitField(read, `lab-report-unit-pick-${index}`, `lab-report-unit-${index}`);
 }
 
 function collectLabReportDraft(panel, entryId) {
@@ -1024,7 +1098,7 @@ function collectLabReportDraft(panel, entryId) {
   draft.rows = draft.rows.map((_row, index) => ({
     marker: read(`lab-report-marker-${index}`),
     value: read(`lab-report-value-${index}`),
-    unit: read(`lab-report-unit-${index}`),
+    unit: readLabReportUnit(panel, index),
   }));
   return draft;
 }
@@ -1048,28 +1122,64 @@ function reportMarkerOptions(markers, selectedKey) {
   return `${placeholder}${labMarkerOptionsHtml(markers, selectedKey)}`;
 }
 
+/* Einheiten-Dropdown eines Markers (§9.3).
+ *
+ * Optionsquelle ist AUSSCHLIESSLICH `marker.allowed_units` vom Server (F11) —
+ * `lab_units` ist die Komfortliste des Custom-Marker-Formulars und wird hier
+ * nie gelesen. Der Fallback (kanonisch + `alt_units`-Keys) greift nur für
+ * ältere Payloads ohne die neuen Keys.
+ *
+ * Vorauswahl: `selectedUnit || marker.default_unit || marker.unit` (§9.3);
+ * ein unbekannter Wert (z. B. gespeicherte Custom-Schreibweise) bleibt als
+ * „Andere …" erhalten statt still auf den ersten Eintrag zu springen (F3). */
+/* Erlaubte Einheiten eines Markers (§9.3/F11): ausschließlich
+ * `allowed_units`; der Fallback (kanonisch + `alt_units`-Keys) gilt nur für
+ * ältere Payloads ohne die neuen Keys. */
+function labMarkerAllowedUnits(marker) {
+  const canonical = (marker && marker.unit) || "";
+  const configured = marker && Array.isArray(marker.allowed_units) ? marker.allowed_units : [];
+  return (
+    configured.length
+      ? configured
+      : [canonical, ...Object.keys((marker && marker.alt_units) || {})]
+  ).filter((unit, index, all) => unit && all.indexOf(unit) === index);
+}
+
+/* Der Freitext ist genau dann sichtbar, wenn die wirksame Einheit keine
+ * Katalogschreibweise ist (normalisierter Vergleich). Die Truthiness von
+ * `row.unit` reicht nicht: ein eingetippter Custom-Wert muss auch nach einem
+ * Re-Render sichtbar und editierbar bleiben (§9.3/§9.4). */
+function labUnitIsCustom(marker, unit) {
+  const fallback = (marker && marker.default_unit) || (marker && marker.unit) || "";
+  const current = String(unit == null ? "" : unit).trim() || fallback;
+  return !labMarkerAllowedUnits(marker).some(
+    (known) => labNormalizeUnit(known) === labNormalizeUnit(current)
+  );
+}
+
 function unitOptions(marker, selectedUnit) {
   const canonical = (marker && marker.unit) || "";
-  const altUnits = Object.keys((marker && marker.alt_units) || {});
-  const known = [canonical, ...altUnits].filter(
-    (unit, index, all) => unit && all.indexOf(unit) === index
-  );
-  const current = selectedUnit
-    ? known.includes(selectedUnit)
-      ? selectedUnit
-      : "__custom__"
-    : canonical;
-  const options = known
+  const configured = marker && Array.isArray(marker.allowed_units) ? marker.allowed_units : [];
+  const allowed = (
+    configured.length
+      ? configured
+      : [canonical, ...Object.keys((marker && marker.alt_units) || {})]
+  ).filter((unit, index, all) => unit && all.indexOf(unit) === index);
+  const fallback = (marker && marker.default_unit) || canonical;
+  const chosen = selectedUnit == null ? "" : String(selectedUnit).trim();
+  const current = chosen || fallback;
+  const isCustom = labUnitIsCustom(marker, selectedUnit);
+  const options = allowed
     .map(
       (unit) =>
         `<option value="${escapeHtml(unit)}"${
-          unit === current ? " selected" : ""
+          labNormalizeUnit(unit) === labNormalizeUnit(current) ? " selected" : ""
         }>${escapeHtml(unit)}</option>`
     )
     .join("");
   // REQ-HOM-133 (#73): Pflicht-Marker warnen im Dropdown, BEVOR der Server
   // mit `unit_required` ablehnt. Der Hinweis ist eine deaktivierte Zeile —
-  // die kanonische Einheit bleibt vorausgewählt und damit ein gültiger Wert.
+  // die Anzeige-Einheit bleibt vorausgewählt und damit ein gültiger Wert.
   const requiredHint =
     marker && marker.require_explicit_unit
       ? `<option value="" disabled>${escapeHtml(
@@ -1077,12 +1187,16 @@ function unitOptions(marker, selectedUnit) {
         )}</option>`
       : "";
   return `${requiredHint}${options}<option value="__custom__"${
-    current === "__custom__" ? " selected" : ""
+    isCustom ? " selected" : ""
   }>${escapeHtml(t("ui_panel_lab_unit_custom", "Andere …"))}</option>`;
 }
 
 function labReportRowHtml(markers, row, index, entryId) {
   const marker = markers[row.marker];
+  // Der Freitext steht IMMER im DOM; `hidden` wird beim Wechsel auf
+  // „Andere …" nur umgeschaltet (§9.3). Sichtbar ist er genau dann, wenn die
+  // wirksame Einheit keine Katalogschreibweise ist (normalisierter Vergleich).
+  const customHidden = labUnitIsCustom(marker, row.unit) ? "" : " hidden";
   return `<div class="lab-report-row">
       <select data-field="lab-report-marker-${index}" aria-label="${escapeHtml(
         t("ui_panel_lab_marker", "Marker")
@@ -1092,13 +1206,14 @@ function labReportRowHtml(markers, row, index, entryId) {
           t("ui_panel_lab_value_field", "Wert")
         )}" value="${attrValue(row.value)}" />
       <select data-field="lab-report-unit-pick-${index}" aria-label="${escapeHtml(
-        t("ui_panel_lab_unit_field", "Einheit (optional)")
+        t("ui_panel_lab_unit_field", "Einheit")
       )}">${unitOptions(marker, row.unit)}</select>
       <input type="text" data-field="lab-report-unit-${index}" aria-label="${escapeHtml(
-        t("ui_panel_lab_unit_field", "Einheit (optional)")
+        t("ui_panel_lab_unit_field", "Einheit (Freitext)")
       )}" value="${attrValue(row.unit)}" placeholder="${escapeHtml(
-        (marker && marker.unit) || t("ui_common_optional", "optional")
-      )}" autocomplete="off" />
+        (marker && (marker.default_unit || marker.unit)) ||
+          t("ui_panel_lab_unit_label", "Einheit")
+      )}" autocomplete="off"${customHidden} />
       <button class="btn ghost" type="button" data-action="lab-report-remove"
         data-entry="${escapeHtml(entryId)}" data-index="${index}" aria-label="${escapeHtml(
           t("ui_panel_lab_report_remove_row", "Zeile entfernen")
@@ -1178,15 +1293,27 @@ export function handleLabReportChange(panel, entryId, field, value) {
     const row = draft.rows[Number(markerMatch[1])];
     if (!row) return false;
     row.marker = value;
-    row.unit = ""; // Einheiten-Dropdown hängt am Marker
+    // §9.4: die Einheit hängt am Marker — Anzeige-Einheit mitziehen, sonst
+    // erbt die Zeile die Einheit des vorherigen Markers.
+    row.unit = labMarkerDefaultUnit(panel, entryId, value);
     return true;
   }
   const pickMatch = /^lab-report-unit-pick-(\d+)$/.exec(field);
   if (pickMatch) {
     const row = draft.rows[Number(pickMatch[1])];
     if (!row) return false;
+    // „Andere …" = leerer Wert; KEIN Re-Render, damit die Auswahl im DOM
+    // stehen bleibt (§9.4). Der Freitext wird direkt eingeblendet.
     row.unit = value === "__custom__" ? "" : value;
-    return true;
+    const input =
+      panel && panel.shadowRoot
+        ? panel.shadowRoot.querySelector(`[data-field="lab-report-unit-${pickMatch[1]}"]`)
+        : null;
+    if (input) {
+      input.value = row.unit;
+      input.hidden = value !== "__custom__";
+    }
+    return false;
   }
   const unitMatch = /^lab-report-unit-(\d+)$/.exec(field);
   if (unitMatch) {
@@ -1235,11 +1362,18 @@ export function fillLabReportDraft(panel, entryId, mode) {
   const used = new Set(draft.rows.map((row) => row.marker).filter(Boolean));
   for (const key of keys) {
     if (used.has(key)) continue;
-    const empty = draft.rows.find((row) => !row.marker && !row.value && !row.unit);
+    // F2: „leer" heißt ohne Marker UND ohne Wert — nicht „ohne Einheit".
+    // Sonst gilt jede Zeile mit vorausgewählter Anzeige-Einheit als belegt
+    // und die Füll-Buttons legen keine Zeilen mehr an.
+    const empty = draft.rows.find((row) => !row.marker && !row.value);
+    const unit = markers[key].default_unit || "";
     if (empty) {
+      // N2: Marker UND Anzeige-Einheit setzen — sonst erbt die Zeile die
+      // Einheit des vorherigen Markers (stille Fehlkonvertierung).
       empty.marker = key;
+      empty.unit = unit;
     } else if (draft.rows.length < LAB_REPORT_MAX_ROWS_UI) {
-      draft.rows.push({ marker: key, value: "", unit: "" });
+      draft.rows.push({ marker: key, value: "", unit });
     } else {
       break;
     }
@@ -1258,11 +1392,13 @@ async function submitLabReport(panel, entryId) {
     return;
   }
   const values = [];
-  for (const row of draft.rows) {
+  for (let index = 0; index < draft.rows.length; index += 1) {
+    const row = draft.rows[index];
     const marker = String(row.marker || "").trim();
     const rawValue = String(row.value || "").trim().replace(",", ".");
-    const unit = String(row.unit || "").trim();
-    if (!marker && !rawValue && !unit) continue;
+    // Einheit IMMER explizit (§8.1/F10): Select bzw. Freitext der Zeile.
+    const unit = readLabReportUnit(panel, index);
+    if (!marker && !rawValue) continue;
     if (!marker || !/^-?\d+(\.\d+)?$/.test(rawValue)) {
       panel._formError = t(
         "ui_panel_val_lab_value",
@@ -1271,11 +1407,14 @@ async function submitLabReport(panel, entryId) {
       panel._render();
       return;
     }
-    values.push(
-      unit
-        ? { marker, value: Number(rawValue), unit }
-        : { marker, value: Number(rawValue) }
-    );
+    // F10: „Andere …" mit leerem Freitext blockiert den Submit — es geht nie
+    // eine leere Einheit auf den Draht (der Server läse den Wert kanonisch).
+    if (!unit) {
+      panel._formError = t("ui_panel_lab_unit_required", "Einheit erforderlich");
+      panel._render();
+      return;
+    }
+    values.push({ marker, value: Number(rawValue), unit });
   }
   if (!values.length) {
     panel._formError = t(
@@ -1548,6 +1687,9 @@ export function labsTab(panel, data, entryId) {
     ? `<div class="msg error">${escapeHtml(panel._formError)}</div>`
     : "";
   const disabled = panel._busy ? " disabled" : "";
+  // Die Anzeige-Einheit hängt am (ersten) Picker-Marker (§9.3).
+  const entryMarker =
+    (labs.markers || {})[firstLabMarkerKey(labs.markers)] || null;
   const entryForm = `<details class="lab-entry-form">
       <summary>${escapeHtml(t("ui_panel_lab_add_value", "Neuen Wert erfassen"))}</summary>
       <label class="field">${escapeHtml(t("ui_panel_lab_marker", "Marker"))}
@@ -1556,10 +1698,12 @@ export function labsTab(panel, data, entryId) {
       <label class="field">${escapeHtml(t("ui_panel_lab_value_field", "Wert"))}
         <input type="number" step="any" data-field="lab-add-value" />
       </label>
-      <label class="field">${escapeHtml(t("ui_panel_lab_unit_field", "Einheit (optional)"))}
-        <input type="text" data-field="lab-add-unit" placeholder="${escapeHtml(
-          t("ui_common_optional", "optional")
-        )}" autocomplete="off" />
+      <label class="field">${escapeHtml(t("ui_panel_lab_unit_label", "Einheit"))}
+        <select data-field="lab-add-unit">${unitOptions(entryMarker, "")}</select>
+      </label>
+      <label class="field" data-role="lab-add-unit-custom-wrap" hidden>
+        ${escapeHtml(t("ui_panel_lab_unit_custom", "Andere …"))}
+        <input type="text" data-field="lab-add-unit-custom" autocomplete="off" />
       </label>
       <label class="field">${escapeHtml(t("ui_panel_lab_report_ref", "Bericht-Link/ID (optional)"))}
         <input type="text" data-field="lab-add-report-ref" placeholder="${escapeHtml(
@@ -1577,4 +1721,46 @@ export function labsTab(panel, data, entryId) {
     labs,
     entryId
   )}<div class="lab-rows">${rows}</div>${formError}${entryForm}${reportForm}`;
+}
+
+/* Erster Marker der Picker-Reihenfolge — genau der Eintrag, den der Browser
+ * ohne `selected` anzeigt; Grundlage für die vorausgewählte Anzeige-Einheit
+ * des Einzel-Erfassungs-Formulars. */
+function firstLabMarkerKey(markers) {
+  const entries = Object.entries(markers || {}).sort(([, a], [, b]) =>
+    labDisplayName(a, "").localeCompare(labDisplayName(b, ""))
+  );
+  return entries.length ? entries[0][0] : "";
+}
+
+/* §9.3 F10: „Andere …" blendet den Freitext ein, jede andere Auswahl aus.
+ * Beide Felder stehen immer im DOM — nur `hidden` wechselt. Gibt es eine
+ * dedizierte Hülle (`data-role="<customField>-wrap"`, Einzel-Erfassung), wird
+ * diese ausgeblendet, sonst das Feld selbst (Berichtszeile). */
+export function syncLabUnitCustomField(panel, pickField, customField) {
+  if (!panel || !panel.shadowRoot) return;
+  const pick = panel.shadowRoot.querySelector(`[data-field="${pickField}"]`);
+  const input = panel.shadowRoot.querySelector(`[data-field="${customField}"]`);
+  if (!pick || !input) return;
+  const isCustom = String(pick.value == null ? "" : pick.value) === "__custom__";
+  const wrap = panel.shadowRoot.querySelector(
+    `[data-role="${customField}-wrap"]`
+  );
+  (wrap || input).hidden = !isCustom;
+  if (!isCustom) input.value = "";
+}
+
+/* Panel: Marker-Wechsel im Einzel-Erfassungs-Formular (§9.3) — das
+ * Einheiten-Select hängt am Marker und wird gezielt im DOM neu aufgebaut
+ * (kein Re-Render, damit ein bereits getippter Wert stehen bleibt). */
+export function refreshLabEntryUnit(panel) {
+  if (!panel || !panel.shadowRoot) return;
+  const markerEl = panel.shadowRoot.querySelector('[data-field="lab-add-marker"]');
+  const unitEl = panel.shadowRoot.querySelector('[data-field="lab-add-unit"]');
+  if (!markerEl || !unitEl) return;
+  const data = (panel._data || {})[panel._selectedEntry] || {};
+  const markers = (data.labs && data.labs.markers) || {};
+  const marker = markers[String(markerEl.value == null ? "" : markerEl.value)] || null;
+  unitEl.innerHTML = unitOptions(marker, "");
+  syncLabUnitCustomField(panel, "lab-add-unit", "lab-add-unit-custom");
 }

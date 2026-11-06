@@ -1071,6 +1071,7 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
         const_module.OPTION_LAB_CUSTOM_MARKERS: [{"key": "vitamin_d"}],
         const_module.OPTION_LAB_REF_OVERRIDES: {"alt": {"ref_min": 5}},
         const_module.OPTION_LAB_HIDDEN_CATEGORIES: ["thyroid"],
+        const_module.OPTION_LAB_DEFAULT_UNITS: {"creatinine": "mg/dL"},
     }
     bare = MagicMock()
     bare.entry_id = "e2"
@@ -1089,6 +1090,7 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
             "lab_custom_markers": [{"key": "vitamin_d"}],
             "lab_ref_overrides": {"alt": {"ref_min": 5}},
             "lab_hidden_categories": ["thyroid"],
+            "lab_default_units": {"creatinine": "mg/dL"},
             "lab_hide_panel_disclaimer": False,
             "lab_retention_months": 0,
         },
@@ -1096,6 +1098,7 @@ def test_req_hom_122_async_backup_collects_lab_options_from_entries(tmp_path, mo
             "lab_custom_markers": [],
             "lab_ref_overrides": {},
             "lab_hidden_categories": [],
+            "lab_default_units": {},
             "lab_hide_panel_disclaimer": False,
             "lab_retention_months": 0,
         },
@@ -2142,3 +2145,21 @@ def test_import_csv_passes_actor_into_the_audit(tmp_path):
     actions = [event["action"] for event in store.entry("e1")["audit_log"]]
     assert actions == ["drink_added", "drink_added", "lab_values_added"]
     assert all(event["actor"] == "user-1" for event in store.entry("e1")["audit_log"])
+
+
+def test_req_hom_134_legacy_backup_without_default_units_stays_readable():
+    """[REQ-HOM-134] Ein Alt-Backup ohne `lab_default_units` bleibt unverändert lesbar."""
+    lab_options = {
+        "e1": {
+            "lab_custom_markers": [{"key": "vitamin_d"}],
+            "lab_ref_overrides": {},
+            "lab_hidden_categories": [],
+        }
+    }
+
+    doc = backup.build_backup_document(
+        {"schema": 5, "entries": {}}, datetime(2026, 10, 31), lab_options=lab_options
+    )
+
+    assert doc["lab_options"] == lab_options
+    assert "lab_default_units" not in doc["lab_options"]["e1"]

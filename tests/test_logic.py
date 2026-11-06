@@ -2307,3 +2307,343 @@ def test_req_hom_133_custom_marker_may_require_explicit_unit():
     default = logic.normalize_lab_custom_markers([{"name": "Vitamin D", "unit": "ng/mL"}])
     assert "require_explicit_unit" not in default[0]
     assert logic.effective_lab_markers(default)["vitamin_d"]["require_explicit_unit"] is False
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten (Werkseinstellungen + Personen-Override) ---
+
+
+def test_req_hom_134_lab_default_units_are_allowed_catalog_units():
+    """[REQ-HOM-134] Jeder Werksdefault ist kanonisch oder ein `alt_units`-Key."""
+    for marker_key, unit in const.LAB_DEFAULT_UNITS.items():
+        assert marker_key in const.LAB_MARKERS, f"unbekannter Marker: {marker_key}"
+        allowed = logic.lab_allowed_units(const.LAB_MARKERS[marker_key])
+        assert any(
+            logic._norm_unit(candidate) == logic._norm_unit(unit) for candidate in allowed
+        ), f"{marker_key}: Default {unit!r} ist keine erlaubte Einheit {allowed!r}"
+
+
+def test_req_hom_134_lab_default_units_urea_stays_canonical():
+    """[REQ-HOM-134/F12] `urea` bleibt kanonisch `mmol/L` (BUN-Faktor 0.357)."""
+    assert const.LAB_DEFAULT_UNITS["urea"] == "mmol/L"
+    assert const.LAB_MARKERS["urea"]["canonical_unit"] == "mmol/L"
+    # Der Katalogfaktor bleibt unverändert — nur die Anzeige ist kanonisch.
+    assert const.LAB_MARKERS["urea"]["alt_units"] == {"mg/dL": 0.357}
+
+
+def test_req_hom_134_lab_units_cover_every_catalog_spelling():
+    """[REQ-HOM-134] `LAB_UNITS` ≡ Katalogschreibweisen (über `_norm_unit`)."""
+    catalog_units: set[str] = set()
+    for marker in const.LAB_MARKERS.values():
+        catalog_units.add(marker["canonical_unit"])
+        catalog_units.update(marker.get("alt_units") or {})
+
+    assert {logic._norm_unit(unit) for unit in const.LAB_UNITS} == {
+        logic._norm_unit(unit) for unit in catalog_units
+    }
+    assert len(const.LAB_UNITS) == len(set(const.LAB_UNITS))
+
+
+def test_req_hom_134_lab_allowed_units_canonical_first_and_deduped():
+    """[REQ-HOM-134] Kanonisch zuerst, Alt-Einheiten in Einfügereihenfolge, dedupliziert."""
+    marker = {
+        "canonical_unit": "µmol/L",
+        "alt_units": {"mg/dL": 88.4, "UMOL/L": 1, "\u03bcmol/L": 1},
+    }
+
+    assert logic.lab_allowed_units(marker) == ["µmol/L", "mg/dL"]
+    # Custom-Marker: Map-Keys werden genauso angehängt.
+    custom = {"canonical_unit": "ng/mL", "alt_units": {"nmol/L": 0.4, "µg/L": 0.001}}
+    assert logic.lab_allowed_units(custom) == ["ng/mL", "nmol/L", "µg/L"]
+    # Leere/fehlende kanonische Einheit -> keine erlaubten Einheiten.
+    assert logic.lab_allowed_units({"canonical_unit": "   "}) == []
+    assert logic.lab_allowed_units({}) == []
+
+
+def test_req_hom_134_resolve_lab_display_unit_precedence():
+    """[REQ-HOM-134] Override > Werkseinstellung > kanonisch, defensiv."""
+    creatinine = const.LAB_MARKERS["creatinine"]
+    hba1c = const.LAB_MARKERS["hba1c"]
+
+    assert (
+        logic.resolve_lab_display_unit("creatinine", creatinine, {"creatinine": "MG/DL"}) == "mg/dL"
+    )
+    assert logic.resolve_lab_display_unit("creatinine", creatinine, {}) == "mg/dL"
+    # Kein Eintrag in `LAB_DEFAULT_UNITS` -> kanonisch.
+    assert logic.resolve_lab_display_unit("hba1c", hba1c, {}) == "mmol/mol"
+
+
+def test_req_hom_134_resolve_lab_display_unit_is_defensive():
+    """[REQ-HOM-134] Ungültige/rohe Defaults werfen nie und fallen zurück."""
+    creatinine = const.LAB_MARKERS["creatinine"]
+
+    # Falsche Schreibweise wird auf die Katalogschreibweise abgebildet.
+    assert (
+        logic.resolve_lab_display_unit("creatinine", creatinine, {"creatinine": "mg/dl"}) == "mg/dL"
+    )
+    # Ungültige Override-Einheit -> nächste Präzedenzstufe (Werkseinstellung).
+    assert (
+        logic.resolve_lab_display_unit("creatinine", creatinine, {"creatinine": "furlong"})
+        == "mg/dL"
+    )
+    # Marker ohne Werkseintrag fällt auf kanonisch zurück.
+    assert (
+        logic.resolve_lab_display_unit("alt", const.LAB_MARKERS["alt"], {"alt": "mg/dL"}) == "U/L"
+    )
+    # `defaults` darf fehlen/roh sein.
+    assert logic.resolve_lab_display_unit("creatinine", creatinine, None) == "mg/dL"
+    assert logic.resolve_lab_display_unit("creatinine", creatinine, "kaputt") == "mg/dL"
+    # Kein kanonischer Wert -> leerer String, keine Ausnahme.
+    assert logic.resolve_lab_display_unit("x", {}, {}) == ""
+
+
+def test_req_hom_134_normalize_lab_default_units_alias_and_catalog_spelling():
+    """[REQ-HOM-134] Alias-Key + tolerant geschriebene Einheit -> Katalogform."""
+    result = logic.normalize_lab_default_units(
+        {"GPT": "u/l", "creatinine": "umol/l", "bogus_marker": "mg/dL"}
+    )
+
+    assert result == {"alt": "U/L", "creatinine": "µmol/L"}
+    assert list(result) == ["alt", "creatinine"], "Eingabereihenfolge bleibt stabil"
+
+
+def test_req_hom_134_normalize_lab_default_units_invalid_unit_falls_back_to_canonical():
+    """[REQ-HOM-134/D4] Unbekannte Einheit -> kanonisch, nie ein Fehler."""
+    result = logic.normalize_lab_default_units(
+        {"alt": "nonsense", "hba1c": "nonsense", "creatinine": "mg/dL"}
+    )
+
+    assert result["alt"] == "U/L"
+    assert result["hba1c"] == "mmol/mol"
+    assert result["creatinine"] == "mg/dL"
+
+
+def test_req_hom_134_normalize_lab_default_units_non_object_is_empty():
+    """[REQ-HOM-134] Kein Objekt -> `{}` (kein Fehler)."""
+    for raw in (None, "x", [], 42):
+        assert logic.normalize_lab_default_units(raw) == {}
+
+
+def test_req_hom_134_normalize_lab_default_units_is_idempotent_and_custom_aware():
+    """[REQ-HOM-134] Idempotent; Custom-Marker-Keys und -Einheiten bleiben gültig."""
+    custom = [
+        {
+            "key": "vitamin_d",
+            "name": "Vitamin D",
+            "category": "other",
+            "unit": "ng/mL",
+            "alt_units": {"nmol/L": 0.4},
+        }
+    ]
+    raw = {"creatinine": "MG/DL", "vitamin_d": "NMOL/L", "unknown": "mg/dL"}
+
+    once = logic.normalize_lab_default_units(raw, custom)
+    twice = logic.normalize_lab_default_units(once, custom)
+
+    assert once == {"creatinine": "mg/dL", "vitamin_d": "nmol/L"}
+    assert twice == once
+
+
+def test_req_hom_134_convert_lab_display_value_all_factory_defaults():
+    """[REQ-HOM-134] Jeder Werksdefault konvertiert mit dem Katalogfaktor."""
+    for marker_key, display_unit in const.LAB_DEFAULT_UNITS.items():
+        marker = const.LAB_MARKERS[marker_key]
+        canonical_value = 100.0
+        factor = marker["alt_units"].get(display_unit, 1)
+        expected = round(canonical_value / factor, 6)
+
+        converted = logic.convert_lab_display_value(marker, canonical_value, display_unit)
+
+        assert converted is not None
+        value, _unit = converted
+        assert value == pytest.approx(expected, abs=1e-6), marker_key
+
+
+def test_req_hom_134_convert_lab_display_value_returns_display_unit():
+    """[REQ-HOM-134] Der zweite Rückgabewert ist die Anzeige-Einheit (Katalogform).
+
+    `convert_lab_display_value` liefert `(anzeige, anzeige_einheit)`; nur so
+    kann der Oracle-Round-Trip den Anzeigewert wieder in die kanonische Zahl
+    zurückrechnen. Eingabe in anderer Schreibweise -> Katalogschreibweise.
+    """
+    creatinine = const.LAB_MARKERS["creatinine"]
+
+    assert logic.convert_lab_display_value(creatinine, 79.6, "mg/dL") == (
+        pytest.approx(0.900452, abs=1e-6),
+        "mg/dL",
+    )
+    assert logic.convert_lab_display_value(creatinine, 79.6, "MG/DL")[1] == "mg/dL"
+    # Kanonische Einheit bleibt kanonisch.
+    assert logic.convert_lab_display_value(creatinine, 79.6, "µmol/L")[1] == "µmol/L"
+
+
+def test_req_hom_134_convert_lab_display_value_unknown_unit_and_bad_value():
+    """[REQ-HOM-134] Unbekannte Einheit -> kanonisch; nicht-numerisch -> `None`."""
+    creatinine = const.LAB_MARKERS["creatinine"]
+
+    assert logic.convert_lab_display_value(creatinine, 97.24, "furlong") == (
+        97.24,
+        "µmol/L",
+    )
+    assert logic.convert_lab_display_value(creatinine, "kaputt", "mg/dL") is None
+    assert logic.convert_lab_display_value(creatinine, None, "mg/dL") is None
+
+
+def test_req_hom_134_convert_lab_display_value_custom_marker_map():
+    """[REQ-HOM-134/D2] Custom-Marker nutzen die `alt_units`-Map."""
+    marker = {"canonical_unit": "ng/mL", "alt_units": {"nmol/L": 0.4, "µg/L": 0.001}}
+
+    value, unit = logic.convert_lab_display_value(marker, 40.0, "nmol/L")
+
+    assert value == pytest.approx(100.0, abs=1e-6)
+    assert unit == "nmol/L"
+
+
+def test_req_hom_134_convert_lab_display_value_roundtrip_reported_value():
+    """[REQ-HOM-134] `convert_lab_value` -> `convert_lab_display_value` ≈ Eingabe."""
+    for marker_key, display_unit in const.LAB_DEFAULT_UNITS.items():
+        marker = const.LAB_MARKERS[marker_key]
+        reported_value = 1.25
+
+        canonical, _canonical_unit = logic.convert_lab_value(marker, reported_value, display_unit)
+        display_value, display_value_unit = logic.convert_lab_display_value(
+            marker, canonical, display_unit
+        )
+
+        assert display_value == pytest.approx(reported_value, abs=1e-6), marker_key
+        assert display_value_unit == display_unit, marker_key
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.09, 3),
+        (0.9, 3),
+        (1, 3),
+        (9.9, 3),
+        (10, 2),
+        (99, 2),
+        (100, 1),
+        (999, 1),
+    ],
+)
+def test_req_hom_134_lab_display_decimals_boundaries_and_cap(value, expected):
+    """[REQ-HOM-134/N2/N4] `base_d`-Grenzen 1/10/100 und Cap `min(base_d+1,3)`."""
+    assert logic.lab_display_decimals(value) == expected
+    assert logic.lab_display_decimals(-value) == expected
+
+
+def test_req_hom_134_lab_display_decimals_defensive():
+    """[REQ-HOM-134] Nicht-numerischer Wert -> maximal präzise (3)."""
+    assert logic.lab_display_decimals("kaputt") == 3
+    assert logic.lab_display_decimals(None) == 3
+
+
+def test_req_hom_134_normalize_custom_marker_legacy_alt_unit_to_map():
+    """[REQ-HOM-134/D2] Legacy `alt_unit` wird in die Map überführt."""
+    result = logic.normalize_lab_custom_markers(
+        [
+            {
+                "name": "Vitamin D",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_unit": {"unit": "nmol/L", "factor_to_canonical": 0.4},
+            }
+        ]
+    )
+
+    assert result[0]["alt_units"] == {"nmol/L": 0.4}
+    assert "alt_unit" not in result[0]
+    assert logic.effective_lab_markers(result)["vitamin_d"]["alt_units"] == {"nmol/L": 0.4}
+
+
+def test_req_hom_134_normalize_custom_marker_map_wins_over_legacy():
+    """[REQ-HOM-134/D2] Map gewinnt pro Einheit; Legacy füllt nur fehlende Keys."""
+    result = logic.normalize_lab_custom_markers(
+        [
+            {
+                "name": "Vitamin D",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_units": {"nmol/L": 0.4},
+                "alt_unit": {"unit": "nmol/L", "factor_to_canonical": 2.5},
+            }
+        ]
+    )
+    assert result[0]["alt_units"] == {"nmol/L": 0.4}
+
+    filled = logic.normalize_lab_custom_markers(
+        [
+            {
+                "name": "Ferritin",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_units": {"nmol/L": 0.4},
+                "alt_unit": {"unit": "µg/L", "factor_to_canonical": 0.001},
+            }
+        ]
+    )
+    assert filled[0]["alt_units"] == {"nmol/L": 0.4, "µg/L": 0.001}
+
+
+def test_req_hom_134_normalize_custom_marker_drops_invalid_pairs_individually():
+    """[REQ-HOM-134/§5.4] Ungültige Paare fallen einzeln weg, kein Abbruch."""
+    result = logic.normalize_lab_custom_markers(
+        [
+            {
+                "name": "Vitamin D",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_units": {
+                    "nmol/L": 0.4,
+                    "zero/L": 0,
+                    "negative/L": -1,
+                    "text/L": "kaputt",
+                    "infinite/L": float("inf"),
+                    "": 2,
+                    "NG/ML": 1,  # Selbstumrechnung auf kanonisch
+                    "NMOL/L": 9,  # Duplikat nach `_norm_unit` -> erster Key gewinnt
+                },
+            }
+        ]
+    )
+
+    assert result[0]["alt_units"] == {"nmol/L": 0.4}
+
+
+def test_req_hom_134_normalize_custom_marker_is_idempotent():
+    """[REQ-HOM-134/§5.4] Wiederholtes Normalisieren ändert nothing."""
+    once = logic.normalize_lab_custom_markers(
+        [
+            {
+                "name": "Vitamin D",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_unit": {"unit": "nmol/L", "factor_to_canonical": 0.4},
+            }
+        ]
+    )
+    twice = logic.normalize_lab_custom_markers(once)
+
+    assert twice == once
+
+
+def test_req_hom_134_effective_lab_markers_carry_alt_units_map():
+    """[REQ-HOM-134/§6] `effective_lab_markers` liefert die Custom-Map."""
+    markers = logic.effective_lab_markers(
+        [
+            {
+                "name": "Ferritin",
+                "category": "other",
+                "unit": "ng/mL",
+                "alt_units": {"µg/L": 0.001, "pmol/L": 0.0001},
+            }
+        ]
+    )
+
+    assert markers["ferritin"]["alt_units"] == {"µg/L": 0.001, "pmol/L": 0.0001}
+    assert markers["ferritin"]["canonical_unit"] == "ng/mL"
+    assert logic.lab_allowed_units(markers["ferritin"]) == [
+        "ng/mL",
+        "µg/L",
+        "pmol/L",
+    ]

@@ -2023,6 +2023,7 @@ def test_get_settings_returns_options_in_options_flow_shape():
                 "areas": {"drink": True, "bp": True, "wellbeing": True, "labs": True},
                 # REQ-HOM-122: additive Lab-Felder + read-only Katalog.
                 "lab_custom_markers": [],
+                "lab_default_units": {},
                 "lab_ref_overrides": {},
                 "lab_hidden_categories": [],
                 "lab_hide_panel_disclaimer": False,
@@ -2030,6 +2031,13 @@ def test_get_settings_returns_options_in_options_flow_shape():
                     "categories": const.LAB_CATEGORIES,
                     "markers": const.LAB_MARKERS,
                 },
+                # REQ-HOM-134: Read-only Anzeige-Einheiten.
+                "lab_default_units_factory": dict(const.LAB_DEFAULT_UNITS),
+                "lab_allowed_units": {
+                    key: ws_api.logic.lab_allowed_units(marker)
+                    for key, marker in ws_api.logic.effective_lab_markers().items()
+                },
+                "lab_units": list(const.LAB_UNITS),
             },
         )
     ]
@@ -2254,6 +2262,11 @@ def test_set_settings_persists_via_async_update_entry_and_fires_listener():
         "lab_ref_overrides",
         "lab_hidden_categories",
         "lab_catalog",
+        # REQ-HOM-134: Anzeige-Einheiten + read-only Listen.
+        "lab_default_units",
+        "lab_default_units_factory",
+        "lab_allowed_units",
+        "lab_units",
     }
 
 
@@ -6501,3 +6514,164 @@ def test_req_hom_127_batch_envelope_has_no_translation_keys(monkeypatch):
     assert set(payload["error"]) == {"code", "params", "message"}
     assert payload["error"]["code"] == "no_active_report"
     assert set(payload["error"]["params"]) == {"ts"}
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten (Admin-Settings + panel_data) ------------
+
+
+def test_req_hom_134_settings_keys_include_lab_default_units():
+    """[REQ-HOM-134] `SETTINGS_KEYS` kennt den Anzeige-Einheiten-Schlüssel."""
+    assert const.OPTION_LAB_DEFAULT_UNITS in ws_api.SETTINGS_KEYS
+
+
+def test_req_hom_134_build_settings_exposes_display_unit_metadata():
+    """[REQ-HOM-134] `build_settings` liefert normalisierte Overrides + Read-only-Keys."""
+    entry = _entry(
+        "e1",
+        options={
+            "lab_custom_markers": [
+                {
+                    "name": "Vitamin D",
+                    "category": "other",
+                    "unit": "ng/mL",
+                    "alt_units": {"nmol/L": 0.4},
+                }
+            ],
+            "lab_default_units": {"creatinine": "MG/DL", "vitamin_d": "NMOL/L"},
+        },
+    )
+
+    settings = ws_api.build_settings(entry)
+
+    assert settings["lab_default_units"] == {
+        "creatinine": "mg/dL",
+        "vitamin_d": "nmol/L",
+    }
+    assert settings["lab_default_units_factory"] == dict(const.LAB_DEFAULT_UNITS)
+    assert settings["lab_allowed_units"]["creatinine"] == ["µmol/L", "mg/dL"]
+    assert settings["lab_allowed_units"]["vitamin_d"] == ["ng/mL", "nmol/L"]
+    assert settings["lab_units"] == list(const.LAB_UNITS)
+    # `lab_catalog` bleibt die unveränderte `const.py`-Projektion.
+    assert settings["lab_catalog"]["markers"] == const.LAB_MARKERS
+
+
+def test_req_hom_134_parse_settings_message_normalizes_default_units():
+    """[REQ-HOM-134] Normalisierung verwirft unbekannte Marker, Einheit -> Katalogform."""
+    updates, error = ws_api.parse_settings_message(
+        {"lab_default_units": {"creatinine": "MG/DL", "bogus": "mg/dL"}}
+    )
+
+    assert error is None
+    assert updates == {"lab_default_units": {"creatinine": "mg/dL"}}
+
+
+def test_req_hom_134_parse_settings_message_pops_before_schema_run():
+    """[REQ-HOM-134/F7] Der Rohwert erreicht `SETTINGS_SCHEMA` nie.
+
+    Ohne den Pop würde der Schema-Lauf die normalisierte Map mit `MG/DL`
+    überschreiben; gespeichert/geantwortet wird aber die Katalogschreibweise.
+    """
+    updates, error = ws_api.parse_settings_message({"lab_default_units": {"creatinine": "MG/DL"}})
+
+    assert error is None
+    assert updates["lab_default_units"] == {"creatinine": "mg/dL"}
+
+
+@pytest.mark.parametrize("raw", ["nope", [], 42, None])
+def test_req_hom_134_parse_settings_message_rejects_non_object_defaults(raw):
+    """[REQ-HOM-134] Kein Objekt -> strukturiertes `invalid_setting`."""
+    updates, error = ws_api.parse_settings_message({"lab_default_units": raw})
+
+    assert updates == {}
+    assert error is not None
+    assert error["code"] == "invalid_setting"
+    assert error["params"]["field"] == const.OPTION_LAB_DEFAULT_UNITS
+
+
+def test_req_hom_134_parse_settings_validates_defaults_against_new_marker_set():
+    """[REQ-HOM-134] Marker + Defaults im SELBEN Payload gelten zusammen."""
+    updates, error = ws_api.parse_settings_message(
+        {
+            "lab_custom_markers": [
+                {
+                    "name": "Vitamin D",
+                    "category": "other",
+                    "unit": "ng/mL",
+                    "alt_units": {"nmol/L": 0.4},
+                }
+            ],
+            "lab_default_units": {"vitamin_d": "nmol/L"},
+        }
+    )
+
+    assert error is None
+    assert updates["lab_custom_markers"][0]["key"] == "vitamin_d"
+    assert updates["lab_default_units"] == {"vitamin_d": "nmol/L"}
+
+
+def test_req_hom_134_set_get_roundtrip_for_default_units():
+    """[REQ-HOM-134] set -> get liefert denselben normalisierten Override."""
+    updates, error = ws_api.parse_settings_message(
+        {"lab_default_units": {"creatinine": "MG/DL", "urea": "mg/dL"}}
+    )
+    assert error is None
+
+    entry = _entry("e1", options=dict(updates))
+    assert ws_api.build_settings(entry)["lab_default_units"] == {
+        "creatinine": "mg/dL",
+        "urea": "mg/dL",
+    }
+
+
+def test_req_hom_134_labs_block_resolves_catalog_default_unit(monkeypatch):
+    """[REQ-HOM-134/§7.1] Katalog-Marker tragen `default_unit` + `allowed_units`."""
+    hass, _store_mock = _lab_panel_hass(_entry(), monkeypatch)
+
+    markers = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]
+
+    assert markers["creatinine"]["unit"] == "µmol/L"
+    assert markers["creatinine"]["default_unit"] == "mg/dL"
+    assert markers["creatinine"]["allowed_units"][0] == "µmol/L"
+    assert markers["creatinine"]["allowed_units"] == ["µmol/L", "mg/dL"]
+    assert markers["urea"]["default_unit"] == "mmol/L"
+    assert markers["hba1c"]["default_unit"] == "mmol/mol"
+    assert markers["hba1c"]["allowed_units"] == ["mmol/mol"]
+
+
+def test_req_hom_134_labs_block_resolves_custom_default_unit(monkeypatch):
+    """[REQ-HOM-134/§7.1] Custom-Marker nutzen ihre `alt_units`-Map."""
+    entry = _entry(
+        options={
+            "lab_custom_markers": [
+                {
+                    "name": "Vitamin D",
+                    "category": "other",
+                    "unit": "ng/mL",
+                    "alt_units": {"nmol/L": 0.4},
+                }
+            ],
+            "lab_default_units": {"vitamin_d": "NMOL/L"},
+        }
+    )
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    marker = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["vitamin_d"]
+
+    assert marker["unit"] == "ng/mL"
+    assert marker["default_unit"] == "nmol/L"
+    assert marker["allowed_units"] == ["ng/mL", "nmol/L"]
+
+
+def test_req_hom_134_labs_block_invalid_override_pins_canonical(monkeypatch):
+    """[REQ-HOM-134/D4] Ungültige, gespeicherte Override-Einheit pinnt kanonisch.
+
+    `normalize_lab_default_units` macht daraus einen expliziten kanonischen
+    Override → die Werkseinstellung greift nicht mehr (bewusste D4-Auslegung,
+    §13). Es ist nie ein Fehler.
+    """
+    entry = _entry(options={"lab_default_units": {"creatinine": "furlong"}})
+    hass, _store_mock = _lab_panel_hass(entry, monkeypatch)
+
+    marker = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["creatinine"]
+
+    assert marker["default_unit"] == "µmol/L"

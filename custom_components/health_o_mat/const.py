@@ -628,10 +628,66 @@ LAB_MARKER_ALIASES: dict[str, str] = {
     "gamma_gt": "ggt",
 }
 
+# Werkseinstellungen der Anzeige-Einheiten (§5.1): marker_key -> anzeige_unit.
+# Nur Marker mit einer vom kanonischen Wert abweichenden Alltagseinheit; jeder
+# Wert ist `canonical_unit` oder ein Key von `alt_units`. Alle übrigen Marker
+# bleiben kanonisch. `urea` ist bewusst `mmol/L` (kanonisch), weil der
+# Katalogfaktor 0.357 die BUN-Skala abbildet (F12) — keine neue Medizinlogik.
+LAB_DEFAULT_UNITS: dict[str, str] = {
+    "bilirubin_total": "mg/dL",
+    "creatinine": "mg/dL",
+    "urea": "mmol/L",
+    "cholesterol_total": "mg/dL",
+    "ldl": "mg/dL",
+    "hdl": "mg/dL",
+    "triglycerides": "mg/dL",
+    "ft4": "ng/dL",
+    "ft3": "pg/mL",
+    "hemoglobin": "g/dL",
+    "albumin": "g/dL",
+    "hematocrit": "%",
+}
+
+# Kuratierte Einheitenliste (§5.5): ALLE in `LAB_MARKERS` vorkommenden
+# Schreibweisen (canonical_unit ∪ alt_units-Keys), dedupliziert. Reihenfolge =
+# Dropdown-Reihenfolge (nicht normativ), kein erfundenes Unit-Vokabular.
+LAB_UNITS: tuple[str, ...] = (
+    "%",
+    "10^12/L",
+    "10^9/L",
+    "10⁶/µL",
+    "fl",
+    "g/dL",
+    "g/L",
+    "g/g",
+    "L/L",
+    "mIU/L",
+    "mg/dL",
+    "mg/L",
+    "mg/g",
+    "mL/min/1.73m²",
+    "mm/h",
+    "mmol/L",
+    "mmol/mol",
+    "ng/dL",
+    "ng/mL",
+    "pg",
+    "pg/mL",
+    "pmol/L",
+    "U/L",
+    "µg/L",
+    "µkat/L",
+    "µmol/L",
+    "µm³",
+)
+
 # Options-Schlüssel (entry.options) für Custom-Marker/Overrides/Sichtbarkeit.
 OPTION_LAB_CUSTOM_MARKERS = "lab_custom_markers"
 OPTION_LAB_REF_OVERRIDES = "lab_ref_overrides"
 OPTION_LAB_HIDDEN_CATEGORIES = "lab_hidden_categories"
+# Anzeige-Einheiten je Person (Overrides der Werkseinstellung `LAB_DEFAULT_UNITS`).
+# Reine Anzeige-Option — kein Eintrag in `_lab_options_snapshot`, kein Reload.
+OPTION_LAB_DEFAULT_UNITS = "lab_default_units"
 
 # Labor-Retention (REQ-HOM-129): eigene Option, unabhängig von
 # `retention_months` (Getränke/BD); 0 = aus (Default = bisheriges Verhalten).

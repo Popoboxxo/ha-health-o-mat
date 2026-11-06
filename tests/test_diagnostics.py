@@ -753,3 +753,50 @@ def test_lab_entity_orphans_defaults_to_empty_without_registry():
     out = diagnostics.redact_diagnostics({"entity_ids": ["sensor.a"]})
 
     assert out["lab_entity_orphans"] == {"count": 0, "items": []}
+
+
+# ============================================================================
+# REQ-HOM-134 — Anzeige-Einheiten: nur Zähler, Slug/Marker nirgends serialisiert
+# ============================================================================
+
+
+def test_req_hom_134_lab_default_units_are_count_only():
+    """[REQ-HOM-134/F1] `lab_default_units` erscheint als `{"count": n}`.
+
+    Die Marker-Keys (inklusive Custom-Slugs aus Nutzer-Freitext) dürfen im
+    serialisierten Diagnostics-Ergebnis an keiner Stelle auftauchen.
+    """
+    options = {
+        const.OPTION_LAB_DEFAULT_UNITS: {
+            "creatinine": "mg/dL",
+            "mein_privater_slug": "nmol/L",
+        }
+    }
+
+    out = diagnostics.redact_diagnostics({"options": options})
+
+    assert out["options"][const.OPTION_LAB_DEFAULT_UNITS] == {"count": 2}
+    blob = _blob(out)
+    for token in ("creatinine", "mein_privater_slug", "mg/dL", "nmol/L"):
+        assert token not in blob, f"geleakt: {token!r}"
+
+
+def test_req_hom_134_lab_default_units_registered_as_count_only_key():
+    """[REQ-HOM-134/F1] Der Options-Schlüssel steht in `_LAB_OPTION_KEYS`."""
+    assert const.OPTION_LAB_DEFAULT_UNITS in diagnostics._LAB_OPTION_KEYS
+
+
+def test_req_hom_134_async_diagnostics_counts_default_units():
+    """[REQ-HOM-134/F1] Auch der Entry-Pfad liefert nur den Zähler."""
+    hass = _executor_hass(MagicMock())
+    hass.data = {}
+    entry = SimpleNamespace(
+        entry_id="e1",
+        version=5,
+        options={const.OPTION_LAB_DEFAULT_UNITS: {"mein_privater_slug": "nmol/L"}},
+    )
+
+    out = asyncio.run(diagnostics.async_get_config_entry_diagnostics(hass, entry))
+
+    assert out["options"][const.OPTION_LAB_DEFAULT_UNITS] == {"count": 1}
+    assert "mein_privater_slug" not in _blob(out)

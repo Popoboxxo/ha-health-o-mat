@@ -2103,6 +2103,138 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ---
 
+#### REQ-HOM-134 — Anzeige-Einheiten für Laborwerte (Werkseinstellungen + Personen-Override)
+- **Priorität:** P2 · **Aufwand:** M
+- **Status: Umgesetzt (Release `0.22.0` ausstehend)**
+  (Branch `feat/lab-default-units`, 2026-11-06; noch nicht veröffentlicht).
+  Die **Unit-/JS- und E2E-Belege sind vollständig** (`test_req_hom_134_*`,
+  siehe AK „Test-Belege" und „Test-Belege E2E"); **alle Akzeptanzkriterien sind
+  abgehakt**, offen ist ausschließlich der Release `0.22.0` (Tag/GitHub
+  Release, Tag ↔ `manifest.version`).
+- **ID-Wahl:** **134 ist die nächste freie ID** — vor der Anlage geprüft per
+  `grep -rn "REQ-HOM-134"` über das Repo (nur Spec-Verweise, kein REQ-Eintrag);
+  133 ist durch den Laborwert-Katalog belegt. Keine bestehende REQ wurde
+  umnummeriert.
+- **Spec:** `docs/superpowers/specs/2026-11-05-lab-default-units-design.md`
+  (§5 Datenmodell, §6 Logik, §7 Wire-Vertrag, §8 Anzeige-Konvertierung,
+  §9 UI, §11 i18n, §14 Release).
+- **Bezug:** Baut auf **REQ-HOM-122** (Laborwerte) und **REQ-HOM-133**
+  (Katalog, `alt_units`, `require_explicit_unit`) auf; ergänzt
+  `docs/superpowers/specs/2026-10-30-lab-values-design.md` §3
+  (Einheiten-Konvertierung).
+- **Anforderung:** Laborwerte werden weiterhin **kanonisch** gespeichert,
+  exportiert und als Sensor geführt (State, `native_unit_of_measurement`,
+  Langzeitstatistik unverändert); **nur die Anzeige** in Panel und Karte
+  rechnet in die Anzeige-Einheit zurück (D1). Je Marker gilt eine
+  **Werkseinstellung** (`LAB_DEFAULT_UNITS`, „typische Labor-Alltagseinheit"),
+  die **pro Person** über `entry.options["lab_default_units"]` übersteuerbar
+  ist (D3/D4); die Auflösungsreihenfolge ist **Override > Werkseinstellung >
+  kanonische Einheit**, eine ungültige oder unbekannte Einheit fällt
+  deterministisch auf die kanonische Einheit zurück — **nie** ein Fehler.
+  Gespeicherte Schreibweisen werden auf die Katalogschreibweise normalisiert
+  (tolerant über `_norm_unit`, `MG/DL` → `mg/dL`). Die UI erhält je Marker
+  `default_unit` und `allowed_units` (kanonisch zuerst, inkl. Custom-Marker)
+  sowie `lab_units` als Einheiten-Katalog; die Einheiten-Eingabe wird vom
+  Freitextfeld zum **Dropdown** („Andere …" + Freitext, mehrere Alt-Einheiten
+  je Custom-Marker über `alt_units`; Legacy-`alt_unit` bleibt dauerhaft
+  lesbar). Wert, Referenzgrenze und Chart-Band leiten ihre Dezimalstellen aus
+  **einem gemeinsamen** `d = min(base_d + 1, 3)` ab, der `in_range`-Badge
+  bleibt kanonisch berechnet. Backup enthält den Key additiv; **Restore
+  spielt `lab_default_units` in v1 nicht zurück** (F14, wie
+  `lab_ref_overrides`); Diagnostics liefert den Key **count-only**. Kein
+  Store-Schema-Bump, keine Migration, keine Entity-Identitäts-Änderung.
+- **Akzeptanzkriterien:**
+  - [x] `const.py` trägt `LAB_DEFAULT_UNITS` (jeder Wert ist `canonical_unit`
+    oder ein `alt_units`-Key, jeder Key existiert in `LAB_MARKERS`) und
+    `LAB_UNITS` (Katalogschreibweisen); `urea` bleibt bewusst auf `mmol/L`
+    (BUN-Skala, §14, O-1). Beleg: `const.py:636-682`.
+  - [x] HA-freie Logik: `lab_allowed_units` (kanonisch zuerst, dedupliziert,
+    Custom-Marker inklusive), `resolve_lab_display_unit`
+    (Override > Werkseinstellung > kanonisch, ungültig → kanonisch),
+    `normalize_lab_default_units` (Alias-Key, unbekannter Marker → weg,
+    idempotent), `convert_lab_display_value` (Round-Trip zu
+    `convert_lab_value`), `lab_display_decimals` (`d = min(base_d + 1, 3)`).
+    Beleg: `logic.py:1232-1370`.
+  - [x] Wire-Vertrag: `SETTINGS_KEYS`/`SETTINGS_SCHEMA`/`build_settings`/
+    `parse_settings_message` führen `lab_default_units`, `get_settings`
+    liefert zusätzlich `lab_default_units_factory`, `lab_allowed_units` und
+    `lab_units`; `_labs_block` liefert je Marker `default_unit` +
+    `allowed_units`. Beleg: `ws_api.py:691-742`, `:2120`, `:2141-2146`,
+    `:2243`.
+  - [x] Persistenz additiv: `backup.py:224` schreibt `lab_default_units` je
+    Entry; `diagnostics.py:104` listet den Key in `_LAB_OPTION_KEYS`
+    (**count-only**, keine Marker-Keys/Slugs); `restore.py` **unverändert**
+    (F14).
+  - [x] UI: Anzeige-Select in Admin-Katalog- **und** Custom-Zeilen samt
+    „Standard (…)"-Option, Einheiten-Dropdowns in Einzel- und
+    Berichts-Formular („Andere …" + Pflicht-Fehler bei leerem Freitext),
+    Add/Remove weiterer Alt-Einheiten, Anzeige-Konvertierung mit
+    gemeinsamer Dezimalableitung in Panel und Karte.
+  - [x] i18n: sechs neue `common`-Keys (§11) in `strings.json` (Master) sowie
+    `translations/de.json`/`en.json`, Key-Baum und `{unit}`-Platzhalter
+    paritätisch; `ui_panel_lab_unit_custom` bleibt unverändert.
+  - [x] Version: `manifest.json` → `0.22.0` (bare SemVer), **kein**
+    `async_migrate_entry`, kein Store-/Backup-Schema-Bump; Tag `v0.22.0` ↔
+    `manifest.version` (Release steht noch aus).
+  - [x] Test-Belege **Unit/JS** gemäß Spec §12 nachgezogen — Belege:
+    `tests/test_logic.py::test_req_hom_134_lab_default_units_are_allowed_catalog_units`,
+    `::test_req_hom_134_lab_default_units_urea_stays_canonical`,
+    `::test_req_hom_134_lab_units_cover_every_catalog_spelling`,
+    `::test_req_hom_134_lab_allowed_units_canonical_first_and_deduped`;
+    `tests/test_ws_api.py::test_req_hom_134_settings_keys_include_lab_default_units`,
+    `::test_req_hom_134_build_settings_exposes_display_unit_metadata`,
+    `::test_req_hom_134_parse_settings_message_normalizes_default_units`,
+    `::test_req_hom_134_parse_settings_message_pops_before_schema_run`,
+    `::test_req_hom_134_parse_settings_message_rejects_non_object_defaults`,
+    `::test_req_hom_134_parse_settings_validates_defaults_against_new_marker_set`,
+    `::test_req_hom_134_set_get_roundtrip_for_default_units`,
+    `::test_req_hom_134_labs_block_resolves_catalog_default_unit`,
+    `::test_req_hom_134_labs_block_resolves_custom_default_unit`,
+    `::test_req_hom_134_labs_block_invalid_override_pins_canonical`;
+    `tests/test_diagnostics.py::test_req_hom_134_lab_default_units_are_count_only`,
+    `::test_req_hom_134_lab_default_units_registered_as_count_only_key`,
+    `::test_req_hom_134_async_diagnostics_counts_default_units`;
+    `tests/test_import_backup.py::test_req_hom_134_legacy_backup_without_default_units_stays_readable`;
+    `tests/test_restore.py::test_req_hom_134_restore_ignores_lab_default_units`;
+    `tests/test_areas_wiring.py::test_req_hom_134_lab_default_units_change_does_not_reload`;
+    `tests/test_panel_js.py::test_req_hom_134_admin_display_selects_at_both_places`,
+    `::test_req_hom_134_admin_custom_unit_outside_vocabulary_keeps_value`,
+    `::test_req_hom_134_panel_collects_display_unit_overrides`,
+    `::test_req_hom_134_panel_report_fill_sets_marker_and_default_unit`,
+    `::test_req_hom_134_panel_entry_form_preselects_default_unit`,
+    `::test_req_hom_134_panel_empty_row_rule_and_reuse_set_default_unit`,
+    `::test_req_hom_134_panel_submit_blocks_empty_custom_unit`,
+    `::test_req_hom_134_panel_marker_row_uses_one_decimal_source`,
+    `::test_req_hom_134_admin_custom_form_has_unit_select_and_alt_add_remove`,
+    `::test_req_hom_134_panel_marker_row_uses_lab_display_value`;
+    `tests/test_card_js.py::test_req_hom_134_labs_card_selects_default_unit_and_form`,
+    `::test_req_hom_134_labs_card_marker_row_shows_converted_value_and_range`,
+    `::test_req_hom_134_labs_card_reported_subline_compares_normalized`,
+    `::test_req_hom_134_labs_card_fill_reuses_row_and_sets_default_unit`,
+    `::test_req_hom_134_labs_card_empty_row_rule_and_reuse_source`,
+    `::test_req_hom_134_labs_card_blocks_empty_custom_unit`,
+    `::test_req_hom_134_labs_card_eight_boundary_pairs_share_one_decimal_source`,
+    `::test_req_hom_134_panel_and_card_display_oracle_matches_python`,
+    `::test_req_hom_134_labs_card_text_contains_unit_keys`,
+    `::test_req_hom_134_labs_card_text_matches_translation_files`.
+  - [x] **Test-Belege E2E** gemäß Spec §12.3/§12.4 (`tests_e2e/`) — grün auf
+    der geteilten HA-Testinstanz: `tests_e2e/` für
+    `test_lab_values_e2e.py` + `test_diagnostics_e2e.py` → **14 passed,
+    0 failed, 0 skipped**. Belege:
+    `tests_e2e/test_lab_values_e2e.py::test_req_hom_134_default_unit_display_and_canonical_sensor`,
+    `::test_req_hom_134_lab_csv_stays_canonical`,
+    `::test_req_hom_134_boundary_value_and_reference_share_decimals`,
+    `::test_req_hom_134_empty_custom_unit_blocks_submit`;
+    `tests_e2e/test_diagnostics_e2e.py::test_req_hom_134_diagnostics_default_units_are_count_only`,
+    `::test_req_hom_134_diagnostics_legacy_entry_without_default_units`.
+- **Belege (Implementierung):** siehe Akzeptanzkriterien (`const.py`,
+  `logic.py`, `ws_api.py`, `backup.py`, `diagnostics.py`,
+  `www/health-o-mat-panel-*.js`, `www/health-o-mat-labs-card.js`,
+  `strings.json`/`translations`); Test-Belege siehe AK „Test-Belege" und
+  AK „Test-Belege E2E" (beide vollständig).
+
+---
+
 ## 3. Mapping Funde → Anforderungen
 
 | Fund | Schwere | REQ (Fix) | Vollständige Lösung |
@@ -2157,3 +2289,4 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 | 2026-11-02 | **B2 — Doku-Statusdrift bereinigt (Branch `chore/28-31-ci-and-e2e-hardening`):** **REQ-HOM-131** (Härtungen A-1…A-4) nachgetragen — Status **umgesetzt (0.17.0/0.17.1/0.17.2)**; die frühere Zuordnung „kein separates Härtungs-REQ" in REQ-HOM-130 ist damit überholt. **REQ-HOM-130** Release-Status von „0.17.0 noch nicht veröffentlicht" auf `0.17.2` korrigiert (`manifest.json:22`, `docs/RELEASE-NOTES-0.17.1.md`, `-0.17.2.md`). **REQ-HOM-001…004** und **008** mit belegtem Status „Umgesetzt" ergänzt; **REQ-HOM-006** (Blueprints: E2E-Import fehlt) und **REQ-HOM-010** (Text-Entity `measurement_note` fehlt) als **teilweise** belegt (für REQ-HOM-010 überholt: in Welle 2 umgesetzt, siehe Eintrag oben); **REQ-HOM-108** auf umgesetzt (grep-clean). **REQ-HOM-132** geprüft: Eintrag vollständig (Titel, Status, AK, Belege). Spec-Statusköpfe nachgezogen: Lab-Werte 0.16.0, Batch/Sichtbarkeit 0.16.2, Lexikon/Reset-Uhrzeit umgesetzt. `docs/REVIEW-2026-10-14.md`: N-11/N-13/N-14 mit Beleg auf erledigt. Keine Code-/Teständerung. |
 | 2026-11-02 | **Backlog-Abgleich gegen Release 0.19.0:** Release-Kopf auf `0.19.0` (0.18.0/0.19.0 veröffentlicht); REQ-HOM-132 (0.18.0) und REQ-HOM-133 (0.19.0) ohne „noch kein Release"; „Restore offen" in REQ-HOM-007 und der Changelog-Zeile durch REQ-HOM-116 ersetzt; REQ-HOM-101/102/106/107/109-AK mit Beleg abgehakt, REQ-HOM-101 AK 4 und REQ-HOM-105 (E2E) offen; Release-Aussagen REQ-HOM-108/112/113/114 korrigiert. Keine Code-/Teständerung. |
 | 2026-11-02 | **Neu aufgenommen: REQ-HOM-130 — Entity-ID-Migration auf sprachunabhängige, einheitliche `object_id`s** (Branch `feat/entity-id-migration` **noch nicht angelegt**; Spec `docs/superpowers/specs/2026-11-02-entity-id-migration-design.md` **APPROVED (2026-11-02)**, Audit `docs/reviews/entity-id-stability-audit.md` §5 Variante B): **P1 · Aufwand L · Status „Offen — geplant"** (überholt — **umgesetzt**, siehe Eintrag darüber). Inhalt: Migration der zwei abweichenden Entity-Klassen (Audit F-1 `QuickDrinkButton`, F-2 Custom-Labor-Marker) auf ein einheitliches Schema — Quick-Drinks `…_quick_drink_<n>` (**1-basiert**, aus der 0-basierten `unique_id` abgeleitet), Custom-Marker `…_lab_<key>` (nur bei slug-sicherem `key`, sonst Skip) — über `async_migrate_entry` (ConfigFlow `VERSION 2 → 3`, `async_migrate_entries` **awaited**) inklusive `suggested_object_id`-Pinning für Neuregistrierungen; `unique_id`, `original_name`, `device_id`, Store und Verlauf bleiben unverändert. Fail-closed bei Kollision/nicht eindeutigem `device_slug` (`target_occupied`, `device_slug_ambiguous`/`_unresolved`, `invalid_key`), **Version wird nur bei Erfolg** in genau einem `async_update_entry` gesetzt, Idempotenz + Retry nach Teil-Lauf. **Härtungen A-1…A-4** in REQ-HOM-130 integriert (Spec §4 führt sie ausdrücklich „in denselben Plan" und §8.2 nimmt sie in denselben REQ-Vorschlag auf — daher **kein** separates Härtungs-REQ): A-1 Kategorie-Validierung (`LAB_CATEGORIES`-Fremdwerte → `other`), A-2 Key-Erhalt für keylose Marker per Namens-Match (`previous`-Parameter), A-3 Drift-Test `WELLBEING_STATES` → `report_*` (Master/de/en), A-4 E2E-Regression englischer `object_id`s bei Systemsprache `de` inkl. Area-Fall. **Release: MINOR `0.17.0`** — **bewusste Abweichung** von der Repo-Regel „Entity-Änderung = MAJOR" (Nutzerentscheidung, Spec §5.4); Konsequenz: 💥-Migrationshinweis **an erster Stelle** in `CHANGELOG.md` und `docs/RELEASE-NOTES-0.17.0.md`, Nutzer müssen Automationen/Skripte/Dashboards/Szenen/Helfer/Template-Sensoren selbst anpassen, **der Verlauf bleibt** (Recorder-Metadaten werden auf die neue `entity_id` umgeschrieben). **Verbindlich:** Live-Migrationstest auf der geteilten Testinstanz `/home/hermes/ha-test` inkl. Negativprobe (Kollision + Retry) und Restore-Prozedur (Registry + Device-Registry + Config-Entries **gemeinsam** zurückspielen). Akzeptanzkriterien 1:1 aus Spec §8.2/§6.5 als offene Checkboxen; Belege folgen mit der Umsetzung. |
+| 2026-11-06 | **Neu angelegt: REQ-HOM-134 — Anzeige-Einheiten für Laborwerte (Werkseinstellungen + Personen-Override)** (Branch `feat/lab-default-units`, Spec `docs/superpowers/specs/2026-11-05-lab-default-units-design.md`): Laborwerte bleiben **kanonisch** gespeichert, exportiert und als Sensor geführt (State, Einheit, Langzeitstatistik unverändert); nur die Anzeige in Panel und Karte konvertiert zurück. Je Marker gilt `LAB_DEFAULT_UNITS` als Werkseinstellung, pro Person übersteuerbar via `entry.options["lab_default_units"]` (Override > Werkseinstellung > kanonisch, ungültig → kanonisch, nie ein Fehler). Einheiten werden zum Dropdown („Andere …" + Freitext), Custom-Marker tragen mehrere `alt_units` (Legacy `alt_unit` bleibt lesbar); Backup enthält den Key additiv, **Restore spielt ihn in v1 nicht zurück** (F14), Diagnostics nur `{"count": n}`. Additiv: kein Store-/Backup-Schema-Bump, keine Migration, keine Entity-Identitäts-Änderung — **MINOR `0.22.0`** (Tag `v0.22.0` ↔ `manifest.version`, noch nicht veröffentlicht). Implementierung im Working Tree; die Unit-/JS-Belege sind nachgezogen und die E2E-Belege nach Spec §12.3/§12.4 sind grün (`tests_e2e/test_lab_values_e2e.py` + `tests_e2e/test_diagnostics_e2e.py` → 14 passed, 0 failed, 0 skipped; 1936 Unit-/JS-Tests passed, `ruff` clean). Alle AK abgehakt; offen ist nur der Release `0.22.0`. |

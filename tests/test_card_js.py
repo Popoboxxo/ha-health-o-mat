@@ -2998,3 +2998,511 @@ def test_req_hom_125_labs_card_disclaimer_matches_translation_files(tmp_path):
     ):
         expected = _common_strings(filename)["ui_card_lab_disclaimer"]
         assert rendered[language] == expected, f"{filename}: Wortlaut weicht ab"
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten in der Laborwerte-Karte -----------------
+
+_LABS_CARD_VM_PREAMBLE = """import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const source = readFileSync(process.argv[2], "utf8");
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; this._fields = {}; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector(selector) {
+    const match = /\\[data-field="([^"]+)"\\]/.exec(String(selector));
+    return match ? this._fields[match[1]] || null : null;
+  }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+const CardClass = context.customElements._classes["health-o-mat-labs-card"];
+"""
+
+_NODE_LABS_DISPLAY_FEATURES_RUNNER = (
+    _LABS_CARD_VM_PREAMBLE
+    + """
+const markers = {
+  creatinine: {
+    category: "kidney", name: "Kreatinin", name_de: "Kreatinin", name_en: "Creatinine",
+    unit: "\\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+    default_unit: "mg/dL", allowed_units: ["\\u00b5mol/L", "mg/dL"],
+    value: 106.1, ref_min: 53, ref_max: 106, in_range: false,
+    reported_unit: "mg/dL", history: [], require_explicit_unit: false,
+    ts: "2026-10-31T09:00:00+01:00",
+  },
+  alt: {
+    category: "liver", name: "ALT", name_de: "ALT", name_en: "ALT",
+    unit: "U/L", alt_units: {}, default_unit: "U/L", allowed_units: ["U/L"],
+    value: 12, ref_min: 10, ref_max: 50, in_range: true,
+    history: [], require_explicit_unit: false, ts: "2026-10-31T09:00:00+01:00",
+  },
+};
+const card = new CardClass();
+card._config = {
+  entry_id: "entry-1", person_mode: "fixed", show_categories: ["kidney"],
+  show_trend: false, show_disclaimer: false,
+};
+card._normalized = null;
+card._activeEntry = "entry-1";
+card._activeCategory = "kidney";
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney", hidden: false }],
+    markers,
+  },
+};
+card._draft = { marker: "creatinine", value: "", unit: "", ts: "", reportRef: "" };
+card._saving = false;
+card._render = () => {};
+
+process.stdout.write(
+  JSON.stringify({
+    unitOptions: card._unitOptions(markers.creatinine, ""),
+    entryForm: card._entryForm(),
+    markerRow: card._markerRow("creatinine", markers.creatinine, { showTrend: false }),
+    sublineSame: context.labReportedSubline(
+      { reported_unit: "\\u00b5mol/L" }, "\\u00b5mol/L"
+    ),
+    sublineAscii: context.labReportedSubline({ reported_unit: "umol/L" }, "\\u00b5mol/L"),
+    sublineDifferent: context.labReportedSubline({ reported_unit: "mg/dL" }, "\\u00b5mol/L"),
+  })
+);
+"""
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_selects_default_unit_and_form(tmp_path):
+    """[REQ-HOM-134] Karte: Select waehlt `default_unit`, Formular hat Freitext."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_DISPLAY_FEATURES_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_display_features",
+        )
+    )
+
+    assert '<option value="mg/dL" selected>mg/dL</option>' in out["unitOptions"]
+    assert '<option value="µmol/L">µmol/L</option>' in out["unitOptions"]
+    assert 'data-field="lab-unit"' in out["entryForm"]
+    assert 'data-field="lab-unit-custom"' in out["entryForm"]
+    assert '<option value="mg/dL" selected>mg/dL</option>' in out["entryForm"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_marker_row_shows_converted_value_and_range(tmp_path):
+    """[REQ-HOM-134/F4/N1] Wert und Grenze teilen dasselbe `d`; Badge kanonisch."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_DISPLAY_FEATURES_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_display_features",
+        )
+    )
+    row = out["markerRow"]
+
+    assert "1,2 mg/dL" in row
+    assert "1,199 mg/dL" in row
+    assert 'class="status bad"' in row
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_reported_subline_compares_normalized(tmp_path):
+    """[REQ-HOM-134/F8] `reported_unit` wird normalisiert gegen die Anzeige-Einheit."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_DISPLAY_FEATURES_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_display_features",
+        )
+    )
+
+    assert out["sublineSame"] == ""
+    assert out["sublineAscii"] == "", "ASCII-`u` vs. Mikro-Zeichen erzeugt Rauschen"
+    assert "eingegeben als" in out["sublineDifferent"]
+
+
+_NODE_LABS_FILL_N2_RUNNER = (
+    _LABS_CARD_VM_PREAMBLE
+    + """
+const markers = {
+  creatinine: {
+    category: "kidney", name: "Kreatinin", name_de: "Kreatinin", name_en: "Creatinine",
+    unit: "\\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+    default_unit: "mg/dL", allowed_units: ["\\u00b5mol/L", "mg/dL"],
+    value: null, history: [], require_explicit_unit: false,
+  },
+};
+const card = new CardClass();
+card._config = { entry_id: "entry-1", person_mode: "fixed", show_categories: ["kidney"] };
+card._normalized = null;
+card._activeEntry = "entry-1";
+card._activeCategory = "kidney";
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney", hidden: false }],
+    markers,
+  },
+};
+card._reportDraft = {
+  ts: "", reportRef: "", rows: [{ marker: "", value: "", unit: "\\u00b5mol/L" }],
+};
+card._render = () => {};
+card._fillReportDraft("visible");
+process.stdout.write(JSON.stringify({ rows: card._reportDraft.rows }));
+"""
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_fill_reuses_row_and_sets_default_unit(tmp_path):
+    """[REQ-HOM-134/F2/N2] Vorausgewaehlte Einheit belegt die Zeile nicht."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_FILL_N2_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_fill_n2",
+        )
+    )
+
+    rows = out["rows"]
+    assert len(rows) == 1, "die Zeile mit vorausgewaehlter Einheit wurde nicht wiederverwendet"
+    assert rows[0]["marker"] == "creatinine"
+    assert rows[0]["unit"] == "mg/dL", "die Zeile erbte die Einheit des vorherigen Markers"
+
+
+def test_req_hom_134_labs_card_empty_row_rule_and_reuse_source():
+    """[REQ-HOM-134/F2/N2] Source-Assertions in `labs-card.js`."""
+    source = _labs_card_source()
+    body = _js_method_text(source, "_fillReportDraft")
+
+    assert "!row.marker && !row.value" in body
+    assert "!row.unit" not in body, "`!row.unit` darf nicht mehr als Leer-Kriterium dienen"
+    assert "empty.marker = key" in body
+    assert "markers[key].default_unit" in body
+    assert "empty.unit =" in body
+
+
+_NODE_LABS_F10_RUNNER = (
+    _LABS_CARD_VM_PREAMBLE
+    + """
+const card = new CardClass();
+card._config = { entry_id: "entry-1", person_mode: "fixed" };
+card._normalized = null;
+card._activeEntry = "entry-1";
+card._activeCategory = "kidney";
+card._data = {
+  person: "Alex",
+  labs: {
+    categories: [{ key: "kidney", name_de: "Niere", name_en: "Kidney", hidden: false }],
+    markers: {
+      creatinine: {
+        category: "kidney", name: "Kreatinin", name_de: "Kreatinin", name_en: "Creatinine",
+        unit: "\\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+        default_unit: "mg/dL", allowed_units: ["\\u00b5mol/L", "mg/dL"],
+        value: null, history: [], require_explicit_unit: false,
+      },
+    },
+  },
+};
+card._draft = { marker: "creatinine", value: "1,2", unit: "", ts: "", reportRef: "" };
+card._render = () => {};
+card.shadowRoot._fields = {
+  "lab-marker": { value: "creatinine" },
+  "lab-value": { value: "1,2" },
+  "lab-unit": { value: "__custom__" },
+  "lab-unit-custom": { value: "" },
+  "lab-ts": { value: "" },
+  "lab-report-ref": { value: "" },
+};
+const sent = [];
+card._hass = {
+  connection: {
+    sendMessagePromise: async (payload) => { sent.push(payload); return { ok: true }; },
+  },
+};
+await card._saveValue();
+process.stdout.write(
+  JSON.stringify({ sent, error: card._actionError, draft: card._draft })
+);
+"""
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_blocks_empty_custom_unit(tmp_path):
+    """[REQ-HOM-134/F10] Leerer „Andere …"-Freitext blockiert den Submit sichtbar."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_F10_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_f10",
+        )
+    )
+
+    assert out["sent"] == [], "es wurde eine (leere) Einheit an den Server gesendet"
+    assert out["error"] == "Einheit erforderlich"
+
+
+_NODE_LABS_EIGHT_CASES_RUNNER = (
+    _LABS_CARD_VM_PREAMBLE
+    + """
+const markers = {
+  creatinine: {
+    category: "kidney", name: "Kreatinin", name_de: "Kreatinin", name_en: "Creatinine",
+    unit: "\\u00b5mol/L", alt_units: { "mg/dL": 88.4 },
+    default_unit: "mg/dL", allowed_units: ["\\u00b5mol/L", "mg/dL"],
+    ref_min: 53, ref_max: 106,
+  },
+  cholesterol_total: {
+    category: "lipids", name: "Cholesterin", name_de: "Cholesterin", name_en: "Cholesterol",
+    unit: "mmol/L", alt_units: { "mg/dL": 0.0259 },
+    default_unit: "mg/dL", allowed_units: ["mmol/L", "mg/dL"],
+    ref_min: null, ref_max: 5.2,
+  },
+  bilirubin_total: {
+    category: "liver", name: "Bilirubin", name_de: "Bilirubin", name_en: "Bilirubin",
+    unit: "\\u00b5mol/L", alt_units: { "mg/dL": 17.1 },
+    default_unit: "mg/dL", allowed_units: ["\\u00b5mol/L", "mg/dL"],
+    ref_min: 5, ref_max: 21,
+  },
+  ft4: {
+    category: "thyroid", name: "fT4", name_de: "fT4", name_en: "fT4",
+    unit: "pmol/L", alt_units: { "ng/dL": 12.87 },
+    default_unit: "ng/dL", allowed_units: ["pmol/L", "ng/dL"],
+    ref_min: 10, ref_max: 23,
+  },
+};
+const cases = [
+  ["creatinine_high", "creatinine", 106.1, false],
+  ["creatinine_normal", "creatinine", 106.0, true],
+  ["cholesterol_high", "cholesterol_total", 5.21, false],
+  ["cholesterol_normal", "cholesterol_total", 5.2, true],
+  ["bilirubin_high", "bilirubin_total", 21.1, false],
+  ["bilirubin_normal", "bilirubin_total", 21.0, true],
+  ["ft4_high", "ft4", 23.1, false],
+  ["ft4_normal", "ft4", 23.0, true],
+];
+const card = new CardClass();
+card._render = () => {};
+const out = {};
+for (const [name, key, value, inRange] of cases) {
+  const marker = { ...markers[key], value, in_range: inRange, history: [],
+    require_explicit_unit: false, ts: "2026-10-31T09:00:00+01:00" };
+  out[name] = card._markerRow(key, marker, { showTrend: false });
+}
+process.stdout.write(JSON.stringify(out));
+"""
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_eight_boundary_pairs_share_one_decimal_source(tmp_path):
+    """[REQ-HOM-134/F4/N1] Acht Grenzfall-Paare: Wert und Grenze aus demselben `d`."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_LABS_EIGHT_CASES_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_eight_cases",
+        )
+    )
+
+    expected = {
+        "creatinine_high": ("1,2 mg/dL", "1,199 mg/dL", "status bad"),
+        "creatinine_normal": ("1,199 mg/dL", "1,199 mg/dL", "status good"),
+        "cholesterol_high": ("201,2 mg/dL", "200,8 mg/dL", "status bad"),
+        "cholesterol_normal": ("200,8 mg/dL", "200,8 mg/dL", "status good"),
+        "bilirubin_high": ("1,234 mg/dL", "1,228 mg/dL", "status bad"),
+        "bilirubin_normal": ("1,228 mg/dL", "1,228 mg/dL", "status good"),
+        "ft4_high": ("1,795 ng/dL", "1,787 ng/dL", "status bad"),
+        "ft4_normal": ("1,787 ng/dL", "1,787 ng/dL", "status good"),
+    }
+    for name, (value, limit, badge) in expected.items():
+        html = out[name]
+        assert value in html, f"{name}: Anzeigewert {value!r} fehlt"
+        assert limit in html, f"{name}: Grenze {limit!r} fehlt (gleiches d?)"
+        assert badge in html, f"{name}: Badge {badge!r} fehlt"
+
+
+_NODE_ORACLE_PARITY_RUNNER = """import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const base = await import(pathToFileURL(process.argv[2]).href);
+const source = readFileSync(process.argv[3], "utf8");
+const cases = JSON.parse(process.argv[4]);
+
+class FakeShadowRoot {
+  constructor() { this.innerHTML = ""; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+class FakeHTMLElement {
+  constructor() { this._shadow = new FakeShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+const context = {
+  HTMLElement: FakeHTMLElement,
+  customElements: {
+    _classes: {},
+    get() { return undefined; },
+    define(tag, cls) { this._classes[tag] = cls; },
+  },
+  window: {},
+  document: { createElement: () => ({}) },
+  console: { info: () => {}, log: () => {}, warn: () => {}, error: () => {} },
+};
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "health-o-mat-labs-card.js" });
+
+const out = cases.map((item) => {
+  const marker = { unit: item.unit, alt_units: item.alt_units };
+  const panelValue = base.labConvertDisplayValue(marker, item.value, item.display_unit);
+  const cardValue = context.labConvertDisplayValue(marker, item.value, item.display_unit);
+  return {
+    name: item.name,
+    panelValue,
+    panelDecimals: base.labDisplayDecimals(panelValue),
+    cardValue,
+    cardDecimals: context.labDisplayDecimals(cardValue),
+  };
+});
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_panel_and_card_display_oracle_matches_python(tmp_path):
+    """[REQ-HOM-134/F9] Panel- und Karten-Helfer ≡ Python-Oracle."""
+    from custom_components.health_o_mat import const as const_module
+    from custom_components.health_o_mat import logic as py_logic
+
+    cases = []
+    specs = [
+        ("creatinine", 79.6, "mg/dL"),
+        ("bilirubin_total", 15.0, "mg/dL"),
+        ("hemoglobin", 145.0, "g/dL"),
+        ("cholesterol_total", 5.2, "mg/dL"),
+        ("triglycerides", 1.7, "mg/dL"),
+        ("ft4", 15.0, "ng/dL"),
+        ("ft3", 5.0, "pg/mL"),
+        ("hematocrit", 0.42, "%"),
+        # Die acht Grenzfall-Paare aus §8.2.
+        ("creatinine", 106.1, "mg/dL"),
+        ("creatinine", 106.0, "mg/dL"),
+        ("cholesterol_total", 5.21, "mg/dL"),
+        ("cholesterol_total", 5.2, "mg/dL"),
+        ("bilirubin_total", 21.1, "mg/dL"),
+        ("bilirubin_total", 21.0, "mg/dL"),
+        ("ft4", 23.1, "ng/dL"),
+        ("ft4", 23.0, "ng/dL"),
+    ]
+    for marker_key, value, display_unit in specs:
+        marker = const_module.LAB_MARKERS[marker_key]
+        cases.append(
+            {
+                "name": f"{marker_key}:{value}:{display_unit}",
+                "unit": marker["canonical_unit"],
+                "alt_units": marker["alt_units"],
+                "value": value,
+                "display_unit": display_unit,
+            }
+        )
+
+    base_copy = tmp_path / "health-o-mat-panel-base.js"
+    base_copy.write_bytes((_COMPONENT_DIR / "www" / "health-o-mat-panel-base.js").read_bytes())
+    (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_ORACLE_PARITY_RUNNER,
+            [str(base_copy), str(Path(_LABS_CARD_JS)), json.dumps(cases)],
+            "runner_display_oracle",
+        )
+    )
+
+    for item, spec in zip(out, cases, strict=True):
+        marker = const_module.LAB_MARKERS[spec["name"].split(":")[0]]
+        expected_value, _unit = py_logic.convert_lab_display_value(
+            marker, spec["value"], spec["display_unit"]
+        )
+        expected_decimals = py_logic.lab_display_decimals(expected_value)
+        assert item["panelValue"] == pytest.approx(expected_value, abs=1e-6), item["name"]
+        assert item["cardValue"] == pytest.approx(expected_value, abs=1e-6), item["name"]
+        assert item["panelDecimals"] == expected_decimals, item["name"]
+        assert item["cardDecimals"] == expected_decimals, item["name"]
+
+
+def test_req_hom_134_labs_card_text_contains_unit_keys():
+    """[REQ-HOM-134] `CARD_TEXT` traegt beide Einheiten-Dropdown-Texte."""
+    source = _labs_card_source()
+
+    assert 'ui_panel_lab_unit_custom: "Andere …"' in source
+    assert 'ui_panel_lab_unit_custom: "Other …"' in source
+    assert 'ui_panel_lab_unit_required: "Einheit erforderlich"' in source
+
+
+_NODE_CARD_TEXT_RUNNER = (
+    _LABS_CARD_VM_PREAMBLE
+    + """
+process.stdout.write(JSON.stringify(vm.runInContext("CARD_TEXT", context)));
+"""
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_req_hom_134_labs_card_text_matches_translation_files(tmp_path):
+    """[REQ-HOM-134] `CARD_TEXT` traegt denselben Wortlaut wie die Uebersetzungen."""
+    out = json.loads(
+        _run_node(
+            tmp_path,
+            _NODE_CARD_TEXT_RUNNER,
+            [str(Path(_LABS_CARD_JS))],
+            "runner_labs_card_text",
+        )
+    )
+
+    keys = (
+        "ui_panel_lab_unit_custom",
+        "ui_panel_lab_unit_required",
+        "ui_card_lab_disclaimer",
+    )
+    for language, filename in (("de", "de.json"), ("en", "en.json")):
+        common = _common_strings(filename)
+        for key in keys:
+            assert out[language][key] == common[key], f"{filename}:{key} weicht ab"
+    # `strings.json` ist der englische Master.
+    master = _common_strings("strings.json")
+    for key in keys:
+        assert out["en"][key] == master[key], f"strings.json:{key} weicht ab"

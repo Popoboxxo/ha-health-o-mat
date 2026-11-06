@@ -39,6 +39,7 @@ from e2e_helpers import (
     is_shared_dev_instance,
     wait_for,
     wait_for_entry_loaded,
+    ws_command,
 )
 
 from scripts.e2e_bootstrap import _headers, ensure_person
@@ -53,6 +54,15 @@ MANIFEST = REPO_ROOT / "custom_components" / "health_o_mat" / "manifest.json"
 # Throwaway persons (one per test, deleted again in `finally`).
 PERSON_DIAG = "E2E-Diag"
 PERSON_GATE = "E2E-DiagGate"
+PERSON_UNITS = "E2E-DiagUnits"
+PERSON_UNITS_LEGACY = "E2E-DiagUnitsLegacy"
+
+# REQ-HOM-134 display units: a catalog marker (public key) plus a custom
+# marker whose slug is derived from the free-text name (must never leak).
+CATALOG_MARKER_KEY = "creatinine"
+CUSTOM_MARKER_NAME = "E2E Slug Probe"
+CUSTOM_MARKER_UNIT = "nmol/L"
+DEFAULT_UNITS = {CATALOG_MARKER_KEY: "mg/dL"}
 
 # Synthetic health data with values that cannot collide with a counter, a
 # schema version or an option (counters stay in the single digits).
@@ -96,6 +106,26 @@ def _diagnostics(base_url: str, token: str, entry_id: str) -> requests.Response:
 def _manifest_version() -> str:
     """`manifest.version` of the integration under test (the mounted source)."""
     return str(json.loads(MANIFEST.read_text(encoding="utf-8"))["version"])
+
+
+def _settings(base_url: str, token: str, entry_id: str) -> dict[str, Any]:
+    """The authoritative settings payload (`health_o_mat/get_settings`)."""
+    result = ws_command(
+        base_url, token, {"type": "health_o_mat/get_settings", "entry_id": entry_id}
+    )
+    return result or {}
+
+
+def _set_settings(base_url: str, token: str, entry_id: str, **payload: Any) -> dict[str, Any]:
+    """`health_o_mat/set_settings` (admin) and the full settings payload back."""
+    return (
+        ws_command(
+            base_url,
+            token,
+            {"type": "health_o_mat/set_settings", "entry_id": entry_id, **payload},
+        )
+        or {}
+    )
 
 
 def _numbers(value: Any) -> list[float]:
@@ -277,5 +307,144 @@ def test_req_hom_105_diagnostics_download_rejects_non_admin(
         denied = _diagnostics(hass_base_url, non_admin["token"], entry_id)
         assert denied.status_code == 401, denied.text
         assert "data" not in denied.text
+    finally:
+        _delete_entry(hass_base_url, hass_bearer_token, entry_id)
+
+
+# --- REQ-HOM-134 display units (§12.4) --------------------------------------
+
+
+def test_req_hom_134_diagnostics_default_units_are_count_only(hass_base_url, hass_bearer_token):
+    """[REQ-HOM-134/F1] §12.4 Nr.1: `lab_default_units` is a counter, slug never leaks.
+
+    The override map mixes a catalog marker (public key) with a custom marker
+    whose slug is derived from free text (potentially a diagnosis). The
+    diagnostics download may expose only the entry count — not the marker keys
+    and not the custom slug — anywhere in the serialized payload.
+    """
+    person = ensure_person(
+        hass_base_url,
+        hass_bearer_token,
+        PERSON_UNITS,
+        enable_panel=False,
+    )
+    entry_id = str(person["entry_id"])
+    try:
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
+
+        # Start from a clean lab-options state, then create exactly one custom
+        # marker. Clearing first keeps repeated runs from accumulating markers.
+        _set_settings(
+            hass_base_url,
+            hass_bearer_token,
+            entry_id,
+            lab_custom_markers=[],
+            lab_default_units={},
+        )
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
+        _set_settings(
+            hass_base_url,
+            hass_bearer_token,
+            entry_id,
+            lab_custom_markers=[
+                {
+                    "name": CUSTOM_MARKER_NAME,
+                    "unit": CUSTOM_MARKER_UNIT,
+                    "category": "other",
+                }
+            ],
+        )
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
+
+        settings = wait_for(
+            lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+            lambda value: any(
+                marker.get("name") == CUSTOM_MARKER_NAME
+                for marker in value.get("lab_custom_markers") or []
+            ),
+            "the custom marker to be persisted before setting its display unit",
+        )
+        slug = next(
+            str(marker["key"])
+            for marker in settings["lab_custom_markers"]
+            if marker.get("name") == CUSTOM_MARKER_NAME
+        )
+        assert slug != CATALOG_MARKER_KEY, slug
+
+        expected = {**DEFAULT_UNITS, slug: CUSTOM_MARKER_UNIT}
+        _set_settings(
+            hass_base_url,
+            hass_bearer_token,
+            entry_id,
+            lab_default_units=expected,
+        )
+        wait_for(
+            lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+            lambda value: value.get("lab_default_units") == expected,
+            "both display-unit overrides (catalog marker + custom slug) to persist",
+        )
+
+        response = _diagnostics(hass_base_url, hass_bearer_token, entry_id)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        data = body["data"]
+
+        assert data["options"]["lab_default_units"] == {"count": 2}, data["options"]
+
+        blob = json.dumps(body, ensure_ascii=False)
+        assert slug not in blob, (
+            f"the custom marker slug {slug!r} leaked into the diagnostics download"
+        )
+        assert CUSTOM_MARKER_NAME not in blob, (
+            f"the custom marker name {CUSTOM_MARKER_NAME!r} leaked into the diagnostics download"
+        )
+    finally:
+        _delete_entry(hass_base_url, hass_bearer_token, entry_id)
+
+
+def test_req_hom_134_diagnostics_legacy_entry_without_default_units(
+    hass_base_url, hass_bearer_token
+):
+    """[REQ-HOM-134/F1] §12.4 Nr.2: a legacy entry reports zero overrides.
+
+    A pre-feature entry has no `lab_default_units` option at all; the download
+    must still succeed and report zero overrides (HA omits an unset option, so
+    the observable contract is "absent or `{'count': 0}`"). Persisting an empty
+    map (what an admin save of "all defaults" produces) then yields the literal
+    `{'count': 0}` payload.
+    """
+    person = ensure_person(
+        hass_base_url,
+        hass_bearer_token,
+        PERSON_UNITS_LEGACY,
+        enable_panel=False,
+    )
+    entry_id = str(person["entry_id"])
+    try:
+        wait_for_entry_loaded(hass_base_url, hass_bearer_token, entry_id)
+
+        # 1. Legacy entry: the option was never written. HA's options mapping
+        # omits it, and diagnostics must not fail on that.
+        response = _diagnostics(hass_base_url, hass_bearer_token, entry_id)
+        assert response.status_code == 200, response.text
+        options = response.json()["data"]["options"]
+        assert options.get("lab_default_units", {"count": 0}) == {"count": 0}, options
+
+        # 2. An explicitly empty override map (all defaults) is count-only, 0.
+        _set_settings(
+            hass_base_url,
+            hass_bearer_token,
+            entry_id,
+            lab_default_units={},
+        )
+        wait_for(
+            lambda: _settings(hass_base_url, hass_bearer_token, entry_id),
+            lambda value: value.get("lab_default_units") == {},
+            "the empty display-unit option to persist",
+        )
+        response = _diagnostics(hass_base_url, hass_bearer_token, entry_id)
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        assert data["options"]["lab_default_units"] == {"count": 0}, data["options"]
     finally:
         _delete_entry(hass_base_url, hass_bearer_token, entry_id)

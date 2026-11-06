@@ -5,6 +5,63 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.22.0] — 2026-11-06
+
+### Added
+
+- **Display units for lab values (REQ-HOM-134):** every lab marker resolves a
+  display unit with the precedence **override > factory default > canonical**.
+  `LAB_DEFAULT_UNITS` ships typical laboratory units for twelve markers —
+  bilirubin, creatinine, total/LDL/HDL cholesterol, triglycerides, fT4, fT3,
+  hemoglobin, albumin and hematocrit — while `urea` deliberately stays
+  `mmol/L` (F12). Per-person overrides live in
+  `entry.options["lab_default_units"]`; unknown or invalid units fall back to
+  the canonical unit deterministically and never raise an error.
+- **Unit dropdowns in panel and labs card:** the free-text unit input becomes a
+  select built from the marker's `allowed_units` (canonical first, custom
+  markers included) with an "Other …" free-text branch. Single-entry and
+  report forms preselect the resolved display unit; an empty "Other …" unit
+  blocks submission with a visible error instead of sending an empty unit.
+  The admin mask lets each person override the display unit per marker via
+  "Default (…)", including custom markers.
+- **Multiple alternative units for custom markers:** additive `alt_units` map
+  (`{unit: factor_to_canonical}`) next to the legacy `alt_unit`, which remains
+  readable. The admin mask can add and remove additional units; the curated
+  `LAB_UNITS` list backs the dropdowns, free-text units are still accepted.
+- **Display conversion with one decimal source:** panel and card convert the
+  canonical value into the display unit for the value, the reference bounds and
+  the chart band, all derived from the same `d = min(base_d + 1, 3)`.
+  `in_range` and the badge stay canonically computed.
+- **Additive wire additions:** `panel_data.labs.markers[*]` gains
+  `default_unit` and `allowed_units`; `get_settings` adds
+  `lab_default_units`, `lab_default_units_factory`, `lab_allowed_units` and
+  `lab_units`. Existing keys are unchanged.
+
+### Changed
+
+- **New lab option `lab_default_units`:** a display-only option without a
+  config-entry reload. It is included in backups and exported as count-only
+  (`{"count": n}`) in diagnostics, so marker keys and custom slugs never reach
+  the public diagnostics download.
+- **Unit spellings are normalised:** an override such as `MG/DL` is stored and
+  returned in catalog spelling (`mg/dL`).
+
+### Notes
+
+- **No breaking changes, no migration:** no `unique_id`, entity-id,
+  `translation_key` or entity-set change; the store schema stays `5`, the
+  config-entry version stays `3` (no `async_migrate_entry`), and
+  `BACKUP_VERSION` stays `3`.
+- **Sensors, store and CSV stay canonical:** `native_unit_of_measurement`, the
+  entity state, long-term statistics, CSV export/import and `in_range` remain
+  canonical — the conversion is display-only.
+- **Restore does not apply `lab_default_units` in v1 (F14):** the backup
+  contains the key, but `plan_restore`/`apply_restore` ignore it, exactly like
+  `lab_ref_overrides`. A follow-up issue tracks a full restore/apply path.
+- **`urea` stays `mmol/L` (F12):** the catalog factor `0.357` is the BUN scale,
+  so displaying `mg/dL` would distort values; the factory default is canonical
+  until the catalog is corrected in a separate issue (the factor is unchanged).
+
 ## [0.21.0] — 2026-11-04
 
 ### Added

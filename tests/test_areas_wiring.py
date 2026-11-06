@@ -477,3 +477,20 @@ def test_options_updated_unchanged_quick_drinks_do_not_reload(monkeypatch):
     _run(init._options_updated(hass, entry))
 
     hass.config_entries.async_reload.assert_not_called()
+
+
+# --- REQ-HOM-134: Anzeige-Einheiten sind reine Anzeige-Optionen --------------
+
+
+def test_req_hom_134_lab_default_units_change_does_not_reload(monkeypatch):
+    """[REQ-HOM-134] `lab_default_units` ändert den Lab-Snapshot nicht → kein Reload."""
+    init, entry, hass = _lab_setup(monkeypatch, {"lab_default_units": {"creatinine": "mg/dL"}})
+    snapshot_before = entry.runtime_data.lab_options
+
+    entry.options = {"lab_default_units": {"creatinine": "µmol/L"}}
+    _run(init._options_updated(hass, entry))
+
+    hass.config_entries.async_reload.assert_not_called()
+    assert entry.runtime_data.lab_options == snapshot_before
+    # Die Option ist reine Anzeige: sie taucht im Snapshot gar nicht auf.
+    assert "lab_default_units" not in repr(snapshot_before)

@@ -23,9 +23,10 @@ Entities verfügbar und jederzeit als Excel-taugliche CSV exportierbar.
   7-Tage-Mittelwert, konfigurierbare Warnschwelle (Default 140/90)
 - 🧪 **Laborwerte**: 41 Marker in 10 Kategorien (Leber, Niere, Elektrolyte,
   Lipide, Schilddrüse, Blutbild, Entzündung, Verdauung, Medikamentenspiegel,
-  Stoffwechsel) mit Referenzbereichen und Einheiten-Umrechnung; dazu eigene Marker,
-  Referenz-Overrides und ausgeblendete Kategorien. Ein Sensor je Marker und
-  ein Warn-Binary je Kategorie
+  Stoffwechsel) mit Referenzbereichen, Einheiten-Umrechnung und je Person
+  wählbaren **Anzeige-Einheiten** (Werkseinstellung + Override); dazu eigene
+  Marker, Referenz-Overrides und ausgeblendete Kategorien. Ein Sensor je Marker
+  und ein Warn-Binary je Kategorie
 - 📈 **Abgeleitete Metriken**: WHO-Blutdruck-Kategorie, Trink-Trend (± % vs.
   Vorwochen-Ø), Blutdruck-Trend, Ziel-Serie (Streak), **geschätztes** Koffein
   heute und der **Wohlbefinden-Score (1–10)** — je eine Entity für den
@@ -551,7 +552,7 @@ manuelle Entity-Pflege. Der Katalog umfasst **41 Marker in 10 Kategorien**:
 
 Zusätzlich gibt es die Kategorie **„Sonstige"** für **eigene Marker**. Die legt
 man pro Person im **Admin-Bereich des Panels** an (Name, Einheit, Kategorie,
-Referenzbereich, optional eine alternative Einheit mit Umrechnungsfaktor);
+Referenzbereich, optional mehrere alternative Einheiten mit Umrechnungsfaktor);
 dort lassen sich auch die Referenzbereiche der Katalog-Marker überschreiben und
 einzelne Kategorien ausblenden.
 
@@ -572,6 +573,51 @@ ruft die Referenz **nie selbst auf**.
 > ⚠️ Die Integration klassifiziert nicht medizinisch und diagnostiziert nicht —
 > Referenzbereiche sind typische Erwachsenen-Richtwerte, keine klinische Norm.
 > Bitte individuell in den Settings anpassen.
+
+### Anzeige-Einheiten (Werkseinstellung + pro Person)
+
+Laborwerte werden **kanonisch gespeichert**, aber in einer **wählbaren
+Anzeige-Einheit** dargestellt. Für typische Alltagseinheiten gilt eine
+Werkseinstellung; pro Person lässt sie sich je Marker übersteuern — im
+**Admin-Bereich des Panels** in der Spalte **„Anzeige"** (Katalog-Marker) bzw.
+in der Liste der eigenen Marker. Die Option **„Standard (…)"** setzt die
+Werkseinstellung zurück; ein leerer Wert bedeutet ebenfalls „Werkseinstellung".
+
+| Marker | Kanonisch | Anzeige (Werkseinstellung) |
+|---|---|---|
+| Bilirubin gesamt, Kreatinin | µmol/L | **mg/dL** |
+| Gesamtcholesterin, LDL, HDL | mmol/L | **mg/dL** |
+| Triglyceride | mmol/L | **mg/dL** |
+| fT4 | pmol/L | **ng/dL** |
+| fT3 | pmol/L | **pg/mL** |
+| Hämoglobin, Albumin | g/L | **g/dL** |
+| Hämatokrit | L/L | **%** |
+| Harnstoff | mmol/L | **mmol/L** (kanonisch) |
+
+Alle übrigen Marker — auch eigene Marker ohne alternative Einheit — werden in
+ihrer kanonischen Einheit angezeigt. Die Overrides liegen pro Person in den
+Options (`lab_default_units`).
+
+- **Eingabe = Anzeige:** Das Einheiten-Feld der Erfassung (Einzelwert und
+  Berichtszeile) ist ein **Dropdown**, vorausgewählt mit der Anzeige-Einheit des
+  Markers. Der Wert wird in genau dieser Einheit eingegeben und **immer mit
+  Einheit** an den Server gesendet; die Integration rechnet wie bisher in die
+  kanonische Einheit um. Die Services bleiben unverändert: ohne `unit` gilt
+  weiterhin die kanonische Einheit.
+- **„Andere …":** Für Einheiten außerhalb der Liste gibt es den Freitext-Zweig.
+  Ein **leeres** Freitextfeld blockiert das Speichern mit „Einheit erforderlich"
+  — es wird nie eine einheitenlose Zahl gesendet.
+- **Eigene Marker:** Im Admin-Formular lassen sich **mehrere** alternative
+  Einheiten mit je einem Umrechnungsfaktor hinterlegen (bis zu 4 Zeilen,
+  „Weitere Einheit hinzufügen"). Gespeichert wird die Map `alt_units`; die alte
+  Einzelform `alt_unit` bleibt lesbar.
+- **Nur Anzeige:** Sensor-Zustand und `native_unit_of_measurement`, Store, CSV
+  und alle `unique_id`s bleiben **kanonisch und unverändert**. Umrechnung und
+  Rundung finden ausschließlich in der Oberfläche statt — keine
+  Statistik-Migration.
+- **Restore (v1):** Das Backup enthält `lab_default_units`, der Restore spielt
+  die Anzeige-Einheiten aber **nicht** zurück — nach einem Restore gilt weiterhin
+  die lokale Einstellung bzw. die Werkseinstellung.
 
 ### Laborwert-Entities
 
@@ -683,7 +729,8 @@ Die Integration liefert eine eigene Lovelace-Karte mit:
 - ein Eingabeformular (Marker, Wert, Einheit, Zeitpunkt, Bericht-Link/ID) —
   zusätzlich ein **Mehrzeilen-Dialog** für einen ganzen Laborbericht mit
   Hybrid-Füllung („Alle sichtbaren Marker anlegen", „Zuletzt verwendete Marker
-  anlegen"), Einheiten-Dropdown je Zeile (kanonisch + Alt-Einheiten + Freitext)
+  anlegen"), Einheiten-Dropdown je Zeile (vorausgewählt mit der Anzeige-Einheit;
+  kanonisch + Alt-Einheiten + Freitext)
   und „Diesen Bericht verwerfen" (Sicherheitsabfrage) für den zuletzt
   erfassten Bericht,
 - einen Medizin-Hinweis, der der Karten-/HA-Sprache folgt
@@ -711,8 +758,9 @@ Ein vollständiges Beispiel-Dashboard mit beiden Ansichten liegt unter
   Liste `lab_readings` — automatisch und idempotent, bestehende Daten bleiben
   unverändert. Ein manueller Schritt ist nicht nötig.
 - **Backup v3** enthält Laborwerte und die Labor-Optionen (eigene Marker,
-  Referenz-Overrides, ausgeblendete Kategorien, `lab_retention_months`,
-  `lab_hide_panel_disclaimer`); ältere Backups bleiben lesbar.
+  Referenz-Overrides, ausgeblendete Kategorien, `lab_default_units`,
+  `lab_retention_months`, `lab_hide_panel_disclaimer`); ältere Backups bleiben
+  lesbar.
 - **CSV-Export/-Import:** Datensatz `lab_values` (Datei
   `health_o_mat_labvalues_<Person>_<YYYYMMDD-HHMM>.csv`). `all` schließt
   Laborwerte mit ein. Das Lab-CSV enthält **auch voidete Zeilen** inkl.
@@ -731,8 +779,11 @@ Ein vollständiges Beispiel-Dashboard mit beiden Ansichten liegt unter
 - **Restore:** Ein unbekannter Marker wird mit einer Warnung **übersprungen**
   (der betroffene Record zählt als Fehler, der Restore läuft weiter — kein
   Abbruch des gesamten Vorgangs). Definieren mehrere Quellen denselben
-  Custom-Marker-Key unterschiedlich (z. B. abweichende `unit`/`alt_unit`), gilt
+  Custom-Marker-Key unterschiedlich (z. B. abweichende `unit`/`alt_units`), gilt
   **first-wins**: die erste Definition gewinnt, spätere werden ignoriert.
+- **Anzeige-Einheiten beim Restore:** `lab_default_units` wird im Backup
+  mitgeführt, in v1 aber **nicht** angewendet (wie `lab_ref_overrides` und
+  `lab_hidden_categories`) — die lokale Personen-Einstellung bleibt bestehen.
 
 ## Services
 

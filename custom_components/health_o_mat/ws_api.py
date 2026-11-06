@@ -35,8 +35,10 @@ from .const import (
     DOMAIN,
     DRINK_LEXICON,
     LAB_CATEGORIES,
+    LAB_DEFAULT_UNITS,
     LAB_MARKERS,
     LAB_REPORT_REF_MAX_LEN,
+    LAB_UNITS,
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
@@ -44,6 +46,7 @@ from .const import (
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
     OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_HIDE_PANEL_DISCLAIMER,
     OPTION_LAB_REF_OVERRIDES,
@@ -207,6 +210,7 @@ SETTINGS_KEYS: tuple[str, ...] = (
     OPTION_AREAS,
     AUDIT_LIMIT_OPTION,
     OPTION_LAB_CUSTOM_MARKERS,
+    OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_REF_OVERRIDES,
     OPTION_LAB_HIDDEN_CATEGORIES,
     OPTION_LAB_HIDE_PANEL_DISCLAIMER,
@@ -316,6 +320,10 @@ SETTINGS_SCHEMA = vol.Schema(
         # `wellbeing_images`; diese Einträge halten die Typen an einer Stelle
         # sichtbar und greifen, falls ein Feld doch bis zum Schema durchläuft.
         vol.Optional(OPTION_LAB_CUSTOM_MARKERS): list,
+        # Nur Typ-Dokumentation: der Wert wird in `parse_settings_message`
+        # VOR dem Schema-Lauf gepoppt und normalisiert (F7) — er darf das
+        # Schema nie erreichen.
+        vol.Optional(OPTION_LAB_DEFAULT_UNITS): dict,
         vol.Optional(OPTION_LAB_REF_OVERRIDES): dict,
         vol.Optional(OPTION_LAB_HIDDEN_CATEGORIES): list,
     }
@@ -678,6 +686,11 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
     custom_markers = options.get(OPTION_LAB_CUSTOM_MARKERS)
     ref_overrides = logic.normalize_lab_ref_overrides(options.get(OPTION_LAB_REF_OVERRIDES))
     hidden = set(logic.normalize_lab_hidden_categories(options.get(OPTION_LAB_HIDDEN_CATEGORIES)))
+    # Einmal vor der Marker-Schleife (F7 / §7.1): Overrides der Anzeige-Einheiten,
+    # validiert gegen die effektiven (Katalog- und Custom-)Marker.
+    display_defaults = logic.normalize_lab_default_units(
+        options.get(OPTION_LAB_DEFAULT_UNITS), custom_markers
+    )
 
     # `name` bleibt die deutsche Anzeige (Abwärtskompatibilität); `name_de`/
     # `name_en` erlauben Card und Panel die sprachabhängige Darstellung.
@@ -709,6 +722,7 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
         )
         value = last.get("value") if last else None
         name_de = marker_def.get("name_de") or marker_def.get("name") or marker_key
+        allowed_units = logic.lab_allowed_units(marker_def)
         markers[marker_key] = {
             "category": marker_def.get("category"),
             "name": marker_def.get("name") or name_de,
@@ -716,8 +730,14 @@ def _labs_block(entry: Any, store: Any, now: datetime) -> dict[str, Any]:
             "name_en": marker_def.get("name_en") or name_de,
             "unit": marker_def.get("canonical_unit"),
             # Additiv (REQ-HOM-123): Alt-Einheiten fürs Einheiten-Dropdown.
-            # Katalog: `alt_units`; Custom: das eine optionale Alt-Paar.
+            # Katalog: `alt_units`; Custom: die `alt_units`-Map.
             "alt_units": dict(marker_def.get("alt_units") or {}),
+            # Additiv (§7.1): aufgelöste Anzeige-Einheit + alle zulässigen
+            # Einheiten (kanonisch zuerst, deterministisch) für die UI-Selects.
+            "default_unit": logic.resolve_lab_display_unit(
+                marker_key, marker_def, display_defaults
+            ),
+            "allowed_units": allowed_units,
             # REQ-HOM-133 (#73): Vorwarnung in der Eingabe-UI — der Server
             # lehnt eine leere Einheit bei diesen Markern mit `unit_required` ab.
             "require_explicit_unit": bool(marker_def.get("require_explicit_unit")),
@@ -2064,6 +2084,8 @@ def build_settings(entry: Any) -> dict[str, Any]:
     Defaults, wenn nichts gesetzt ist) — kein Zweit-Datenmodell.
     """
     options = getattr(entry, "options", None) or {}
+    custom_markers = logic.normalize_lab_custom_markers(options.get(OPTION_LAB_CUSTOM_MARKERS))
+    effective_markers = logic.effective_lab_markers(custom_markers)
     return {
         "daily_goal_ml": _option_int(
             entry, "daily_goal_ml", "daily_goal_ml", DEFAULT_DAILY_GOAL_ML
@@ -2088,8 +2110,11 @@ def build_settings(entry: Any) -> dict[str, Any]:
         # Audit-Cap: ungültige/negative Werte fallen auf den Default zurück,
         # 0 bleibt "unbegrenzt" (logic.audit_limit_from_options).
         AUDIT_LIMIT_OPTION: logic.audit_limit_from_options(options),
-        OPTION_LAB_CUSTOM_MARKERS: logic.normalize_lab_custom_markers(
-            options.get(OPTION_LAB_CUSTOM_MARKERS)
+        OPTION_LAB_CUSTOM_MARKERS: custom_markers,
+        # Anzeige-Einheiten (§7.2): nur LESEN und normalisieren — `build_settings`
+        # persistiert nichts (F13). Overrides gegen die gespeicherten Marker.
+        OPTION_LAB_DEFAULT_UNITS: logic.normalize_lab_default_units(
+            options.get(OPTION_LAB_DEFAULT_UNITS), custom_markers
         ),
         OPTION_LAB_REF_OVERRIDES: logic.normalize_lab_ref_overrides(
             options.get(OPTION_LAB_REF_OVERRIDES)
@@ -2105,6 +2130,16 @@ def build_settings(entry: Any) -> dict[str, Any]:
         # Options-Schlüssel, wird von `set_settings` ignoriert (nicht in
         # SETTINGS_KEYS) und nie zurückgeschrieben.
         "lab_catalog": {"categories": LAB_CATEGORIES, "markers": LAB_MARKERS},
+        # Read-only Anzeige-Einheiten (§7.2): Werkseinstellungen (damit die
+        # Admin-Maske „Standard (…)" rendern kann), erlaubte Einheiten ALLER
+        # effektiven Marker (einzige Quelle der Anzeige-Selects, F11) und die
+        # kuratierte Einheitenliste NUR für das Custom-Marker-Formular.
+        "lab_default_units_factory": dict(LAB_DEFAULT_UNITS),
+        "lab_allowed_units": {
+            key: logic.lab_allowed_units(marker_def)
+            for key, marker_def in effective_markers.items()
+        },
+        "lab_units": list(LAB_UNITS),
     }
 
 
@@ -2181,6 +2216,28 @@ def parse_settings_message(
         # gespeicherten Marker schützen einen fehlenden `key` vor Drift (A-2).
         updates[OPTION_LAB_CUSTOM_MARKERS] = logic.normalize_lab_custom_markers(
             raw_markers, previous_markers
+        )
+
+    if OPTION_LAB_DEFAULT_UNITS in raw:
+        # F7: VOR `SETTINGS_SCHEMA(raw)` poppen — sonst überschreibt der
+        # Schema-Lauf die normalisierte Map (das Schema ist `PREVENT_EXTRA`,
+        # der Rohwert darf es nie erreichen).
+        raw_defaults = raw.pop(OPTION_LAB_DEFAULT_UNITS)
+        if not isinstance(raw_defaults, dict):
+            _LOGGER.debug(
+                "Health-O-Mat: invalid %s payload type %s",
+                OPTION_LAB_DEFAULT_UNITS,
+                type(raw_defaults).__name__,
+            )
+            return {}, _invalid_setting(OPTION_LAB_DEFAULT_UNITS)
+        # Gegen den NEUEN Marker-Satz validieren: dasselbe Payload kann Marker
+        # UND Defaults ändern; ohne Marker im Payload bleibt der gespeicherte
+        # Satz maßgeblich.
+        new_markers = updates.get(OPTION_LAB_CUSTOM_MARKERS)
+        if new_markers is None:
+            new_markers = previous_markers
+        updates[OPTION_LAB_DEFAULT_UNITS] = logic.normalize_lab_default_units(
+            raw_defaults, new_markers
         )
 
     if OPTION_LAB_REF_OVERRIDES in raw:

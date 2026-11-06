@@ -1651,3 +1651,47 @@ def test_req_hom_130_restore_inherits_explicit_key_from_current():
     incoming = [{"name": "Vitamin D", "unit": "ng/mL"}]
     merged = restore.merge_lab_custom_markers(current, incoming)
     assert [marker["key"] for marker in merged] == ["vit_d3"]
+
+
+def test_req_hom_134_restore_ignores_lab_default_units(tmp_path, monkeypatch):
+    """[REQ-HOM-134/F14] Restore wendet `lab_default_units` in v1 nicht an.
+
+    Der Key wird wie `lab_ref_overrides`/`lab_hidden_categories` behandelt:
+    Backup enthält ihn, `apply_restore` ignoriert ihn. Kein
+    `async_update_entry` durch diesen Key, kein Listener-Feuer.
+    """
+    hass, store, _archive = _apply_setup(tmp_path, monkeypatch, {"t1": _entry("Max")})
+    target_entry = types.SimpleNamespace(
+        entry_id="t1",
+        options={"lab_custom_markers": [], "lab_default_units": {"creatinine": "µmol/L"}},
+    )
+    listener = MagicMock()
+    hass.config_entries.async_get_entry = MagicMock(return_value=target_entry)
+    hass.config_entries.async_entries = MagicMock(return_value=[target_entry])
+    hass.config_entries.async_update_entry = MagicMock(
+        side_effect=lambda entry, **kwargs: listener(entry, **kwargs)
+    )
+    document = _doc({"src": _entry("Max", lab=[_lab("2026-10-31T09:00:00", "alt", 32.0)])})
+    document["lab_options"] = {
+        "src": {
+            "lab_default_units": {"creatinine": "mg/dL"},
+            "lab_custom_markers": [],
+        }
+    }
+    filename = _write_import_file(tmp_path, document)
+
+    result = _run(
+        restore.async_restore_from_file(
+            hass,
+            store,
+            None,
+            {"filename": filename, "datasets": ["lab_values"]},
+        )
+    )
+
+    assert result["applied"] is True
+    # Der Laborwert kommt mit, die Anzeige-Option bleibt unangetastet.
+    assert store.entry("t1")["lab_readings"][0]["marker_key"] == "alt"
+    hass.config_entries.async_update_entry.assert_not_called()
+    listener.assert_not_called()
+    assert target_entry.options["lab_default_units"] == {"creatinine": "µmol/L"}
