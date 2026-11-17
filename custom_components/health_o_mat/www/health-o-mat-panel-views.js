@@ -50,7 +50,7 @@ import {
   wsErrorText,
   WS,
   errMsg,
-} from "./health-o-mat-panel-base.js?v=0.22.0";
+} from "./health-o-mat-panel-base.js?v=0.22.1";
 
 /* ---- Overview (L2 start) ------------------------------------------------- */
 

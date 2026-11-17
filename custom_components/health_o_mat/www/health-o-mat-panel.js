@@ -73,20 +73,20 @@ import {
   setUiTranslator,
   setUiErrorTranslator,
   setUiLanguage,
-} from "./health-o-mat-panel-base.js?v=0.22.0";
+} from "./health-o-mat-panel-base.js?v=0.22.1";
 import {
   loadUiTranslations,
   t as uiTranslate,
   tError as uiErrorTranslate,
   currentLanguage as uiCurrentLanguage,
-} from "./health-o-mat-i18n.js?v=0.22.0";
+} from "./health-o-mat-i18n.js?v=0.22.1";
 import {
   renderOverview,
   renderDetail,
   handleLabReportChange,
   refreshLabEntryUnit,
   syncLabUnitCustomField,
-} from "./health-o-mat-panel-views.js?v=0.22.0";
+} from "./health-o-mat-panel-views.js?v=0.22.1";
 import {
   renderSettings,
   settingsStatusHtml,
@@ -95,10 +95,10 @@ import {
   collectRestorePayload,
   labCustomAltRowHtml,
   LAB_CUSTOM_ALT_MAX,
-} from "./health-o-mat-panel-admin.js?v=0.22.0";
+} from "./health-o-mat-panel-admin.js?v=0.22.1";
 
 const PANEL_TAG = "health-o-mat-panel";
-const PANEL_VERSION = "0.22.0";
+const PANEL_VERSION = "0.22.1";
 
 /* Single translation source: the i18n module owns the cache, the base module
  * owns the `t()` used by every renderer. Injecting once at module load keeps
