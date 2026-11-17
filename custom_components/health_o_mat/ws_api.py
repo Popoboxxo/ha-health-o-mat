@@ -1290,9 +1290,7 @@ async def websocket_panel_data(hass: HomeAssistant, connection: Any, msg: dict[s
     # Die Aggregation läuft über den gesamten Store (Drinks, Readings, Labor).
     # Auf dem Event-Loop blockiert ein großer Bestand State-Updates und damit
     # auch das Panel → in den Executor auslagern.
-    payload = await hass.async_add_executor_job(
-        build_panel_data, hass, entry_id, dt_util.now()
-    )
+    payload = await hass.async_add_executor_job(build_panel_data, hass, entry_id, dt_util.now())
     if payload is None:
         code = websocket_api.ERR_NOT_FOUND if websocket_api is not None else "not_found"
         connection.send_error(
