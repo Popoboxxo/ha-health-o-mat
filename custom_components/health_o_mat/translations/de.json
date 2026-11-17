@@ -833,6 +833,7 @@
     "ui_panel_delete_prompt": "„{name}“ endgültig löschen? Backups können derzeit NICHT wiederhergestellt werden.",
     "ui_panel_person_deleted": "Person gelöscht.",
     "ui_panel_back_aria": "Zurück zur Übersicht",
+    "ui_panel_home_aria": "Zurück zu Home Assistant",
     "ui_panel_settings_aria": "Einstellungen",
     "ui_panel_footer": "Health-O-Mat · keine medizinische Beratung",
     "ui_panel_loading_app": "Lade Health-O-Mat…",

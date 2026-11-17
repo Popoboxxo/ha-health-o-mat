@@ -270,7 +270,10 @@ export const EXPORT_DATASETS = [
 
 export const RING_RADIUS = 42;
 export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-export const REFRESH_DEBOUNCE_MS = 150;
+/* Schreibbursts (z. B. mehrere Buchungen hintereinander) sollen nicht sieben
+ * Reload-Zyklen pro Sekunde auslösen — 400 ms bündelt sie, ohne das Panel für
+ * den Nutzer spürbar träge zu machen. */
+export const REFRESH_DEBOUNCE_MS = 400;
 
 /* --- component CSS -------------------------------------------------------- */
 

@@ -1287,7 +1287,10 @@ async def websocket_list_persons(hass: HomeAssistant, connection: Any, msg: dict
 async def websocket_panel_data(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
     """`health_o_mat/panel_data` → kompletter Karten-Payload einer Person."""
     entry_id = msg["entry_id"]
-    payload = build_panel_data(hass, entry_id, dt_util.now())
+    # Die Aggregation läuft über den gesamten Store (Drinks, Readings, Labor).
+    # Auf dem Event-Loop blockiert ein großer Bestand State-Updates und damit
+    # auch das Panel → in den Executor auslagern.
+    payload = await hass.async_add_executor_job(build_panel_data, hass, entry_id, dt_util.now())
     if payload is None:
         code = websocket_api.ERR_NOT_FOUND if websocket_api is not None else "not_found"
         connection.send_error(

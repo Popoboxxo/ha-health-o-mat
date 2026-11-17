@@ -172,3 +172,33 @@ def test_disabled_area_hides_its_tab(logged_in_page, hass_base_url, tab_person):
     assert keys == ["drink", "wellbeing", "labs"], f"unexpected tab set: {keys!r}"
     assert "labs" in keys, "the default-enabled lab area must keep rendering its tab"
     assert panel.locator(".tab[data-tab='bp']").count() == 0
+
+
+def _wait_away_from_panel(page) -> None:
+    """The exit button must really leave /health-o-mat, not just re-render."""
+    page.wait_for_function(
+        "() => !window.location.pathname.startsWith('/health-o-mat')", timeout=60000
+    )
+
+
+def test_home_button_leaves_the_panel_back_to_home_assistant(logged_in_page, hass_base_url):
+    """The topbar exit button works both on direct open and from a HA page.
+
+    Direct open has no referrer → fallback to the HA overview. Coming from a
+    HA page → `history.back()` to that page. Both must leave the panel.
+    """
+    page = logged_in_page
+
+    panel = open_panel(page, hass_base_url)
+    wait_for_overview(panel)
+    home = panel.locator("[data-action='home']")
+    assert home.count() == 1, "the topbar exit button is missing"
+    assert home.get_attribute("aria-label") == "Back to Home Assistant"
+    home.click()
+    _wait_away_from_panel(page)
+
+    page.goto(f"{hass_base_url}/")
+    panel = open_panel(page, hass_base_url)
+    wait_for_overview(panel)
+    panel.locator("[data-action='home']").click()
+    _wait_away_from_panel(page)

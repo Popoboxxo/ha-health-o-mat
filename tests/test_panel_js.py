@@ -4835,3 +4835,99 @@ def test_req_hom_134_alt_rows_keep_unique_monotonic_ids_after_removal(tmp_path):
         "`_readLabCustomAltUnits` verliert oder mischt Einheit/Faktor-Paare"
     )
     assert "\u00b5mol/L" not in out["pairs"], "die entfernte Zeile liefert noch eine Einheit"
+
+
+# --- Panel-Performance + Exit-Navigation ------------------------------------
+
+_NODE_PANEL_PERF_RUNNER = """import { pathToFileURL } from "node:url";
+
+class CountingShadowRoot {
+  constructor() { this._html = ""; this.writes = 0; }
+  get innerHTML() { return this._html; }
+  set innerHTML(value) { this._html = value; this.writes += 1; }
+  addEventListener() {}
+  removeEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  get activeElement() { return null; }
+}
+
+class FakeHTMLElement {
+  constructor() { this._shadow = new CountingShadowRoot(); }
+  attachShadow() { return this._shadow; }
+  get shadowRoot() { return this._shadow; }
+}
+
+let PanelClass = null;
+globalThis.HTMLElement = FakeHTMLElement;
+globalThis.customElements = {
+  get: () => undefined,
+  define: (_name, cls) => { PanelClass = cls; },
+};
+console.info = () => {};
+
+await import(pathToFileURL(process.argv[2]).href);
+
+const panel = new PanelClass();
+panel._persons = [];
+panel._render();
+const first = panel.shadowRoot.writes;
+panel._render();
+const second = panel.shadowRoot.writes;
+panel._fatal = "kaputt";
+panel._render();
+const changed = panel.shadowRoot.writes;
+const topbar = panel._topbarHtml();
+
+function navigate(referrer, href) {
+  const events = [];
+  globalThis.document = { referrer };
+  globalThis.window = {
+    location: { href, assign: (url) => events.push(["assign", url]) },
+    history: { back: () => events.push(["back"]) },
+  };
+  const target = new PanelClass();
+  target._navigateHome();
+  return events;
+}
+
+process.stdout.write(JSON.stringify({
+  writes: { first, second, changed },
+  hasHome: topbar.includes('data-action="home"'),
+  homeLabel: topbar.includes("Zurück zu Home Assistant"),
+  fromDashboard: navigate("https://ha.local/dashboard/0", "https://ha.local/health-o-mat"),
+  direct: navigate("", "https://ha.local/health-o-mat"),
+  foreign: navigate("https://example.org/", "https://ha.local/health-o-mat"),
+  samePanel: navigate("https://ha.local/health-o-mat?person=caro", "https://ha.local/health-o-mat"),
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
+def test_panel_render_memoized_and_exit_navigation(tmp_path):
+    """Identisches HTML baut den DOM nicht neu; der Exit-Button führt nach HA."""
+    panel_copy = _prepare_panel_copy(tmp_path)
+    out = json.loads(
+        _run_node(tmp_path, _NODE_PANEL_PERF_RUNNER, [str(panel_copy)], "runner_panel_perf")
+    )
+
+    assert out["writes"] == {"first": 1, "second": 1, "changed": 2}, (
+        "identisches HTML wurde erneut in den DOM geschrieben bzw. eine Änderung übersehen"
+    )
+    assert out["hasHome"] and out["homeLabel"], "Exit-Button fehlt in der Topbar"
+    assert out["fromDashboard"] == [["back"]], "Dashboard-Rückkehr fehlt"
+    assert out["direct"] == [["assign", "/"]], "ohne Referrer fehlt der HA-Overview-Fallback"
+    assert out["foreign"] == [["assign", "/"]], "fremde Origin darf nicht history.back() auslösen"
+    assert out["samePanel"] == [["assign", "/"]], (
+        "Rücksprung aufs Panel selbst muss vermieden werden"
+    )
+
+
+def test_refresh_debounce_is_bounded():
+    """Der Refresh-Debounce bündelt Schreibbursts (300–500 ms)."""
+    base = (_WWW_DIR / "health-o-mat-panel-base.js").read_text(encoding="utf-8")
+    match = re.search(r"REFRESH_DEBOUNCE_MS\s*=\s*(\d+)", base)
+    assert match, "REFRESH_DEBOUNCE_MS fehlt im Basis-Modul"
+    assert 300 <= int(match.group(1)) <= 500, (
+        f"Refresh-Debounce {match.group(1)} ms bündelt Schreibbursts nicht"
+    )

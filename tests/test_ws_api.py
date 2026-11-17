@@ -6675,3 +6675,20 @@ def test_req_hom_134_labs_block_invalid_override_pins_canonical(monkeypatch):
     marker = ws_api.build_panel_data(hass, "e1", NOW)["labs"]["markers"]["creatinine"]
 
     assert marker["default_unit"] == "µmol/L"
+
+
+def test_panel_data_aggregation_runs_in_executor(monkeypatch):
+    """Die Store-Aggregation blockiert nicht den Event-Loop."""
+    entry = _entry(options={"daily_goal_ml": 2000})
+    hass = _panel_hass(_sample_store_data(), entry, _registry_entries(), monkeypatch)
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_panel_data(
+            hass, connection, {"id": 1, "type": ws_api.COMMAND_PANEL_DATA, "entry_id": "e1"}
+        )
+    )
+
+    hass.async_add_executor_job.assert_awaited_once()
+    assert connection.errors == []
+    assert connection.results[0][1]["entry_id"] == "e1"
