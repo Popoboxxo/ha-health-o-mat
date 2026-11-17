@@ -101,3 +101,7 @@ services:
       - HASS_PASSWORD=${HASS_PASSWORD:-e2e-bootstrap-password-not-a-secret}
     volumes:
       - ./test-results:/workspace/test-results
+      # Die CSV-Export-Tests lesen die Datei aus HA's /config. Ohne diesen
+      # Mount findet der Runner sie im Container nicht (docker ps/exec sind im
+      # Runner-Container nicht verfügbar) — nur auf dem Host-Bind-Mount.
+      - ./docker/ha_config_e2e:/workspace/docker/ha_config_e2e
