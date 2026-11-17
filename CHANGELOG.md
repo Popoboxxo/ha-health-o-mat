@@ -5,6 +5,32 @@ All notable changes to HA Health-O-Mat are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Older releases are available on the
 [GitHub releases page](https://github.com/Popoboxxo/ha-health-o-mat/releases).
 
+## [0.22.1] — 2026-11-17
+
+### Fixed
+
+- **Panel performance:** the panel now memoises rendered HTML instead of
+  rebuilding the DOM on every `hass` update; a person switch is coalesced into a
+  single render; bootstrap is parallelised with the visible person first; the
+  refresh debounce was raised from 150 ms to 400 ms; and `panel_data`
+  aggregation runs in the executor so the event loop is no longer blocked.
+- **New topbar button "Back to Home Assistant":** a same-origin referrer uses
+  `history.back()`, otherwise the button falls back to the Home Assistant
+  overview; includes German/English translations.
+- **E2E stack:** the Home Assistant config folder is now mounted into the E2E
+  runner so CSV export tests inside the container can read the exported file
+  (these tests were previously red on `main`).
+
+### Notes
+
+- **No breaking change, no migration, no schema bump:** no `unique_id`, entity
+  id, `translation_key` or entity-set change; no `async_migrate_entry`, no store
+  or backup schema bump.
+- **Frontend cache buster bumped:** all `?v=` cache busters, `PANEL_VERSION` and
+  `CARD_VERSION` are on `0.22.1`.
+- **Restart Home Assistant after the update** so the cached frontend JS modules
+  are reloaded.
+
 ## [0.22.0] — 2026-11-06
 
 ### Added

@@ -31,7 +31,7 @@ import {
   personSlug,
   messageHtml,
   t,
-} from "./health-o-mat-panel-base.js?v=0.22.0";
+} from "./health-o-mat-panel-base.js?v=0.22.1";
 
 /* ---- Settings view ------------------------------------------------------- */
 
