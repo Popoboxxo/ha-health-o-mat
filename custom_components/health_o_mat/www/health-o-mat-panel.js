@@ -208,6 +208,9 @@ class HealthOMatPanel extends HTMLElement {
     this._refreshTimer = null;
 
     this._renderScheduled = false;
+    /* Cache des zuletzt gemalten HTML: identischer Inhalt muss den DOM nicht
+     * erneut aufbauen (siehe `_render`). */
+    this._lastHtml = null;
 
     this._historyNavigating = false; // true while handling a popstate event
     this._popStateAttached = false;
@@ -370,6 +373,28 @@ class HealthOMatPanel extends HTMLElement {
     this._pushUrl("");
   }
 
+  /* Exit the panel back into Home Assistant. Prefer the page the user came
+   * from (typically a dashboard), but only for a same-origin page that is not
+   * this panel itself — otherwise fall back to the HA overview. */
+  _navigateHome() {
+    let goBack = false;
+    try {
+      if (typeof document !== "undefined" && document.referrer) {
+        const here = new URL(window.location.href);
+        const ref = new URL(document.referrer, here.href);
+        goBack = ref.origin === here.origin && ref.pathname !== here.pathname;
+      }
+    } catch (_e) {
+      goBack = false;
+    }
+    try {
+      if (goBack) window.history.back();
+      else window.location.assign("/");
+    } catch (_e) {
+      // Kein Browser-/DOM-Kontext (z. B. Unit-Test): nie durchreichen.
+    }
+  }
+
   _onPopState() {
     if (!this._booted || this._persons == null) return;
     this._historyNavigating = true;
@@ -401,18 +426,33 @@ class HealthOMatPanel extends HTMLElement {
     await this._syncTranslations(true);
     this._render();
     try {
-      let saved = "";
-      try {
-        const settings = await this._ws({ type: WS.getUiSettings });
-        saved = settings && settings.selected_person ? String(settings.selected_person) : "";
-      } catch (_e) {
-        // UI settings are optional; never fatal.
-      }
-      const res = await this._ws({ type: WS.listPersons });
+      /* Settings und Personenliste sind voneinander unabhängig: parallel statt
+       * zwei aufeinanderfolgender Round-Trips. */
+      const [settings, res] = await Promise.all([
+        this._ws({ type: WS.getUiSettings }).catch(() => null),
+        this._ws({ type: WS.listPersons }),
+      ]);
+      const saved = settings && settings.selected_person ? String(settings.selected_person) : "";
       this._persons = normalizePersons(res && res.persons);
-      await this._loadAll();
       this._applyInitialView(saved);
-      await this._subscribe();
+
+      /* Erst die sichtbare Person laden (schneller erster Paint), alle
+       * übrigen im Hintergrund. Die Subscription läuft parallel dazu. */
+      const visible = this._selectedEntry
+        ? [this._selectedEntry]
+        : (this._persons || []).map((p) => p.entry_id);
+      await Promise.all([
+        Promise.all(visible.map((id) => this._loadEntry(id))),
+        this._subscribe(),
+      ]);
+      const rest = (this._persons || [])
+        .map((p) => p.entry_id)
+        .filter((id) => !visible.includes(id));
+      if (rest.length) {
+        Promise.all(
+          rest.map((id) => this._loadEntry(id).then(() => this._scheduleRender()))
+        ).catch(() => {});
+      }
     } catch (err) {
       this._fatal = errMsg(err);
     } finally {
@@ -720,7 +760,9 @@ class HealthOMatPanel extends HTMLElement {
     if (this._selectedEntry && ids.includes(this._selectedEntry)) {
       await this._loadAllHistory(this._selectedEntry, { force: true, render: false });
     }
-    if (this._view !== "settings") this._render();
+    // Hintergrund-Refresh: über den scheduled Pfad, damit ein offenes
+    // Eingabefeld nicht mitten in der Eingabe überschrieben wird.
+    if (this._view !== "settings") this._scheduleRender();
   }
 
   /* ---- Navigation --------------------------------------------------------- */
@@ -737,10 +779,15 @@ class HealthOMatPanel extends HTMLElement {
     this._actionError = null;
     this._formError = null;
     if (!o.silent) this._pushPersonUrl(this._slugFor(entryId));
-    if (!this._data[entryId]) this._loadEntry(entryId).then(() => this._render());
+    /* Alle Loads bündeln und NUR EINMAL neu zeichnen. Vorher erzeugte jeder
+     * Klick drei vollständige DOM-Rebuilds (Daten, Historie, Sofort-Render),
+     * was sich als spürbare Verzögerung beim Personenwechsel äußerte. */
+    const loads = [];
+    if (!this._data[entryId]) loads.push(this._loadEntry(entryId));
     // Beim Öffnen wird der Verlauf immer frisch geholt (er ist nicht Teil von
     // `panel_data` und kann sich außerhalb des Panels geändert haben).
-    this._loadAllHistory(entryId, { force: true, render: false }).then(() => {
+    loads.push(this._loadAllHistory(entryId, { force: true, render: false }));
+    Promise.all(loads).then(() => {
       if (this._view === "detail" && this._selectedEntry === entryId) this._render();
     });
     this._persistSelected(entryId);
@@ -2030,7 +2077,14 @@ class HealthOMatPanel extends HTMLElement {
 
   _render() {
     try {
-      this.shadowRoot.innerHTML = this._html();
+      const html = this._html();
+      /* Viele `hass`-Updates betreffen fremde Entities und verändern dieses
+       * Panel gar nicht. Ohne diesen Vergleich baut jeder Frame den kompletten
+       * DOM neu — inklusive SVG-Charts, Verlaufslisten und Formularen. Das war
+       * die Hauptursache für träge Ladezeiten und verzögerte Klicks. */
+      if (html === this._lastHtml) return;
+      this._lastHtml = html;
+      this.shadowRoot.innerHTML = html;
       try {
         this._applyHistoryFocus();
       } catch (_e) {
@@ -2038,9 +2092,11 @@ class HealthOMatPanel extends HTMLElement {
       }
     } catch (err) {
       // Absolute last resort: never let the panel break the app shell.
-      this.shadowRoot.innerHTML =
+      const fallback =
         `<style>${PANEL_CSS}</style><div class="content"><div class="msg error">` +
         `Health-O-Mat: ${escapeHtml(errMsg(err))}</div></div>`;
+      this._lastHtml = fallback;
+      this.shadowRoot.innerHTML = fallback;
     }
   }
 
@@ -2053,6 +2109,10 @@ class HealthOMatPanel extends HTMLElement {
 
   _topbarHtml() {
     const multi = (this._persons || []).length > 1;
+    /* Immer verfügbar: zurück zu Home Assistant (Dashboard/Startseite),
+     * unabhängig von der internen Panel-Navigation. */
+    const homeLabel = escapeHtml(t("ui_panel_home_aria", "Zurück zu Home Assistant"));
+    const home = `<button class="icon-btn" data-action="home" type="button" aria-label="${homeLabel}" title="${homeLabel}">\u{1F3E0}</button>`;
     const back =
       this._view === "settings" || (this._view === "detail" && multi)
         ? `<button class="icon-btn" data-action="back" type="button" aria-label="${escapeHtml(
@@ -2069,7 +2129,7 @@ class HealthOMatPanel extends HTMLElement {
           )}">\u2699\uFE0F</button>`
         : "";
     return `<div class="topbar">
-        ${back}
+        ${home}${back}
         <div class="title"><span aria-hidden="true">\u{1F4A7}</span><span class="name">Health-O-Mat</span></div>
         ${gear}
         <button class="icon-btn" data-action="refresh" type="button" aria-label="${escapeHtml(
@@ -2142,6 +2202,9 @@ class HealthOMatPanel extends HTMLElement {
           break;
         case "back":
           this._showOverview();
+          break;
+        case "home":
+          this._navigateHome();
           break;
         case "settings":
           this._openSettings();
