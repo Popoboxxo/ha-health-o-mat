@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -49,6 +50,7 @@ def _load(name: str):
 
 
 frontend = _load("frontend")
+logic = _load("logic")
 
 # Version-Query in einem Import-Specifier (`?v=1.2.3`); stoppt an Anführungs-
 # zeichen, Whitespace, Klammern und `&`/`>`.
@@ -637,21 +639,57 @@ def test_req_hom_112_panel_chart_svg_is_valid_xml_without_invalid_numbers(tmp_pa
 # Skript ohne Imports) und muss deshalb gegen beide Implementierungen
 # geprueft werden.
 
-# (Eingabe, erwarteter Score) — die Ausgabe ist `null` (kein Score) oder 1..N.
-_SCORE_RULE_CASES = [
-    pytest.param({"score": 4, "key": "good"}, 4, id="server-score-wins"),
-    pytest.param({"score": None, "key": "good"}, None, id="server-null-is-truth"),
-    pytest.param({"key": "good"}, 7, id="legacy-derivation-from-key"),
-    pytest.param({"key": "bogus_stage"}, None, id="no-key-alias-table"),
-    pytest.param({"key": "GOOD"}, None, id="exact-case-sensitive-match"),
-    pytest.param({"score": 0, "key": "good"}, None, id="never-zero"),
-    pytest.param({"score": 11, "key": "good"}, None, id="outside-scale"),
+# (Eingabe, Fall-ID) — die Ausgabe ist `null` (kein Score) oder 1..N. Der
+# Erwartungswert kommt NICHT aus einer hartkodierten Tabelle, sondern wird
+# unten per `_expected_wellbeing_score()` zur Testlaufzeit ermittelt: der
+# Legacy-Ableitungspfad (`score`-Feld fehlt) ruft dafuer echt
+# `logic.wellbeing_score(key)` auf. Aendert sich `WELLBEING_STATES`
+# (Reihenfolge, Laenge, neue Stufe), zieht der Test automatisch mit —
+# eine hartkodierte Tabelle wuerde das nicht bemerken (sie driftet lautlos).
+_SCORE_RULE_INPUTS = [
+    ({"score": 4, "key": "good"}, "server-score-wins"),
+    ({"score": None, "key": "good"}, "server-null-is-truth"),
+    ({"key": "good"}, "legacy-derivation-from-key"),
+    ({"key": "bogus_stage"}, "no-key-alias-table"),
+    ({"key": "GOOD"}, "exact-case-sensitive-match"),
+    ({"score": 0, "key": "good"}, "never-zero"),
+    ({"score": 11, "key": "good"}, "outside-scale"),
     # Nicht-String-Keys: `key: null`, `key: ""` und `key: 123` sind KEIN
     # verwertbarer Key -> kein Score (die Python-Seite deckt das bereits ab;
     # die JS-Regeltabelle muss es mitfuehren, sonst driftet die Tabelle).
-    pytest.param({"key": None}, None, id="null-key"),
-    pytest.param({"key": ""}, None, id="empty-key"),
-    pytest.param({"key": 123}, None, id="non-string-key"),
+    ({"key": None}, "null-key"),
+    ({"key": ""}, "empty-key"),
+    ({"key": 123}, "non-string-key"),
+]
+
+
+def _expected_wellbeing_score(raw: dict) -> int | None:
+    """Oracle fuer die Server-ist-Wahrheit-Regel (siehe Kommentar oben).
+
+    Pfad 2 (`score`-Feld fehlt) ist eine ECHTE Ableitung ueber
+    `logic.wellbeing_score(key)` — kein Duplikat, kein hartkodierter Wert.
+    Pfad 1 (`score`-Feld vorhanden) hat keine Python-Entsprechung in
+    `logic.wellbeing_score` (das ist eine reine JS-Praezedenzregel fuer den
+    Server-Wert), die Skalengrenze `1..N` wird dafuer aber live aus
+    `logic.WELLBEING_STATES` gelesen statt hartkodiert — eine Erweiterung
+    der Zustandsliste aendert N automatisch mit.
+    """
+    if "score" in raw:
+        score = raw["score"]
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            return None
+        if isinstance(score, float) and not math.isfinite(score):
+            return None
+        rounded = round(score)
+        if 1 <= rounded <= len(logic.WELLBEING_STATES):
+            return rounded
+        return None
+    return logic.wellbeing_score(raw.get("key"))
+
+
+_SCORE_RULE_CASES = [
+    pytest.param(raw, _expected_wellbeing_score(raw), id=case_id)
+    for raw, case_id in _SCORE_RULE_INPUTS
 ]
 
 # Node-Runner: laedt das Panel-Basis-Modul als ES-Modul und ruft die
@@ -778,8 +816,15 @@ def test_req_hom_112_card_and_panel_resolve_the_same_wellbeing_score(tmp_path):
     Die Regel ist in beiden Frontends dupliziert (die Karte ist ein
     eigenstaendiges Skript ohne Imports) — eine Divergenz wuerde im Panel
     "4 / 10" und in der Karte "2 / 10" anzeigen.
+
+    Der Erwartungswert kommt aus `_expected_wellbeing_score()`, die den
+    Legacy-Ableitungspfad live gegen `logic.wellbeing_score()` ausfuehrt
+    (kein hartkodiertes Zahlen-Orakel) — eine Aenderung an
+    `WELLBEING_STATES` wuerde sonst unbemerkt an beiden JS-Implementierungen
+    vorbeidriften, solange Card und Panel nur untereinander uebereinstimmen.
     """
     cases = [case.values[0] for case in _SCORE_RULE_CASES]
+    expected_scores = [case.values[1] for case in _SCORE_RULE_CASES]
 
     panel_scores = _panel_scores(tmp_path, cases)
     card_scores = _card_scores(tmp_path, cases)
@@ -787,9 +832,12 @@ def test_req_hom_112_card_and_panel_resolve_the_same_wellbeing_score(tmp_path):
     assert panel_scores == card_scores, (
         f"Card und Panel liefern unterschiedliche Scores: {card_scores} != {panel_scores}"
     )
-    # Kontrollfall: die erwarteten Werte sind tatsaechlich gemessen (nicht nur
-    # "beide gleich" — ein leeres Resultat waere ein "always green"-Test).
-    assert panel_scores == [case.values[1] for case in _SCORE_RULE_CASES]
+    # Kontrollfall: beide JS-Seiten gegen die zur Laufzeit ermittelte
+    # Python-Erwartung pruefen — "beide gleich" allein waere ein
+    # "always green"-Test, wenn beide Seiten denselben (falschen) Bug teilen.
+    assert panel_scores == expected_scores, (
+        f"Card/Panel weichen von logic.wellbeing_score ab: {panel_scores} != {expected_scores}"
+    )
 
 
 # --- REQ-HOM-112: Panel-Konsistenz (Kopfzeile und Chart) --------------------

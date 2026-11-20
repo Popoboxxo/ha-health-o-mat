@@ -42,9 +42,14 @@ from .const import (
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
+    MAX_DAILY_GOAL_ML,
     MAX_IMPORT_CONTENT_BYTES,
+    MAX_PERSON_DISPLAY_LEN,
+    MAX_QUICK_DRINK_KEY_LEN,
+    MAX_QUICK_DRINK_LABEL_LEN,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
+    MIN_DAILY_GOAL_ML,
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_HIDDEN_CATEGORIES,
@@ -110,6 +115,7 @@ COMMAND_BOOK_DRINK = "health_o_mat/book_drink"
 COMMAND_UNDO_LAST = "health_o_mat/undo_last"
 COMMAND_SAVE_MEASUREMENT = "health_o_mat/save_measurement"
 COMMAND_ADD_LAB_VALUE = "health_o_mat/add_lab_value"
+COMMAND_GET_LAB_VALUE = "health_o_mat/get_lab_value"
 COMMAND_ADD_LAB_REPORT = "health_o_mat/add_lab_report"
 COMMAND_REMOVE_LAB_REPORT = "health_o_mat/remove_lab_report"
 COMMAND_REMOVE_LAST_LAB_VALUE = "health_o_mat/remove_last_lab_value"
@@ -265,17 +271,24 @@ def _strict_int(value: Any) -> int:
 # Feldgenaue Validierung eines `set_settings`-Payloads.
 SETTINGS_SCHEMA = vol.Schema(
     {
-        vol.Optional("daily_goal_ml"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        # Grenzen identisch zu config_flow.py/number.py (eine Quelle in const.py —
+        # vorher drei divergierende Bounds, siehe
+        # docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
+        vol.Optional("daily_goal_ml"): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_DAILY_GOAL_ML, max=MAX_DAILY_GOAL_ML)
+        ),
         vol.Optional("daily_reset_hour"): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
-        vol.Optional("person_display"): str,
+        vol.Optional("person_display"): vol.All(str, vol.Length(max=MAX_PERSON_DISPLAY_LEN)),
         # Quick-Drinks: dieselben 4 Felder, die der Options-Flow schreibt
         # (config_flow.quick_drinks_from_user_input) — gleiche Repräsentation.
         vol.Optional("quick_drinks"): vol.All(
             [
                 vol.Schema(
                     {
-                        vol.Required("key"): str,
-                        vol.Required("label"): str,
+                        vol.Required("key"): vol.All(str, vol.Length(max=MAX_QUICK_DRINK_KEY_LEN)),
+                        vol.Required("label"): vol.All(
+                            str, vol.Length(max=MAX_QUICK_DRINK_LABEL_LEN)
+                        ),
                         vol.Required("ml"): vol.All(
                             vol.Coerce(int), vol.Range(min=MIN_DRINK_ML, max=MAX_AMOUNT_ML)
                         ),
@@ -1154,6 +1167,15 @@ async def async_register_ws_api(hass: HomeAssistant) -> None:
             },
         ),
         (
+            COMMAND_GET_LAB_VALUE,
+            websocket_get_lab_value,
+            {
+                vol.Required("entry_id"): str,
+                vol.Required("marker"): str,
+                vol.Optional("target_unit"): str,
+            },
+        ),
+        (
             COMMAND_ADD_LAB_REPORT,
             websocket_add_lab_report,
             {
@@ -1847,6 +1869,109 @@ async def websocket_remove_last_lab_value(
         return
     signal_refresh(hass, entry_id)
     connection.send_result(msg["id"])
+
+
+def _match_lab_target_unit(marker_def: dict, requested: str) -> str | None:
+    """Angeforderte Zieleinheit gegen die erlaubten Einheiten matchen (Katalogschreibweise).
+
+    Case-/Whitespace-insensitiv; `None` bei keinem Treffer (Aufrufer meldet
+    `unsupported_unit`). Bewusst lokal statt über `logic`s modulprivaten
+    Matcher — dieselbe Quelle (`logic.lab_allowed_units`), kein neuer
+    Konvertierungscode.
+    """
+    normalized = requested.strip().casefold()
+    for unit in logic.lab_allowed_units(marker_def):
+        if unit.strip().casefold() == normalized:
+            return unit
+    return None
+
+
+async def websocket_get_lab_value(
+    hass: HomeAssistant, connection: Any, msg: dict[str, Any]
+) -> None:
+    """`health_o_mat/get_lab_value` → aktueller Laborwert in einer Zieleinheit.
+
+    Produktiver Lese-Pfad (Multi-Unit-Konzept Schritt 4, Scope: nur Labor):
+    liest den kanonischen Store-Wert (`last_active_lab_reading`, Felder
+    `value`/`unit`) und rechnet ihn ON-READ über
+    `logic.convert_lab_display_value` in `target_unit` um — dieselbe Funktion,
+    die REQ-HOM-134 bisher nur für die Anzeige nutzte; für diesen Scope ist das
+    dort dokumentierte "kein Produktionsaufrufer" jetzt widerrufen (siehe
+    Docstring dort). Kein neues Store-Feld nötig: `value`/`unit` sind bereits
+    die kanonische Quelle für JEDE Zieleinheit; `reported_value`/
+    `reported_unit` laufen nur als Herkunfts-Metadaten im Response mit.
+
+    Fehlt `target_unit`, greift dieselbe Präzedenz wie im Panel
+    (`entry.options["lab_default_units"]` -> Werkseinstellung -> kanonisch,
+    `logic.resolve_lab_display_unit`).
+    """
+    entry_id = msg["entry_id"]
+    store = _store(hass)
+    entry = _runtime_entry(hass, entry_id)
+    if store is None or entry is None or not _entry_ready(hass, entry_id):
+        _send_entry_error(connection, msg, entry_id)
+        return
+    options = getattr(entry, "options", None) or {}
+    resolved = _resolve_lab_marker_or_error(connection, msg, options)
+    if resolved is None:
+        return
+    marker_key, marker_def = resolved
+    requested_unit = str(msg.get("target_unit") or "").strip() or None
+    if requested_unit is not None:
+        target_unit = _match_lab_target_unit(marker_def, requested_unit)
+        if target_unit is None:
+            errors.send_ws_error(
+                connection,
+                msg["id"],
+                ERR_INVALID_FORMAT,
+                "unsupported_unit",
+                {"marker": msg.get("marker"), "unit": requested_unit},
+            )
+            return
+    else:
+        custom_markers = options.get(OPTION_LAB_CUSTOM_MARKERS)
+        display_defaults = logic.normalize_lab_default_units(
+            options.get(OPTION_LAB_DEFAULT_UNITS), custom_markers
+        )
+        target_unit = logic.resolve_lab_display_unit(marker_key, marker_def, display_defaults)
+    reading = store.last_active_lab_reading(entry_id, marker_key)
+    if reading is None:
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "no_active_value",
+            {"marker": msg.get("marker")},
+        )
+        return
+    converted = logic.convert_lab_display_value(marker_def, reading.get("value"), target_unit)
+    if converted is None:
+        # Defensiv: ein bereits validiert gespeichertes Reading hat immer
+        # einen numerischen `value` — dieser Zweig sollte in der Praxis nie
+        # greifen, verhindert aber einen Crash bei einem korrupten Eintrag.
+        errors.send_ws_error(
+            connection,
+            msg["id"],
+            ERR_INVALID_FORMAT,
+            "invalid_value",
+            {"marker": msg.get("marker")},
+        )
+        return
+    display_value, display_unit = converted
+    connection.send_result(
+        msg["id"],
+        {
+            "marker": marker_key,
+            "value": display_value,
+            "unit": display_unit,
+            "decimals": logic.lab_display_decimals(display_value),
+            "canonical_value": reading.get("value"),
+            "canonical_unit": reading.get("unit"),
+            "reported_value": reading.get("reported_value"),
+            "reported_unit": reading.get("reported_unit"),
+            "ts": reading.get("ts"),
+        },
+    )
 
 
 async def websocket_set_wellbeing(

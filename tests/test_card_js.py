@@ -3402,32 +3402,33 @@ process.stdout.write(JSON.stringify(out));
 """
 
 
+def _lab_marker_oracle_specs(markers):
+    """Generiert Oracle-Parity-Specs für ALLE übergebenen `LAB_MARKERS`-Einträge.
+
+    Pro Marker: eine Selbstkonvertierungs-Spec (`canonical_unit` -> `canonical_unit`,
+    Faktor 1) sowie je eine Spec pro `alt_units`-Eintrag. Automatisch generiert statt
+    einer gepflegten Literal-Liste, damit neue Marker (mit oder ohne `alt_units`)
+    ohne Listen-Pflege mitgetestet werden (§Q4: auch die 29 Faktor-1-Marker ohne
+    `alt_units`).
+    """
+    representative_value = 100.0
+    specs = []
+    for marker_key, marker in markers.items():
+        specs.append((marker_key, representative_value, marker["canonical_unit"]))
+        for alt_unit in marker["alt_units"]:
+            specs.append((marker_key, representative_value, alt_unit))
+    return specs
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node nicht verfügbar")
 def test_req_hom_134_panel_and_card_display_oracle_matches_python(tmp_path):
-    """[REQ-HOM-134/F9] Panel- und Karten-Helfer ≡ Python-Oracle."""
+    """[REQ-HOM-134/F9] Panel- und Karten-Helfer ≡ Python-Oracle (alle 41 Marker)."""
     from custom_components.health_o_mat import const as const_module
     from custom_components.health_o_mat import logic as py_logic
 
+    assert len(const_module.LAB_MARKERS) == 41
     cases = []
-    specs = [
-        ("creatinine", 79.6, "mg/dL"),
-        ("bilirubin_total", 15.0, "mg/dL"),
-        ("hemoglobin", 145.0, "g/dL"),
-        ("cholesterol_total", 5.2, "mg/dL"),
-        ("triglycerides", 1.7, "mg/dL"),
-        ("ft4", 15.0, "ng/dL"),
-        ("ft3", 5.0, "pg/mL"),
-        ("hematocrit", 0.42, "%"),
-        # Die acht Grenzfall-Paare aus §8.2.
-        ("creatinine", 106.1, "mg/dL"),
-        ("creatinine", 106.0, "mg/dL"),
-        ("cholesterol_total", 5.21, "mg/dL"),
-        ("cholesterol_total", 5.2, "mg/dL"),
-        ("bilirubin_total", 21.1, "mg/dL"),
-        ("bilirubin_total", 21.0, "mg/dL"),
-        ("ft4", 23.1, "ng/dL"),
-        ("ft4", 23.0, "ng/dL"),
-    ]
+    specs = _lab_marker_oracle_specs(const_module.LAB_MARKERS)
     for marker_key, value, display_unit in specs:
         marker = const_module.LAB_MARKERS[marker_key]
         cases.append(
