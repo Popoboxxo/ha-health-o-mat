@@ -2235,6 +2235,85 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 ---
 
+#### REQ-HOM-135 — Produktiver Multi-Unit-Lese-Pfad für Laborwerte (WS-Kommando `get_lab_value`)
+- **Kategorie:** Kernfunktionalität · **Priorität:** P2 · **Aufwand:** S
+- **Status: Umgesetzt (noch kein Release)** (Branch
+  `feat/lab-multiunit-validation-hardening`, 2026-11-20; `manifest.json`
+  weiterhin `0.22.1`, kein Versions-Bump in diesem Schritt).
+- **ID-Wahl:** **135 ist die nächste freie ID** — vor der Anlage geprüft per
+  `grep -rn "REQ-HOM-135"` über das Repo (0 Treffer). 134 ist durch die
+  Anzeige-Einheiten-Lösung belegt. Keine bestehende REQ wurde umnummeriert.
+- **Bezug:** `docs/concept-multi-unit-conversion-plan.md` §3 Schritt 4 +
+  §6 Nutzerentscheidungen (Q1 Kombination A+B, Q2 Scope nur Labor, Q3 Katalog
+  bleibt `const.py`); baut auf **REQ-HOM-122** (Laborwerte) und
+  **REQ-HOM-133** (Katalog/`alt_units`) auf und **erweitert REQ-HOM-134**
+  über dessen eigenen Scope hinaus: REQ-HOM-134 hatte „Keine neuen Services /
+  WS-Kommandos" und „kein Produktionsaufrufer" für
+  `convert_lab_display_value()`/`lab_display_decimals()` als Nicht-Ziel
+  dokumentiert (`docs/superpowers/specs/2026-11-05-lab-default-units-design.md`
+  §4) — dieses Nicht-Ziel wird hiermit für genau diesen neuen Scope
+  **widerrufen**, der Rest von REQ-HOM-134 (Store/Sensor bleiben kanonisch,
+  kein Schema-Bump) gilt unverändert fort. Eigene REQ statt Amendment, weil
+  eine neue, eigenständig nutzbare Nutzerfähigkeit entsteht (ein Marker
+  gezielt in einer beliebigen erlaubten Einheit **zurücklesen**, nicht nur
+  anzeige-rendern) — analog zum bisherigen Muster, nach dem jede über eine
+  bestehende REQ hinausgehende Fähigkeit eine eigene ID bekommt (vgl.
+  REQ-HOM-133 → REQ-HOM-134).
+- **Anforderung:** Für Laborwerte gibt es einen produktiven,
+  on-read-konvertierenden Lese-Pfad: das neue WS-Kommando
+  `health_o_mat/get_lab_value` (`ws_api.py::websocket_get_lab_value`) liefert
+  zu `entry_id` + `marker` den **aktuellen aktiven** Laborwert
+  (`store.last_active_lab_reading`) umgerechnet in eine **Zieleinheit**
+  (`target_unit`, optional). Ist `target_unit` angegeben, muss sie zu den
+  für den Marker erlaubten Einheiten gehören (`logic.lab_allowed_units`,
+  case-/whitespace-insensitiv); sonst `unsupported_unit`. Fehlt
+  `target_unit`, gilt dieselbe Präzedenz wie im Panel (Override >
+  Werkseinstellung > kanonisch, `logic.resolve_lab_display_unit`). Die
+  Umrechnung nutzt ausschließlich die bestehenden, bereits für die Anzeige
+  genutzten Funktionen `logic.convert_lab_display_value()` und
+  `logic.lab_display_decimals()` — kein neuer Konvertierungscode, kein
+  neues Store-Feld. Die Antwort trägt zusätzlich `canonical_value`/
+  `canonical_unit` und `reported_value`/`reported_unit` als
+  Herkunfts-Metadaten sowie `ts`. Fehlerfälle: unbekannte/nicht bereite
+  Person → Entry-Fehler, unbekannter Marker → bestehender
+  Marker-Resolver-Fehler, kein aktiver Messwert → `no_active_value`,
+  nicht erlaubte Zieleinheit → `unsupported_unit`. Store, Sensor-State,
+  `native_unit_of_measurement`, CSV-Export und Entity-Menge bleiben
+  **unverändert kanonisch** (kein Store-Schema-Bump, keine neue Entity,
+  kein Config-Entry-Versions-Bump) — Scope ist ausschließlich Labor
+  (Trinken/Blutdruck bewusst außen vor, Q2).
+- **Akzeptanzkriterien:**
+  - [x] `health_o_mat/get_lab_value` konvertiert einen vorhandenen aktiven
+    Messwert korrekt in eine explizit angeforderte, erlaubte Zieleinheit.
+  - [x] Ohne `target_unit` greift die Panel-Präzedenz (Override >
+    Werkseinstellung > kanonisch).
+  - [x] Unbekannte/nicht erlaubte Zieleinheit → `unsupported_unit`;
+    unbekannter Marker → bestehender Resolver-Fehler; kein aktiver
+    Messwert → `no_active_value`; nicht bereite/unbekannte Person →
+    Entry-Fehler.
+  - [x] Antwort enthält `value`/`unit`/`decimals` (Anzeige) **und**
+    `canonical_value`/`canonical_unit`/`reported_value`/`reported_unit`/`ts`
+    (Herkunft) ohne Store-Mutation.
+- **Belege:** `custom_components/health_o_mat/ws_api.py`
+  (`COMMAND_GET_LAB_VALUE`, `websocket_get_lab_value`,
+  `_match_lab_target_unit`); `tests/test_ws_api.py`, Abschnitt
+  „`get_lab_value` (Multi-Unit-Lese-Pfad, Schritt 4)" — 7 Tests, alle grün:
+  `test_req_hom_134_websocket_get_lab_value_converts_to_requested_unit`,
+  `::test_req_hom_134_websocket_get_lab_value_unknown_marker_sends_error`,
+  `::test_req_hom_134_websocket_get_lab_value_unsupported_target_unit_sends_error`,
+  `::test_req_hom_134_websocket_get_lab_value_falls_back_to_default_unit`,
+  `::test_req_hom_134_websocket_get_lab_value_falls_back_to_canonical_without_default`,
+  `::test_req_hom_134_websocket_get_lab_value_no_reading_sends_error`,
+  `::test_req_hom_134_websocket_get_lab_value_unloaded_person_sends_not_found`.
+  **Hinweis zur Benennung:** Die Testfunktionen tragen (historisch, aus dem
+  Umsetzungsschritt heraus) weiterhin das Präfix `test_req_hom_134_*`, obwohl
+  sie hier als Beleg für REQ-HOM-135 geführt werden — der Code gehört
+  eindeutig zum in REQ-HOM-134 widerrufenen Nicht-Ziel „kein
+  Produktionsaufrufer" und damit zu dieser REQ. Kein Umbenennen in diesem
+  Schritt (reine Doku-Änderung, kein Code-/Test-Edit).
+
+---
+
 ## 3. Mapping Funde → Anforderungen
 
 | Fund | Schwere | REQ (Fix) | Vollständige Lösung |
@@ -2256,6 +2335,7 @@ Aufwand S (< ½ Tag) / M (1–2 Tage) / L (> 2 Tage)
 
 | Datum | Änderung |
 |---|---|
+| 2026-11-20 | **REQ-HOM-135 neu angelegt — Produktiver Multi-Unit-Lese-Pfad für Laborwerte** (Branch `feat/lab-multiunit-validation-hardening`, Konzept `docs/concept-multi-unit-conversion-plan.md` §3 Schritt 4/§6): neues WS-Kommando `health_o_mat/get_lab_value` (`ws_api.py::websocket_get_lab_value`) liest den kanonischen Laborwert und rechnet ihn on-read in eine angeforderte/aufgelöste Zieleinheit um — widerruft für diesen Scope das in REQ-HOM-134 dokumentierte Nicht-Ziel „kein Produktionsaufrufer"/„keine neuen WS-Kommandos". Eigene REQ statt Amendment, da eine neue, eigenständige Nutzerfähigkeit (gezieltes Zurücklesen in Ziel-Einheit) entsteht. Store/Sensor/Entity-Menge bleiben kanonisch unverändert, kein Schema-/Versions-Bump. **Belege:** `tests/test_ws_api.py` Abschnitt „`get_lab_value` (Multi-Unit-Lese-Pfad, Schritt 4)", 7 Tests grün. **Kein Release/Tag** — `manifest.json` bleibt `0.22.1`. Keine Code-/Teständerung in diesem Schritt (reine REQ-Dokumentation). |
 | 2026-11-04 | **Release `0.21.0` veröffentlicht** (Tag `v0.21.0`, `manifest.json` = `0.21.0`, echtes GitHub-Release — nicht Draft/Pre-Release, `main` @ `640c94d`). **Die Zwischenversionen `0.19.1` und `0.20.0` wurden bewusst übersprungen und in `0.21.0` gebündelt.** Enthalten: **REQ-HOM-010** (Mess-Notiz-Eingabe), **REQ-HOM-006** (vierter Blueprint `goal_reached` + Blueprint-E2E), **REQ-HOM-127** (Fehlercode-/i18n-Vertrag) sowie die Fixes und die **WP-B-E2E-Abdeckung**. **Neue E2E-Dateien** (alle grün, E2E-Suite `tests_e2e/` → **73 Tests**): `tests_e2e/e2e_helpers.py` (gemeinsame Helfer), `test_config_migration_e2e.py` (REQ-HOM-101 AK4: Legacy-Entry + Quick-Drink nach Reload), `test_diagnostics_e2e.py` (REQ-HOM-105: Admin 200, Nicht-Admin abgewiesen), `test_input_persistence_e2e.py` (REQ-HOM-104: Neustart) und `test_i18n_e2e.py` (REQ-HOM-127: Rendering). Damit **abgehakt:** REQ-HOM-101 AK4, REQ-HOM-104 und REQ-HOM-105. **REQ-HOM-130 (HACS-Update-Test) bleibt offen/teilweise:** die HACS-Mechanik ist weiterhin **nicht verifiziert** (manuelle Betreiber-Prozedur in `docs/PLAN-AUDIT-2026-11-03.md` §WP-E, kein automatisierter Beleg). Keine Code-/Teständerung in diesem Schritt. |
 | 2026-11-03 | **REQ-HOM-127 umgesetzt — Fehlercode-/i18n-Vertrag für bestehende Services und WS-Pfade** (Branch `feat/127-error-contract-impl`; Konzept `docs/superpowers/specs/2026-11-03-error-contract-design.md`, Plan `docs/superpowers/plans/2026-11-03-error-contract.md`): zentraler **35-Code-Katalog** `errors.ERROR_SPECS` (HA-frei in `logic.py`, `params`/`template`/`row_template`, `RAW_ECHO_CODES`) mit HA-Projektion ausschließlich in `errors.py` (`validation_error`, `send_ws_error`, `relay_error`; Invariante `code == translation_key`); **29 Service-** und **32 WS-Fehlerstellen** von Prosa/`send_error` auf den Katalog migriert; **4 Relais-Stellen** (`export_failed`, `backup_failed`, `import_failed`, `restore_failed`) reichen `translation_domain`/`translation_key`/`translation_placeholders` durch; **35 `exceptions`-Übersetzungen** in `strings.json`/`translations/de.json`/`translations/en.json` mit identischen Platzhalter-Sets; **Batch-Envelope unverändert** `{code, params, message}` **ohne** `translation_*` (Lokalisierung clientseitig aus `code` + `params`); Frontend löst ausschließlich **per Code** auf (`translation_key || code`, dann `translation_placeholders || params`, Unknown-Code-Fallback auf `message`, dann Code), ergänzter Key `ui_panel_lab_report_row_hint`. **Belege:** `pytest -q` → **1865 passed**, `ruff check .` clean, `compileall` OK; E2E `tests_e2e/` → **73 passed** auf dem Compose-Stack (8124), inkl. lokalisierter Darstellung de/en, Unknown-Code-Fallback und Batch-Envelope ohne `translation_*`. **Kein Release/Tag** — `0.21.0` ist geplant, aber nicht geschnitten. |
 | 2026-11-03 | **Welle 3 — REQ-HOM-006 Blueprint-E2E umgesetzt (noch kein Release):** vierter Blueprint `blueprints/automation/health_o_mat/goal_reached.yaml` (Ziel-erreicht, Trigger `off → on` des Binärsensors `…_daily_goal_reached`, kein Helfer nötig); **echter Defekt behoben** — `evening_reminder` und `blood_pressure_warning` referenzierten `person_name` im Jinja-Template, ohne es zu binden (HA substituiert nur `!input`), daher rendete der Personenname nie; beide binden jetzt `variables: {person: !input person_name}` und nutzen `person`, `weekly_report` braucht keine Bindung (kein Template); `tests/test_blueprints.py` um die Bindungs-Regression erweitert (schlägt auf dem Vorher-Stand fehl); `README.md`-Blueprint-Liste drei → vier. **Belege:** `pytest -q` → **1751 passed**; neu `tests_e2e/test_blueprints_e2e.py` → **19 Tests, 19 passed** auf dem Compose-Stack (8124) — Import über Admin-WS `blueprint/save` → `automation.reload` → `blueprint/list` (alle vier mit Metadaten, Domain, exaktem Input-Set), HA-eigene Automationsvalidierung (`POST /api/config/automation/config/<id>`, `async_validate_config_item`) akzeptiert `goal_reached` und `evening_reminder` mit konkreten Inputs und liest sie zurück, Negativfälle abgewiesen (`invalid_format` / `Invalid blueprint`, fehlender Input → 400), `blueprint/substitute` + `POST /api/template` rendern den Personennamen (Vorher-Variante ohne). **Nicht belegt:** keine Automation feuert tatsächlich (kein `automation:`-Include in der Seed-Konfiguration, also keine auslösbare Entity) — kein realer Notify-Aufruf. **Kein Release/Tag** — 0.20.0 ist nicht veröffentlicht. |
