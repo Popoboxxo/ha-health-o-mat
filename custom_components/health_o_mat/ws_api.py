@@ -272,7 +272,8 @@ def _strict_int(value: Any) -> int:
 SETTINGS_SCHEMA = vol.Schema(
     {
         # Grenzen identisch zu config_flow.py/number.py (eine Quelle in const.py —
-        # vorher drei divergierende Bounds, siehe docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
+        # vorher drei divergierende Bounds, siehe
+        # docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
         vol.Optional("daily_goal_ml"): vol.All(
             vol.Coerce(int), vol.Range(min=MIN_DAILY_GOAL_ML, max=MAX_DAILY_GOAL_ML)
         ),
@@ -284,9 +285,7 @@ SETTINGS_SCHEMA = vol.Schema(
             [
                 vol.Schema(
                     {
-                        vol.Required("key"): vol.All(
-                            str, vol.Length(max=MAX_QUICK_DRINK_KEY_LEN)
-                        ),
+                        vol.Required("key"): vol.All(str, vol.Length(max=MAX_QUICK_DRINK_KEY_LEN)),
                         vol.Required("label"): vol.All(
                             str, vol.Length(max=MAX_QUICK_DRINK_LABEL_LEN)
                         ),

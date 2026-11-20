@@ -39,7 +39,8 @@ DEFAULT_CUSTOM_AMOUNT_ML = 250
 MAX_AMOUNT_ML = 10000
 
 # Tagesziel-Grenzen (eine Quelle fuer config_flow.py, number.py, ws_api.py —
-# vorher drei divergierende Literale, siehe docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
+# vorher drei divergierende Literale, siehe
+# docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
 MIN_DAILY_GOAL_ML = 500
 MAX_DAILY_GOAL_ML = MAX_AMOUNT_ML
 

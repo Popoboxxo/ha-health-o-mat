@@ -5355,9 +5355,7 @@ def test_req_hom_134_websocket_get_lab_value_no_reading_sends_error():
         )
     )
 
-    assert connection.errors == [
-        (25, "invalid_format", "no_active_value (marker=creatinine)")
-    ]
+    assert connection.errors == [(25, "invalid_format", "no_active_value (marker=creatinine)")]
     assert connection.results == []
 
 
