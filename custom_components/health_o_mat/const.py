@@ -38,6 +38,11 @@ DEFAULT_DAILY_GOAL_ML = 2000
 DEFAULT_CUSTOM_AMOUNT_ML = 250
 MAX_AMOUNT_ML = 10000
 
+# Tagesziel-Grenzen (eine Quelle fuer config_flow.py, number.py, ws_api.py —
+# vorher drei divergierende Literale, siehe docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
+MIN_DAILY_GOAL_ML = 500
+MAX_DAILY_GOAL_ML = MAX_AMOUNT_ML
+
 # Max. Anzahl Buchungen, die als JSON-Attribut im State landen (Finding N-1).
 # Attribute werden im State-Objekt und im Recorder gespeichert und wüchsen
 # sonst unbegrenzt mit jeder Buchung. Der Rohdaten-Vollbestand bleibt
@@ -698,6 +703,12 @@ OPTION_LAB_HIDE_PANEL_DISCLAIMER = "lab_hide_panel_disclaimer"
 
 # Max. Länge des optionalen `report_ref`-Freitextfelds (§2.4a der Spec).
 LAB_REPORT_REF_MAX_LEN = 500
+
+# Längenlimits für ungeprüfte Textfelder im ws_api-Admin-Pfad (§3 Schritt 1 des
+# Multi-Unit-Audits): vorher plain `str` ohne Obergrenze.
+MAX_PERSON_DISPLAY_LEN = 60
+MAX_QUICK_DRINK_LABEL_LEN = 40
+MAX_QUICK_DRINK_KEY_LEN = 30
 
 # LEICHTER Batch-Vertrag (REQ-HOM-123): Server-Limit je Bericht; die UI hat
 # einen eigenen Soft-Cap (60). Beide Werte sind bewusst unabhängig.

@@ -1094,6 +1094,60 @@ def test_register_ws_api_is_idempotent_and_schema_validates(monkeypatch):
     )
 
 
+def test_settings_schema_daily_goal_ml_matches_options_flow_bounds():
+    """ws_api.SETTINGS_SCHEMA muss dieselben daily_goal_ml-Grenzen durchsetzen wie
+    der Options-Flow/die Number-Entity (eine Quelle: const.MIN/MAX_DAILY_GOAL_ML),
+    nicht mehr die vorherige losere `vol.Range(min=1)`-Prüfung."""
+    assert ws_api.SETTINGS_SCHEMA({"daily_goal_ml": 2000})["daily_goal_ml"] == 2000
+    for bogus in (1, 499, 50_000_000):
+        with pytest.raises(vol.Invalid):
+            ws_api.SETTINGS_SCHEMA({"daily_goal_ml": bogus})
+
+
+def test_settings_schema_enforces_text_length_limits():
+    """person_display und quick_drinks[].key/label waren vorher plain `str` ohne
+    Obergrenze — ein überlanger Wert muss jetzt abgewiesen werden."""
+    with pytest.raises(vol.Invalid):
+        ws_api.SETTINGS_SCHEMA({"person_display": "x" * (ws_api.MAX_PERSON_DISPLAY_LEN + 1)})
+    assert ws_api.SETTINGS_SCHEMA({"person_display": "x" * ws_api.MAX_PERSON_DISPLAY_LEN})
+
+    with pytest.raises(vol.Invalid):
+        ws_api.SETTINGS_SCHEMA(
+            {
+                "quick_drinks": [
+                    {
+                        "key": "x" * (ws_api.MAX_QUICK_DRINK_KEY_LEN + 1),
+                        "label": "A",
+                        "ml": 200,
+                    }
+                ]
+            }
+        )
+    with pytest.raises(vol.Invalid):
+        ws_api.SETTINGS_SCHEMA(
+            {
+                "quick_drinks": [
+                    {
+                        "key": "a",
+                        "label": "x" * (ws_api.MAX_QUICK_DRINK_LABEL_LEN + 1),
+                        "ml": 200,
+                    }
+                ]
+            }
+        )
+    assert ws_api.SETTINGS_SCHEMA(
+        {
+            "quick_drinks": [
+                {
+                    "key": "x" * ws_api.MAX_QUICK_DRINK_KEY_LEN,
+                    "label": "x" * ws_api.MAX_QUICK_DRINK_LABEL_LEN,
+                    "ml": 200,
+                }
+            ]
+        }
+    )
+
+
 def test_register_ws_api_uses_real_registration():
     """Echte Registrierung (ohne Mock): alle Kommandos + Schemas landen in hass.data."""
     hass = FakeHass()
@@ -2503,7 +2557,7 @@ def test_set_settings_accepts_boundary_values():
                 sys_threshold=40,
                 dia_threshold=260,
                 retention_months=ws_api.MAX_RETENTION_MONTHS,
-                daily_goal_ml=1,
+                daily_goal_ml=ws_api.MIN_DAILY_GOAL_ML,
             ),
         )
     )
@@ -2512,6 +2566,7 @@ def test_set_settings_accepts_boundary_values():
     stored = hass.config_entries.updates[0]["options"]
     assert (stored["daily_reset_hour"], stored["sys_threshold"]) == (23, 40)
     assert (stored["dia_threshold"], stored["retention_months"]) == (260, 120)
+    assert stored["daily_goal_ml"] == ws_api.MIN_DAILY_GOAL_ML
 
 
 def test_set_settings_non_admin_denied_without_any_write():

@@ -25,7 +25,11 @@ from .const import (
     DEFAULT_QUICK_DRINKS,
     DOMAIN,
     DRINK_LEXICON,
+    MAX_DAILY_GOAL_ML,
+    MAX_PERSON_DISPLAY_LEN,
+    MAX_QUICK_DRINK_LABEL_LEN,
     MAX_RETENTION_MONTHS,
+    MIN_DAILY_GOAL_ML,
     OPTION_LAB_RETENTION_MONTHS,
     OPTION_REMINDERS,
     OPTION_WEEKLY_REPORT,
@@ -69,7 +73,10 @@ def quick_drinks_schema(current: list[dict]) -> vol.Schema:
     slots = {}
     for i in range(4):
         qd = current[i] if i < len(current) else {}
-        slots[vol.Required(f"quick_{i}_label", default=qd.get("label", f"Quick {i + 1}"))] = str
+        # Grenze identisch zu ws_api.SETTINGS_SCHEMA (eine Quelle in const.py).
+        slots[vol.Required(f"quick_{i}_label", default=qd.get("label", f"Quick {i + 1}"))] = (
+            vol.All(str, vol.Length(max=MAX_QUICK_DRINK_LABEL_LEN))
+        )
         slots[vol.Required(f"quick_{i}_ml", default=int(qd.get("ml", 200)))] = vol.All(
             vol.Coerce(int), vol.Range(min=1, max=10000)
         )
@@ -415,14 +422,15 @@ class HealthOMatOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required("daily_goal_ml", default=current_goal): vol.All(
-                        vol.Coerce(int), vol.Range(min=500, max=10000)
+                        vol.Coerce(int), vol.Range(min=MIN_DAILY_GOAL_ML, max=MAX_DAILY_GOAL_ML)
                     ),
                     vol.Optional("set_lifetime_ml", default=lifetime): vol.All(vol.Coerce(int)),
                     vol.Optional(
                         "person_display",
                         default=self._option("person_display")
                         or self.config_entry.data.get("person", ""),
-                    ): str,
+                        # Grenze identisch zu ws_api.SETTINGS_SCHEMA (eine Quelle in const.py).
+                    ): vol.All(str, vol.Length(max=MAX_PERSON_DISPLAY_LEN)),
                     vol.Optional(
                         "daily_reset_hour",
                         default=self._option("daily_reset_hour", 0),

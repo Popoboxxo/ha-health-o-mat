@@ -42,9 +42,14 @@ from .const import (
     MAX_AMOUNT_ML,
     MAX_AUDIT_LIMIT,
     MAX_BP_VALUE,
+    MAX_DAILY_GOAL_ML,
     MAX_IMPORT_CONTENT_BYTES,
+    MAX_PERSON_DISPLAY_LEN,
+    MAX_QUICK_DRINK_KEY_LEN,
+    MAX_QUICK_DRINK_LABEL_LEN,
     MAX_RETENTION_MONTHS,
     MIN_BP_VALUE,
+    MIN_DAILY_GOAL_ML,
     OPTION_LAB_CUSTOM_MARKERS,
     OPTION_LAB_DEFAULT_UNITS,
     OPTION_LAB_HIDDEN_CATEGORIES,
@@ -265,17 +270,25 @@ def _strict_int(value: Any) -> int:
 # Feldgenaue Validierung eines `set_settings`-Payloads.
 SETTINGS_SCHEMA = vol.Schema(
     {
-        vol.Optional("daily_goal_ml"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        # Grenzen identisch zu config_flow.py/number.py (eine Quelle in const.py —
+        # vorher drei divergierende Bounds, siehe docs/concept-multi-unit-conversion-plan.md §3 Schritt 1).
+        vol.Optional("daily_goal_ml"): vol.All(
+            vol.Coerce(int), vol.Range(min=MIN_DAILY_GOAL_ML, max=MAX_DAILY_GOAL_ML)
+        ),
         vol.Optional("daily_reset_hour"): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
-        vol.Optional("person_display"): str,
+        vol.Optional("person_display"): vol.All(str, vol.Length(max=MAX_PERSON_DISPLAY_LEN)),
         # Quick-Drinks: dieselben 4 Felder, die der Options-Flow schreibt
         # (config_flow.quick_drinks_from_user_input) — gleiche Repräsentation.
         vol.Optional("quick_drinks"): vol.All(
             [
                 vol.Schema(
                     {
-                        vol.Required("key"): str,
-                        vol.Required("label"): str,
+                        vol.Required("key"): vol.All(
+                            str, vol.Length(max=MAX_QUICK_DRINK_KEY_LEN)
+                        ),
+                        vol.Required("label"): vol.All(
+                            str, vol.Length(max=MAX_QUICK_DRINK_LABEL_LEN)
+                        ),
                         vol.Required("ml"): vol.All(
                             vol.Coerce(int), vol.Range(min=MIN_DRINK_ML, max=MAX_AMOUNT_ML)
                         ),

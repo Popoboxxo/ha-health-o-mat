@@ -10,6 +10,8 @@ from .const import (
     DEFAULT_CUSTOM_AMOUNT_ML,
     DOMAIN,
     MAX_AMOUNT_ML,
+    MAX_DAILY_GOAL_ML,
+    MIN_DAILY_GOAL_ML,
     WELLBEING_STATES,
 )
 from .entity import HealthOMatEntity, signal_refresh
@@ -78,8 +80,8 @@ class DailyGoalNumber(HealthOMatNumber):
 
     _attr_translation_key = "daily_goal"
     _attr_icon = "mdi:target"
-    _attr_native_min_value = 500
-    _attr_native_max_value = MAX_AMOUNT_ML
+    _attr_native_min_value = MIN_DAILY_GOAL_ML
+    _attr_native_max_value = MAX_DAILY_GOAL_ML
     _attr_native_step_value = 50
     # HA-kanonische Schreibweise für Volumen: "mL" (nicht "ml") — damit die
     # Number-Entities dieselbe Einheit melden wie die Volumen-Sensoren
