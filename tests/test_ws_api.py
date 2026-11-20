@@ -820,6 +820,7 @@ _ALL_COMMANDS = (
     ws_api.COMMAND_RESTORE_ENTRY,
     ws_api.COMMAND_SAVE_MEASUREMENT,
     ws_api.COMMAND_ADD_LAB_VALUE,
+    ws_api.COMMAND_GET_LAB_VALUE,
     ws_api.COMMAND_ADD_LAB_REPORT,
     ws_api.COMMAND_REMOVE_LAB_REPORT,
     ws_api.COMMAND_REMOVE_LAST_LAB_VALUE,
@@ -5164,6 +5165,223 @@ def test_req_hom_122_websocket_add_lab_value_unloaded_person_sends_not_found(mon
     assert connection.errors[0][1] == "not_found"
     assert connection.results == []
     store.add_lab_reading.assert_not_awaited()
+
+
+# --- get_lab_value (Multi-Unit-Lese-Pfad, Schritt 4) ------------------------
+
+
+def _lab_reading(
+    value: float = 97.24,
+    unit: str = "µmol/L",
+    reported_value: float = 1.1,
+    reported_unit: str = "mg/dL",
+    ts: str = "2026-10-15T12:00:00",
+) -> dict:
+    return {
+        "value": value,
+        "unit": unit,
+        "reported_value": reported_value,
+        "reported_unit": reported_unit,
+        "ts": ts,
+    }
+
+
+def test_req_hom_134_websocket_get_lab_value_converts_to_requested_unit():
+    """Kanonischer Store-Wert wird on-read in die angeforderte Zieleinheit umgerechnet."""
+    store = _write_store()
+    store.last_active_lab_reading.return_value = _lab_reading()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 20,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+                "target_unit": "mg/dL",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    assert connection.results == [
+        (
+            20,
+            {
+                "marker": "creatinine",
+                "value": 1.1,
+                "unit": "mg/dL",
+                "decimals": 3,
+                "canonical_value": 97.24,
+                "canonical_unit": "µmol/L",
+                "reported_value": 1.1,
+                "reported_unit": "mg/dL",
+                "ts": "2026-10-15T12:00:00",
+            },
+        )
+    ]
+    store.last_active_lab_reading.assert_called_once_with("e1", "creatinine")
+
+
+def test_req_hom_134_websocket_get_lab_value_unknown_marker_sends_error():
+    store = _write_store()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 21,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "not_a_marker",
+                "target_unit": "mg/dL",
+            },
+        )
+    )
+
+    assert connection.errors == [(21, "invalid_format", "unknown_marker (marker=not_a_marker)")]
+    assert connection.results == []
+
+
+def test_req_hom_134_websocket_get_lab_value_unsupported_target_unit_sends_error():
+    """Zieleinheit, die weder kanonisch noch in `alt_units` ist, wird abgewiesen."""
+    store = _write_store()
+    store.last_active_lab_reading.return_value = _lab_reading()
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 22,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+                "target_unit": "furlong",
+            },
+        )
+    )
+
+    assert connection.errors == [
+        (22, "invalid_format", "unsupported_unit (marker=creatinine, unit=furlong)")
+    ]
+    assert connection.results == []
+
+
+def test_req_hom_134_websocket_get_lab_value_falls_back_to_default_unit():
+    """Fehlendes `target_unit` greift auf `entry.options['lab_default_units']` zurück."""
+    store = _write_store()
+    store.last_active_lab_reading.return_value = _lab_reading()
+    entry = _entry("e1", options={const.OPTION_LAB_DEFAULT_UNITS: {"creatinine": "mg/dL"}})
+    hass = _write_hass(store, [entry])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 23,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    result = connection.results[0][1]
+    assert result["unit"] == "mg/dL"
+    assert result["value"] == 1.1
+
+
+def test_req_hom_134_websocket_get_lab_value_falls_back_to_canonical_without_default():
+    """Ohne `target_unit`, ohne Options-Default UND ohne Werks-Default (anders
+    als `creatinine`, das einen Werks-Default `mg/dL` hat) bleibt die
+    kanonische Einheit — `alkaline_phosphatase` ist nicht in
+    `LAB_DEFAULT_UNITS`, besitzt aber `alt_units`."""
+    store = _write_store()
+    store.last_active_lab_reading.return_value = _lab_reading(
+        value=60.0, unit="U/L", reported_value=60.0, reported_unit="U/L"
+    )
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 24,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "alkaline_phosphatase",
+            },
+        )
+    )
+
+    assert connection.errors == []
+    result = connection.results[0][1]
+    assert result["unit"] == "U/L"
+    assert result["value"] == 60.0
+
+
+def test_req_hom_134_websocket_get_lab_value_no_reading_sends_error():
+    """Kein aktiver Messwert für den Marker → `no_active_value`, kein Crash."""
+    store = _write_store()
+    store.last_active_lab_reading.return_value = None
+    hass = _write_hass(store, [_entry("e1")])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 25,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+            },
+        )
+    )
+
+    assert connection.errors == [
+        (25, "invalid_format", "no_active_value (marker=creatinine)")
+    ]
+    assert connection.results == []
+
+
+def test_req_hom_134_websocket_get_lab_value_unloaded_person_sends_not_found():
+    store = _write_store()
+    hass = _write_hass(store, [])
+    connection = FakeConnection()
+
+    asyncio.run(
+        ws_api.websocket_get_lab_value(
+            hass,
+            connection,
+            {
+                "id": 26,
+                "type": ws_api.COMMAND_GET_LAB_VALUE,
+                "entry_id": "e1",
+                "marker": "creatinine",
+            },
+        )
+    )
+
+    assert len(connection.errors) == 1
+    assert connection.errors[0][1] == "not_found"
+    assert connection.results == []
 
 
 def test_req_hom_122_websocket_remove_last_lab_value_calls_store(monkeypatch):

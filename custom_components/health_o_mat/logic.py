@@ -1321,7 +1321,13 @@ def convert_lab_display_value(
     Einheit ist die aufgelöste Anzeige-Einheit in Katalogschreibweise (§6),
     nicht die kanonische Einheit. Nicht-numerischer Wert -> `None`.
     Unbekannte/fehlende Einheit -> `(value, canonical_unit)` (Faktor 1,
-    defensiv). Kein Produktionsaufrufer (D1).
+    defensiv). Ursprünglich "kein Produktionsaufrufer" (D1, REQ-HOM-134) —
+    seit dem Multi-Unit-Lese-Pfad (`ws_api.websocket_get_lab_value`,
+    `health_o_mat/get_lab_value`) ist das für diesen EINEN, bewusst
+    gescopten Aufrufer widerrufen: Labor-Readings bleiben kanonisch
+    gespeichert, nur der neue Lese-Pfad rechnet produktiv auf eine
+    Ziel-Einheit um. Weiterhin auch Referenz-Oracle für die zwei
+    JS-Implementierungen und die Tests (§12).
     """
     if not isinstance(marker_def, Mapping):
         return None
@@ -1358,7 +1364,9 @@ def lab_display_decimals(value: float) -> int:
 
     `base_d`: >=100 -> 0, >=10 -> 1, >=1 -> 2, sonst 3; final
     `d = min(base_d + 1, 3)`. Obergrenze für `maximumFractionDigits`, keine
-    feste Stellenzahl. Referenz-Oracle, kein Produktionsaufrufer.
+    feste Stellenzahl. Referenz-Oracle für Tests/JS-Spiegel; seit
+    `ws_api.websocket_get_lab_value` zusätzlich produktiv genutzt (gleiche
+    Ausnahme wie bei `convert_lab_display_value`, s. dort).
     """
     try:
         magnitude = abs(float(value))
