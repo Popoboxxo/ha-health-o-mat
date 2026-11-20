@@ -2458,6 +2458,37 @@ def test_req_hom_134_convert_lab_display_value_all_factory_defaults():
         assert value == pytest.approx(expected, abs=1e-6), marker_key
 
 
+def test_req_hom_134_convert_lab_display_value_all_41_markers_self_and_alt_units():
+    """[REQ-HOM-134] Alle 41 Katalog-Marker: Selbstkonvertierung + jede `alt_units`-Paarung.
+
+    Ergänzt (ersetzt nicht) `..._all_factory_defaults` oben, das nur die 12
+    `LAB_DEFAULT_UNITS`-Marker abdeckt. Deckt zusätzlich die 29 Marker ohne
+    `alt_units` per Faktor-1-Selbstkonvertierung ab (Beschluss Q4).
+    """
+    assert len(const.LAB_MARKERS) == 41
+    canonical_value = 100.0
+    for marker_key, marker in const.LAB_MARKERS.items():
+        # Selbstkonvertierung (kanonisch -> kanonisch) ist Faktor 1 (Identität),
+        # auch für die 29 Marker mit leerem `alt_units`.
+        converted = logic.convert_lab_display_value(
+            marker, canonical_value, marker["canonical_unit"]
+        )
+        assert converted is not None, marker_key
+        value, unit = converted
+        assert value == pytest.approx(canonical_value, abs=1e-6), marker_key
+        assert unit == marker["canonical_unit"], marker_key
+
+        for display_unit, factor in marker["alt_units"].items():
+            expected = round(canonical_value / factor, 6)
+
+            converted = logic.convert_lab_display_value(marker, canonical_value, display_unit)
+
+            assert converted is not None, f"{marker_key}:{display_unit}"
+            value, unit = converted
+            assert value == pytest.approx(expected, abs=1e-6), f"{marker_key}:{display_unit}"
+            assert unit == display_unit, f"{marker_key}:{display_unit}"
+
+
 def test_req_hom_134_convert_lab_display_value_returns_display_unit():
     """[REQ-HOM-134] Der zweite Rückgabewert ist die Anzeige-Einheit (Katalogform).
 
